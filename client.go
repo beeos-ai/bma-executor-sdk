@@ -1,6 +1,7 @@
 // Package bmaexecutor implements the BMA executor protocol transport for
 // bma.executor.v1: token bootstrap, outbound WebSocket, JSON-RPC 2.0,
-// registration, heartbeat, reconnect, dispatch, and tool-result idempotency.
+// registration, heartbeat, reconnect, dispatch, session lifecycle, tool
+// cancellation, retried tool results, artifact references, and the MCP channel.
 package bmaexecutor
 
 import (
@@ -25,9 +26,14 @@ const (
 	DefaultRequestTimeout       = 30 * time.Second
 	DefaultMaxReconnectAttempts = 10
 	DefaultReconnectBaseDelay   = 500 * time.Millisecond
-	defaultHeartbeatInterval    = 15 * time.Second
-	maxTrackedToolResults       = 8192
-	maxFrameBytes               = 1 << 20
+	// DefaultToolResultRetryAttempts is the total number of tool.result attempts.
+	DefaultToolResultRetryAttempts = 5
+	// DefaultToolResultRetryBaseDelay is the first retry backoff for tool.result.
+	DefaultToolResultRetryBaseDelay = 250 * time.Millisecond
+	defaultHeartbeatInterval        = 15 * time.Second
+	maxTrackedToolResults           = 8192
+	maxToolResultRetryDelay         = 10 * time.Second
+	maxFrameBytes                   = 1 << 20
 )
 
 var (
@@ -85,7 +91,18 @@ type Options struct {
 	MaxReconnectAttempts int
 	ReconnectBaseDelay   time.Duration
 	Random               func() float64
-	OnLog                func(LogEvent)
+	// ToolResultRetryAttempts is the total number of tool.result attempts,
+	// including the first. It defaults to 5; set it to 1 to disable retries.
+	ToolResultRetryAttempts int
+	// ToolResultRetryBaseDelay is the first backoff for retryable tool.result
+	// failures. It defaults to 250ms and doubles per attempt.
+	ToolResultRetryBaseDelay time.Duration
+	// OnToolResultLost is called by the dispatch path when a tool result could
+	// not be accepted after all retries, or the error is not retryable. The
+	// adapter must persist the result and replay it with the same
+	// tool_call_id; the client never drops a result silently.
+	OnToolResultLost func(params ToolResultParams, err error)
+	OnLog            func(LogEvent)
 }
 
 // RPCError is a JSON-RPC error returned by the harness.
@@ -149,6 +166,13 @@ type rpcInbound struct {
 	Error   *JSONRPCError   `json:"error"`
 }
 
+// runningToolCall tracks one in-flight tool.call so tool.cancel can abort it.
+type runningToolCall struct {
+	cancel   context.CancelFunc
+	reason   string
+	canceled bool
+}
+
 // Client is an outbound executor client.
 type Client struct {
 	options    Options
@@ -169,6 +193,8 @@ type Client struct {
 	pending              map[string]chan rpcOutcome
 	reconnectAttempts    int
 	completedToolResults map[string]struct{}
+	seenToolCalls        map[string]struct{}
+	runningToolCalls     map[string]*runningToolCall
 	toolCallHandler      ToolCallHandler
 	sessionAssignHandler SessionAssignHandler
 	sessionStopHandler   SessionStopHandler
@@ -211,6 +237,12 @@ func NewClient(options Options) (*Client, error) {
 	if options.Random == nil {
 		options.Random = rand.Float64
 	}
+	if options.ToolResultRetryAttempts <= 0 {
+		options.ToolResultRetryAttempts = DefaultToolResultRetryAttempts
+	}
+	if options.ToolResultRetryBaseDelay <= 0 {
+		options.ToolResultRetryBaseDelay = DefaultToolResultRetryBaseDelay
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
 		options:              options,
@@ -222,6 +254,8 @@ func NewClient(options Options) (*Client, error) {
 		sessions:             make(map[string]struct{}),
 		pending:              make(map[string]chan rpcOutcome),
 		completedToolResults: make(map[string]struct{}),
+		seenToolCalls:        make(map[string]struct{}),
+		runningToolCalls:     make(map[string]*runningToolCall),
 		requestHandlers:      make(map[string]func(context.Context, json.RawMessage) (any, error)),
 		notificationHandlers: make(map[string]func(json.RawMessage)),
 	}, nil
@@ -396,30 +430,113 @@ func (c *Client) Notify(ctx context.Context, method string, params any) error {
 	return nil
 }
 
-// ReportToolResult sends tool.result once per tool_call_id.
+// ReportToolResult sends tool.result once per tool_call_id, retrying retryable
+// failures with exponential backoff. A duplicate call for an accepted
+// tool_call_id returns accepted without sending another frame.
 func (c *Client) ReportToolResult(ctx context.Context, params ToolResultParams) (Ack, error) {
 	c.mu.Lock()
 	if _, ok := c.completedToolResults[params.ToolCallID]; ok {
 		c.mu.Unlock()
 		return Ack{Accepted: true}, nil
 	}
-	if len(c.completedToolResults) >= maxTrackedToolResults {
-		for key := range c.completedToolResults {
-			delete(c.completedToolResults, key)
+	c.rememberToolCallLocked(c.completedToolResults, params.ToolCallID)
+	c.mu.Unlock()
+
+	var lastErr error
+	for attempt := 1; attempt <= c.options.ToolResultRetryAttempts; attempt++ {
+		var ack Ack
+		err := c.Call(ctx, MethodToolResult, params, &ack)
+		if err == nil {
+			return ack, nil
+		}
+		lastErr = err
+		if attempt == c.options.ToolResultRetryAttempts || !retryableToolResultError(err) {
+			break
+		}
+		c.log(LogWarn, fmt.Sprintf("tool.result for %s failed on attempt %d, retrying", params.ToolCallID, attempt), err)
+		if err := c.waitToolResultRetry(ctx, attempt); err != nil {
+			lastErr = err
 			break
 		}
 	}
-	c.completedToolResults[params.ToolCallID] = struct{}{}
-	c.mu.Unlock()
 
+	c.mu.Lock()
+	delete(c.completedToolResults, params.ToolCallID)
+	c.mu.Unlock()
+	return Ack{}, lastErr
+}
+
+// SessionReady reports that the executor accepted session.assign and has
+// prepared the session. Call it after workspace and MCP setup complete.
+func (c *Client) SessionReady(ctx context.Context, params SessionReadyParams) (Ack, error) {
 	var ack Ack
-	if err := c.Call(ctx, MethodToolResult, params, &ack); err != nil {
-		c.mu.Lock()
-		delete(c.completedToolResults, params.ToolCallID)
-		c.mu.Unlock()
-		return Ack{}, err
+	err := c.Call(ctx, MethodSessionReady, params, &ack)
+	return ack, err
+}
+
+// SessionEnded reports that every process and MCP server for the session has
+// stopped. The session leaves ActiveSessions after the harness accepts.
+func (c *Client) SessionEnded(ctx context.Context, params SessionEndedParams) (SessionEndedResult, error) {
+	var result SessionEndedResult
+	if err := c.Call(ctx, MethodSessionEnded, params, &result); err != nil {
+		return SessionEndedResult{}, err
 	}
-	return ack, nil
+	c.mu.Lock()
+	delete(c.sessions, params.SessionID)
+	c.mu.Unlock()
+	return result, nil
+}
+
+func retryableToolResultError(err error) bool {
+	var rpcErr *RPCError
+	if errors.As(err, &rpcErr) {
+		if rpcErr.Data != nil && rpcErr.Data.Retryable != nil {
+			return *rpcErr.Data.Retryable
+		}
+		switch rpcErr.Code {
+		case JSONRPCErrorCodeExecutorBusy, JSONRPCErrorCodeTimeout:
+			return true
+		default:
+			return false
+		}
+	}
+	return errors.Is(err, ErrNotConnected) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func (c *Client) waitToolResultRetry(ctx context.Context, attempt int) error {
+	delay := c.options.ToolResultRetryBaseDelay
+	for i := 1; i < attempt; i++ {
+		if delay >= maxToolResultRetryDelay {
+			delay = maxToolResultRetryDelay
+			break
+		}
+		delay *= 2
+	}
+	if delay > maxToolResultRetryDelay {
+		delay = maxToolResultRetryDelay
+	}
+	delay = time.Duration(float64(delay) * (0.5 + c.options.Random()*0.5))
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.rootCtx.Done():
+		return ErrClientStopped
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (c *Client) rememberToolCallLocked(set map[string]struct{}, id string) {
+	if len(set) >= maxTrackedToolResults {
+		for key := range set {
+			delete(set, key)
+			break
+		}
+	}
+	set[id] = struct{}{}
 }
 
 func (c *Client) fetchToken(ctx context.Context) (ExecutorTokenResponse, error) {
@@ -633,8 +750,20 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 			c.respondError(conn, id, JSONRPCErrorCodeInvalidParams, "invalid tool.call params")
 			return
 		}
+		callCtx, started := c.beginToolCall(call)
 		c.respondResult(conn, id, Ack{Accepted: true})
-		c.runToolCall(call)
+		if started {
+			go c.runToolCall(callCtx, call)
+			return
+		}
+		c.log(LogDebug, "duplicate tool.call for "+call.ToolCallID+" ignored", nil)
+	case MethodToolCancel:
+		var cancel ToolCancelParams
+		if err := json.Unmarshal(params, &cancel); err != nil {
+			c.respondError(conn, id, JSONRPCErrorCodeInvalidParams, "invalid tool.cancel params")
+			return
+		}
+		c.respondResult(conn, id, c.cancelToolCall(cancel))
 	case MethodSessionAssign:
 		var assign SessionAssignParams
 		if err := json.Unmarshal(params, &assign); err != nil {
@@ -763,35 +892,113 @@ func (c *Client) drain(params ExecutorDrainParams) (ExecutorDrainResult, error) 
 	return ExecutorDrainResult{Accepted: true, ActiveSessions: c.ActiveSessions()}, nil
 }
 
-func (c *Client) runToolCall(params ToolCallParams) {
+// beginToolCall registers an inbound tool.call exactly once. It returns false
+// for a duplicate tool_call_id, which the harness may resend after reconnect.
+func (c *Client) beginToolCall(params ToolCallParams) (context.Context, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.seenToolCalls[params.ToolCallID]; ok {
+		return nil, false
+	}
+	if _, ok := c.runningToolCalls[params.ToolCallID]; ok {
+		return nil, false
+	}
+	c.rememberToolCallLocked(c.seenToolCalls, params.ToolCallID)
+
+	var (
+		callCtx context.Context
+		cancel  context.CancelFunc
+	)
+	if params.DeadlineMS != nil && *params.DeadlineMS > 0 {
+		callCtx, cancel = context.WithTimeout(c.rootCtx, time.Duration(*params.DeadlineMS)*time.Millisecond)
+	} else {
+		callCtx, cancel = context.WithCancel(c.rootCtx)
+	}
+	c.runningToolCalls[params.ToolCallID] = &runningToolCall{cancel: cancel}
+	return callCtx, true
+}
+
+// cancelToolCall aborts a running tool.call. The handler observes cancellation
+// through its context and the client reports outcome=canceled.
+func (c *Client) cancelToolCall(params ToolCancelParams) ToolCancelResult {
+	c.mu.Lock()
+	running, ok := c.runningToolCalls[params.ToolCallID]
+	if ok {
+		running.canceled = true
+		running.reason = params.Reason
+	}
+	c.mu.Unlock()
+	if !ok {
+		return ToolCancelResult{Canceled: false}
+	}
+	running.cancel()
+	c.log(LogInfo, "canceled tool.call "+params.ToolCallID, nil)
+	return ToolCancelResult{Canceled: true}
+}
+
+func (c *Client) runToolCall(ctx context.Context, params ToolCallParams) {
 	c.mu.Lock()
 	handler := c.toolCallHandler
 	c.mu.Unlock()
+
+	var result ToolResultParams
 	if handler == nil {
-		c.reportFailedTool(params, "no tool handler registered")
-		return
+		result = failedToolResult(params, "no tool handler registered")
+	} else {
+		var err error
+		result, err = handler(ctx, params)
+		if err != nil {
+			result = failedToolResult(params, err.Error())
+		}
 	}
-	result, err := handler(c.rootCtx, params)
-	if err != nil {
-		c.reportFailedTool(params, err.Error())
-		return
+
+	c.mu.Lock()
+	running := c.runningToolCalls[params.ToolCallID]
+	canceled := running != nil && running.canceled
+	reason := ""
+	if running != nil {
+		reason = running.reason
 	}
+	delete(c.runningToolCalls, params.ToolCallID)
+	c.mu.Unlock()
+
+	if canceled {
+		result = canceledToolResult(params, reason)
+	}
+	// The result must identify the call the harness dispatched, whatever the
+	// handler put in the struct.
+	result.ToolCallID = params.ToolCallID
+	result.SessionID = params.SessionID
+
 	if _, err := c.ReportToolResult(c.rootCtx, result); err != nil {
-		c.log(LogError, "failed to report tool result", err)
+		c.log(LogError, "failed to report tool result for "+params.ToolCallID, err)
+		if c.options.OnToolResultLost != nil {
+			c.options.OnToolResultLost(result, err)
+		}
 	}
 }
 
-func (c *Client) reportFailedTool(params ToolCallParams, message string) {
+func failedToolResult(params ToolCallParams, message string) ToolResultParams {
 	text := message
-	_, err := c.ReportToolResult(c.rootCtx, ToolResultParams{
+	return ToolResultParams{
 		SessionID:  params.SessionID,
 		ToolCallID: params.ToolCallID,
 		Outcome:    ToolOutcomeFailed,
 		IsError:    true,
 		Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: &text}},
-	})
-	if err != nil {
-		c.log(LogError, "failed to report tool failure", err)
+	}
+}
+
+func canceledToolResult(params ToolCallParams, reason string) ToolResultParams {
+	text := "canceled"
+	if reason != "" {
+		text += ": " + reason
+	}
+	return ToolResultParams{
+		SessionID:  params.SessionID,
+		ToolCallID: params.ToolCallID,
+		Outcome:    ToolOutcomeCanceled,
+		Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: &text}},
 	}
 }
 
