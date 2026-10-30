@@ -1,0 +1,355 @@
+{
+  "protocol": "bma.executor.v1",
+  "messages": [
+    {
+      "name": "executor.register request",
+      "method": "executor.register",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_register",
+        "method": "executor.register",
+        "params": {
+          "protocol": "bma.executor.v1",
+          "environment_id": "env_01JABC",
+          "executor": {
+            "name": "macbook-pro",
+            "os": "darwin",
+            "arch": "arm64",
+            "version": "0.1.0"
+          },
+          "capabilities": {
+            "shell": { "enabled": true },
+            "files": {
+              "enabled": true,
+              "read_roots": ["/workspace"],
+              "write_roots": ["/workspace"]
+            },
+            "mcp": { "stdio": true, "http": true, "max_servers": 4 },
+            "chrome": true,
+            "computer_use": true,
+            "display": false
+          },
+          "resume": {
+            "executor_id": "exec_01JABC",
+            "last_connection_id": "conn_01JABC",
+            "active_sessions": ["sess_01JABC"]
+          }
+        }
+      }
+    },
+    {
+      "name": "executor.register result",
+      "method": "executor.register",
+      "kind": "result",
+      "result": {
+        "executor_id": "exec_01JABC",
+        "connection_id": "conn_01JABC",
+        "server_time": "2026-10-30T12:00:00Z",
+        "heartbeat_interval_ms": 15000,
+        "lease_ttl_ms": 60000,
+        "max_control_frame_bytes": 65536,
+        "max_mcp_frame_bytes": 1048576,
+        "drain": false
+      }
+    },
+    {
+      "name": "executor.heartbeat request",
+      "method": "executor.heartbeat",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_heartbeat",
+        "method": "executor.heartbeat",
+        "params": {
+          "connection_id": "conn_01JABC",
+          "active_sessions": ["sess_01JABC"],
+          "load": { "cpu_percent": 12.5, "memory_percent": 40.1 }
+        }
+      }
+    },
+    {
+      "name": "executor.heartbeat result",
+      "method": "executor.heartbeat",
+      "kind": "result",
+      "result": {
+        "server_time": "2026-10-30T12:00:15Z",
+        "lease_ttl_ms": 60000,
+        "drain": false
+      }
+    },
+    {
+      "name": "executor.capabilities.update notification",
+      "method": "executor.capabilities.update",
+      "kind": "notification",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "executor.capabilities.update",
+        "params": { "capabilities": { "chrome": false } }
+      }
+    },
+    {
+      "name": "executor.drain request",
+      "method": "executor.drain",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_drain",
+        "method": "executor.drain",
+        "params": { "reason": "upgrade", "deadline_ms": 30000 }
+      }
+    },
+    {
+      "name": "executor.drain result",
+      "method": "executor.drain",
+      "kind": "result",
+      "result": { "accepted": true, "active_sessions": ["sess_01JABC"] }
+    },
+    {
+      "name": "executor.close notification",
+      "method": "executor.close",
+      "kind": "notification",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "executor.close",
+        "params": { "reason": "shutdown" }
+      }
+    },
+    {
+      "name": "session.assign request",
+      "method": "session.assign",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_assign",
+        "method": "session.assign",
+        "params": {
+          "session_id": "sess_01JABC",
+          "work_id": "work_01JABC",
+          "agent_id": "agent_01JABC",
+          "environment_id": "env_01JABC",
+          "deadline_ms": 300000,
+          "lease": { "token": "lease_01JABC", "fencing_token": 7 },
+          "resources": [
+            {
+              "type": "memory_store",
+              "memory_store_id": "memstore_01JABC",
+              "mount_path": "/mnt/memory/docs"
+            }
+          ],
+          "mcp_servers": [
+            {
+              "server_key": "chrome",
+              "connection_origin": "environment",
+              "transport": {
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "chrome-devtools-mcp@latest"],
+                "cwd": "/workspace",
+                "env": { "CHROME_PATH": "/usr/bin/google-chrome" },
+                "timeout_ms": 60000,
+                "command_sha256": "sha256:0123456789abcdef"
+              }
+            }
+          ],
+          "metadata": { "title": "build" }
+        }
+      }
+    },
+    {
+      "name": "session.assign result",
+      "method": "session.assign",
+      "kind": "result",
+      "result": { "accepted": true, "session_id": "sess_01JABC" }
+    },
+    {
+      "name": "session.ready request",
+      "method": "session.ready",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_ready",
+        "method": "session.ready",
+        "params": {
+          "session_id": "sess_01JABC",
+          "work_id": "work_01JABC",
+          "lease_token": "lease_01JABC"
+        }
+      }
+    },
+    {
+      "name": "session.ready result",
+      "method": "session.ready",
+      "kind": "result",
+      "result": { "accepted": true }
+    },
+    {
+      "name": "session.event request",
+      "method": "session.event",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_event",
+        "method": "session.event",
+        "params": {
+          "session_id": "sess_01JABC",
+          "event": {
+            "type": "agent.tool_result",
+            "tool_use_id": "toolu_01JABC",
+            "content": [{ "type": "text", "text": "ok" }],
+            "is_error": false
+          }
+        }
+      }
+    },
+    {
+      "name": "session.event result",
+      "method": "session.event",
+      "kind": "result",
+      "result": { "accepted": true, "event_id": "evt_01JABC" }
+    },
+    {
+      "name": "session.status notification",
+      "method": "session.status",
+      "kind": "notification",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "session.status",
+        "params": {
+          "session_id": "sess_01JABC",
+          "status": "running",
+          "detail": "tool_running"
+        }
+      }
+    },
+    {
+      "name": "session.stop request",
+      "method": "session.stop",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_stop",
+        "method": "session.stop",
+        "params": {
+          "session_id": "sess_01JABC",
+          "reason": "user_interrupt",
+          "deadline_ms": 10000
+        }
+      }
+    },
+    {
+      "name": "session.stop result",
+      "method": "session.stop",
+      "kind": "result",
+      "result": { "stopped": true }
+    },
+    {
+      "name": "session.ended request",
+      "method": "session.ended",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_ended",
+        "method": "session.ended",
+        "params": { "session_id": "sess_01JABC", "reason": "completed" }
+      }
+    },
+    {
+      "name": "session.ended result",
+      "method": "session.ended",
+      "kind": "result",
+      "result": { "accepted": true }
+    },
+    {
+      "name": "tool.call request",
+      "method": "tool.call",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_tool_call",
+        "method": "tool.call",
+        "params": {
+          "session_id": "sess_01JABC",
+          "tool_call_id": "toolu_01JABC",
+          "tool": "bash",
+          "input": {
+            "command": "ls -la",
+            "cwd": "/workspace",
+            "timeout_ms": 120000
+          },
+          "deadline_ms": 120000,
+          "permission": { "mode": "always_allow" }
+        }
+      }
+    },
+    {
+      "name": "tool.call result",
+      "method": "tool.call",
+      "kind": "result",
+      "result": { "accepted": true }
+    },
+    {
+      "name": "tool.result request",
+      "method": "tool.result",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_tool_result",
+        "method": "tool.result",
+        "params": {
+          "session_id": "sess_01JABC",
+          "tool_call_id": "toolu_01JABC",
+          "outcome": "succeeded",
+          "is_error": false,
+          "content": [
+            { "type": "text", "text": "file1\nfile2\n" },
+            { "type": "text", "text": "exit_code: 0" }
+          ],
+          "duration_ms": 42,
+          "artifacts": []
+        }
+      }
+    },
+    {
+      "name": "tool.result result",
+      "method": "tool.result",
+      "kind": "result",
+      "result": { "accepted": true }
+    },
+    {
+      "name": "tool.cancel request",
+      "method": "tool.cancel",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_tool_cancel",
+        "method": "tool.cancel",
+        "params": {
+          "session_id": "sess_01JABC",
+          "tool_call_id": "toolu_01JABC",
+          "reason": "user_interrupt"
+        }
+      }
+    },
+    {
+      "name": "tool.cancel result",
+      "method": "tool.cancel",
+      "kind": "result",
+      "result": { "canceled": true }
+    },
+    {
+      "name": "tool.progress notification",
+      "method": "tool.progress",
+      "kind": "notification",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "tool.progress",
+        "params": {
+          "session_id": "sess_01JABC",
+          "tool_call_id": "toolu_01JABC",
+          "message": "building"
+        }
+      }
+    }
+  ]
+}

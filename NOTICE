@@ -1,0 +1,10 @@
+beeos-managed-agents (project identifier: bma)
+
+This repository is derived from Omnara, distributed under the Apache License 2.0.
+Upstream: https://github.com/omnara-ai/omnara
+Source revision: 35868fcc91b8392eda1dd1389997e8638744daa7
+
+Modified on 2026-10-29 by qryvox <qryvox@gmail.com> for BeeOS.
+Changes include project branding, identifiers, package/module names, deployment
+references, and visual assets. The upstream Git history is not included.
+The original LICENSE and any third-party copyright notices are retained.
