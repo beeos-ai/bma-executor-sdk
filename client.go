@@ -1298,16 +1298,26 @@ func (c *Client) disconnected(conn *connection, err error) {
 		return
 	}
 	c.setState(ConnectionStateDisconnected)
-	switch code := CloseCode(err); {
-	case code == 4004:
-		c.finish(ErrReplaced, 1000, "replaced")
-		return
-	case terminalCloseCode(code):
-		c.finish(err, 1000, "terminal close")
+	if c.finishOnTerminalClose(err) {
 		return
 	}
 	c.log(LogWarn, "executor connection lost", err)
 	c.scheduleReconnect()
+}
+
+// finishOnTerminalClose stops the client for good when err carries a
+// terminal close code, whether it ended a registered connection or a
+// re-registration.
+func (c *Client) finishOnTerminalClose(err error) bool {
+	switch code := CloseCode(err); {
+	case code == 4004:
+		c.finish(ErrReplaced, 1000, "replaced")
+	case terminalCloseCode(code):
+		c.finish(err, 1000, "terminal close")
+	default:
+		return false
+	}
+	return true
 }
 
 func (c *Client) scheduleReconnect() {
@@ -1367,6 +1377,9 @@ func (c *Client) reconnect() {
 		return
 	}
 	if err := c.connect(c.rootCtx, token); err != nil {
+		if c.finishOnTerminalClose(err) {
+			return
+		}
 		c.log(LogWarn, "executor reconnect failed", err)
 		c.scheduleReconnect()
 	}
