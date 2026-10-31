@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from bma_sdk import executor
+from bma_sdk.executor import generated as executor
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "contracts/bma/executor/examples/conformance.json"
 
@@ -28,6 +28,6 @@ def test_every_example_matches_the_catalog_and_params_type() -> None:
 
 def test_protocols_and_v11_error_codes() -> None:
     assert [p.value for p in executor.ProtocolVersion] == ["bma.executor.v1", "bma.executor.v1.1"]
-    assert executor.JsonRpcErrorCode.Value32012 == -32012
+    assert executor.JsonRpcErrorCode.CapabilityUnavailable == -32012
     assert executor.METHODS["process.start"].capability == "process.enabled"
     assert executor.METHODS["process.start"].since == "bma.executor.v1.1"
