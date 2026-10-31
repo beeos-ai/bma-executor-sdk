@@ -35,7 +35,7 @@ func TestClientRegistersAndRunsToolCall(t *testing.T) {
 				Token:        "jwt_test",
 				ExpiresIn:    300,
 				WSURL:        wsURL,
-				ChannelScope: []ChannelScope{ChannelScopeControl},
+				ChannelScope: []string{ChannelControl},
 			})
 		case "/v1/executors/channel":
 			if got := r.Header.Get("Authorization"); got != "Bearer jwt_test" {
@@ -43,7 +43,7 @@ func TestClientRegistersAndRunsToolCall(t *testing.T) {
 				http.Error(w, "authorization", http.StatusUnauthorized)
 				return
 			}
-			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{WSSubprotocol}})
+			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV11}})
 			if err != nil {
 				serverDone <- err
 				return
@@ -62,7 +62,7 @@ func TestClientRegistersAndRunsToolCall(t *testing.T) {
 		EnvironmentKey: "env_key",
 		EnvironmentID:  "env_test",
 		Executor:       ExecutorInfo{Name: "test", OS: "linux", Arch: "arm64", Version: "0.1.0"},
-		Capabilities:   ExecutorCapabilities{Shell: &ShellCapability{Enabled: true}},
+		Capabilities:   Capabilities{Shell: &ShellCapability{Enabled: true}},
 		BaseURL:        server.URL,
 		RequestTimeout: 2 * time.Second,
 	})
@@ -74,7 +74,7 @@ func TestClientRegistersAndRunsToolCall(t *testing.T) {
 			SessionID:  params.SessionID,
 			ToolCallID: params.ToolCallID,
 			Outcome:    ToolOutcomeSucceeded,
-			Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: stringPtr("ok")}},
+			Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "ok"}},
 		}, nil
 	})
 
@@ -98,7 +98,7 @@ func TestClientRegistersAndRunsToolCall(t *testing.T) {
 		SessionID:  "sess_test",
 		ToolCallID: "toolu_test",
 		Outcome:    ToolOutcomeSucceeded,
-		Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: stringPtr("ok")}},
+		Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "ok"}},
 	})
 	if err != nil {
 		t.Fatalf("duplicate ReportToolResult: %v", err)
@@ -142,13 +142,13 @@ func runExecutorServer(ctx context.Context, ws *websocket.Conn) error {
 	if err := json.Unmarshal(register.Params, &registerParams); err != nil {
 		return err
 	}
-	if registerParams.Protocol != ProtocolVersion || registerParams.EnvironmentID != "env_test" {
+	if registerParams.Protocol != ProtocolV11 || registerParams.EnvironmentID != "env_test" {
 		return errString("unexpected register params")
 	}
 	if err := write(rpcSuccessEnvelope{
 		JSONRPC: "2.0",
 		ID:      *register.ID,
-		Result: ExecutorRegisterResult{
+		Result: ExecutorRegisterResult{Protocol: ProtocolV11,
 			ExecutorID:           "exec_test",
 			ConnectionID:         "conn_test",
 			ServerTime:           "2026-10-30T12:00:00Z",
@@ -165,7 +165,7 @@ func runExecutorServer(ctx context.Context, ws *websocket.Conn) error {
 		SessionID:  "sess_test",
 		ToolCallID: "toolu_test",
 		Tool:       ToolNameBash,
-		Input:      ToolInput{Command: stringPtr("true")},
+		Input:      NewToolInput(ToolInput{Command: "true"}),
 	})
 	if err != nil {
 		return err

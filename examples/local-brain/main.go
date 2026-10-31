@@ -68,7 +68,7 @@ func main() {
 		SessionID: "sess_demo",
 		MCPServers: []bmaexecutor.MCPServerConfig{{
 			ServerKey: "echo", ConnectionOrigin: bmaexecutor.MCPConnectionOriginEnvironment,
-			Transport: bmaexecutor.MCPServerTransport{Type: bmaexecutor.MCPTransportTypeStdio, Command: &argv[0], Args: argv[1:], Cwd: ptr(mustGetwd())},
+			Transport: bmaexecutor.MCPServerTransport{Type: bmaexecutor.MCPTransportTypeStdio, Command: argv[0], Args: argv[1:], Cwd: mustGetwd()},
 		}},
 	})
 	check(err)
@@ -76,7 +76,7 @@ func main() {
 
 	// Scripted "model": two built-in tool calls, then the MCP server.
 	for _, command := range []string{"echo hello from $(uname -s) > note.txt", "cat note.txt"} {
-		result, err := session.CallTool(ctx, bmaexecutor.ToolCallParams{Tool: bmaexecutor.ToolNameBash, Input: bmaexecutor.ToolInput{Command: ptr(command)}})
+		result, err := session.CallTool(ctx, bmaexecutor.ToolCallParams{Tool: bmaexecutor.ToolNameBash, Input: bmaexecutor.NewToolInput(bmaexecutor.ToolInput{Command: command})})
 		check(err)
 		fmt.Printf("bash %q -> %s\n", command, text(result))
 	}
@@ -97,8 +97,8 @@ func main() {
 func text(result bmaexecutor.ToolResultParams) string {
 	var parts []string
 	for _, block := range result.Content {
-		if block.Text != nil {
-			parts = append(parts, strings.TrimSpace(*block.Text))
+		if block.Text != "" {
+			parts = append(parts, strings.TrimSpace(block.Text))
 		}
 	}
 	return strings.Join(parts, " | ")

@@ -1,24 +1,27 @@
-// Package bmaexecutor implements the BMA executor protocol transport for
-// bma.executor.v1: token bootstrap, outbound WebSocket, JSON-RPC 2.0,
-// registration, heartbeat, reconnect, dispatch, session lifecycle, tool
-// cancellation, retried tool results, artifact references, and the MCP channel.
+// Package bmaexecutor implements the BMA Executor Protocol (bma.executor.v1.1,
+// generated from contracts/bma): the executor end (Client: token bootstrap,
+// pluggable transport, JSON-RPC 2.0, registration, heartbeat, reconnect with
+// resume, dispatch, tool cancellation, retried results, artifacts, MCP
+// channel), the execution Core with registrable capabilities (process.*,
+// skill.install, ...), and the harness end (Harness).
 package bmaexecutor
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/coder/websocket"
 )
 
 const (
@@ -31,9 +34,16 @@ const (
 	// DefaultToolResultRetryBaseDelay is the first retry backoff for tool.result.
 	DefaultToolResultRetryBaseDelay = 250 * time.Millisecond
 	defaultHeartbeatInterval        = 15 * time.Second
+	defaultLeaseTTL                 = time.Minute
 	maxTrackedToolResults           = 8192
 	maxToolResultRetryDelay         = 10 * time.Second
-	maxFrameBytes                   = 1 << 20
+	maxFrameBytes                   = 4 << 20
+
+	// Artifact upload (v1.1 §6.5).
+	artifactPath         = "/v1/executors/artifacts"
+	headerSessionID      = "X-BMA-Session-ID"
+	headerArtifactDigest = "X-BMA-Artifact-Digest"
+	headerArtifactName   = "X-BMA-Artifact-Name"
 )
 
 var (
@@ -41,7 +51,15 @@ var (
 	ErrNotConnected = errors.New("bmaexecutor: executor channel is not connected")
 	// ErrClientStopped is returned after Stop or a terminal close code.
 	ErrClientStopped = errors.New("bmaexecutor: client stopped")
+	// ErrReplaced is Err after the harness closed with 4004: a newer
+	// connection for this executor is authoritative and this one must stop.
+	ErrReplaced = errors.New("bmaexecutor: executor connection was replaced (4004)")
+	// ErrReconnectExhausted is Err after MaxReconnectAttempts failed.
+	ErrReconnectExhausted = errors.New("bmaexecutor: executor reconnect attempts exhausted")
 )
+
+// ConnectionState is the executor control channel state (ConnectionState* values).
+type ConnectionState string
 
 type LogLevel string
 
@@ -73,33 +91,48 @@ type DrainHandler func(ctx context.Context, params ExecutorDrainParams) (Executo
 
 // Options configures a Client.
 type Options struct {
+	// EnvironmentKey is the bearer of POST /v1/executors/token: an environment
+	// key, or a machine daemon token for a machine-scoped executor (empty
+	// EnvironmentID).
 	EnvironmentKey string
-	EnvironmentID  string
-	Executor       ExecutorInfo
-	Capabilities   ExecutorCapabilities
+	// EnvironmentID is the selfhost environment; empty registers a
+	// machine-scoped executor.
+	EnvironmentID string
+	Executor      ExecutorInfo
+	Capabilities  Capabilities
+	// Protocol is the WebSocket subprotocol and executor.register protocol.
+	// Defaults to ProtocolV11.
+	Protocol string
 
 	BaseURL string
 	WSURL   string
 	// TokenSource replaces the POST /v1/executors/token bootstrap, for example
-	// StaticToken for a local harness on a loopback listener. When set,
-	// EnvironmentKey and BaseURL are not used.
+	// StaticToken for a local harness. When set, EnvironmentKey and BaseURL
+	// are not used.
 	TokenSource func(ctx context.Context) (ExecutorTokenResponse, error)
-	// HTTPClient is used for the token request. Defaults to http.DefaultClient.
+	// Dial opens the control connection. Defaults to WebSocketDialer with
+	// HTTPClient; see UnixSocketDialer, ListenUnixSocket and InProcessDialer.
+	Dial Dialer
+	// HTTPClient is used for the token request, artifact uploads and the
+	// default WebSocket dial. Defaults to http.DefaultClient.
 	HTTPClient *http.Client
 	// RequestTimeout bounds one JSON-RPC request. Defaults to 30s.
 	RequestTimeout time.Duration
 	// HeartbeatInterval overrides the interval returned by executor.register.
 	HeartbeatInterval time.Duration
 	// HeartbeatLoad is sampled for each heartbeat.
-	HeartbeatLoad        func() *ExecutorLoad
+	HeartbeatLoad func() *ExecutorLoad
+	// MaxReconnectAttempts bounds consecutive failed reconnects (default 10);
+	// a negative value reconnects until Stop.
 	MaxReconnectAttempts int
 	ReconnectBaseDelay   time.Duration
 	Random               func() float64
-	// ToolResultRetryAttempts is the total number of tool.result attempts,
-	// including the first. It defaults to 5; set it to 1 to disable retries.
+	// ToolResultRetryAttempts is the total number of attempts for tool.result,
+	// session.ready and session.ended, including the first. It defaults to 5;
+	// set it to 1 to disable retries.
 	ToolResultRetryAttempts int
-	// ToolResultRetryBaseDelay is the first backoff for retryable tool.result
-	// failures. It defaults to 250ms and doubles per attempt.
+	// ToolResultRetryBaseDelay is the first backoff for retryable failures.
+	// It defaults to 250ms and doubles per attempt up to 10s.
 	ToolResultRetryBaseDelay time.Duration
 	// OnToolResultLost is called by the dispatch path when a tool result could
 	// not be accepted after all retries, or the error is not retryable. The
@@ -109,9 +142,10 @@ type Options struct {
 	OnLog            func(LogEvent)
 }
 
-// RPCError is a JSON-RPC error returned by the harness.
+// RPCError is a JSON-RPC error returned by the peer, or returned by a handler
+// to answer with a specific code and data.
 type RPCError struct {
-	Code    JSONRPCErrorCode
+	Code    int
 	Message string
 	Data    *JSONRPCErrorData
 }
@@ -121,14 +155,14 @@ func (e *RPCError) Error() string {
 }
 
 type connection struct {
-	ws      *websocket.Conn
+	conn    Conn
 	writeMu sync.Mutex
 }
 
 func (c *connection) write(ctx context.Context, payload []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return c.ws.Write(ctx, websocket.MessageText, payload)
+	return c.conn.Write(ctx, payload)
 }
 
 type rpcOutcome struct {
@@ -177,6 +211,15 @@ type runningToolCall struct {
 	canceled bool
 }
 
+type requestIDKey struct{}
+
+// RequestID returns the JSON-RPC id of the inbound request whose handler
+// received ctx (the idempotency key of retried requests), or "".
+func RequestID(ctx context.Context) string {
+	id, _ := ctx.Value(requestIDKey{}).(string)
+	return id
+}
+
 // Client is an outbound executor client.
 type Client struct {
 	options    Options
@@ -184,15 +227,20 @@ type Client struct {
 
 	rootCtx context.Context
 	cancel  context.CancelFunc
+	done    chan struct{}
 
 	mu                   sync.Mutex
 	conn                 *connection
 	state                ConnectionState
 	stopped              bool
+	err                  error
 	registerResult       *ExecutorRegisterResult
+	token                ExecutorTokenResponse
 	connectionID         string
 	executorID           string
 	heartbeatInterval    time.Duration
+	leaseTTL             time.Duration
+	disconnectedAt       time.Time
 	sessions             map[string]struct{}
 	pending              map[string]chan rpcOutcome
 	reconnectAttempts    int
@@ -200,6 +248,9 @@ type Client struct {
 	seenToolCalls        map[string]struct{}
 	runningToolCalls     map[string]*runningToolCall
 	toolCallHandler      ToolCallHandler
+	toolCallAccept       func(ToolCallParams) error
+	afterToolResults     []func(ToolCallParams)
+	sessionsLost         []func([]string)
 	sessionAssignHandler SessionAssignHandler
 	sessionStopHandler   SessionStopHandler
 	drainHandler         DrainHandler
@@ -213,11 +264,11 @@ func NewClient(options Options) (*Client, error) {
 	if options.TokenSource == nil && strings.TrimSpace(options.EnvironmentKey) == "" {
 		return nil, errors.New("bmaexecutor: EnvironmentKey is required")
 	}
-	if strings.TrimSpace(options.EnvironmentID) == "" {
-		return nil, errors.New("bmaexecutor: EnvironmentID is required")
-	}
 	if options.Executor.Name == "" {
 		return nil, errors.New("bmaexecutor: Executor.Name is required")
+	}
+	if options.Protocol == "" {
+		options.Protocol = ProtocolV11
 	}
 	if options.BaseURL == "" {
 		options.BaseURL = DefaultBaseURL
@@ -226,13 +277,16 @@ func NewClient(options Options) (*Client, error) {
 	if options.HTTPClient == nil {
 		options.HTTPClient = http.DefaultClient
 	}
+	if options.Dial == nil {
+		options.Dial = WebSocketDialer(options.HTTPClient)
+	}
 	if options.RequestTimeout <= 0 {
 		options.RequestTimeout = DefaultRequestTimeout
 	}
 	if options.HeartbeatInterval <= 0 {
 		options.HeartbeatInterval = defaultHeartbeatInterval
 	}
-	if options.MaxReconnectAttempts <= 0 {
+	if options.MaxReconnectAttempts == 0 {
 		options.MaxReconnectAttempts = DefaultMaxReconnectAttempts
 	}
 	if options.ReconnectBaseDelay <= 0 {
@@ -253,8 +307,10 @@ func NewClient(options Options) (*Client, error) {
 		httpClient:           options.HTTPClient,
 		rootCtx:              ctx,
 		cancel:               cancel,
+		done:                 make(chan struct{}),
 		state:                ConnectionStateDisconnected,
 		heartbeatInterval:    options.HeartbeatInterval,
+		leaseTTL:             defaultLeaseTTL,
 		sessions:             make(map[string]struct{}),
 		pending:              make(map[string]chan rpcOutcome),
 		completedToolResults: make(map[string]struct{}),
@@ -266,6 +322,7 @@ func NewClient(options Options) (*Client, error) {
 }
 
 // Start fetches an executor token, connects, registers, and starts heartbeats.
+// After a failed Start the client may be started again.
 func (c *Client) Start(ctx context.Context) (ExecutorRegisterResult, error) {
 	c.mu.Lock()
 	if c.stopped {
@@ -297,17 +354,14 @@ func (c *Client) Start(ctx context.Context) (ExecutorRegisterResult, error) {
 	return *c.registerResult, nil
 }
 
-// Stop sends executor.close, closes the WebSocket, and fails pending calls.
+// Stop sends executor.close, closes the connection, and fails pending calls.
 func (c *Client) Stop(ctx context.Context, reason string) error {
 	c.mu.Lock()
 	if c.stopped {
 		c.mu.Unlock()
 		return nil
 	}
-	c.stopped = true
 	conn := c.conn
-	c.conn = nil
-	c.state = ConnectionStateClosed
 	c.mu.Unlock()
 
 	if conn != nil {
@@ -321,11 +375,43 @@ func (c *Client) Stop(ctx context.Context, reason string) error {
 			_ = conn.write(writeCtx, payload)
 			cancel()
 		}
-		_ = conn.ws.Close(websocket.StatusNormalClosure, reason)
+	}
+	c.finish(nil, 1000, reason)
+	return nil
+}
+
+// finish stops the client for good with err (nil for Stop).
+func (c *Client) finish(err error, code int, reason string) {
+	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return
+	}
+	c.stopped = true
+	c.err = err
+	conn := c.conn
+	c.conn = nil
+	c.state = ConnectionStateClosed
+	c.mu.Unlock()
+	if conn != nil {
+		_ = conn.conn.Close(code, reason)
 	}
 	c.cancel()
 	c.failPending(ErrClientStopped)
-	return nil
+	close(c.done)
+}
+
+// Done is closed when the client stops for good: Stop, executor.close, a
+// terminal close code (4004 replaced, 4003 unsupported protocol, ...) or
+// exhausted reconnects.
+func (c *Client) Done() <-chan struct{} { return c.done }
+
+// Err explains Done: nil after Stop or executor.close, ErrReplaced after
+// 4004, ErrReconnectExhausted, or the terminal close error.
+func (c *Client) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
 }
 
 // State returns the current connection state.
@@ -363,6 +449,32 @@ func (c *Client) OnToolCall(handler ToolCallHandler) {
 	c.toolCallHandler = handler
 }
 
+// OnToolCallAccept registers a check run before a tool.call is acknowledged.
+// An error answers the request instead (a *RPCError keeps its code, for
+// example session_not_active or capability_unavailable) and the tool does
+// not run.
+func (c *Client) OnToolCallAccept(accept func(ToolCallParams) error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.toolCallAccept = accept
+}
+
+// afterToolResult registers a hook run after a tool call's result was
+// delivered (or given up on).
+func (c *Client) afterToolResult(hook func(ToolCallParams)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.afterToolResults = append(c.afterToolResults, hook)
+}
+
+// onSessionsLost registers a hook run when the client gives up its sessions
+// because it stayed disconnected past the harness lease.
+func (c *Client) onSessionsLost(hook func([]string)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sessionsLost = append(c.sessionsLost, hook)
+}
+
 // OnSessionAssign registers the session.assign handler.
 func (c *Client) OnSessionAssign(handler SessionAssignHandler) {
 	c.mu.Lock()
@@ -385,6 +497,7 @@ func (c *Client) OnDrain(handler DrainHandler) {
 }
 
 // OnRequest registers a handler for a harness-to-executor request method.
+// RequestID(ctx) is the request's JSON-RPC id.
 func (c *Client) OnRequest(method string, handler func(context.Context, json.RawMessage) (any, error)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -435,8 +548,9 @@ func (c *Client) Notify(ctx context.Context, method string, params any) error {
 }
 
 // ReportToolResult sends tool.result once per tool_call_id, retrying retryable
-// failures with exponential backoff. A duplicate call for an accepted
-// tool_call_id returns accepted without sending another frame.
+// failures (executor_busy, timeout, a disconnect) with exponential backoff
+// across reconnects. A duplicate call for an accepted tool_call_id returns
+// accepted without sending another frame.
 func (c *Client) ReportToolResult(ctx context.Context, params ToolResultParams) (Ack, error) {
 	c.mu.Lock()
 	if _, ok := c.completedToolResults[params.ToolCallID]; ok {
@@ -446,44 +560,31 @@ func (c *Client) ReportToolResult(ctx context.Context, params ToolResultParams) 
 	c.rememberToolCallLocked(c.completedToolResults, params.ToolCallID)
 	c.mu.Unlock()
 
-	var lastErr error
-	for attempt := 1; attempt <= c.options.ToolResultRetryAttempts; attempt++ {
-		var ack Ack
-		err := c.Call(ctx, MethodToolResult, params, &ack)
-		if err == nil {
-			return ack, nil
-		}
-		lastErr = err
-		if attempt == c.options.ToolResultRetryAttempts || !retryableToolResultError(err) {
-			break
-		}
-		c.log(LogWarn, fmt.Sprintf("tool.result for %s failed on attempt %d, retrying", params.ToolCallID, attempt), err)
-		if err := c.waitToolResultRetry(ctx, attempt); err != nil {
-			lastErr = err
-			break
-		}
+	var ack Ack
+	err := c.callRetrying(ctx, MethodToolResult, params, &ack)
+	if err != nil {
+		c.mu.Lock()
+		delete(c.completedToolResults, params.ToolCallID)
+		c.mu.Unlock()
+		return Ack{}, err
 	}
-
-	c.mu.Lock()
-	delete(c.completedToolResults, params.ToolCallID)
-	c.mu.Unlock()
-	return Ack{}, lastErr
+	return ack, nil
 }
 
 // SessionReady reports that the executor accepted session.assign and has
 // prepared the session. Call it after workspace and MCP setup complete.
 func (c *Client) SessionReady(ctx context.Context, params SessionReadyParams) (Ack, error) {
 	var ack Ack
-	err := c.Call(ctx, MethodSessionReady, params, &ack)
+	err := c.callRetrying(ctx, MethodSessionReady, params, &ack)
 	return ack, err
 }
 
 // SessionEnded reports that every process and MCP server for the session has
 // stopped. The session leaves ActiveSessions after the harness accepts.
-func (c *Client) SessionEnded(ctx context.Context, params SessionEndedParams) (SessionEndedResult, error) {
-	var result SessionEndedResult
-	if err := c.Call(ctx, MethodSessionEnded, params, &result); err != nil {
-		return SessionEndedResult{}, err
+func (c *Client) SessionEnded(ctx context.Context, params SessionEndedParams) (Ack, error) {
+	var result Ack
+	if err := c.callRetrying(ctx, MethodSessionEnded, params, &result); err != nil {
+		return Ack{}, err
 	}
 	c.mu.Lock()
 	delete(c.sessions, params.SessionID)
@@ -491,14 +592,36 @@ func (c *Client) SessionEnded(ctx context.Context, params SessionEndedParams) (S
 	return result, nil
 }
 
+// callRetrying sends a request whose delivery is mandatory (v1.1 §8.4),
+// retrying retryable failures with backoff.
+func (c *Client) callRetrying(ctx context.Context, method string, params, out any) error {
+	var lastErr error
+	for attempt := 1; attempt <= c.options.ToolResultRetryAttempts; attempt++ {
+		err := c.Call(ctx, method, params, out)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt == c.options.ToolResultRetryAttempts || !retryableToolResultError(err) {
+			break
+		}
+		c.log(LogWarn, fmt.Sprintf("%s failed on attempt %d, retrying", method, attempt), err)
+		if err := c.waitToolResultRetry(ctx, attempt); err != nil {
+			lastErr = err
+			break
+		}
+	}
+	return lastErr
+}
+
 func retryableToolResultError(err error) bool {
 	var rpcErr *RPCError
 	if errors.As(err, &rpcErr) {
-		if rpcErr.Data != nil && rpcErr.Data.Retryable != nil {
-			return *rpcErr.Data.Retryable
+		if rpcErr.Data != nil && rpcErr.Data.Retryable {
+			return true
 		}
 		switch rpcErr.Code {
-		case JSONRPCErrorCodeExecutorBusy, JSONRPCErrorCodeTimeout:
+		case CodeExecutorBusy, CodeTimeout:
 			return true
 		default:
 			return false
@@ -543,9 +666,46 @@ func (c *Client) rememberToolCallLocked(set map[string]struct{}, id string) {
 	set[id] = struct{}{}
 }
 
+// UploadArtifact implements POST /v1/executors/artifacts (v1.1 §6.5) with
+// the current executor token. It must finish before a tool.result references
+// the artifact; the upload is idempotent by (session, digest).
+func (c *Client) UploadArtifact(ctx context.Context, sessionID, name, mimeType string, content []byte) (ArtifactRef, error) {
+	if len(content) > DefaultMaxArtifactBytes {
+		return ArtifactRef{}, fmt.Errorf("bmaexecutor: artifact is %d bytes, limit is %d", len(content), DefaultMaxArtifactBytes)
+	}
+	c.mu.Lock()
+	token := c.token.Token
+	c.mu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.options.BaseURL+artifactPath, bytes.NewReader(content))
+	if err != nil {
+		return ArtifactRef{}, err
+	}
+	sum := sha256.Sum256(content)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", mimeType)
+	request.Header.Set(headerSessionID, sessionID)
+	request.Header.Set(headerArtifactDigest, "sha256:"+hex.EncodeToString(sum[:]))
+	request.Header.Set(headerArtifactName, name)
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return ArtifactRef{}, err
+	}
+	defer response.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
+	if response.StatusCode != http.StatusCreated && response.StatusCode != http.StatusOK {
+		return ArtifactRef{}, fmt.Errorf("bmaexecutor: artifact upload returned %d", response.StatusCode)
+	}
+	var ref ArtifactRef
+	if err := json.Unmarshal(raw, &ref); err != nil {
+		return ArtifactRef{}, fmt.Errorf("bmaexecutor: decode artifact upload response: %w", err)
+	}
+	return ref, nil
+}
+
 // StaticToken is a TokenSource for a harness reached directly, typically a
-// local harness on ws://127.0.0.1. token may be empty when the harness has no
-// Authenticate hook.
+// local harness. token may be empty when the harness has no Authenticate hook.
 func StaticToken(wsURL, token string) func(context.Context) (ExecutorTokenResponse, error) {
 	return func(context.Context) (ExecutorTokenResponse, error) {
 		return ExecutorTokenResponse{Token: token, WSURL: wsURL}, nil
@@ -593,32 +753,28 @@ func (c *Client) fetchToken(ctx context.Context) (ExecutorTokenResponse, error) 
 }
 
 func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error {
-	wsURL := c.options.WSURL
-	if wsURL == "" {
-		wsURL = token.WSURL
+	if c.options.WSURL != "" {
+		token.WSURL = c.options.WSURL
 	}
 	c.setState(ConnectionStateConnecting)
-	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
-		HTTPHeader:   authHeader(token.Token),
-		Subprotocols: []string{WSSubprotocol},
-	})
+	transport, err := c.options.Dial(ctx, token, c.options.Protocol)
 	if err != nil {
-		return fmt.Errorf("bmaexecutor: websocket dial: %w", err)
+		return err
 	}
-	ws.SetReadLimit(maxFrameBytes)
-	conn := &connection{ws: ws}
+	conn := &connection{conn: transport}
 	c.mu.Lock()
 	if c.stopped {
 		c.mu.Unlock()
-		_ = ws.Close(websocket.StatusNormalClosure, "stopped")
+		_ = transport.Close(1000, "stopped")
 		return ErrClientStopped
 	}
 	c.conn = conn
+	c.token = token
 	c.mu.Unlock()
 	go c.readLoop(conn)
 
 	params := ExecutorRegisterParams{
-		Protocol:      ProtocolVersion,
+		Protocol:      c.options.Protocol,
 		EnvironmentID: c.options.EnvironmentID,
 		Executor:      c.options.Executor,
 		Capabilities:  c.options.Capabilities,
@@ -629,6 +785,10 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 		c.dropConnection(conn)
 		return err
 	}
+	if c.options.Protocol == ProtocolV11 && result.Protocol != ProtocolV11 {
+		c.dropConnection(conn)
+		return fmt.Errorf("bmaexecutor: register result protocol %q, need %s", result.Protocol, ProtocolV11)
+	}
 	c.mu.Lock()
 	interval := time.Duration(result.HeartbeatIntervalMS) * time.Millisecond
 	if interval <= 0 {
@@ -638,6 +798,10 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 	c.connectionID = result.ConnectionID
 	c.executorID = result.ExecutorID
 	c.heartbeatInterval = interval
+	if result.LeaseTTLMS > 0 {
+		c.leaseTTL = time.Duration(result.LeaseTTLMS) * time.Millisecond
+	}
+	c.disconnectedAt = time.Time{}
 	c.state = ConnectionStateReady
 	c.reconnectAttempts = 0
 	c.mu.Unlock()
@@ -651,14 +815,9 @@ func (c *Client) resumeState() *ExecutorResume {
 	if c.executorID == "" && c.connectionID == "" && len(c.sessions) == 0 {
 		return nil
 	}
-	resume := &ExecutorResume{ActiveSessions: c.sessionIDsLocked()}
-	if c.executorID != "" {
-		resume.ExecutorID = stringPtr(c.executorID)
+	return &ExecutorResume{
+		ExecutorID: c.executorID, LastConnectionID: c.connectionID, ActiveSessions: c.sessionIDsLocked(),
 	}
-	if c.connectionID != "" {
-		resume.LastConnectionID = stringPtr(c.connectionID)
-	}
-	return resume
 }
 
 func (c *Client) sessionIDsLocked() []string {
@@ -696,7 +855,7 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 	defer cancel()
 	if err := conn.write(callCtx, payload); err != nil {
 		c.removePending(id)
-		return nil, fmt.Errorf("bmaexecutor: write %s: %w", method, err)
+		return nil, fmt.Errorf("bmaexecutor: write %s: %w: %w", method, ErrNotConnected, err)
 	}
 	select {
 	case outcome := <-pending:
@@ -718,7 +877,7 @@ func (c *Client) removePending(id string) {
 
 func (c *Client) readLoop(conn *connection) {
 	for {
-		_, data, err := conn.ws.Read(c.rootCtx)
+		data, err := conn.conn.Read(c.rootCtx)
 		if err != nil {
 			c.disconnected(conn, err)
 			return
@@ -767,8 +926,17 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 	case MethodToolCall:
 		var call ToolCallParams
 		if err := json.Unmarshal(params, &call); err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInvalidParams, "invalid tool.call params")
+			c.respondError(conn, id, CodeInvalidParams, "invalid tool.call params")
 			return
+		}
+		c.mu.Lock()
+		accept := c.toolCallAccept
+		c.mu.Unlock()
+		if accept != nil {
+			if err := accept(call); err != nil {
+				c.respondHandlerError(conn, id, err)
+				return
+			}
 		}
 		callCtx, started := c.beginToolCall(call)
 		c.respondResult(conn, id, Ack{Accepted: true})
@@ -780,14 +948,14 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 	case MethodToolCancel:
 		var cancel ToolCancelParams
 		if err := json.Unmarshal(params, &cancel); err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInvalidParams, "invalid tool.cancel params")
+			c.respondError(conn, id, CodeInvalidParams, "invalid tool.cancel params")
 			return
 		}
 		c.respondResult(conn, id, c.cancelToolCall(cancel))
 	case MethodSessionAssign:
 		var assign SessionAssignParams
 		if err := json.Unmarshal(params, &assign); err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInvalidParams, "invalid session.assign params")
+			c.respondError(conn, id, CodeInvalidParams, "invalid session.assign params")
 			return
 		}
 		result, err := c.assignSession(assign)
@@ -799,7 +967,7 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 	case MethodSessionStop:
 		var stop SessionStopParams
 		if err := json.Unmarshal(params, &stop); err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInvalidParams, "invalid session.stop params")
+			c.respondError(conn, id, CodeInvalidParams, "invalid session.stop params")
 			return
 		}
 		result, err := c.stopSession(stop)
@@ -811,12 +979,12 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 	case MethodExecutorDrain:
 		var drain ExecutorDrainParams
 		if err := json.Unmarshal(params, &drain); err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInvalidParams, "invalid executor.drain params")
+			c.respondError(conn, id, CodeInvalidParams, "invalid executor.drain params")
 			return
 		}
 		result, err := c.drain(drain)
 		if err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInternalError, err.Error())
+			c.respondError(conn, id, CodeInternalError, err.Error())
 			return
 		}
 		c.respondResult(conn, id, result)
@@ -825,10 +993,10 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 		handler, ok := c.requestHandlers[method]
 		c.mu.Unlock()
 		if !ok {
-			c.respondError(conn, id, JSONRPCErrorCodeMethodNotFound, "unknown method "+method)
+			c.respondError(conn, id, CodeMethodNotFound, "unknown method "+method)
 			return
 		}
-		result, err := handler(c.rootCtx, params)
+		result, err := handler(context.WithValue(c.rootCtx, requestIDKey{}, id), params)
 		if err != nil {
 			c.respondHandlerError(conn, id, err)
 			return
@@ -839,16 +1007,7 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 
 func (c *Client) dispatchNotification(method string, params json.RawMessage) {
 	if method == MethodExecutorClose {
-		c.mu.Lock()
-		c.stopped = true
-		conn := c.conn
-		c.conn = nil
-		c.state = ConnectionStateClosed
-		c.mu.Unlock()
-		if conn != nil {
-			_ = conn.ws.Close(websocket.StatusNormalClosure, "executor.close")
-		}
-		c.failPending(ErrClientStopped)
+		c.finish(nil, 1000, "executor.close")
 		return
 	}
 	c.mu.Lock()
@@ -929,8 +1088,8 @@ func (c *Client) beginToolCall(params ToolCallParams) (context.Context, bool) {
 		callCtx context.Context
 		cancel  context.CancelFunc
 	)
-	if params.DeadlineMS != nil && *params.DeadlineMS > 0 {
-		callCtx, cancel = context.WithTimeout(c.rootCtx, time.Duration(*params.DeadlineMS)*time.Millisecond)
+	if params.DeadlineMS > 0 {
+		callCtx, cancel = context.WithTimeout(c.rootCtx, time.Duration(params.DeadlineMS)*time.Millisecond)
 	} else {
 		callCtx, cancel = context.WithCancel(c.rootCtx)
 	}
@@ -980,6 +1139,7 @@ func (c *Client) runToolCall(ctx context.Context, params ToolCallParams) {
 		reason = running.reason
 	}
 	delete(c.runningToolCalls, params.ToolCallID)
+	hooks := slices.Clone(c.afterToolResults)
 	c.mu.Unlock()
 
 	if canceled {
@@ -996,16 +1156,18 @@ func (c *Client) runToolCall(ctx context.Context, params ToolCallParams) {
 			c.options.OnToolResultLost(result, err)
 		}
 	}
+	for _, hook := range hooks {
+		hook(params)
+	}
 }
 
 func failedToolResult(params ToolCallParams, message string) ToolResultParams {
-	text := message
 	return ToolResultParams{
 		SessionID:  params.SessionID,
 		ToolCallID: params.ToolCallID,
 		Outcome:    ToolOutcomeFailed,
 		IsError:    true,
-		Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: &text}},
+		Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: message}},
 	}
 }
 
@@ -1018,7 +1180,7 @@ func canceledToolResult(params ToolCallParams, reason string) ToolResultParams {
 		SessionID:  params.SessionID,
 		ToolCallID: params.ToolCallID,
 		Outcome:    ToolOutcomeCanceled,
-		Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: &text}},
+		Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: text}},
 	}
 }
 
@@ -1040,7 +1202,7 @@ func (c *Client) respondResult(conn *connection, id string, result any) {
 func (c *Client) respondHandlerError(conn *connection, id string, err error) {
 	var rpcErr *RPCError
 	if !errors.As(err, &rpcErr) {
-		c.respondError(conn, id, JSONRPCErrorCodeInternalError, err.Error())
+		c.respondError(conn, id, CodeInternalError, err.Error())
 		return
 	}
 	payload, marshalErr := json.Marshal(rpcErrorEnvelope{
@@ -1057,7 +1219,7 @@ func (c *Client) respondHandlerError(conn *connection, id string, err error) {
 	}
 }
 
-func (c *Client) respondError(conn *connection, id string, code JSONRPCErrorCode, message string) {
+func (c *Client) respondError(conn *connection, id string, code int, message string) {
 	payload, err := json.Marshal(rpcErrorEnvelope{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -1125,22 +1287,26 @@ func (c *Client) disconnected(conn *connection, err error) {
 	pending := c.pending
 	c.pending = make(map[string]chan rpcOutcome)
 	stopped := c.stopped
+	if c.disconnectedAt.IsZero() {
+		c.disconnectedAt = time.Now()
+	}
 	c.mu.Unlock()
 	for _, channel := range pending {
 		channel <- rpcOutcome{err: ErrNotConnected}
 	}
 	if stopped {
-		c.setState(ConnectionStateClosed)
 		return
 	}
 	c.setState(ConnectionStateDisconnected)
-	code := websocket.CloseStatus(err)
-	if terminalCloseCode(int(code)) {
-		c.mu.Lock()
-		c.state = ConnectionStateClosed
-		c.mu.Unlock()
+	switch code := CloseCode(err); {
+	case code == 4004:
+		c.finish(ErrReplaced, 1000, "replaced")
+		return
+	case terminalCloseCode(code):
+		c.finish(err, 1000, "terminal close")
 		return
 	}
+	c.log(LogWarn, "executor connection lost", err)
 	c.scheduleReconnect()
 }
 
@@ -1150,17 +1316,35 @@ func (c *Client) scheduleReconnect() {
 		c.mu.Unlock()
 		return
 	}
-	if c.reconnectAttempts >= c.options.MaxReconnectAttempts {
-		c.state = ConnectionStateClosed
+	if c.options.MaxReconnectAttempts > 0 && c.reconnectAttempts >= c.options.MaxReconnectAttempts {
 		c.mu.Unlock()
 		c.log(LogError, "executor reconnect attempts exhausted", nil)
+		c.finish(ErrReconnectExhausted, 1000, "reconnect exhausted")
 		return
 	}
 	attempt := c.reconnectAttempts
 	c.reconnectAttempts++
+	var lost []string
+	var hooks []func([]string)
+	// v1.1 §3.9: once the harness lease has certainly expired the sessions
+	// and their processes are gone on the harness side; stop them here too.
+	if !c.disconnectedAt.IsZero() && time.Since(c.disconnectedAt) > c.leaseTTL && len(c.sessions) > 0 {
+		lost = c.sessionIDsLocked()
+		c.sessions = make(map[string]struct{})
+		hooks = append(hooks, c.sessionsLost...)
+	}
 	c.mu.Unlock()
+	if len(lost) > 0 {
+		for _, hook := range hooks {
+			hook(lost)
+		}
+	}
 
-	delay := float64(c.options.ReconnectBaseDelay) * float64(int(1)<<attempt)
+	shift := attempt
+	if shift > 6 {
+		shift = 6
+	}
+	delay := float64(c.options.ReconnectBaseDelay) * float64(int(1)<<shift)
 	if delay > float64(30*time.Second) {
 		delay = float64(30 * time.Second)
 	}
@@ -1194,7 +1378,7 @@ func (c *Client) dropConnection(conn *connection) {
 		c.conn = nil
 	}
 	c.mu.Unlock()
-	_ = conn.ws.Close(websocket.StatusInternalError, "registration failed")
+	_ = conn.conn.Close(1011, "registration failed")
 }
 
 func (c *Client) failPending(err error) {
@@ -1219,9 +1403,11 @@ func (c *Client) log(level LogLevel, message string, err error) {
 	}
 }
 
+// terminalCloseCode reports close codes after which the executor must not
+// reconnect. 4001 (token expired) and 4005 (drained) reconnect.
 func terminalCloseCode(code int) bool {
 	switch code {
-	case 1008, 4002, 4003, 4004, 4005:
+	case 1008, 4002, 4003, 4004:
 		return true
 	default:
 		return false

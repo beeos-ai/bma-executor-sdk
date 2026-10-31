@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.bma.beeos.ai/schemas/tool.json",
+  "title": "BMA executor tool types",
+  "description": "Tool dispatch, results, cancellation, and artifact references.",
+  "$defs": {
+    "ToolName": {
+      "type": "string",
+      "description": "Built-in tool names. bmad serves bash only and answers -32012 for the rest.",
+      "enum": [
+        "bash",
+        "read",
+        "write",
+        "edit",
+        "glob",
+        "grep",
+        "list_files",
+        "computer_observe",
+        "computer_action"
+      ]
+    },
+    "ComputerAction": {
+      "type": "string",
+      "description": "Input actions accepted by the computer_action tool.",
+      "enum": [
+        "click",
+        "type",
+        "key",
+        "scroll",
+        "drag"
+      ]
+    },
+    "PermissionMode": {
+      "type": "string",
+      "description": "Tool permission mode; always_ask means the harness already resolved approval.",
+      "enum": [
+        "always_allow",
+        "always_ask"
+      ]
+    },
+    "ToolPermission": {
+      "type": "object",
+      "description": "Tool permission resolved by the harness.",
+      "properties": {
+        "mode": {
+          "$ref": "tool.json#/$defs/PermissionMode"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "additionalProperties": true
+    },
+    "ToolInput": {
+      "type": "object",
+      "description": "Built-in tool input. The selected tool decides which members are meaningful; unknown members are ignored.",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "timeout_ms": {
+          "type": "integer"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "path": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "content": {
+          "type": "string"
+        },
+        "old_string": {
+          "type": "string"
+        },
+        "new_string": {
+          "type": "string"
+        },
+        "pattern": {
+          "type": "string"
+        },
+        "glob": {
+          "type": "string"
+        },
+        "display": {
+          "type": "string"
+        },
+        "action": {
+          "$ref": "tool.json#/$defs/ComputerAction"
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "ContentBlockType": {
+      "type": "string",
+      "description": "Tool result content block type.",
+      "enum": [
+        "text",
+        "image",
+        "resource",
+        "artifact"
+      ]
+    },
+    "ContentBlock": {
+      "type": "object",
+      "description": "Tool result content block. An artifact block carries artifact_id and mime_type instead of text (v1.1 §6.5).",
+      "properties": {
+        "type": {
+          "$ref": "tool.json#/$defs/ContentBlockType"
+        },
+        "text": {
+          "type": "string"
+        },
+        "data": {
+          "type": "string"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "artifact_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "ArtifactRef": {
+      "type": "object",
+      "description": "Artifact reference returned by POST /v1/executors/artifacts and listed in tool.result artifacts (v1.1 §6.5).",
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "digest": {
+          "type": "string",
+          "description": "sha256:<hex> of the content."
+        },
+        "created_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "mime_type",
+        "size_bytes",
+        "digest"
+      ],
+      "additionalProperties": true
+    },
+    "ToolOutcome": {
+      "type": "string",
+      "description": "Tool outcome.",
+      "enum": [
+        "succeeded",
+        "failed",
+        "canceled"
+      ]
+    },
+    "ToolCancelResult": {
+      "type": "object",
+      "description": "tool.cancel result.",
+      "properties": {
+        "canceled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "canceled"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

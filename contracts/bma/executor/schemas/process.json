@@ -1,0 +1,313 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.bma.beeos.ai/schemas/process.json",
+  "title": "BMA executor process types",
+  "description": "v1.1 process.* streaming (v1.1 §3) and its additive file transfer, PTY and Git credential modes.",
+  "$defs": {
+    "ProcessStateName": {
+      "type": "string",
+      "description": "Process state (v1.1 §3.3).",
+      "enum": [
+        "running",
+        "exited",
+        "failed",
+        "killed"
+      ],
+      "x-go-names": {
+        "running": "ProcessRunning",
+        "exited": "ProcessExited",
+        "failed": "ProcessFailed",
+        "killed": "ProcessKilled"
+      }
+    },
+    "ProcessStream": {
+      "type": "string",
+      "description": "Process output stream (v1.1 §3.2).",
+      "enum": [
+        "stdout",
+        "stderr"
+      ],
+      "x-go-names": {
+        "stdout": "StreamStdout",
+        "stderr": "StreamStderr"
+      }
+    },
+    "StdinMode": {
+      "type": "string",
+      "description": "process.start stdin mode. Empty or \"closed\" closes stdin at start; \"open\" keeps it open for process.write.",
+      "enum": [
+        "open",
+        "closed"
+      ],
+      "x-go-names": {
+        "open": "StdinOpen",
+        "closed": "StdinClosed"
+      }
+    },
+    "StderrMode": {
+      "type": "string",
+      "description": "process.start stderr mode. \"merge\" redirects stderr into stdout at the OS level so one cursor covers both.",
+      "enum": [
+        "merge"
+      ],
+      "x-go-names": {
+        "merge": "StderrMerge"
+      }
+    },
+    "IOMode": {
+      "type": "string",
+      "description": "process.start io_mode. \"pty\" runs the command on a 24x80 pseudo-terminal: stdout is the PTY output, stdin writes go to the PTY and close_stdin is rejected. Requires process.pty.",
+      "enum": [
+        "pty"
+      ],
+      "x-go-names": {
+        "pty": "IOModePTY"
+      }
+    },
+    "FileTransferDirection": {
+      "type": "string",
+      "description": "File transfer direction relative to the machine.",
+      "enum": [
+        "upload",
+        "download"
+      ],
+      "x-go-names": {
+        "upload": "FileTransferUpload",
+        "download": "FileTransferDownload"
+      }
+    },
+    "ProcessFileTransfer": {
+      "type": "object",
+      "description": "Replaces argv: the executor moves one file between the machine and the process BMA file endpoint and reports the outcome in ProcessState.file_transfer. Requires process.file_transfer.",
+      "properties": {
+        "direction": {
+          "$ref": "process.json#/$defs/FileTransferDirection"
+        },
+        "local_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "direction",
+        "local_path"
+      ],
+      "additionalProperties": true
+    },
+    "FileTransferError": {
+      "type": "object",
+      "description": "Failed file transfer.",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string",
+          "x-go-name": "Message"
+        },
+        "current_digest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "error"
+      ],
+      "additionalProperties": true
+    },
+    "FileTransferResult": {
+      "type": "object",
+      "description": "Ended file transfer outcome: the uploaded path and digest, the downloaded digest, or an error.",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "error": {
+          "$ref": "process.json#/$defs/FileTransferError"
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "Cursors": {
+      "type": "object",
+      "description": "Per-stream byte cursors.",
+      "properties": {
+        "stdout": {
+          "type": "integer"
+        },
+        "stderr": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "stdout",
+        "stderr"
+      ],
+      "additionalProperties": true
+    },
+    "ProcessState": {
+      "type": "object",
+      "description": "Result of process.start/interrupt/terminate and one process.list entry. ended_at (RFC 3339, executor clock) is set once the process is no longer running; reason explains a \"failed\" state (for example \"timeout\"). A spawn failure never creates a state: it is the process.start error with data.reason \"spawn_failed\".",
+      "properties": {
+        "process_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "process.json#/$defs/ProcessStateName"
+        },
+        "pid": {
+          "type": "integer",
+          "x-go-type": "int"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "ended_at": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "cursors": {
+          "$ref": "process.json#/$defs/Cursors"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-go-type": "int"
+        },
+        "exit_signal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "file_transfer": {
+          "$ref": "process.json#/$defs/FileTransferResult"
+        }
+      },
+      "required": [
+        "process_id",
+        "state",
+        "cursors",
+        "exit_code",
+        "exit_signal"
+      ],
+      "additionalProperties": true
+    },
+    "ProcessReadResult": {
+      "type": "object",
+      "description": "process.read result.",
+      "properties": {
+        "process_id": {
+          "type": "string"
+        },
+        "stream": {
+          "$ref": "process.json#/$defs/ProcessStream"
+        },
+        "data": {
+          "type": "string",
+          "description": "Base64 bytes from from_cursor to next_cursor."
+        },
+        "from_cursor": {
+          "type": "integer"
+        },
+        "next_cursor": {
+          "type": "integer"
+        },
+        "earliest_cursor": {
+          "type": "integer"
+        },
+        "gap": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "eof": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "process.json#/$defs/ProcessStateName"
+        },
+        "ended_at": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-go-type": "int"
+        },
+        "exit_signal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file_transfer": {
+          "$ref": "process.json#/$defs/FileTransferResult"
+        }
+      },
+      "required": [
+        "process_id",
+        "stream",
+        "data",
+        "from_cursor",
+        "next_cursor",
+        "earliest_cursor",
+        "gap",
+        "truncated",
+        "eof",
+        "state",
+        "exit_code",
+        "exit_signal"
+      ],
+      "additionalProperties": true
+    },
+    "ProcessWriteResult": {
+      "type": "object",
+      "description": "process.write result.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "accepted"
+      ],
+      "additionalProperties": true
+    },
+    "ProcessListResult": {
+      "type": "object",
+      "description": "process.list result.",
+      "properties": {
+        "processes": {
+          "type": "array",
+          "items": {
+            "$ref": "process.json#/$defs/ProcessState"
+          }
+        }
+      },
+      "required": [
+        "processes"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

@@ -27,7 +27,7 @@ func newLoopbackClient(t *testing.T, wsURL, token string) *Client {
 	client, err := NewClient(Options{
 		EnvironmentID: "local",
 		Executor:      ExecutorInfo{Name: "test-hand", OS: "test", Arch: "test", Version: "0"},
-		Capabilities:  ExecutorCapabilities{Shell: &ShellCapability{Enabled: true}},
+		Capabilities:  Capabilities{Shell: &ShellCapability{Enabled: true}},
 		TokenSource:   StaticToken(wsURL, token),
 	})
 	if err != nil {
@@ -47,8 +47,8 @@ func testContext(t *testing.T) context.Context {
 func textOf(result ToolResultParams) string {
 	var b strings.Builder
 	for _, block := range result.Content {
-		if block.Text != nil {
-			b.WriteString(*block.Text)
+		if block.Text != "" {
+			b.WriteString(block.Text)
 		}
 	}
 	return b.String()
@@ -71,8 +71,9 @@ func TestHarnessDrivesExecutorClient(t *testing.T) {
 			}
 			return ToolResultParams{Outcome: ToolOutcomeSucceeded}, nil
 		}
-		text := "ran " + *call.Input.Command
-		return ToolResultParams{Outcome: ToolOutcomeSucceeded, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: &text}}}, nil
+		var input ToolInput
+		_ = json.Unmarshal(call.Input, &input)
+		return ToolResultParams{Outcome: ToolOutcomeSucceeded, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "ran " + input.Command}}}, nil
 	})
 	client.OnSessionAssign(func(ctx context.Context, assign SessionAssignParams) (SessionAssignResult, error) {
 		go func() {
@@ -102,7 +103,7 @@ func TestHarnessDrivesExecutorClient(t *testing.T) {
 	}
 
 	command := "echo hi"
-	call := ToolCallParams{ToolCallID: "call_1", Tool: ToolNameBash, Input: ToolInput{Command: &command}}
+	call := ToolCallParams{ToolCallID: "call_1", Tool: ToolNameBash, Input: NewToolInput(ToolInput{Command: command})}
 	result, err := session.CallTool(ctx, call)
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +141,7 @@ func TestHarnessDrivesExecutorClient(t *testing.T) {
 	default:
 		t.Fatal("session not done after stop")
 	}
-	if _, err := session.CallTool(ctx, ToolCallParams{ToolCallID: "call_late", Tool: ToolNameBash, Input: ToolInput{Command: &command}}); !errors.Is(err, ErrSessionEnded) {
+	if _, err := session.CallTool(ctx, ToolCallParams{ToolCallID: "call_late", Tool: ToolNameBash, Input: NewToolInput(ToolInput{Command: command})}); !errors.Is(err, ErrSessionEnded) {
 		t.Fatalf("call after stop err = %v", err)
 	}
 }
@@ -182,7 +183,7 @@ func dialRaw(t *testing.T, wsURL, query string) *rawExecutor {
 	if query != "" {
 		wsURL += "?" + query
 	}
-	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{Subprotocols: []string{WSSubprotocol}})
+	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{Subprotocols: []string{ProtocolV11}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +226,7 @@ func (r *rawExecutor) readResponse(id string) rpcInbound {
 
 func (r *rawExecutor) register(resume map[string]any) ExecutorRegisterResult {
 	params := map[string]any{
-		"protocol": ProtocolVersion, "environment_id": "local",
+		"protocol": ProtocolV11, "environment_id": "local",
 		"executor": map[string]any{"name": "raw", "os": "test", "arch": "test", "version": "0"}, "capabilities": map[string]any{},
 	}
 	if resume != nil {
@@ -279,14 +280,14 @@ func TestHarnessToolResultSemantics(t *testing.T) {
 	raw.send(map[string]any{"id": "r1", "method": MethodToolResult, "params": map[string]any{
 		"session_id": "sess_a", "tool_call_id": "never", "outcome": "succeeded", "is_error": false, "content": []any{},
 	}})
-	if response := raw.readResponse("r1"); response.Error == nil || response.Error.Code != JSONRPCErrorCodeNotFound {
+	if response := raw.readResponse("r1"); response.Error == nil || response.Error.Code != CodeNotFound {
 		t.Fatalf("unknown call response = %+v", response)
 	}
 	// A result for a session this executor does not hold is session_not_active.
 	raw.send(map[string]any{"id": "r2", "method": MethodToolResult, "params": map[string]any{
 		"session_id": "sess_other", "tool_call_id": "x", "outcome": "succeeded", "is_error": false, "content": []any{},
 	}})
-	if response := raw.readResponse("r2"); response.Error == nil || response.Error.Code != JSONRPCErrorCodeSessionNotActive {
+	if response := raw.readResponse("r2"); response.Error == nil || response.Error.Code != CodeSessionNotActive {
 		t.Fatalf("foreign session response = %+v", response)
 	}
 }

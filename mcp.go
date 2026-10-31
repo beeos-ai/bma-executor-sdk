@@ -44,7 +44,7 @@ func (c *Client) OpenMCPChannel(ctx context.Context, sessionID, serverKey string
 	if err != nil {
 		return nil, err
 	}
-	if len(token.ChannelScope) > 0 && !allowsChannel(token.ChannelScope, ChannelScopeMcp) {
+	if len(token.ChannelScope) > 0 && !allowsChannel(token.ChannelScope, ChannelMCP) {
 		return nil, errors.New("bmaexecutor: executor token does not allow the mcp channel")
 	}
 
@@ -59,7 +59,7 @@ func (c *Client) OpenMCPChannel(ctx context.Context, sessionID, serverKey string
 
 	ws, _, err := websocket.Dial(ctx, channelURL, &websocket.DialOptions{
 		HTTPHeader:   authHeader(token.Token),
-		Subprotocols: []string{WSSubprotocol},
+		Subprotocols: []string{ProtocolV11},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("bmaexecutor: mcp websocket dial: %w", err)
@@ -122,7 +122,7 @@ func mcpChannelURL(rawURL, sessionID, serverKey string) (string, error) {
 	return parsed.String(), nil
 }
 
-func allowsChannel(scopes []ChannelScope, want ChannelScope) bool {
+func allowsChannel(scopes []string, want string) bool {
 	for _, scope := range scopes {
 		if scope == want {
 			return true

@@ -125,35 +125,35 @@ func TestCoreToolsOverLoopback(t *testing.T) {
 	core := newTestCore(t, CoreOptions{})
 	session := readySession(t, attachBrain(t, core, "local"), SessionAssignParams{SessionID: "sess_tools"})
 
-	call := func(tool ToolName, input ToolInput) ToolResultParams {
+	call := func(tool string, input ToolInput) ToolResultParams {
 		t.Helper()
-		result, err := session.CallTool(ctx, ToolCallParams{Tool: tool, Input: input})
+		result, err := session.CallTool(ctx, ToolCallParams{Tool: tool, Input: NewToolInput(input)})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return result
 	}
-	if result := call(ToolNameBash, ToolInput{Command: ptr("printf 'one\\ntwo\\n' > a.txt && pwd")}); result.IsError ||
+	if result := call(ToolNameBash, ToolInput{Command: "printf 'one\\ntwo\\n' > a.txt && pwd"}); result.IsError ||
 		!strings.Contains(textOf(result), filepath.Join("local", "sess_tools")) {
 		t.Fatalf("bash = %+v", textOf(result))
 	}
-	if result := call(ToolNameEdit, ToolInput{Path: ptr("a.txt"), OldString: ptr("two"), NewString: ptr("2")}); result.IsError {
+	if result := call(ToolNameEdit, ToolInput{Path: "a.txt", OldString: "two", NewString: "2"}); result.IsError {
 		t.Fatalf("edit = %s", textOf(result))
 	}
-	if got := textOf(call(ToolNameRead, ToolInput{Path: ptr("a.txt"), Offset: ptr[int64](2)})); got != "2\n" {
+	if got := textOf(call(ToolNameRead, ToolInput{Path: "a.txt", Offset: 2})); got != "2\n" {
 		t.Fatalf("read = %q", got)
 	}
-	call(ToolNameWrite, ToolInput{Path: ptr("sub/b.go"), Content: ptr("package b // needle\n")})
-	if got := textOf(call(ToolNameGrep, ToolInput{Pattern: ptr("needle"), Glob: ptr("*.go")})); got != "sub/b.go:1:package b // needle" {
+	call(ToolNameWrite, ToolInput{Path: "sub/b.go", Content: "package b // needle\n"})
+	if got := textOf(call(ToolNameGrep, ToolInput{Pattern: "needle", Glob: "*.go"})); got != "sub/b.go:1:package b // needle" {
 		t.Fatalf("grep = %q", got)
 	}
-	if got := textOf(call(ToolNameGlob, ToolInput{Pattern: ptr("sub/*.go")})); got != "sub/b.go" {
+	if got := textOf(call(ToolNameGlob, ToolInput{Pattern: "sub/*.go"})); got != "sub/b.go" {
 		t.Fatalf("glob = %q", got)
 	}
-	if result := call(ToolNameBash, ToolInput{Command: ptr("exit 3")}); !result.IsError || !strings.Contains(textOf(result), "exit_code: 3") {
+	if result := call(ToolNameBash, ToolInput{Command: "exit 3"}); result.IsError || result.Outcome != ToolOutcomeSucceeded || !strings.Contains(textOf(result), "exit_code: 3") {
 		t.Fatalf("nonzero exit = %+v", textOf(result))
 	}
-	if result := call(ToolNameRead, ToolInput{Path: ptr("../../escape")}); result.Outcome != ToolOutcomeFailed ||
+	if result := call(ToolNameRead, ToolInput{Path: "../../escape"}); result.Outcome != ToolOutcomeFailed ||
 		!strings.Contains(textOf(result), "outside the session workspace") {
 		t.Fatalf("escape = %+v", textOf(result))
 	}
@@ -168,7 +168,7 @@ func TestCoreCancelAndStopKillProcessGroups(t *testing.T) {
 	// tool.cancel kills the shell and its child sleep.
 	done := make(chan ToolResultParams, 1)
 	go func() {
-		result, _ := session.CallTool(ctx, ToolCallParams{ToolCallID: "call_sleep", Tool: ToolNameBash, Input: ToolInput{Command: ptr("sleep 30 & echo $! > child.pid; wait")}})
+		result, _ := session.CallTool(ctx, ToolCallParams{ToolCallID: "call_sleep", Tool: ToolNameBash, Input: NewToolInput(ToolInput{Command: "sleep 30 & echo $! > child.pid; wait"})})
 		done <- result
 	}()
 	pidFile := filepath.Join(core.workspace("local", "sess_kill"), "child.pid")
@@ -186,7 +186,7 @@ func TestCoreCancelAndStopKillProcessGroups(t *testing.T) {
 	_ = os.Remove(pidFile)
 	stopped := make(chan error, 1)
 	go func() {
-		_, err := session.CallTool(ctx, ToolCallParams{Tool: ToolNameBash, Input: ToolInput{Command: ptr("sleep 30 & echo $! > child.pid; wait")}})
+		_, err := session.CallTool(ctx, ToolCallParams{Tool: ToolNameBash, Input: NewToolInput(ToolInput{Command: "sleep 30 & echo $! > child.pid; wait"})})
 		stopped <- err
 	}()
 	waitFor(t, func() bool { raw, _ := os.ReadFile(pidFile); return len(raw) > 0 })
@@ -224,29 +224,29 @@ func TestCoreMultiBrainIsolationAndCapacity(t *testing.T) {
 	cloudSession := readySession(t, cloud, SessionAssignParams{SessionID: "sess_same"})
 	localSession := readySession(t, local, SessionAssignParams{SessionID: "sess_same"})
 	write := func(session *Session, text string) {
-		if _, err := session.CallTool(ctx, ToolCallParams{Tool: ToolNameWrite, Input: ToolInput{Path: ptr("owner"), Content: ptr(text)}}); err != nil {
+		if _, err := session.CallTool(ctx, ToolCallParams{Tool: ToolNameWrite, Input: NewToolInput(ToolInput{Path: "owner", Content: text})}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	write(cloudSession, "cloud")
 	write(localSession, "local")
-	result, err := cloudSession.CallTool(ctx, ToolCallParams{Tool: ToolNameRead, Input: ToolInput{Path: ptr("owner")}})
+	result, err := cloudSession.CallTool(ctx, ToolCallParams{Tool: ToolNameRead, Input: NewToolInput(ToolInput{Path: "owner"})})
 	if err != nil || textOf(result) != "cloud" {
 		t.Fatalf("cloud read = %q err %v", textOf(result), err)
 	}
 
 	// A brain cannot reach a session another brain assigned.
-	cross := core.toolCall(ctx, "third", ToolCallParams{SessionID: "sess_same", ToolCallID: "x", Tool: ToolNameRead, Input: ToolInput{Path: ptr("owner")}})
+	cross := core.toolCall(ctx, "third", ToolCallParams{SessionID: "sess_same", ToolCallID: "x", Tool: ToolNameRead, Input: NewToolInput(ToolInput{Path: "owner"})})
 	if cross.Outcome != ToolOutcomeFailed || !strings.Contains(textOf(cross), "session_not_active") {
 		t.Fatalf("cross-brain call = %+v", textOf(cross))
 	}
 
 	// Per-brain capacity, then total capacity: both executor_busy.
 	var rpcErr *RPCError
-	if _, err := cloud.executor.AssignSession(ctx, SessionAssignParams{SessionID: "sess_second"}); !errors.As(err, &rpcErr) || rpcErr.Code != JSONRPCErrorCodeExecutorBusy {
+	if _, err := cloud.executor.AssignSession(ctx, SessionAssignParams{SessionID: "sess_second"}); !errors.As(err, &rpcErr) || rpcErr.Code != CodeExecutorBusy {
 		t.Fatalf("per-brain capacity err = %v", err)
 	}
-	if _, err := third.executor.AssignSession(ctx, SessionAssignParams{SessionID: "sess_third"}); !errors.As(err, &rpcErr) || rpcErr.Code != JSONRPCErrorCodeExecutorBusy {
+	if _, err := third.executor.AssignSession(ctx, SessionAssignParams{SessionID: "sess_third"}); !errors.As(err, &rpcErr) || rpcErr.Code != CodeExecutorBusy {
 		t.Fatalf("total capacity err = %v", err)
 	}
 	// Stopping one brain's session frees capacity for another brain only.
@@ -269,7 +269,7 @@ func TestCoreStdioMCPChannel(t *testing.T) {
 	}
 	server := func(key string) MCPServerConfig {
 		return MCPServerConfig{ServerKey: key, ConnectionOrigin: MCPConnectionOriginEnvironment, Transport: MCPServerTransport{
-			Type: MCPTransportTypeStdio, Command: &executable, Env: map[string]string{"BMA_TEST_MCP_SERVER": "1"},
+			Type: MCPTransportTypeStdio, Command: executable, Env: map[string]string{"BMA_TEST_MCP_SERVER": "1"},
 		}}
 	}
 	session := readySession(t, b, SessionAssignParams{SessionID: "sess_mcp", MCPServers: []MCPServerConfig{server("a"), server("b")}})

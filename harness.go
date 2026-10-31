@@ -18,9 +18,8 @@ import (
 )
 
 // ProtocolV11 is the bma.executor.v1.1 subprotocol and register value. The
-// harness accepts it alongside ProtocolVersion so it can drive executors on
+// harness accepts it alongside ProtocolV11 so it can drive executors on
 // either revision; the method shapes it relies on are identical in both.
-const ProtocolV11 = "bma.executor.v1.1"
 
 const (
 	DefaultHarnessHeartbeatInterval = 15 * time.Second
@@ -61,7 +60,7 @@ type HarnessOptions struct {
 	// RequestTimeout bounds harness-to-executor requests. Defaults to 30s.
 	RequestTimeout time.Duration
 	// Protocols are the accepted subprotocols in preference order. Defaults
-	// to ProtocolV11 then ProtocolVersion.
+	// to ProtocolV11 then ProtocolV1.
 	Protocols []string
 
 	// OnExecutor runs after each successful executor.register.
@@ -101,7 +100,7 @@ func NewHarness(opts HarnessOptions) *Harness {
 		opts.RequestTimeout = DefaultRequestTimeout
 	}
 	if len(opts.Protocols) == 0 {
-		opts.Protocols = []string{ProtocolV11, ProtocolVersion}
+		opts.Protocols = []string{ProtocolV11, ProtocolV1}
 	}
 	return &Harness{
 		opts:      opts,
@@ -160,9 +159,9 @@ func (h *Harness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	switch r.URL.Query().Get("channel") {
-	case "", string(ChannelScopeControl):
+	case "", string(ChannelControl):
 		h.serveControl(w, r, principal)
-	case string(ChannelScopeMcp):
+	case string(ChannelMCP):
 		h.serveMCP(w, r, principal)
 	default:
 		http.Error(w, "unknown channel", http.StatusBadRequest)
@@ -195,9 +194,16 @@ func (h *Harness) serveControl(w http.ResponseWriter, r *http.Request, principal
 	if !ok {
 		return
 	}
+	h.ServeConn(NewWebSocketConn(ws), principal)
+}
+
+// ServeConn serves one executor control connection on any transport (an
+// in-process Pipe end, a dialed local socket, ...) until it closes. The
+// caller authenticated the peer; principal pins its identity.
+func (h *Harness) ServeConn(transport Conn, principal Principal) {
 	ctx, cancel := context.WithCancel(context.Background())
 	conn := &harnessConn{
-		h: h, ws: ws, principal: principal, ctx: ctx, cancel: cancel,
+		h: h, ws: transport, principal: principal, ctx: ctx, cancel: cancel,
 		pending: map[string]chan rpcOutcome{},
 		id:      fmt.Sprintf("conn_%d_%s", h.nextConn.Add(1), randomID(4)),
 	}
@@ -246,7 +252,7 @@ func (e *Executor) Protocol() string {
 }
 
 // Capabilities decodes the advertised capabilities into out (for example
-// *ExecutorCapabilities, or a v1.1 capability struct).
+// *Capabilities, or a v1.1 capability struct).
 func (e *Executor) Capabilities(out any) error {
 	e.mu.Lock()
 	raw := e.capabilities
@@ -272,6 +278,13 @@ func (e *Executor) connected() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.conn != nil
+}
+
+// Call sends a harness-to-executor request for a capability method
+// (process.*, terminal.*, skill.install, ...) and decodes its result. A
+// JSON-RPC error answer is an *RPCError.
+func (e *Executor) Call(ctx context.Context, method string, params, out any) error {
+	return e.call(ctx, method, params, out)
 }
 
 func (e *Executor) call(ctx context.Context, method string, params, out any) error {
@@ -557,7 +570,7 @@ func (s *Session) end(reason string, pendingErr error) {
 
 type harnessConn struct {
 	h         *Harness
-	ws        *websocket.Conn
+	ws        Conn
 	principal Principal
 	id        string
 	ctx       context.Context
@@ -574,7 +587,7 @@ type harnessConn struct {
 func (c *harnessConn) readLoop() {
 	defer c.cancel()
 	for {
-		_, data, err := c.ws.Read(c.ctx)
+		data, err := c.ws.Read(c.ctx)
 		if err != nil {
 			c.disconnected()
 			return
@@ -615,7 +628,7 @@ func (c *harnessConn) write(value any) error {
 	defer cancel()
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return c.ws.Write(ctx, websocket.MessageText, payload)
+	return c.ws.Write(ctx, payload)
 }
 
 func (c *harnessConn) respond(id string, result any, rpcErr *JSONRPCError) {
@@ -630,8 +643,8 @@ func (c *harnessConn) respond(id string, result any, rpcErr *JSONRPCError) {
 	}
 }
 
-func rpcErr(code JSONRPCErrorCode, message string, retryable bool) *JSONRPCError {
-	return &JSONRPCError{Code: code, Message: message, Data: &JSONRPCErrorData{Retryable: &retryable}}
+func rpcErr(code int, message string, retryable bool) *JSONRPCError {
+	return &JSONRPCError{Code: code, Message: message, Data: &JSONRPCErrorData{Retryable: retryable}}
 }
 
 func (c *harnessConn) call(ctx context.Context, method string, params, out any) error {
@@ -699,26 +712,26 @@ type harnessRegisterResult struct {
 
 func (c *harnessConn) handleRegister(id string, raw json.RawMessage) {
 	if c.currentExecutor() != nil {
-		c.respond(id, nil, rpcErr(JSONRPCErrorCodeInvalidRequest, "already registered", false))
+		c.respond(id, nil, rpcErr(CodeInvalidRequest, "already registered", false))
 		return
 	}
 	var params harnessRegisterParams
 	if err := json.Unmarshal(raw, &params); err != nil {
-		c.respond(id, nil, rpcErr(JSONRPCErrorCodeInvalidParams, "invalid executor.register params", false))
+		c.respond(id, nil, rpcErr(CodeInvalidParams, "invalid executor.register params", false))
 		return
 	}
 	if params.Protocol != c.ws.Subprotocol() {
-		c.respond(id, nil, rpcErr(JSONRPCErrorCodeUnsupportedProtocol, "protocol must match the negotiated subprotocol", false))
+		c.respond(id, nil, rpcErr(CodeUnsupportedProtocol, "protocol must match the negotiated subprotocol", false))
 		return
 	}
 	resumeID := ""
-	if params.Resume != nil && params.Resume.ExecutorID != nil {
-		resumeID = *params.Resume.ExecutorID
+	if params.Resume != nil {
+		resumeID = params.Resume.ExecutorID
 	}
 	executorID := c.principal.ExecutorID
 	switch {
 	case executorID != "" && resumeID != "" && resumeID != executorID:
-		c.respond(id, nil, rpcErr(JSONRPCErrorCodeForbidden, "resume.executor_id does not match the authenticated executor", false))
+		c.respond(id, nil, rpcErr(CodeForbidden, "resume.executor_id does not match the authenticated executor", false))
 		return
 	case executorID == "" && resumeID != "":
 		executorID = resumeID
@@ -815,7 +828,7 @@ func (c *harnessConn) disconnected() {
 func (c *harnessConn) handleRequest(id, method string, raw json.RawMessage) {
 	executor := c.currentExecutor()
 	if executor == nil {
-		c.respond(id, nil, rpcErr(JSONRPCErrorCodeInvalidRequest, "executor.register must come first", false))
+		c.respond(id, nil, rpcErr(CodeInvalidRequest, "executor.register must come first", false))
 		return
 	}
 	result, rpcError := c.dispatch(executor, id, method, raw)
@@ -834,46 +847,46 @@ func (c *harnessConn) dispatch(executor *Executor, id, method string, raw json.R
 	case MethodSessionReady:
 		var params SessionReadyParams
 		if json.Unmarshal(raw, &params) != nil {
-			return nil, rpcErr(JSONRPCErrorCodeInvalidParams, "invalid session.ready params", false)
+			return nil, rpcErr(CodeInvalidParams, "invalid session.ready params", false)
 		}
 		session, ok := executor.session(params.SessionID)
 		if !ok {
-			return nil, rpcErr(JSONRPCErrorCodeSessionNotActive, "session is not active on this executor", false)
+			return nil, rpcErr(CodeSessionNotActive, "session is not active on this executor", false)
 		}
 		if params.LeaseToken != "" && params.LeaseToken != session.leaseToken {
-			return nil, rpcErr(JSONRPCErrorCodeLeaseExpired, "lease token does not match", false)
+			return nil, rpcErr(CodeLeaseExpired, "lease token does not match", false)
 		}
 		session.markReady()
 		return Ack{Accepted: true}, nil
 	case MethodSessionEnded:
 		var params SessionEndedParams
 		if json.Unmarshal(raw, &params) != nil {
-			return nil, rpcErr(JSONRPCErrorCodeInvalidParams, "invalid session.ended params", false)
+			return nil, rpcErr(CodeInvalidParams, "invalid session.ended params", false)
 		}
 		if session, ok := executor.session(params.SessionID); ok {
 			session.end(params.Reason, ErrToolOutcomeUnknown)
 		}
-		return SessionEndedResult{Accepted: true}, nil
+		return Ack{Accepted: true}, nil
 	case MethodToolResult:
 		var params ToolResultParams
 		if json.Unmarshal(raw, &params) != nil {
-			return nil, rpcErr(JSONRPCErrorCodeInvalidParams, "invalid tool.result params", false)
+			return nil, rpcErr(CodeInvalidParams, "invalid tool.result params", false)
 		}
 		session, ok := executor.session(params.SessionID)
 		if !ok {
-			return nil, rpcErr(JSONRPCErrorCodeSessionNotActive, "session is not active on this executor", false)
+			return nil, rpcErr(CodeSessionNotActive, "session is not active on this executor", false)
 		}
 		if !session.complete(params) {
-			return nil, rpcErr(JSONRPCErrorCodeNotFound, "tool_call_id was not dispatched by this harness", false)
+			return nil, rpcErr(CodeNotFound, "tool_call_id was not dispatched by this harness", false)
 		}
 		return Ack{Accepted: true}, nil
 	case MethodSessionEvent:
 		var params SessionEventParams
 		if json.Unmarshal(raw, &params) != nil {
-			return nil, rpcErr(JSONRPCErrorCodeInvalidParams, "invalid session.event params", false)
+			return nil, rpcErr(CodeInvalidParams, "invalid session.event params", false)
 		}
 		if _, ok := executor.session(params.SessionID); !ok {
-			return nil, rpcErr(JSONRPCErrorCodeSessionNotActive, "session is not active on this executor", false)
+			return nil, rpcErr(CodeSessionNotActive, "session is not active on this executor", false)
 		}
 		executor.mu.Lock()
 		previous, replay := executor.eventIDs[id]
@@ -885,7 +898,7 @@ func (c *harnessConn) dispatch(executor *Executor, id, method string, raw json.R
 		if c.h.opts.OnSessionEvent != nil {
 			var err error
 			if result, err = c.h.opts.OnSessionEvent(c.ctx, executor, params); err != nil {
-				return nil, rpcErr(JSONRPCErrorCodeInternalError, err.Error(), true)
+				return nil, rpcErr(CodeInternalError, err.Error(), true)
 			}
 		}
 		executor.mu.Lock()
@@ -896,7 +909,7 @@ func (c *harnessConn) dispatch(executor *Executor, id, method string, raw json.R
 		executor.mu.Unlock()
 		return result, nil
 	default:
-		return nil, rpcErr(JSONRPCErrorCodeMethodNotFound, "unknown method "+method, false)
+		return nil, rpcErr(CodeMethodNotFound, "unknown method "+method, false)
 	}
 }
 
@@ -928,7 +941,7 @@ func (c *harnessConn) handleNotification(method string, raw json.RawMessage) {
 	case MethodExecutorClose:
 		// A deliberate shutdown: no reconnect grace.
 		executor.forget("executor_closed")
-		_ = c.ws.Close(websocket.StatusNormalClosure, "executor.close")
+		_ = c.ws.Close(int(websocket.StatusNormalClosure), "executor.close")
 	}
 }
 
@@ -938,4 +951,17 @@ func randomID(bytes int) string {
 		panic(err)
 	}
 	return hex.EncodeToString(buf)
+}
+
+// DialExecutor connects this harness to an executor that listens on the
+// local Unix socket at path (ListenUnixSocket) and serves the connection
+// until it closes. A local brain uses it to drive the hand already running
+// on the machine instead of starting another one.
+func (h *Harness) DialExecutor(ctx context.Context, path, token string) error {
+	conn, err := dialWebSocket(ctx, unixHTTPClient(path), "ws://local/", token, h.opts.Protocols[0])
+	if err != nil {
+		return err
+	}
+	go h.ServeConn(conn, Principal{})
+	return nil
 }

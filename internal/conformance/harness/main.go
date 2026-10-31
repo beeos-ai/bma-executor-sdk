@@ -55,14 +55,14 @@ func run() error {
 		return fmt.Errorf("ready: %w", err)
 	}
 	command := "hello"
-	call := bmaexecutor.ToolCallParams{ToolCallID: "call_1", Tool: bmaexecutor.ToolNameBash, Input: bmaexecutor.ToolInput{Command: &command}}
+	call := bmaexecutor.ToolCallParams{ToolCallID: "call_1", Tool: bmaexecutor.ToolNameBash, Input: bmaexecutor.NewToolInput(bmaexecutor.ToolInput{Command: command})}
 	for range 2 { // the repeat must return the recorded result
 		result, err := session.CallTool(ctx, call)
 		if err != nil {
 			return fmt.Errorf("tool.call: %w", err)
 		}
-		if result.Outcome != bmaexecutor.ToolOutcomeSucceeded || len(result.Content) == 0 || result.Content[0].Text == nil ||
-			!strings.HasSuffix(*result.Content[0].Text, ":hello") {
+		if result.Outcome != bmaexecutor.ToolOutcomeSucceeded || len(result.Content) == 0 || result.Content[0].Text == "" ||
+			!strings.HasSuffix(result.Content[0].Text, ":hello") {
 			return fmt.Errorf("tool.result = %+v", result)
 		}
 	}
