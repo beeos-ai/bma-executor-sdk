@@ -1,0 +1,62 @@
+name: Contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags:
+      - 'go/v*'
+      - 'ts/v*'
+      - 'python/v*'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: Generated code, contract drift, and SDK tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Regenerate every SDK and require no diff
+        run: |
+          uv run --no-project --with pyyaml ./tools/generate.sh
+          git status --porcelain
+          test -z "$(git status --porcelain)"
+
+      - name: Contract drift check
+        run: uv run --no-project --with pyyaml --with jsonschema python tools/check_contract.py
+
+      - name: Go
+        working-directory: go
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: TypeScript
+        working-directory: typescript
+        run: |
+          npm run build
+          npm test
+
+      - name: Python
+        working-directory: python
+        run: uv run pytest -q
