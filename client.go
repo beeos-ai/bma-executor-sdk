@@ -80,6 +80,10 @@ type Options struct {
 
 	BaseURL string
 	WSURL   string
+	// TokenSource replaces the POST /v1/executors/token bootstrap, for example
+	// StaticToken for a local harness on a loopback listener. When set,
+	// EnvironmentKey and BaseURL are not used.
+	TokenSource func(ctx context.Context) (ExecutorTokenResponse, error)
 	// HTTPClient is used for the token request. Defaults to http.DefaultClient.
 	HTTPClient *http.Client
 	// RequestTimeout bounds one JSON-RPC request. Defaults to 30s.
@@ -206,7 +210,7 @@ type Client struct {
 
 // NewClient validates options and returns a disconnected client.
 func NewClient(options Options) (*Client, error) {
-	if strings.TrimSpace(options.EnvironmentKey) == "" {
+	if options.TokenSource == nil && strings.TrimSpace(options.EnvironmentKey) == "" {
 		return nil, errors.New("bmaexecutor: EnvironmentKey is required")
 	}
 	if strings.TrimSpace(options.EnvironmentID) == "" {
@@ -539,7 +543,23 @@ func (c *Client) rememberToolCallLocked(set map[string]struct{}, id string) {
 	set[id] = struct{}{}
 }
 
+// StaticToken is a TokenSource for a harness reached directly, typically a
+// local harness on ws://127.0.0.1. token may be empty when the harness has no
+// Authenticate hook.
+func StaticToken(wsURL, token string) func(context.Context) (ExecutorTokenResponse, error) {
+	return func(context.Context) (ExecutorTokenResponse, error) {
+		return ExecutorTokenResponse{Token: token, WSURL: wsURL}, nil
+	}
+}
+
 func (c *Client) fetchToken(ctx context.Context) (ExecutorTokenResponse, error) {
+	if c.options.TokenSource != nil {
+		token, err := c.options.TokenSource(ctx)
+		if err == nil && token.WSURL == "" {
+			err = errors.New("bmaexecutor: token source returned no ws_url")
+		}
+		return token, err
+	}
 	body, err := json.Marshal(ExecutorTokenRequest{
 		EnvironmentID: c.options.EnvironmentID,
 		Executor:      c.options.Executor,
@@ -579,7 +599,7 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 	}
 	c.setState(ConnectionStateConnecting)
 	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
-		HTTPHeader:   http.Header{"Authorization": []string{"Bearer " + token.Token}},
+		HTTPHeader:   authHeader(token.Token),
 		Subprotocols: []string{WSSubprotocol},
 	})
 	if err != nil {
@@ -772,7 +792,7 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 		}
 		result, err := c.assignSession(assign)
 		if err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInternalError, err.Error())
+			c.respondHandlerError(conn, id, err)
 			return
 		}
 		c.respondResult(conn, id, result)
@@ -784,7 +804,7 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 		}
 		result, err := c.stopSession(stop)
 		if err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInternalError, err.Error())
+			c.respondHandlerError(conn, id, err)
 			return
 		}
 		c.respondResult(conn, id, result)
@@ -810,7 +830,7 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 		}
 		result, err := handler(c.rootCtx, params)
 		if err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInternalError, err.Error())
+			c.respondHandlerError(conn, id, err)
 			return
 		}
 		c.respondResult(conn, id, result)
@@ -1015,6 +1035,28 @@ func (c *Client) respondResult(conn *connection, id string, result any) {
 	}
 }
 
+// respondHandlerError answers with the handler's *RPCError code and data (for
+// example executor_busy for a full executor), or internal_error otherwise.
+func (c *Client) respondHandlerError(conn *connection, id string, err error) {
+	var rpcErr *RPCError
+	if !errors.As(err, &rpcErr) {
+		c.respondError(conn, id, JSONRPCErrorCodeInternalError, err.Error())
+		return
+	}
+	payload, marshalErr := json.Marshal(rpcErrorEnvelope{
+		JSONRPC: "2.0", ID: id, Error: JSONRPCError{Code: rpcErr.Code, Message: rpcErr.Message, Data: rpcErr.Data},
+	})
+	if marshalErr != nil {
+		c.log(LogError, "marshal JSON-RPC error", marshalErr)
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.rootCtx, 5*time.Second)
+	defer cancel()
+	if err := conn.write(ctx, payload); err != nil {
+		c.log(LogWarn, "write JSON-RPC error", err)
+	}
+}
+
 func (c *Client) respondError(conn *connection, id string, code JSONRPCErrorCode, message string) {
 	payload, err := json.Marshal(rpcErrorEnvelope{
 		JSONRPC: "2.0",
@@ -1184,6 +1226,13 @@ func terminalCloseCode(code int) bool {
 	default:
 		return false
 	}
+}
+
+func authHeader(token string) http.Header {
+	if token == "" {
+		return nil
+	}
+	return http.Header{"Authorization": []string{"Bearer " + token}}
 }
 
 func stringPtr(value string) *string {
