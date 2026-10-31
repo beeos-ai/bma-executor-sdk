@@ -676,9 +676,10 @@ func checkMCPRequest(r *http.Request) error {
 }
 
 func TestMCPChannelURLKeepsExistingQuery(t *testing.T) {
-	got, err := mcpChannelURL("wss://example.test/v1/executors/channel?region=eu", "sess_1", "chrome")
+	got, _, err := channelURL(nil, "wss://example.test/v1/executors/channel?region=eu",
+		ChannelTarget{Channel: ChannelMCP, SessionID: "sess_1", ServerKey: "chrome"})
 	if err != nil {
-		t.Fatalf("mcpChannelURL: %v", err)
+		t.Fatalf("channelURL: %v", err)
 	}
 	parsed, err := url.Parse(got)
 	if err != nil {

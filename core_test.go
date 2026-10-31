@@ -38,12 +38,17 @@ func serveFakeMCP() {
 		}
 		var result any
 		switch request.Method {
+		case "exit-now":
+			os.Exit(0)
 		case "initialize":
 			result = map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "fake", "version": "0"}}
 		case "tools/call":
 			var params MCPToolsCallParams
 			_ = json.Unmarshal(request.Params, &params)
 			text := fmt.Sprintf("echo:%v pid:%d", params.Arguments["text"], os.Getpid())
+			if params.Name == "env" {
+				text = strings.Join(os.Environ(), "\n")
+			}
 			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}}
 		default:
 			result = map[string]any{}

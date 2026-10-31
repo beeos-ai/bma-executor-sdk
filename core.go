@@ -82,6 +82,11 @@ type CoreOptions struct {
 	// Env is set on every bash tool and process and cannot be overridden by
 	// a request (for example BMA_HOME).
 	Env map[string]string
+	// DenyEnv reports executor-private variables (credentials, state paths)
+	// that no bash tool, process or stdio MCP server may see: they are
+	// dropped from the inherited environment and a request setting one is
+	// rejected. NewCore rejects an Env entry it denies.
+	DenyEnv func(name string) bool
 	// EndAfterToolCall marks sessions that carry exactly one tool call: the
 	// core ends them (session.ended "completed") after the result is
 	// delivered. BMA's durable selfhost queue assigns such sessions.
@@ -231,6 +236,14 @@ func NewCore(opts CoreOptions) (*Core, error) {
 	}
 	if opts.InlineResultBytes <= 0 {
 		opts.InlineResultBytes = DefaultCoreInlineResultBytes
+	}
+	if opts.DenyEnv == nil {
+		opts.DenyEnv = func(string) bool { return false }
+	}
+	for key := range opts.Env {
+		if opts.DenyEnv(key) {
+			return nil, fmt.Errorf("bmaexecutor: CoreOptions.Env %s is denied by DenyEnv", key)
+		}
 	}
 	return &Core{
 		opts: opts, brains: map[string]*Client{}, sessions: map[coreKey]*CoreSession{},
@@ -655,7 +668,8 @@ func (s *CoreSession) ResolveCwd(cwd string) (string, error) {
 }
 
 // Env builds a bash or process environment: baseEnv from the executor, the
-// request env (bounded, loader variables denied), then CoreOptions.Env.
+// request env (bounded, loader and DenyEnv variables rejected), then
+// CoreOptions.Env.
 func (c *Core) Env(explicit map[string]string) ([]string, error) {
 	if len(explicit) > maxEnvEntries {
 		return nil, fmt.Errorf("env exceeds %d entries", maxEnvEntries)
@@ -663,7 +677,7 @@ func (c *Core) Env(explicit map[string]string) ([]string, error) {
 	total := 0
 	values := map[string]string{}
 	for _, key := range baseEnv {
-		if value, ok := os.LookupEnv(key); ok {
+		if value, ok := os.LookupEnv(key); ok && !c.opts.DenyEnv(key) {
 			values[key] = value
 		}
 	}
@@ -671,7 +685,7 @@ func (c *Core) Env(explicit map[string]string) ([]string, error) {
 		if key == "" || strings.ContainsAny(key, "=\x00") || strings.Contains(value, "\x00") {
 			return nil, fmt.Errorf("env key %q is invalid", key)
 		}
-		if deniedEnv[strings.ToUpper(key)] {
+		if deniedEnv[strings.ToUpper(key)] || c.opts.DenyEnv(key) {
 			return nil, fmt.Errorf("env %s is not allowed", key)
 		}
 		total += len(key) + len(value)
@@ -1043,8 +1057,15 @@ func (c *Core) runMCPOnce(client *Client, session *CoreSession, server MCPServer
 	cmd := exec.CommandContext(ctx, command, transport.Args...)
 	setProcessGroup(cmd)
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	for _, entry := range os.Environ() {
+		if name, _, _ := strings.Cut(entry, "="); !c.opts.DenyEnv(name) {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
 	for name, value := range transport.Env {
+		if c.opts.DenyEnv(name) {
+			return fmt.Errorf("mcp env %s is not allowed", name)
+		}
 		cmd.Env = append(cmd.Env, name+"="+value)
 	}
 	stdin, err := cmd.StdinPipe()

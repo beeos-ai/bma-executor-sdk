@@ -62,6 +62,9 @@ type GitCredentialGranter interface {
 // matching capability bit unset, and the core rejects those process.start
 // fields with capability_unavailable.
 type ProcessOptions struct {
+	// Env is set on every process (not on bash tools) over the request env,
+	// for example a canonical skill root such as BMA_HOME.
+	Env            map[string]string
 	FileTransfer   FileTransferer
 	GitCredentials GitCredentialGranter
 }
@@ -389,6 +392,7 @@ func (p *processes) create(session *CoreSession, params ProcessStartParams) (*pr
 	if err != nil {
 		return nil, invalidParams("%v", err)
 	}
+	env = withEnv(env, p.opts.Env)
 	var release func()
 	if params.GitCredentials {
 		if env, release, err = p.opts.GitCredentials.Grant(params.ProcessID, env); err != nil {
@@ -934,4 +938,23 @@ func NewSkillInstallCapability(install SkillInstaller) (Capability, error) {
 			},
 		},
 	}, nil
+}
+
+// withEnv sets values over env entries of the same name.
+func withEnv(env []string, values map[string]string) []string {
+	if len(values) == 0 {
+		return env
+	}
+	result := make([]string, 0, len(env)+len(values))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, set := values[name]; !set {
+			result = append(result, entry)
+		}
+	}
+	for name, value := range values {
+		result = append(result, name+"="+value)
+	}
+	sort.Strings(result)
+	return result
 }

@@ -328,7 +328,7 @@ func TestClientStopsOnReplacedAndReconnectsAfterDrain(t *testing.T) {
 	client, err := NewClient(Options{
 		Executor: ExecutorInfo{Name: "close-codes"}, TokenSource: StaticToken("pipe://", ""),
 		ReconnectBaseDelay: time.Millisecond,
-		Dial: func(context.Context, ExecutorTokenResponse, string) (Conn, error) {
+		Dial: func(context.Context, ExecutorTokenResponse, string, ChannelTarget) (Conn, error) {
 			dials.Add(1)
 			executorEnd, harnessEnd := Pipe(ProtocolV11)
 			harnessEnds <- harnessEnd
@@ -388,7 +388,7 @@ func TestClientDropsSessionsAfterLeaseExpiry(t *testing.T) {
 	client, err := NewClient(Options{
 		Executor: ExecutorInfo{Name: "lease"}, TokenSource: StaticToken("pipe://", ""),
 		ReconnectBaseDelay: 20 * time.Millisecond, MaxReconnectAttempts: -1,
-		Dial: func(context.Context, ExecutorTokenResponse, string) (Conn, error) {
+		Dial: func(context.Context, ExecutorTokenResponse, string, ChannelTarget) (Conn, error) {
 			if dials.Add(1) > 1 {
 				return nil, errors.New("harness unreachable")
 			}
@@ -441,5 +441,41 @@ func answerRegisterWithLease(conn Conn, leaseMS int64) {
 			ExecutorID: "exec_1", ConnectionID: "conn", Protocol: ProtocolV11, HeartbeatIntervalMS: 60000, LeaseTTLMS: leaseMS,
 		}})
 		_ = conn.Write(context.Background(), payload)
+	}
+}
+
+// A 4004 that arrives while the executor re-registers stops it too.
+func TestClientStopsOnReplacedDuringReregister(t *testing.T) {
+	var dials atomic.Int32
+	first := make(chan Conn, 1)
+	client, err := NewClient(Options{
+		Executor: ExecutorInfo{Name: "close-codes"}, TokenSource: StaticToken("pipe://", ""),
+		ReconnectBaseDelay: time.Millisecond,
+		Dial: func(context.Context, ExecutorTokenResponse, string, ChannelTarget) (Conn, error) {
+			executorEnd, harnessEnd := Pipe(ProtocolV11)
+			if dials.Add(1) == 1 {
+				first <- harnessEnd
+				go answerRegister(harnessEnd)
+			} else {
+				_ = harnessEnd.Close(4004, "replaced")
+			}
+			return executorEnd, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := testContext(t)
+	if _, err := client.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_ = (<-first).Close(4005, "drained")
+	select {
+	case <-client.Done():
+	case <-ctx.Done():
+		t.Fatalf("client kept running after 4004 during re-register (dials %d)", dials.Load())
+	}
+	if !errors.Is(client.Err(), ErrReplaced) || dials.Load() != 2 {
+		t.Fatalf("err = %v dials = %d", client.Err(), dials.Load())
 	}
 }

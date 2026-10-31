@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -47,9 +48,20 @@ func CloseCode(err error) int {
 	return -1
 }
 
-// Dialer opens the executor's control connection after the token source
-// returned token. The default dials token.WSURL over WebSocket.
-type Dialer func(ctx context.Context, token ExecutorTokenResponse, protocol string) (Conn, error)
+// ChannelTarget names the channel a Dialer opens: the control channel, or
+// the MCP channel of one session.assign mcp_servers entry
+// (?channel=mcp&session_id=&server_key= on WebSocket transports).
+type ChannelTarget struct {
+	Channel   string // ChannelControl or ChannelMCP
+	SessionID string
+	ServerKey string
+}
+
+// Dialer opens an executor channel after the token source returned token.
+// The default dials token.WSURL over WebSocket: ws://, wss:// or
+// unix:///path/to.sock (the same WebSocket upgrade on a Unix domain socket,
+// as in the TypeScript and Python SDKs).
+type Dialer func(ctx context.Context, token ExecutorTokenResponse, protocol string, target ChannelTarget) (Conn, error)
 
 type wsConn struct{ ws *websocket.Conn }
 
@@ -80,16 +92,46 @@ func (c wsConn) Close(code int, reason string) error {
 
 func (c wsConn) Subprotocol() string { return c.ws.Subprotocol() }
 
-// WebSocketDialer dials token.WSURL with the bearer token in the
-// Authorization header. httpClient may carry a proxy or a custom transport;
-// nil uses http.DefaultClient.
+// WebSocketDialer dials token.WSURL (ws://, wss:// or unix://) with the
+// bearer token in the Authorization header. httpClient may carry a proxy or a
+// custom transport; nil uses http.DefaultClient. A unix:// URL always dials
+// its socket.
 func WebSocketDialer(httpClient *http.Client) Dialer {
-	return func(ctx context.Context, token ExecutorTokenResponse, protocol string) (Conn, error) {
-		return dialWebSocket(ctx, httpClient, token.WSURL, token.Token, protocol)
+	return func(ctx context.Context, token ExecutorTokenResponse, protocol string, target ChannelTarget) (Conn, error) {
+		return dialWebSocket(ctx, httpClient, token.WSURL, token.Token, protocol, target)
 	}
 }
 
-func dialWebSocket(ctx context.Context, httpClient *http.Client, url, token, protocol string) (Conn, error) {
+// channelURL adds the channel query of target to rawURL. A unix:// URL
+// becomes ws://local/ on the HTTP client of its socket.
+func channelURL(httpClient *http.Client, rawURL string, target ChannelTarget) (string, *http.Client, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", nil, fmt.Errorf("bmaexecutor: invalid channel URL: %w", err)
+	}
+	switch parsed.Scheme {
+	case "ws", "wss":
+	case "unix":
+		httpClient = unixHTTPClient(parsed.Path)
+		parsed = &url.URL{Scheme: "ws", Host: "local", Path: "/", RawQuery: parsed.RawQuery}
+	default:
+		return "", nil, errors.New("bmaexecutor: channel URL must use ws, wss or unix")
+	}
+	if target.Channel == ChannelMCP {
+		query := parsed.Query()
+		query.Set("channel", ChannelMCP)
+		query.Set("session_id", target.SessionID)
+		query.Set("server_key", target.ServerKey)
+		parsed.RawQuery = query.Encode()
+	}
+	return parsed.String(), httpClient, nil
+}
+
+func dialWebSocket(ctx context.Context, httpClient *http.Client, rawURL, token, protocol string, target ChannelTarget) (Conn, error) {
+	url, httpClient, err := channelURL(httpClient, rawURL, target)
+	if err != nil {
+		return nil, err
+	}
 	ws, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{
 		HTTPClient:   httpClient,
 		HTTPHeader:   authHeader(token),
@@ -116,19 +158,24 @@ func unixHTTPClient(path string) *http.Client {
 }
 
 // UnixSocketDialer dials a harness listening on the Unix domain socket at
-// path (the harness serves Harness.ServeHTTP on that listener). The host in
-// token.WSURL is ignored; use for example StaticToken("ws://local/", token).
+// path (the harness serves Harness.ServeHTTP on that listener). token.WSURL
+// is ignored; StaticToken("unix://"+path, token) with the default dialer is
+// equivalent.
 func UnixSocketDialer(path string) Dialer {
-	return WebSocketDialer(unixHTTPClient(path))
+	return func(ctx context.Context, token ExecutorTokenResponse, protocol string, target ChannelTarget) (Conn, error) {
+		return dialWebSocket(ctx, nil, "unix://"+path, token.Token, protocol, target)
+	}
 }
 
 // ListenUnixSocket makes the executor the listening side on a local machine:
 // it creates a 0700 directory and a 0600 Unix socket at path and returns a
 // Dialer that waits for the next local harness ("brain") to connect with
 // Authorization: Bearer token. The roles do not change: the brain is still
-// the harness and the executor still registers. Use it as Options.Dial with
-// TokenSource StaticToken("ws://local/", "") so the executor reconnects by
-// accepting again. Close the returned closer to stop listening.
+// the harness and the executor still registers. The brain (Harness.
+// DialExecutor) also dials the MCP channels of its sessions; an MCP dial
+// waits for that connection. Use it as Options.Dial with TokenSource
+// StaticToken("ws://local/", "") so the executor reconnects by accepting
+// again. Close the returned closer to stop listening.
 func ListenUnixSocket(path, token string) (Dialer, func() error, error) {
 	if token == "" {
 		return nil, nil, errors.New("bmaexecutor: a local socket needs a token")
@@ -148,46 +195,68 @@ func ListenUnixSocket(path, token string) (Dialer, func() error, error) {
 		_ = listener.Close()
 		return nil, nil, err
 	}
-	accepted := make(chan *websocket.Conn)
-	done := make(chan struct{})
+	l := &unixListener{accepted: map[ChannelTarget]chan *websocket.Conn{}, done: make(chan struct{})}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bearer := r.Header.Get("Authorization")
 		if subtle.ConstantTimeCompare([]byte(bearer), []byte("Bearer "+token)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		query := r.URL.Query()
+		target := ChannelTarget{Channel: ChannelControl}
+		if query.Get("channel") == ChannelMCP {
+			target = ChannelTarget{Channel: ChannelMCP, SessionID: query.Get("session_id"), ServerKey: query.Get("server_key")}
+		}
 		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV11, ProtocolV1}})
 		if err != nil {
 			return
 		}
 		select {
-		case accepted <- ws:
+		case l.slot(target) <- ws:
 			// The connection is hijacked: the executor owns it now.
-		case <-done:
+		case <-l.done:
 			_ = ws.Close(websocket.StatusGoingAway, "executor stopped")
 		}
 	})}
 	go func() { _ = server.Serve(listener) }()
 	var once sync.Once
 	closer := func() error {
-		once.Do(func() { close(done) })
+		once.Do(func() { close(l.done) })
 		return server.Close()
 	}
-	dial := func(ctx context.Context, _ ExecutorTokenResponse, protocol string) (Conn, error) {
+	dial := func(ctx context.Context, _ ExecutorTokenResponse, protocol string, target ChannelTarget) (Conn, error) {
 		select {
-		case ws := <-accepted:
+		case ws := <-l.slot(target):
 			if ws.Subprotocol() != protocol {
 				_ = ws.Close(websocket.StatusPolicyViolation, protocol+" required")
 				return nil, fmt.Errorf("bmaexecutor: local harness offered %q, need %s", ws.Subprotocol(), protocol)
 			}
 			return NewWebSocketConn(ws), nil
-		case <-done:
+		case <-l.done:
 			return nil, ErrClientStopped
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 	}
 	return dial, closer, nil
+}
+
+// unixListener hands accepted connections to dials of the same channel.
+type unixListener struct {
+	mu       sync.Mutex
+	accepted map[ChannelTarget]chan *websocket.Conn
+	done     chan struct{}
+}
+
+func (l *unixListener) slot(target ChannelTarget) chan *websocket.Conn {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	slot := l.accepted[target]
+	if slot == nil {
+		slot = make(chan *websocket.Conn)
+		l.accepted[target] = slot
+	}
+	return slot
 }
 
 // pipeConn is one end of an in-process connection.
@@ -260,9 +329,21 @@ func (p *pipeConn) Close(code int, reason string) error {
 func (p *pipeConn) Subprotocol() string { return p.protocol }
 
 // InProcessDialer connects the executor to h in the same process: every dial
-// creates a fresh Pipe and serves its harness end with principal.
+// creates a fresh Pipe and serves its harness end with principal, as the
+// control channel or as an MCP channel.
 func InProcessDialer(h *Harness, principal Principal) Dialer {
-	return func(_ context.Context, _ ExecutorTokenResponse, protocol string) (Conn, error) {
+	return func(_ context.Context, _ ExecutorTokenResponse, protocol string, target ChannelTarget) (Conn, error) {
+		if target.Channel == ChannelMCP {
+			session, err := h.mcpSession(principal, target.SessionID)
+			if err != nil {
+				return nil, err
+			}
+			executor, harness := Pipe(protocol)
+			if err := session.attachMCP(target.ServerKey, newHarnessMCPChannel(harness)); err != nil {
+				return nil, err
+			}
+			return executor, nil
+		}
 		executor, harness := Pipe(protocol)
 		go h.ServeConn(harness, principal)
 		return executor, nil

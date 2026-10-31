@@ -4,27 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
-
-	"github.com/coder/websocket"
 )
 
 // MCPChannel is a raw MCP JSON-RPC transport on the executor MCP channel. The
 // payload is unframed MCP JSON-RPC: the caller sends initialize,
 // notifications/initialized, tools/list and tools/call directly, exactly as
-// the protocol appendix defines.
-//
-// This release provides the channel transport only. MCP process supervision
-// (stdio spawn, stderr capture, restart backoff, generation) and automatic
-// reconnection stay with the adapter until the SDK grows that lifecycle.
+// the protocol appendix defines. It runs on the client's transport:
+// WebSocket, a Unix socket or in-process.
 type MCPChannel struct {
-	ws *websocket.Conn
+	conn Conn
 }
 
-// OpenMCPChannel opens wss://.../v1/executors/channel?channel=mcp with a fresh
-// executor token. sessionID and serverKey identify the environment-owned MCP
-// server from session.assign.mcp_servers.
+// OpenMCPChannel opens the MCP channel (?channel=mcp on WebSocket
+// transports) with a fresh executor token through Options.Dial. sessionID
+// and serverKey identify the environment-owned MCP server from
+// session.assign.mcp_servers.
 func (c *Client) OpenMCPChannel(ctx context.Context, sessionID, serverKey string) (*MCPChannel, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, errors.New("bmaexecutor: sessionID is required")
@@ -47,54 +42,32 @@ func (c *Client) OpenMCPChannel(ctx context.Context, sessionID, serverKey string
 	if len(token.ChannelScope) > 0 && !allowsChannel(token.ChannelScope, ChannelMCP) {
 		return nil, errors.New("bmaexecutor: executor token does not allow the mcp channel")
 	}
-
-	rawURL := c.options.WSURL
-	if rawURL == "" {
-		rawURL = token.WSURL
+	if c.options.WSURL != "" {
+		token.WSURL = c.options.WSURL
 	}
-	channelURL, err := mcpChannelURL(rawURL, sessionID, serverKey)
+	conn, err := c.options.Dial(ctx, token, ProtocolV11, ChannelTarget{Channel: ChannelMCP, SessionID: sessionID, ServerKey: serverKey})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("bmaexecutor: mcp channel dial: %w", err)
 	}
-
-	ws, _, err := websocket.Dial(ctx, channelURL, &websocket.DialOptions{
-		HTTPHeader:   authHeader(token.Token),
-		Subprotocols: []string{ProtocolV11},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("bmaexecutor: mcp websocket dial: %w", err)
+	if ws, ok := conn.(wsConn); ok {
+		ws.ws.SetReadLimit(c.mcpFrameLimit())
 	}
-	ws.SetReadLimit(c.mcpFrameLimit())
-	return &MCPChannel{ws: ws}, nil
+	return &MCPChannel{conn: conn}, nil
 }
 
-// Read returns one MCP JSON-RPC frame. Frames are newline-delimited JSON on the
-// wire but this transport returns one WebSocket message per call.
+// Read returns one MCP JSON-RPC frame: one transport message per call.
 func (m *MCPChannel) Read(ctx context.Context) ([]byte, error) {
-	if m == nil || m.ws == nil {
-		return nil, errors.New("bmaexecutor: mcp channel is closed")
-	}
-	_, data, err := m.ws.Read(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return m.conn.Read(ctx)
 }
 
 // Write sends one MCP JSON-RPC frame as a text message.
 func (m *MCPChannel) Write(ctx context.Context, payload []byte) error {
-	if m == nil || m.ws == nil {
-		return errors.New("bmaexecutor: mcp channel is closed")
-	}
-	return m.ws.Write(ctx, websocket.MessageText, payload)
+	return m.conn.Write(ctx, payload)
 }
 
 // Close closes the MCP channel.
 func (m *MCPChannel) Close() error {
-	if m == nil || m.ws == nil {
-		return nil
-	}
-	return m.ws.Close(websocket.StatusNormalClosure, "mcp channel closed")
+	return m.conn.Close(1000, "mcp channel closed")
 }
 
 func (c *Client) mcpFrameLimit() int64 {
@@ -104,22 +77,6 @@ func (c *Client) mcpFrameLimit() int64 {
 		return c.registerResult.MaxMCPFrameBytes
 	}
 	return maxFrameBytes
-}
-
-func mcpChannelURL(rawURL, sessionID, serverKey string) (string, error) {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return "", fmt.Errorf("bmaexecutor: invalid mcp channel URL: %w", err)
-	}
-	if parsed.Scheme != "ws" && parsed.Scheme != "wss" {
-		return "", fmt.Errorf("bmaexecutor: mcp channel URL must use ws or wss")
-	}
-	query := parsed.Query()
-	query.Set("channel", "mcp")
-	query.Set("session_id", sessionID)
-	query.Set("server_key", serverKey)
-	parsed.RawQuery = query.Encode()
-	return parsed.String(), nil
 }
 
 func allowsChannel(scopes []string, want string) bool {

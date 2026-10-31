@@ -208,9 +208,13 @@ func (h *Harness) serveControl(w http.ResponseWriter, r *http.Request, principal
 // in-process Pipe end, a dialed local socket, ...) until it closes. The
 // caller authenticated the peer; principal pins its identity.
 func (h *Harness) ServeConn(transport Conn, principal Principal) {
+	h.serveConn(transport, principal, nil)
+}
+
+func (h *Harness) serveConn(transport Conn, principal Principal, dialBack *dialBack) {
 	ctx, cancel := context.WithCancel(context.Background())
 	conn := &harnessConn{
-		h: h, ws: transport, principal: principal, ctx: ctx, cancel: cancel,
+		h: h, ws: transport, principal: principal, ctx: ctx, cancel: cancel, dialBack: dialBack,
 		pending: map[string]chan rpcOutcome{},
 		id:      fmt.Sprintf("conn_%d_%s", h.nextConn.Add(1), randomID(4)),
 	}
@@ -350,6 +354,19 @@ func (e *Executor) AssignSession(ctx context.Context, params SessionAssignParams
 	if err != nil {
 		session.end("assign_failed", ErrSessionEnded)
 		return nil, err
+	}
+	e.mu.Lock()
+	var back *dialBack
+	if e.conn != nil {
+		back = e.conn.dialBack
+	}
+	e.mu.Unlock()
+	if back != nil {
+		for _, server := range params.MCPServers {
+			if server.ConnectionOrigin == MCPConnectionOriginEnvironment {
+				go session.dialMCP(back.path, back.token, server.ServerKey)
+			}
+		}
 	}
 	return session, nil
 }
@@ -589,6 +606,7 @@ type harnessConn struct {
 	nextID  uint64
 	// executor is set by executor.register.
 	executor *Executor
+	dialBack *dialBack
 }
 
 func (c *harnessConn) readLoop() {
@@ -976,10 +994,14 @@ func randomID(bytes int) string {
 // until it closes. A local brain uses it to drive the hand already running
 // on the machine instead of starting another one.
 func (h *Harness) DialExecutor(ctx context.Context, path, token string) error {
-	conn, err := dialWebSocket(ctx, unixHTTPClient(path), "ws://local/", token, h.opts.Protocols[0])
+	conn, err := dialWebSocket(ctx, nil, "unix://"+path, token, h.opts.Protocols[0], ChannelTarget{Channel: ChannelControl})
 	if err != nil {
 		return err
 	}
-	go h.ServeConn(conn, Principal{})
+	go h.serveConn(conn, Principal{}, &dialBack{path: path, token: token})
 	return nil
 }
+
+// dialBack is the local socket of an executor this harness dialed: the
+// harness dials its sessions' MCP channels there too.
+type dialBack struct{ path, token string }
