@@ -1,6 +1,6 @@
 [project]
 name = "bma-executor-sdk"
-version = "0.4.4"
+version = "0.4.5"
 description = "BMA executor protocol (bma.executor.v1.1): executor, harness and agent ends on asyncio with WebSocket, Unix socket and in-process transports."
 readme = "README.md"
 license = "Apache-2.0"

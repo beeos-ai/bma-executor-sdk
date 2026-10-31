@@ -1,5 +1,25 @@
 # Changelog
 
+## bma-executor-sdk v0.4.5
+
+Released 2026-11-01 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.5) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.5) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.5).
+
+Go tag `executor/v0.4.5`, npm `@beeos-ai/bma-executor-sdk@0.4.5`, PyPI
+`bma-executor-sdk` 0.4.5 (tag `executor-python/v0.4.5`).
+
+### Features (Go, TypeScript, Python clients)
+
+- Contract: new executor → harness request `executor.token.refresh{token}` →
+  `{expires_at}` (additive, `bma.executor.v1.1`).
+- The client no longer drops its control connection every token lifetime. At
+  70% of the token's `expires_in` it fetches a new token with its original
+  credential and sends `executor.token.refresh`; the harness moves the
+  connection's 4001 deadline. A harness without the method answers -32601 and
+  the client keeps the previous behaviour (reconnect on 4001). Tokens without
+  `expires_in` (static tokens) are never refreshed.
+- Reconnect backoff cap is configurable: Go `Options.ReconnectMaxDelay`,
+  TypeScript `reconnectMaxDelayMs`, Python `reconnect_max_delay` (default 30 s).
+
 ## bma-executor-sdk v0.4.4
 
 Released 2026-11-01 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.4) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.4) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.4).
