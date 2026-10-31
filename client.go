@@ -217,7 +217,9 @@ func NewClient(options Options) (*Client, error) {
 	if options.TokenSource == nil && strings.TrimSpace(options.EnvironmentKey) == "" {
 		return nil, errors.New("bmaexecutor: EnvironmentKey is required")
 	}
-	if strings.TrimSpace(options.EnvironmentID) == "" {
+	// A TokenSource may supply a machine-scoped token, which registers
+	// without an environment.
+	if options.TokenSource == nil && strings.TrimSpace(options.EnvironmentID) == "" {
 		return nil, errors.New("bmaexecutor: EnvironmentID is required")
 	}
 	if options.Executor.Name == "" {
@@ -603,9 +605,15 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 		wsURL = token.WSURL
 	}
 	c.setState(ConnectionStateConnecting)
+	subprotocols := []string{WSSubprotocol}
+	if c.agent != nil {
+		// The agent capability is a v1.1 capability; a v1-only harness
+		// still selects v1.
+		subprotocols = []string{ProtocolVersionV11, WSSubprotocol}
+	}
 	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPHeader:   authHeader(token.Token),
-		Subprotocols: []string{WSSubprotocol},
+		Subprotocols: subprotocols,
 	})
 	if err != nil {
 		return fmt.Errorf("bmaexecutor: websocket dial: %w", err)
@@ -624,7 +632,7 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 
 	params := registerParams{
 		ExecutorRegisterParams: ExecutorRegisterParams{
-			Protocol:      ProtocolVersion,
+			Protocol:      negotiatedProtocol(ws.Subprotocol()),
 			EnvironmentID: c.options.EnvironmentID,
 			Executor:      c.options.Executor,
 			Resume:        c.resumeState(),
@@ -1269,4 +1277,17 @@ func (c *Client) registeredSignal() <-chan struct{} {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+// ProtocolVersionV11 is the executor protocol revision that carries the
+// agent capability.
+const ProtocolVersionV11 = "bma.executor.v1.1"
+
+// negotiatedProtocol is the register protocol for the selected subprotocol;
+// it must equal the subprotocol the harness selected.
+func negotiatedProtocol(selected string) string {
+	if selected == ProtocolVersionV11 {
+		return ProtocolVersionV11
+	}
+	return ProtocolVersion
 }
