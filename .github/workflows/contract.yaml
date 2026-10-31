@@ -8,6 +8,9 @@ on:
       - 'go/v*'
       - 'ts/v*'
       - 'python/v*'
+      - 'executor/v*'
+      - 'executor-ts/v*'
+      - 'executor-python/v*'
   # The tag release workflows run this same check suite before publishing.
   workflow_call:
 
@@ -26,14 +29,18 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          cache-dependency-path: |
+            go/go.sum
+            executor/go.sum
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: typescript/package-lock.json
+          cache-dependency-path: |
+            typescript/package-lock.json
+            executor/typescript/package-lock.json
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
@@ -61,4 +68,22 @@ jobs:
 
       - name: Python
         working-directory: python
+        run: uv run pytest -q
+
+      - name: Go executor
+        working-directory: executor
+        run: |
+          go vet ./...
+          go test -race ./...
+
+      - name: TypeScript executor (with Go and Python interop)
+        working-directory: executor/typescript
+        run: |
+          (cd ../python && uv sync)
+          npm ci
+          npm run build
+          npm test
+
+      - name: Python executor
+        working-directory: executor/python
         run: uv run pytest -q

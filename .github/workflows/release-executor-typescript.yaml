@@ -1,0 +1,68 @@
+name: Release TypeScript executor SDK
+
+on:
+  push:
+    tags:
+      - 'executor-ts/v*'
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Contract and SDK checks
+    uses: ./.github/workflows/contract.yaml
+
+  publish:
+    name: Publish @beeos-ai/bma-executor-sdk to npm
+    needs: checks
+    runs-on: ubuntu-latest
+    environment:
+      name: releases
+      url: https://www.npmjs.com/package/@beeos-ai/bma-executor-sdk
+    permissions:
+      contents: read
+      # npm provenance signs the published tarball with this job's OIDC token.
+      id-token: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release tag is on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Verify the tag matches the package version
+        run: |
+          tag_version="${GITHUB_REF_NAME#executor-ts/v}"
+          package_version="$(node -p "require('./executor/typescript/package.json').version")"
+          if [ "$tag_version" != "$package_version" ]; then
+            printf 'tag %s does not match executor/typescript/package.json version %s\n' \
+              "$GITHUB_REF_NAME" "$package_version" >&2
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: executor/typescript/package-lock.json
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        working-directory: executor/typescript
+        run: npm ci
+
+      - name: Build
+        working-directory: executor/typescript
+        run: npm run build
+
+      - name: Publish
+        working-directory: executor/typescript
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

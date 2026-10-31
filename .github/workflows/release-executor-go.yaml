@@ -1,0 +1,40 @@
+name: Release Go executor SDK
+
+on:
+  push:
+    tags:
+      - 'executor/v*'
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Test and release the Go executor module
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: executor
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: executor/go.mod
+          cache-dependency-path: executor/go.sum
+
+      - name: Verify release tag is on main
+        working-directory: .
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...

@@ -1,0 +1,13 @@
+{
+  "name": "bma-executor-sdk-ts-examples",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "executor-minimal": "node executor-minimal/main.mjs",
+    "harness-loopback": "node harness-loopback/main.mjs",
+    "agent-minimal": "node agent-minimal/main.mjs"
+  },
+  "dependencies": {
+    "@beeos-ai/bma-executor-sdk": "file:.."
+  }
+}

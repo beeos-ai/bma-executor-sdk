@@ -1,0 +1,2157 @@
+asyncapi: 3.0.0
+id: https://contracts.bma.beeos.ai/executor.asyncapi
+info:
+  title: BMA Executor Protocol channels
+  version: 1.1.0
+  description: WebSocket channels for bma.executor.v1 and bma.executor.v1.1. The control channel carries JSON-RPC 2.0 requests, notifications, and responses. The mcp channel carries raw MCP JSON-RPC with no BMA wrapper. PTY bytes travel on per-attach outbound host sockets (subprotocol bma.terminal.v1), not on these channels.
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+defaultContentType: application/json
+servers:
+  control:
+    host: "{host}"
+    protocol: wss
+    protocolVersion: "1.1"
+    pathname: /v1/executors/channel
+    description: Executor control channel. Token is a short-lived executor JWT.
+    security:
+      - $ref: "#/components/securitySchemes/executorJWT"
+    variables:
+      host:
+        default: api.bma.beeos.ai
+        description: BMA API host.
+  mcp:
+    host: "{host}"
+    protocol: wss
+    protocolVersion: "1.1"
+    pathname: /v1/executors/channel
+    description: Raw MCP JSON-RPC channel for one environment-origin MCP server.
+    security:
+      - $ref: "#/components/securitySchemes/executorJWT"
+    variables:
+      host:
+        default: api.bma.beeos.ai
+        description: BMA API host.
+channels:
+  control:
+    address: /v1/executors/channel?channel=control
+    title: Executor control channel
+    description: "Subprotocol bma.executor.v1.1 or bma.executor.v1; the server selects one and executor.register.protocol must equal it. Max outbound control frame: 64 KiB UTF-8. Close codes: 4001 token expired, 4003 unsupported protocol, 4004 replaced, 4005 drained."
+    messages:
+      executorRegister:
+        $ref: "#/components/messages/executorRegister"
+      executorHeartbeat:
+        $ref: "#/components/messages/executorHeartbeat"
+      executorCapabilitiesUpdate:
+        $ref: "#/components/messages/executorCapabilitiesUpdate"
+      executorDrain:
+        $ref: "#/components/messages/executorDrain"
+      executorClose:
+        $ref: "#/components/messages/executorClose"
+      sessionAssign:
+        $ref: "#/components/messages/sessionAssign"
+      sessionReady:
+        $ref: "#/components/messages/sessionReady"
+      sessionEvent:
+        $ref: "#/components/messages/sessionEvent"
+      sessionStatus:
+        $ref: "#/components/messages/sessionStatus"
+      sessionStop:
+        $ref: "#/components/messages/sessionStop"
+      sessionEnded:
+        $ref: "#/components/messages/sessionEnded"
+      toolCall:
+        $ref: "#/components/messages/toolCall"
+      toolResult:
+        $ref: "#/components/messages/toolResult"
+      toolCancel:
+        $ref: "#/components/messages/toolCancel"
+      toolProgress:
+        $ref: "#/components/messages/toolProgress"
+      processStart:
+        $ref: "#/components/messages/processStart"
+      processRead:
+        $ref: "#/components/messages/processRead"
+      processWrite:
+        $ref: "#/components/messages/processWrite"
+      processInterrupt:
+        $ref: "#/components/messages/processInterrupt"
+      processTerminate:
+        $ref: "#/components/messages/processTerminate"
+      processList:
+        $ref: "#/components/messages/processList"
+      processStatus:
+        $ref: "#/components/messages/processStatus"
+      terminalOpen:
+        $ref: "#/components/messages/terminalOpen"
+      terminalAttach:
+        $ref: "#/components/messages/terminalAttach"
+      terminalClose:
+        $ref: "#/components/messages/terminalClose"
+      skillInstall:
+        $ref: "#/components/messages/skillInstall"
+      workspaceBackup:
+        $ref: "#/components/messages/workspaceBackup"
+      turnStart:
+        $ref: "#/components/messages/turnStart"
+      turnInput:
+        $ref: "#/components/messages/turnInput"
+      turnCancel:
+        $ref: "#/components/messages/turnCancel"
+      sessionClose:
+        $ref: "#/components/messages/sessionClose"
+      sessionEventDelta:
+        $ref: "#/components/messages/sessionEventDelta"
+      interactionRequest:
+        $ref: "#/components/messages/interactionRequest"
+      interactionResponse:
+        $ref: "#/components/messages/interactionResponse"
+      interactionCancel:
+        $ref: "#/components/messages/interactionCancel"
+      jsonRpcSuccessResponse:
+        $ref: "#/components/messages/jsonRpcSuccessResponse"
+      jsonRpcErrorResponse:
+        $ref: "#/components/messages/jsonRpcErrorResponse"
+  mcp:
+    address: /v1/executors/channel?channel=mcp
+    title: Executor MCP channel
+    description: Raw MCP JSON-RPC for one environment-origin MCP server. Connect with ?channel=mcp&session_id=<id>&server_key=<key>. No BMA wrapper and no mcp.start/mcp.frame/mcp.stop methods.
+    messages:
+      mcpInitialize:
+        $ref: "#/components/messages/mcpInitialize"
+      mcpInitialized:
+        $ref: "#/components/messages/mcpInitialized"
+      mcpToolsList:
+        $ref: "#/components/messages/mcpToolsList"
+      mcpToolsCall:
+        $ref: "#/components/messages/mcpToolsCall"
+      mcpProgress:
+        $ref: "#/components/messages/mcpProgress"
+      mcpRequest:
+        $ref: "#/components/messages/mcpRequest"
+      mcpNotification:
+        $ref: "#/components/messages/mcpNotification"
+      mcpSuccessResponse:
+        $ref: "#/components/messages/mcpSuccessResponse"
+      mcpErrorResponse:
+        $ref: "#/components/messages/mcpErrorResponse"
+operations:
+  executorRegisterSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/executorRegister"
+  executorHeartbeatSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/executorHeartbeat"
+  executorCapabilitiesUpdateSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/executorCapabilitiesUpdate"
+  executorDrainReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/executorDrain"
+  executorCloseExchange:
+    action: sendReceive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/executorClose"
+  sessionAssignReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/sessionAssign"
+  sessionReadySend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/sessionReady"
+  sessionEventSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/sessionEvent"
+  sessionStatusSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/sessionStatus"
+  sessionStopReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/sessionStop"
+  sessionEndedSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/sessionEnded"
+  toolCallReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/toolCall"
+  toolResultSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/toolResult"
+  toolCancelReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/toolCancel"
+  toolProgressSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/toolProgress"
+  processStartReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/processStart"
+  processReadReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/processRead"
+  processWriteReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/processWrite"
+  processInterruptReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/processInterrupt"
+  processTerminateReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/processTerminate"
+  processListReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/processList"
+  processStatusSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/processStatus"
+  terminalOpenReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/terminalOpen"
+  terminalAttachReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/terminalAttach"
+  terminalCloseReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/terminalClose"
+  skillInstallReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/skillInstall"
+  workspaceBackupReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/workspaceBackup"
+  turnStartReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/turnStart"
+  turnInputReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/turnInput"
+  turnCancelReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/turnCancel"
+  sessionCloseReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/sessionClose"
+  sessionEventDeltaSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/sessionEventDelta"
+  interactionRequestSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/interactionRequest"
+  interactionResponseReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/interactionResponse"
+  interactionCancelSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/interactionCancel"
+components:
+  messages:
+    executorRegister:
+      name: executor.register
+      title: executor.register
+      summary: Register an executor connection.
+      description: Executor to harness request, the first frame on the control channel. protocol MUST equal the negotiated WebSocket subprotocol; otherwise the server answers -32010 and closes with 4003. A machine-scoped executor sends an empty environment_id. resume.active_sessions reattaches sessions after reconnect.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: executor.register
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              protocol:
+                $ref: schemas/common.json#/$defs/ProtocolVersion
+              environment_id:
+                type: string
+              executor:
+                $ref: schemas/executor.json#/$defs/ExecutorInfo
+              capabilities:
+                $ref: schemas/executor.json#/$defs/Capabilities
+              resume:
+                $ref: schemas/executor.json#/$defs/ExecutorResume
+            required:
+              - protocol
+              - environment_id
+              - executor
+              - capabilities
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: executor.register
+      x-bma-direction: executor-to-harness
+      x-bma-kind: request
+      x-bma-channel: control
+    executorHeartbeat:
+      name: executor.heartbeat
+      title: executor.heartbeat
+      summary: Refresh the executor lease.
+      description: Executor to harness request, sent every heartbeat_interval_ms. Two missed heartbeats expire the lease server-side. drain=true means the executor must stop accepting new sessions and finish current work.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: executor.heartbeat
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              connection_id:
+                type: string
+              active_sessions:
+                type: array
+                items:
+                  type: string
+              load:
+                $ref: schemas/common.json#/$defs/ExecutorLoad
+            required:
+              - connection_id
+              - active_sessions
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: executor.heartbeat
+      x-bma-direction: executor-to-harness
+      x-bma-kind: request
+      x-bma-channel: control
+    executorCapabilitiesUpdate:
+      name: executor.capabilities.update
+      title: executor.capabilities.update
+      summary: Publish changed executor capabilities.
+      description: Executor to harness notification. It may change capabilities, not the protocol version.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          method:
+            type: string
+            const: executor.capabilities.update
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              capabilities:
+                $ref: schemas/executor.json#/$defs/Capabilities
+            required:
+              - capabilities
+        required:
+          - jsonrpc
+          - method
+          - params
+      x-bma-jsonrpc-method: executor.capabilities.update
+      x-bma-direction: executor-to-harness
+      x-bma-kind: notification
+      x-bma-channel: control
+    executorDrain:
+      name: executor.drain
+      title: executor.drain
+      summary: Ask the executor to drain.
+      description: Harness to executor request. The executor stops accepting new sessions, finishes current work, and reports active_sessions.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: executor.drain
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              reason:
+                type: string
+              deadline_ms:
+                type: integer
+                minimum: 1
+            required:
+              - reason
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: executor.drain
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+    executorClose:
+      name: executor.close
+      title: executor.close
+      summary: Close the executor connection.
+      description: Either side notification, followed by WebSocket close code 1000 or 1001.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          method:
+            type: string
+            const: executor.close
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              reason:
+                type: string
+            required:
+              - reason
+        required:
+          - jsonrpc
+          - method
+          - params
+      x-bma-jsonrpc-method: executor.close
+      x-bma-direction: bidirectional
+      x-bma-kind: notification
+      x-bma-channel: control
+    sessionAssign:
+      name: session.assign
+      title: session.assign
+      summary: Assign a session to the executor.
+      description: Harness to executor request. The executor rejects a session that exceeds its capability or resource limits with -32009. metadata.source "harness" marks a long-lived harness session; any other source is one-shot and ends after its tool call.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: session.assign
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              work_id:
+                type: string
+              agent_id:
+                type: string
+              environment_id:
+                type: string
+              deadline_ms:
+                type: integer
+                minimum: 1
+              lease:
+                $ref: schemas/common.json#/$defs/Lease
+              resources:
+                type: array
+                items:
+                  $ref: schemas/session.json#/$defs/SessionMemoryResource
+                x-go-type: "[]json.RawMessage"
+              mcp_servers:
+                type: array
+                items:
+                  $ref: schemas/mcp.json#/$defs/McpServerConfig
+              metadata:
+                type: object
+                additionalProperties:
+                  type: string
+            required:
+              - session_id
+              - work_id
+              - environment_id
+              - lease
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: session.assign
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+    sessionReady:
+      name: session.ready
+      title: session.ready
+      summary: Report a session ready.
+      description: Executor to harness request after session.assign is accepted.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: session.ready
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              work_id:
+                type: string
+              lease_token:
+                type: string
+            required:
+              - session_id
+              - work_id
+              - lease_token
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: session.ready
+      x-bma-direction: executor-to-harness
+      x-bma-kind: request
+      x-bma-channel: control
+    sessionEvent:
+      name: session.event
+      title: session.event
+      summary: Emit a durable session event.
+      description: Executor to harness request for durable session events. A tool executor's event is idempotent by its JSON-RPC id. An agent executor (capability agent) also sends turn_id, event_id and sequence; the harness deduplicates by (session_id, event_id), accepts a sequence at or below acked_sequence as a duplicate, and rejects a gap with -32013 conflict (data.expected_sequence). An agent event matches schemas/agent.json AgentEvent. The JSON-RPC response is the ACK; the executor keeps every unacked event and resends them in sequence order after reconnect, before any new event.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: session.event
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              turn_id:
+                type: string
+              event_id:
+                type: string
+              sequence:
+                type: integer
+                minimum: 1
+              event:
+                $ref: schemas/session.json#/$defs/SessionEvent
+                x-go-type: json.RawMessage
+            required:
+              - session_id
+              - event
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: session.event
+      x-bma-direction: executor-to-harness
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: jsonrpc_id
+    sessionStatus:
+      name: session.status
+      title: session.status
+      summary: Report session status.
+      description: Executor to harness notification. detail carries free-form context such as tool_running or mcp_unavailable.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          method:
+            type: string
+            const: session.status
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              status:
+                $ref: schemas/session.json#/$defs/SessionStatus
+              detail:
+                type: string
+            required:
+              - session_id
+              - status
+        required:
+          - jsonrpc
+          - method
+          - params
+      x-bma-jsonrpc-method: session.status
+      x-bma-direction: executor-to-harness
+      x-bma-kind: notification
+      x-bma-channel: control
+    sessionStop:
+      name: session.stop
+      title: session.stop
+      summary: Stop a session.
+      description: Harness to executor request. The executor terminates every process and MCP server of the session (SIGTERM, then SIGKILL) and then sends session.ended.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: session.stop
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              reason:
+                type: string
+              deadline_ms:
+                type: integer
+                minimum: 1
+            required:
+              - session_id
+              - reason
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: session.stop
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+    sessionEnded:
+      name: session.ended
+      title: session.ended
+      summary: Report a session ended.
+      description: Executor to harness request, sent after every process of the session is gone. Retried until accepted.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: session.ended
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              reason:
+                type: string
+            required:
+              - session_id
+              - reason
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: session.ended
+      x-bma-direction: executor-to-harness
+      x-bma-kind: request
+      x-bma-channel: control
+    toolCall:
+      name: tool.call
+      title: tool.call
+      summary: Dispatch a tool call.
+      description: Harness to executor request. The executor acknowledges the dispatch and reports the outcome separately with tool.result. A duplicate tool_call_id is acknowledged without re-execution. A tool the executor does not serve is -32012 with data.capability "tool:<name>".
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: tool.call
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              tool_call_id:
+                type: string
+              tool:
+                $ref: schemas/tool.json#/$defs/ToolName
+              input:
+                $ref: schemas/tool.json#/$defs/ToolInput
+                x-go-type: json.RawMessage
+              deadline_ms:
+                type: integer
+                minimum: 1
+              permission:
+                $ref: schemas/tool.json#/$defs/ToolPermission
+            required:
+              - session_id
+              - tool_call_id
+              - tool
+              - input
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: tool.call
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+    toolResult:
+      name: tool.result
+      title: tool.result
+      summary: Report a tool result.
+      description: Executor to harness request, idempotent by tool_call_id and retried until accepted. Large output is uploaded first (POST /v1/executors/artifacts) and referenced by an artifact content block.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: tool.result
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              tool_call_id:
+                type: string
+              outcome:
+                $ref: schemas/tool.json#/$defs/ToolOutcome
+              is_error:
+                type: boolean
+              content:
+                type: array
+                items:
+                  $ref: schemas/tool.json#/$defs/ContentBlock
+              duration_ms:
+                type: integer
+                minimum: 0
+              artifacts:
+                type: array
+                items:
+                  $ref: schemas/tool.json#/$defs/ArtifactRef
+            required:
+              - session_id
+              - tool_call_id
+              - outcome
+              - is_error
+              - content
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: tool.result
+      x-bma-direction: executor-to-harness
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: tool_call_id
+    toolCancel:
+      name: tool.cancel
+      title: tool.cancel
+      summary: Cancel a running tool call.
+      description: Harness to executor request. The executor kills the process group; canceled=false when the call is unknown or already finished.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: tool.cancel
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              tool_call_id:
+                type: string
+              reason:
+                type: string
+            required:
+              - session_id
+              - tool_call_id
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: tool.cancel
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+    toolProgress:
+      name: tool.progress
+      title: tool.progress
+      summary: Report tool progress.
+      description: Executor to harness notification, optional.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          method:
+            type: string
+            const: tool.progress
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              tool_call_id:
+                type: string
+              message:
+                type: string
+            required:
+              - session_id
+              - tool_call_id
+              - message
+        required:
+          - jsonrpc
+          - method
+          - params
+      x-bma-jsonrpc-method: tool.progress
+      x-bma-direction: executor-to-harness
+      x-bma-kind: notification
+      x-bma-channel: control
+    processStart:
+      name: process.start
+      title: process.start
+      summary: Start a process.
+      description: 'Harness to executor request (v1.1 §3.3). Idempotent by (session_id, process_id): a repeat returns the live state. wait_ms waits up to that long for the process to end before answering. A spawn failure is an error with data.reason "spawn_failed". io_mode, file_transfer and git_credentials each require the matching process capability bit.'
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: process.start
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              process_id:
+                type: string
+              argv:
+                type: array
+                items:
+                  type: string
+                maxItems: 256
+              cwd:
+                type: string
+              env:
+                type: object
+                additionalProperties:
+                  type: string
+              stdin:
+                $ref: schemas/process.json#/$defs/StdinMode
+              stderr:
+                $ref: schemas/process.json#/$defs/StderrMode
+              wait_ms:
+                type: integer
+                minimum: 0
+                maximum: 300000
+              timeout_ms:
+                type: integer
+                minimum: 0
+                maximum: 86400000
+              metadata:
+                type: object
+                additionalProperties:
+                  type: string
+              io_mode:
+                $ref: schemas/process.json#/$defs/IOMode
+              file_transfer:
+                $ref: schemas/process.json#/$defs/ProcessFileTransfer
+              git_credentials:
+                type: boolean
+            required:
+              - session_id
+              - process_id
+              - argv
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: process.start
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: session_id+process_id
+    processRead:
+      name: process.read
+      title: process.read
+      summary: Read process output from a cursor.
+      description: Harness to executor request (v1.1 §3.4). Long-polls up to wait_ms for new bytes. gap=true when bytes before earliest_cursor were dropped from the ring buffer.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: process.read
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              process_id:
+                type: string
+              stream:
+                $ref: schemas/process.json#/$defs/ProcessStream
+              cursor:
+                type: integer
+                minimum: 0
+              max_bytes:
+                type: integer
+                minimum: 1
+                maximum: 32768
+                x-go-type: int
+              wait_ms:
+                type: integer
+                minimum: 0
+                maximum: 300000
+            required:
+              - session_id
+              - process_id
+              - stream
+              - cursor
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: process.read
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+    processWrite:
+      name: process.write
+      title: process.write
+      summary: Write to process stdin.
+      description: Harness to executor request (v1.1 §3.5). Exactly one of data (base64, at most 32 KiB decoded) or close_stdin. close_stdin is rejected for io_mode "pty".
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: process.write
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              process_id:
+                type: string
+              data:
+                type: string
+              close_stdin:
+                type: boolean
+            required:
+              - session_id
+              - process_id
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: process.write
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+    processInterrupt:
+      name: process.interrupt
+      title: process.interrupt
+      summary: Interrupt a process (SIGINT).
+      description: Harness to executor request (v1.1 §3.6).
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: process.interrupt
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              process_id:
+                type: string
+              grace_ms:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+                maximum: 30000
+            required:
+              - session_id
+              - process_id
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: process.interrupt
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+    processTerminate:
+      name: process.terminate
+      title: process.terminate
+      summary: Terminate a process (SIGTERM, then SIGKILL after grace_ms).
+      description: Harness to executor request (v1.1 §3.6).
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: process.terminate
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              process_id:
+                type: string
+              grace_ms:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+                maximum: 30000
+            required:
+              - session_id
+              - process_id
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: process.terminate
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+    processList:
+      name: process.list
+      title: process.list
+      summary: List the processes of a session.
+      description: Harness to executor request (v1.1 §3.7). A new connection starts with an empty process table.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: process.list
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+            required:
+              - session_id
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: process.list
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+    processStatus:
+      name: process.status
+      title: process.status
+      summary: Advise a process state change.
+      description: "Executor to harness notification (v1.1 §3.8). Advisory: the harness confirms state with process.read or process.list."
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          method:
+            type: string
+            const: process.status
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              process_id:
+                type: string
+              state:
+                $ref: schemas/process.json#/$defs/ProcessStateName
+              exit_code:
+                type:
+                  - integer
+                  - "null"
+                x-go-type: int
+              exit_signal:
+                type:
+                  - string
+                  - "null"
+              ended_at:
+                type: string
+              reason:
+                type: string
+              observed_at:
+                type: string
+            required:
+              - session_id
+              - process_id
+              - state
+              - observed_at
+        required:
+          - jsonrpc
+          - method
+          - params
+      x-bma-jsonrpc-method: process.status
+      x-bma-direction: executor-to-harness
+      x-bma-kind: notification
+      x-bma-channel: control
+    terminalOpen:
+      name: terminal.open
+      title: terminal.open
+      summary: Create or reuse a PTY.
+      description: Harness to executor request (machine-scoped). Returns the live PTY with the same terminal_id; rows/cols only size a new PTY, and the rest of the spec must match a live terminal or the executor answers -32013.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: terminal.open
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              terminal_id:
+                type: string
+              kind:
+                type: string
+              shell:
+                type: string
+              argv:
+                type: array
+                items:
+                  type: string
+              cwd:
+                type: string
+              env:
+                type: object
+                additionalProperties:
+                  type: string
+              rows:
+                type: integer
+                x-go-type: uint16
+              cols:
+                type: integer
+                x-go-type: uint16
+            required:
+              - terminal_id
+              - kind
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: terminal.open
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: terminal_id
+    terminalAttach:
+      name: terminal.attach
+      title: terminal.attach
+      summary: Attach one consumer to a live PTY.
+      description: Harness to executor request. The executor dials host.url with the ticket, offering subprotocol bma.terminal.v1, and answers after the attached frame was written. from_seq/ack_seq resume output exactly as the bma.terminal.v1 attach frame does; can_write requests the single writer lease. Closing the host socket detaches; the PTY survives.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: terminal.attach
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              terminal_id:
+                type: string
+              epoch:
+                type: integer
+              stream_id:
+                type: string
+              can_write:
+                type: boolean
+              from_seq:
+                type: integer
+              ack_seq:
+                type: integer
+              host:
+                $ref: schemas/terminal.json#/$defs/TerminalHost
+            required:
+              - terminal_id
+              - epoch
+              - stream_id
+              - can_write
+              - from_seq
+              - ack_seq
+              - host
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: terminal.attach
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+    terminalClose:
+      name: terminal.close
+      title: terminal.close
+      summary: Close a PTY.
+      description: Harness to executor request. Idempotent.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: terminal.close
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              terminal_id:
+                type: string
+              reason:
+                type: string
+            required:
+              - terminal_id
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: terminal.close
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: terminal_id
+    skillInstall:
+      name: skill.install
+      title: skill.install
+      summary: Install one skill revision on the machine.
+      description: Harness to executor request (machine-scoped). The executor downloads the revision archive with download_token, verifies digest, and installs it. Idempotent by (skill_id, revision_id, digest).
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: skill.install
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              machine_id:
+                type: string
+              skill_id:
+                type: string
+              revision_id:
+                type: string
+              digest:
+                type: string
+              download_token:
+                type: string
+              download_expires_at:
+                type: integer
+            required:
+              - machine_id
+              - skill_id
+              - revision_id
+              - digest
+              - download_token
+              - download_expires_at
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: skill.install
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: skill_id+revision_id+digest
+    workspaceBackup:
+      name: workspace.backup
+      title: workspace.backup
+      summary: Upload one backup of the machine workspace.
+      description: Harness to executor request (machine-scoped). The executor walks paths (absolute), skipping exclude entries and its own BMA_HOME, and streams a tar+zstd archive with PUT to /daemon/machine-backups/{backup_id}/archive over the machine token, with the tree fingerprint in X-BMA-Backup-Fingerprint. When the fingerprint equals skip_if_fingerprint nothing is uploaded and the result is "unchanged". Restore has no method; a recreated executor fetches /daemon/machine-backup-restore before executor.register.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: workspace.backup
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              backup_id:
+                type: string
+              paths:
+                type: array
+                items:
+                  type: string
+              exclude:
+                type: array
+                items:
+                  type: string
+              skip_if_fingerprint:
+                type: string
+            required:
+              - backup_id
+              - paths
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: workspace.backup
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: backup_id
+    turnStart:
+      name: turn.start
+      title: turn.start
+      summary: Start an agent turn.
+      description: Harness to executor request (capability agent). Opens the agent session on first use (no session.assign) or continues it; executor_session_ref from an earlier TurnStartResult lets the executor resume its local conversation after a restart. The executor answers as soon as the turn is accepted and reports progress with session.event. Idempotent by turn_id. A session with a running turn answers -32013 conflict (use turn.input); a new session beyond max_sessions answers -32009.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: turn.start
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              turn_id:
+                type: string
+              input_id:
+                type: string
+              input:
+                type: array
+                minItems: 1
+                items:
+                  $ref: schemas/agent.json#/$defs/AgentInputBlock
+              executor_session_ref:
+                type: string
+              config:
+                $ref: schemas/agent.json#/$defs/AgentTurnConfig
+              deadline_ms:
+                type: integer
+                minimum: 1
+              metadata:
+                type: object
+                additionalProperties:
+                  type: string
+            required:
+              - session_id
+              - turn_id
+              - input_id
+              - input
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: turn.start
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: turn_id
+    turnInput:
+      name: turn.input
+      title: turn.input
+      summary: Add user input to the running turn.
+      description: Harness to executor request (capability agent). The local agent consumes the input at its next step. Idempotent by input_id. When turn_id is not the running turn the executor answers -32013 conflict and the harness starts a new turn instead.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: turn.input
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              turn_id:
+                type: string
+              input_id:
+                type: string
+              input:
+                type: array
+                minItems: 1
+                items:
+                  $ref: schemas/agent.json#/$defs/AgentInputBlock
+            required:
+              - session_id
+              - turn_id
+              - input_id
+              - input
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: turn.input
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: input_id
+    turnCancel:
+      name: turn.cancel
+      title: turn.cancel
+      summary: Stop the running turn.
+      description: Harness to executor request (capability agent). The executor stops the agent loop, cancels its local tool calls, withdraws open interactions (interaction.cancel turn_canceled), and ends the turn with session.status_idle turn_outcome=canceled. The session stays open for the next turn.start. Unlike tool.cancel (one harness-dispatched tool call) and session.stop (a hand session and its processes), it targets only the agent turn.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: turn.cancel
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              turn_id:
+                type: string
+              reason:
+                type: string
+            required:
+              - session_id
+              - turn_id
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: turn.cancel
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+    sessionClose:
+      name: session.close
+      title: session.close
+      summary: Close an agent session.
+      description: Harness to executor request (capability agent). The executor cancels a running turn as turn.cancel does, waits until its events are acknowledged, releases the local conversation, and then sends session.ended. closed=false for an unknown session. A later turn.start with the same session_id starts a new local conversation.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: session.close
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              reason:
+                type: string
+            required:
+              - session_id
+              - reason
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: session.close
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+    sessionEventDelta:
+      name: session.event_delta
+      title: session.event_delta
+      summary: Stream a preview of a durable agent event.
+      description: Executor to harness notification (capability agent). Transient and lossy; never acknowledged or resent. event_id is the event_id of the durable session.event that finalizes the preview. The harness relays it to subscribers as Anthropic event_start and event_delta.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          method:
+            type: string
+            const: session.event_delta
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              turn_id:
+                type: string
+              event_id:
+                type: string
+              event_type:
+                $ref: schemas/agent.json#/$defs/EventDeltaType
+              index:
+                type: integer
+                minimum: 0
+              text:
+                type: string
+            required:
+              - session_id
+              - turn_id
+              - event_id
+              - event_type
+              - index
+              - text
+        required:
+          - jsonrpc
+          - method
+          - params
+      x-bma-jsonrpc-method: session.event_delta
+      x-bma-direction: executor-to-harness
+      x-bma-kind: notification
+      x-bma-channel: control
+    interactionRequest:
+      name: interaction.request
+      title: interaction.request
+      summary: Ask the platform for an approval or an answer.
+      description: Executor to harness request (capability agent). The harness opens one platform agent interaction (the same request on desktop, mobile and integrations) and answers with interaction.response later. Idempotent by interaction_id. A permission request references the agent.tool_use event in tool_use_id, sent earlier with evaluated_permission ask. The executor keeps local authority; it may still deny, and it treats expires_at as a local deny.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: interaction.request
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              turn_id:
+                type: string
+              interaction_id:
+                type: string
+              kind:
+                $ref: schemas/agent.json#/$defs/InteractionKind
+              tool_use_id:
+                type: string
+              tool_name:
+                type: string
+              tool_input:
+                type: object
+                additionalProperties: true
+              scopes:
+                type: array
+                items:
+                  $ref: schemas/agent.json#/$defs/InteractionScope
+              question:
+                $ref: schemas/agent.json#/$defs/InteractionQuestion
+              expires_at:
+                type: string
+            required:
+              - session_id
+              - turn_id
+              - interaction_id
+              - kind
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: interaction.request
+      x-bma-direction: executor-to-harness
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: interaction_id
+    interactionResponse:
+      name: interaction.response
+      title: interaction.response
+      summary: Deliver the answer to an interaction.
+      description: Harness to executor request (capability agent). Sent once the platform interaction resolves, expires or is canceled; retried with the same interaction_id until answered. The first answer wins; a repeat or an unknown interaction answers accepted=false.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: interaction.response
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              interaction_id:
+                type: string
+              outcome:
+                $ref: schemas/agent.json#/$defs/InteractionOutcome
+              scope:
+                $ref: schemas/agent.json#/$defs/InteractionScope
+              deny_message:
+                type: string
+              answers:
+                type: array
+                items:
+                  type: string
+              responder:
+                $ref: schemas/agent.json#/$defs/InteractionResponder
+            required:
+              - session_id
+              - interaction_id
+              - outcome
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: interaction.response
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: interaction_id
+    interactionCancel:
+      name: interaction.cancel
+      title: interaction.cancel
+      summary: Withdraw an open interaction.
+      description: Executor to harness request (capability agent). The executor no longer needs the answer, for example the user answered in the local UI (resolved_locally) or the turn was canceled. The harness cancels the platform interaction so every client dismisses it. Idempotent by interaction_id.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: interaction.cancel
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              interaction_id:
+                type: string
+              reason:
+                $ref: schemas/agent.json#/$defs/InteractionCancelReason
+            required:
+              - session_id
+              - interaction_id
+              - reason
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: interaction.cancel
+      x-bma-direction: executor-to-harness
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: interaction_id
+    jsonRpcSuccessResponse:
+      name: JSON-RPC success response
+      title: JSON-RPC success response
+      contentType: application/json
+      payload:
+        $ref: schemas/common.json#/$defs/JsonRpcSuccessResponse
+    jsonRpcErrorResponse:
+      name: JSON-RPC error response
+      title: JSON-RPC error response
+      contentType: application/json
+      payload:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorResponse
+    mcpInitialize:
+      name: initialize
+      title: initialize
+      summary: Raw MCP initialize request.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/mcp.json#/$defs/McpJsonRpcId
+          method:
+            type: string
+            const: initialize
+          params:
+            $ref: schemas/mcp.json#/$defs/McpInitializeParams
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-mcp-method: initialize
+      x-bma-kind: request
+      x-bma-channel: mcp
+    mcpInitialized:
+      name: notifications/initialized
+      title: notifications/initialized
+      summary: Raw MCP notifications/initialized notification.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          method:
+            type: string
+            const: notifications/initialized
+          params:
+            type: object
+            additionalProperties: false
+        required:
+          - jsonrpc
+          - method
+          - params
+      x-bma-mcp-method: notifications/initialized
+      x-bma-kind: notification
+      x-bma-channel: mcp
+    mcpToolsList:
+      name: tools/list
+      title: tools/list
+      summary: Raw MCP tools/list request.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/mcp.json#/$defs/McpJsonRpcId
+          method:
+            type: string
+            const: tools/list
+          params:
+            $ref: schemas/mcp.json#/$defs/McpToolsListParams
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-mcp-method: tools/list
+      x-bma-kind: request
+      x-bma-channel: mcp
+    mcpToolsCall:
+      name: tools/call
+      title: tools/call
+      summary: Raw MCP tools/call request.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/mcp.json#/$defs/McpJsonRpcId
+          method:
+            type: string
+            const: tools/call
+          params:
+            $ref: schemas/mcp.json#/$defs/McpToolsCallParams
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-mcp-method: tools/call
+      x-bma-kind: request
+      x-bma-channel: mcp
+    mcpProgress:
+      name: notifications/progress
+      title: notifications/progress
+      summary: Raw MCP notifications/progress notification.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          method:
+            type: string
+            const: notifications/progress
+          params:
+            $ref: schemas/mcp.json#/$defs/McpProgressParams
+        required:
+          - jsonrpc
+          - method
+          - params
+      x-bma-mcp-method: notifications/progress
+      x-bma-kind: notification
+      x-bma-channel: mcp
+    mcpRequest:
+      name: MCP JSON-RPC request
+      title: MCP JSON-RPC request
+      contentType: application/json
+      payload:
+        $ref: schemas/mcp.json#/$defs/McpJsonRpcRequest
+      x-bma-channel: mcp
+    mcpNotification:
+      name: MCP JSON-RPC notification
+      title: MCP JSON-RPC notification
+      contentType: application/json
+      payload:
+        $ref: schemas/mcp.json#/$defs/McpJsonRpcNotification
+      x-bma-channel: mcp
+    mcpSuccessResponse:
+      name: MCP JSON-RPC success response
+      title: MCP JSON-RPC success response
+      contentType: application/json
+      payload:
+        $ref: schemas/mcp.json#/$defs/McpJsonRpcSuccessResponse
+      x-bma-channel: mcp
+    mcpErrorResponse:
+      name: MCP JSON-RPC error response
+      title: MCP JSON-RPC error response
+      contentType: application/json
+      payload:
+        $ref: schemas/mcp.json#/$defs/McpJsonRpcErrorResponse
+      x-bma-channel: mcp
+  securitySchemes:
+    executorJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Channel-scoped executor JWT fetched from POST /v1/executors/token with an environment key or a machine daemon token. A machine-scoped JWT carries machine_id and daemon_token_id.
+x-bma-token-endpoint:
+  method: POST
+  path: /v1/executors/token
+  authentication:
+    - environment-key
+    - machine-daemon-token
+  request:
+    $ref: schemas/executor.json#/$defs/ExecutorTokenRequest
+  response:
+    $ref: schemas/executor.json#/$defs/ExecutorTokenResponse

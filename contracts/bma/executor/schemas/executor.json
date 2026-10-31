@@ -1,0 +1,410 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.bma.beeos.ai/schemas/executor.json",
+  "title": "BMA executor lifecycle types",
+  "description": "Token bootstrap, registration, capabilities, heartbeat and drain.",
+  "$defs": {
+    "ExecutorInfo": {
+      "type": "object",
+      "description": "Executor identity reported at token bootstrap and registration.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "os",
+        "arch",
+        "version"
+      ],
+      "additionalProperties": true
+    },
+    "ShellCapability": {
+      "type": "object",
+      "description": "v1 one-shot shell tools.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": true
+    },
+    "FilesCapability": {
+      "type": "object",
+      "description": "v1 file tools.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "read_roots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "write_roots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": true
+    },
+    "McpCapability": {
+      "type": "object",
+      "description": "Environment-origin MCP servers.",
+      "properties": {
+        "stdio": {
+          "type": "boolean"
+        },
+        "http": {
+          "type": "boolean"
+        },
+        "max_servers": {
+          "type": "integer",
+          "x-go-type": "int"
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "DisplayCapability": {
+      "type": "object",
+      "description": "v1.1 display object. v1 sent a boolean; the server accepts both.",
+      "properties": {
+        "rfb": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "ProcessCapability": {
+      "type": "object",
+      "description": "v1.1 process.* support. pty, file_transfer and git_credentials are additive: the harness only sends the matching process.start fields to an executor that set them, and fails the process explicitly otherwise.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "max_processes": {
+          "type": "integer",
+          "x-go-type": "int"
+        },
+        "buffer_bytes": {
+          "type": "integer",
+          "x-go-type": "int"
+        },
+        "pty": {
+          "type": "boolean",
+          "description": "Accepts process.start io_mode \"pty\"."
+        },
+        "file_transfer": {
+          "type": "boolean",
+          "description": "Accepts process.start file_transfer."
+        },
+        "git_credentials": {
+          "type": "boolean",
+          "description": "Accepts process.start git_credentials."
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": true
+    },
+    "ArtifactCapability": {
+      "type": "object",
+      "description": "v1.1 artifact upload (POST /v1/executors/artifacts). Environment-scoped executors only.",
+      "properties": {
+        "upload": {
+          "type": "boolean"
+        },
+        "max_bytes": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "upload"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalCapability": {
+      "type": "object",
+      "description": "v1.1 terminal.* support. Machine-scoped executors only.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_sessions": {
+          "type": "integer",
+          "x-go-type": "int"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": true
+    },
+    "SkillsCapability": {
+      "type": "object",
+      "description": "skill.install support. Machine-scoped executors only.",
+      "properties": {
+        "install": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "install"
+      ],
+      "additionalProperties": true
+    },
+    "WorkspaceCapability": {
+      "type": "object",
+      "description": "workspace.backup support and the startup restore of a pending backup. Machine-scoped executors only.",
+      "properties": {
+        "backup": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "backup"
+      ],
+      "additionalProperties": true
+    },
+    "Capabilities": {
+      "type": "object",
+      "description": "Executor capability object. The server only sends a method to an executor that advertised its capability; otherwise the executor answers -32012 capability_unavailable.",
+      "properties": {
+        "shell": {
+          "$ref": "executor.json#/$defs/ShellCapability"
+        },
+        "files": {
+          "$ref": "executor.json#/$defs/FilesCapability"
+        },
+        "mcp": {
+          "$ref": "executor.json#/$defs/McpCapability"
+        },
+        "chrome": {
+          "type": "boolean"
+        },
+        "computer_use": {
+          "type": "boolean"
+        },
+        "display": {
+          "description": "v1 boolean or v1.1 DisplayCapability object.",
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "executor.json#/$defs/DisplayCapability"
+            }
+          ],
+          "x-go-type": "json.RawMessage"
+        },
+        "process": {
+          "$ref": "executor.json#/$defs/ProcessCapability"
+        },
+        "artifacts": {
+          "$ref": "executor.json#/$defs/ArtifactCapability"
+        },
+        "terminal": {
+          "$ref": "executor.json#/$defs/TerminalCapability"
+        },
+        "skills": {
+          "$ref": "executor.json#/$defs/SkillsCapability"
+        },
+        "workspace": {
+          "$ref": "executor.json#/$defs/WorkspaceCapability"
+        },
+        "agent": {
+          "$ref": "agent.json#/$defs/AgentCapability"
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "ExecutorResume": {
+      "type": "object",
+      "description": "Reattach state sent on reconnect.",
+      "properties": {
+        "executor_id": {
+          "type": "string"
+        },
+        "last_connection_id": {
+          "type": "string"
+        },
+        "active_sessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "ExecutorRegisterResult": {
+      "type": "object",
+      "description": "executor.register result. protocol and limits are v1.1 only.",
+      "properties": {
+        "executor_id": {
+          "type": "string"
+        },
+        "connection_id": {
+          "type": "string"
+        },
+        "server_time": {
+          "type": "string"
+        },
+        "heartbeat_interval_ms": {
+          "type": "integer"
+        },
+        "lease_ttl_ms": {
+          "type": "integer"
+        },
+        "max_control_frame_bytes": {
+          "type": "integer"
+        },
+        "max_mcp_frame_bytes": {
+          "type": "integer"
+        },
+        "drain": {
+          "type": "boolean"
+        },
+        "protocol": {
+          "$ref": "common.json#/$defs/ProtocolVersion"
+        },
+        "limits": {
+          "$ref": "common.json#/$defs/Limits"
+        }
+      },
+      "required": [
+        "executor_id",
+        "connection_id",
+        "server_time",
+        "heartbeat_interval_ms",
+        "lease_ttl_ms",
+        "max_control_frame_bytes",
+        "max_mcp_frame_bytes",
+        "drain"
+      ],
+      "additionalProperties": true
+    },
+    "ExecutorHeartbeatResult": {
+      "type": "object",
+      "description": "executor.heartbeat result.",
+      "properties": {
+        "server_time": {
+          "type": "string"
+        },
+        "lease_ttl_ms": {
+          "type": "integer"
+        },
+        "drain": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "server_time",
+        "lease_ttl_ms",
+        "drain"
+      ],
+      "additionalProperties": true
+    },
+    "ExecutorDrainResult": {
+      "type": "object",
+      "description": "executor.drain result.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "active_sessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "accepted",
+        "active_sessions"
+      ],
+      "additionalProperties": true
+    },
+    "ExecutorTokenRequest": {
+      "type": "object",
+      "description": "POST /v1/executors/token body. The bearer is an environment key, or a machine daemon token. An empty environment_id with a machine token requests a machine-scoped executor: its executor_id is exec_<machine_id>, stable across refreshes, and the JWT carries machine_id and daemon_token_id.",
+      "properties": {
+        "environment_id": {
+          "type": "string"
+        },
+        "executor": {
+          "$ref": "executor.json#/$defs/ExecutorInfo"
+        }
+      },
+      "required": [
+        "environment_id",
+        "executor"
+      ],
+      "additionalProperties": true
+    },
+    "ExecutorTokenResponse": {
+      "type": "object",
+      "description": "POST /v1/executors/token response.",
+      "properties": {
+        "executor_id": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string",
+          "description": "Short-lived executor JWT, sent only in the Authorization header of the channel upgrade."
+        },
+        "expires_in": {
+          "type": "integer",
+          "description": "Seconds."
+        },
+        "ws_url": {
+          "type": "string"
+        },
+        "channel_scope": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/ChannelScope"
+          }
+        }
+      },
+      "required": [
+        "executor_id",
+        "token",
+        "expires_in",
+        "ws_url",
+        "channel_scope"
+      ],
+      "additionalProperties": true
+    }
+  }
+}
