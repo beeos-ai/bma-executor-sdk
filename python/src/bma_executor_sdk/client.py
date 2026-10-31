@@ -28,6 +28,7 @@ from .generated import (
     METHOD_TOOL_CALL,
     METHOD_TOOL_CANCEL,
     METHOD_TOOL_RESULT,
+    METHODS,
     Ack,
     Capabilities,
     ChannelScope,
@@ -509,7 +510,7 @@ class ExecutorClient:
             return await self._agent.methods[method](params)
         handler = self._request_handlers.get(method)
         if handler is None:
-            raise RPCError(JsonRpcErrorCode.MethodNotFound, f"unknown method {method}")
+            raise _unregistered_method_error(method)
         return await handler(params)
 
     def _dispatch_notification(self, method: str, params: Any) -> None:
@@ -673,3 +674,13 @@ __all__ = [
     "MAX_FRAME_BYTES",
     "static_token",
 ]
+
+
+def _unregistered_method_error(method: str) -> RPCError:
+    """A contract method behind a capability this executor did not register is
+    capability_unavailable naming that capability; anything else is
+    method_not_found."""
+    spec = METHODS.get(method)
+    if spec is None or not spec.capability or spec.direction == "executor-to-harness":
+        return RPCError(JsonRpcErrorCode.MethodNotFound, f"unknown method {method}")
+    return RPCError(JsonRpcErrorCode.CapabilityUnavailable, "capability_unavailable", {"capability": spec.capability})

@@ -1,5 +1,22 @@
 # Changelog
 
+## bma-executor-sdk v0.4.1
+
+Go tag `executor/v0.4.1`, npm `@beeos-ai/bma-executor-sdk@0.4.1`, PyPI
+`bma-executor-sdk` 0.4.1 (tag `executor-python/v0.4.1`).
+
+### Fixes
+
+- **Contract compatibility: unregistered capability methods answer
+  `capability_unavailable`.** A harness → executor contract method behind a
+  capability the executor did not register (`terminal.*`, `skill.install`,
+  `workspace.backup`, the agent methods, …) now answers `-32012
+  capability_unavailable` with `data.capability` set to the contract's
+  `x-bma-capability` (for example `terminal.enabled`), as the contract
+  requires and pre-SDK executors did. 0.4.0 answered `-32601
+  method_not_found`. Methods outside the contract still answer
+  `method_not_found`. Go, TypeScript and Python executors behave the same.
+
 ## v0.4.0
 
 bma-executor-sdk 0.4.0 was released first (Go tag `executor/v0.4.0`, npm

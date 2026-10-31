@@ -407,3 +407,20 @@ async def test_start_turn_requires_agent_capability() -> None:
             await executor.start_turn(turn_start("s", "t", "hi"))  # type: ignore[arg-type]
         assert error.value.code == JsonRpcErrorCode.CapabilityUnavailable
         await client.stop()
+
+
+async def test_unregistered_contract_method_is_capability_unavailable() -> None:
+    harness = bx.Harness()
+    async with listen(harness, "inprocess") as (url, dialer):
+        client = make_client(url, dialer)
+        await client.start()
+        executor = await harness.wait_executor()
+        for method, capability in [("terminal.open", "terminal.enabled"), ("skill.install", "skills.install"), ("workspace.backup", "workspace.backup")]:
+            with pytest.raises(bx.RPCError) as error:
+                await executor._call(method, {})  # noqa: SLF001
+            assert error.value.code == JsonRpcErrorCode.CapabilityUnavailable, method
+            assert error.value.data == {"capability": capability}, method
+        with pytest.raises(bx.RPCError) as unknown:
+            await executor._call("vendor.unknown", {})  # noqa: SLF001
+        assert unknown.value.code == JsonRpcErrorCode.MethodNotFound
+        await client.stop()

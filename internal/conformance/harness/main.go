@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -83,6 +84,17 @@ func run() error {
 	}
 	if result := <-blocked; result.Outcome != bmaexecutor.ToolOutcomeCanceled {
 		return fmt.Errorf("canceled result = %+v", result)
+	}
+	// A contract method the executor did not register is capability_unavailable
+	// naming its capability; a method outside the contract is method_not_found.
+	var rpcErr *bmaexecutor.RPCError
+	err = executor.Call(ctx, bmaexecutor.MethodTerminalOpen, bmaexecutor.TerminalOpenParams{TerminalID: "term_conformance", Kind: "human"}, nil)
+	if !errors.As(err, &rpcErr) || rpcErr.Code != bmaexecutor.CodeCapabilityUnavailable || rpcErr.Data == nil || rpcErr.Data.Capability != "terminal.enabled" {
+		return fmt.Errorf("terminal.open on an executor without terminals = %v %+v", err, rpcErr)
+	}
+	err = executor.Call(ctx, "vendor.unknown", map[string]any{}, nil)
+	if !errors.As(err, &rpcErr) || rpcErr.Code != bmaexecutor.CodeMethodNotFound {
+		return fmt.Errorf("vendor.unknown = %v", err)
 	}
 	if err := session.Stop(ctx, "done"); err != nil {
 		return fmt.Errorf("session.stop: %w", err)

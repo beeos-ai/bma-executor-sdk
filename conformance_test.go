@@ -94,12 +94,6 @@ func TestConformanceCorePeer(t *testing.T) {
 		if example.Message == nil || Methods[example.Method].Direction != DirectionHarnessToExecutor {
 			continue
 		}
-		switch Methods[example.Method].Capability {
-		case "agent", "workspace.backup":
-			// Not Core capabilities: the agent end has its own conformance
-			// test, and the embedding executor (bmad) serves workspace.backup.
-			continue
-		}
 		switch example.Method {
 		case MethodSessionAssign:
 			ordered = append([]conformanceExample{example}, ordered...)
@@ -223,6 +217,15 @@ func TestConformanceCorePeer(t *testing.T) {
 			problem("%s: no answer", example.Name)
 			continue
 		}
+		// agent and workspace.backup are contract methods this executor does
+		// not register: they must answer capability_unavailable naming the
+		// capability, never method_not_found.
+		if capability := Methods[example.Method].Capability; capability == "agent" || capability == "workspace.backup" {
+			if answer.Error == nil || answer.Error.Code != CodeCapabilityUnavailable || answer.Error.Data == nil || answer.Error.Data.Capability != capability {
+				problem("%s: want capability_unavailable for %s, got %+v", example.Name, capability, answer.Error)
+			}
+			continue
+		}
 		if answer.Error != nil {
 			decodeFailure := answer.Error.Code == CodeInvalidParams && strings.HasPrefix(answer.Error.Message, "invalid params")
 			if answer.Error.Code == CodeMethodNotFound || decodeFailure {
@@ -233,6 +236,20 @@ func TestConformanceCorePeer(t *testing.T) {
 		if err := strictDecode(answer.Result, NewResult(example.Method)); err != nil {
 			problem("%s result: %v: %s", example.Name, err, answer.Result)
 		}
+	}
+	// A method outside the contract stays method_not_found.
+	unknown := make(chan conformanceAnswer, 1)
+	mu.Lock()
+	pending["unknown-method"] = unknown
+	mu.Unlock()
+	write(map[string]any{"jsonrpc": "2.0", "id": "unknown-method", "method": "vendor.unknown", "params": map[string]any{}})
+	select {
+	case answer := <-unknown:
+		if answer.Error == nil || answer.Error.Code != CodeMethodNotFound {
+			problem("vendor.unknown: want method_not_found, got %+v", answer.Error)
+		}
+	case <-time.After(10 * time.Second):
+		problem("vendor.unknown: no answer")
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
