@@ -111,15 +111,23 @@ func TestProcessOptionsEnvReachesProcessesOnly(t *testing.T) {
 	}
 }
 
-// TestStdioMCPEnvIsExplicitOnly: a stdio MCP server sees only its configured
-// env (v1 §8.1): no inherited host variable, BMA_* or HOME, while processes
-// keep the canonical BMA_HOME.
+// TestStdioMCPEnvIsExplicitOnly: a stdio MCP server sees only the MCP SDK's
+// safe default variables (PATH, SHELL, TERM, USER, LOGNAME; not HOME, which is
+// the host's) overlaid by its configured env (v1 §8.1): no other host
+// variable and no BMA_*, while processes keep the canonical BMA_HOME.
 func TestStdioMCPEnvIsExplicitOnly(t *testing.T) {
 	requireUnix(t)
 	t.Setenv("BMA_MACHINE_TOKEN", "machine-secret")
 	t.Setenv("BMA_API_URL", "https://bma.internal")
 	t.Setenv("BMA_HOME", "/private/bma-home")
 	t.Setenv("HOST_ONLY_SECRET", "host-secret")
+	t.Setenv("HOME", "/host/home")
+	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("SHELL", "/bin/sh")
+	t.Setenv("TERM", "xterm")
+	t.Setenv("USER", "agent")
+	t.Setenv("LOGNAME", "agent")
+	t.Setenv("LANG", "C.UTF-8")
 	ctx := testContext(t)
 	executable, err := os.Executable()
 	if err != nil {
@@ -137,7 +145,7 @@ func TestStdioMCPEnvIsExplicitOnly(t *testing.T) {
 	session := readySession(t, b, SessionAssignParams{SessionID: "sess_mcp_env", Lease: Lease{Token: "lease"}, MCPServers: []MCPServerConfig{{
 		ServerKey: "env", ConnectionOrigin: MCPConnectionOriginEnvironment,
 		Transport: MCPServerTransport{Type: MCPTransportTypeStdio, Command: executable,
-			Env: map[string]string{"BMA_TEST_MCP_SERVER": "1", "EXPLICIT": "yes"}},
+			Env: map[string]string{"BMA_TEST_MCP_SERVER": "1", "EXPLICIT": "yes", "TERM": "dumb"}},
 	}}})
 	channel, err := session.MCP(ctx, "env")
 	if err != nil {
@@ -162,8 +170,9 @@ func TestStdioMCPEnvIsExplicitOnly(t *testing.T) {
 	}
 	got := strings.Split(response.Result.Content[0].Text, "\n")
 	slices.Sort(got)
-	if want := []string{"BMA_TEST_MCP_SERVER=1", "EXPLICIT=yes"}; !slices.Equal(got, want) {
-		t.Fatalf("stdio MCP env = %q, want only the configured %q", got, want)
+	want := []string{"BMA_TEST_MCP_SERVER=1", "EXPLICIT=yes", "LOGNAME=agent", "PATH=/usr/bin:/bin", "SHELL=/bin/sh", "TERM=dumb", "USER=agent"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("stdio MCP env = %q, want the safe defaults plus the configured env %q", got, want)
 	}
 
 	var state ProcessState

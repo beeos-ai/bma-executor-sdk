@@ -1,5 +1,25 @@
 # Changelog
 
+## bma-executor-sdk v0.4.3
+
+Released 2026-10-31 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.3) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.3) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.3).
+
+Go tag `executor/v0.4.3`, npm `@beeos-ai/bma-executor-sdk@0.4.3`, PyPI
+`bma-executor-sdk` 0.4.3 (tag `executor-python/v0.4.3`).
+
+### Fixes (Go `Core`)
+
+- **stdio MCP servers get the MCP SDKs' safe default environment.** 0.4.2
+  started servers with `transport.env` only, so `npx`/`uvx`-style servers had
+  no `PATH`. The server now inherits `PATH`, `SHELL`, `TERM`, `USER`,
+  `LOGNAME` (the official MCP SDK `getDefaultEnvironment` list, `DenyEnv`
+  filtered; the Windows list likewise) and `transport.env` overlays them.
+  `HOME` stays the host's and is not inherited, nor is any `BMA_*` or other
+  host variable; `secret:` refusal is unchanged.
+
+The TypeScript and Python packages start no processes; they are released at
+0.4.3 to keep the family in lockstep.
+
 ## bma-executor-sdk v0.4.2
 
 Released 2026-10-31 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.2) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.2) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.2).

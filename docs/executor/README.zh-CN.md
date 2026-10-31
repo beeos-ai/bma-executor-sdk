@@ -18,7 +18,7 @@
 - **【即将提供】**：契约中已定义、尚未提供服务；按能力位（capability-gated）发布，未声明对应能力位的一方不会收到这些方法。
 - **【设计中】**：只有设计，没有实现。
 
-> 基线：bma-executor-sdk **0.4.2**（相关功能自 0.4.0 起提供），协议 `bma.executor.v1.1`（契约 1.1.0，[`contracts/bma/executor`](../../contracts/bma/executor)）。
+> 基线：bma-executor-sdk **0.4.3**（相关功能自 0.4.0 起提供），协议 `bma.executor.v1.1`（契约 1.1.0，[`contracts/bma/executor`](../../contracts/bma/executor)）。
 
 ---
 

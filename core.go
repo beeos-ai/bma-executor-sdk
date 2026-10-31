@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -50,6 +51,19 @@ var deniedEnv = map[string]bool{
 // baseEnv is the only executor environment a bash tool or process inherits;
 // everything else comes from the request or CoreOptions.Env.
 var baseEnv = []string{"PATH", "HOME", "USER", "LANG", "TMPDIR"}
+
+// mcpBaseEnv is what a stdio MCP server inherits from the executor: the
+// official MCP SDKs' default list (getDefaultEnvironment) without the
+// host-profile variables (HOME on POSIX; HOMEDRIVE, HOMEPATH, USERPROFILE,
+// APPDATA, LOCALAPPDATA on Windows), so package launchers find their
+// tools but not the host's credentials.
+func mcpBaseEnv() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"COMSPEC", "PATH", "PATHEXT", "PROCESSOR_ARCHITECTURE", "PROGRAMDATA",
+			"PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "USERNAME", "WINDIR"}
+	}
+	return []string{"LOGNAME", "PATH", "SHELL", "TERM", "USER"}
+}
 
 // CoreOptions configures the execution core.
 type CoreOptions struct {
@@ -1085,11 +1099,21 @@ func (c *Core) runMCPOnce(client *Client, session *CoreSession, server MCPServer
 	cmd := exec.CommandContext(ctx, command, transport.Args...)
 	setProcessGroup(cmd)
 	cmd.Dir = dir
-	// v1 §8.1: env is explicit; the host environment is not inherited. A
-	// non-nil empty slice, because a nil cmd.Env inherits everything.
-	// session.assign already rejected denied names and secret: values.
-	cmd.Env = make([]string, 0, len(transport.Env))
+	// v1 §8.1: the host environment is not inherited beyond mcpBaseEnv
+	// (minus DenyEnv names, and functions as the MCP SDKs skip them); the
+	// configured env overlays it. session.assign already rejected denied
+	// names and secret: values. cmd.Env is never nil, which would inherit all.
+	values := map[string]string{}
+	for _, name := range mcpBaseEnv() {
+		if value, ok := os.LookupEnv(name); ok && !strings.HasPrefix(value, "()") && !c.opts.DenyEnv(name) {
+			values[name] = value
+		}
+	}
 	for name, value := range transport.Env {
+		values[name] = value
+	}
+	cmd.Env = make([]string, 0, len(values))
+	for name, value := range values {
 		cmd.Env = append(cmd.Env, name+"="+value)
 	}
 	stdin, err := cmd.StdinPipe()
