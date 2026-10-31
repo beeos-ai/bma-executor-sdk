@@ -1,6 +1,6 @@
 {
   "source_repository": "beeos-ai/beeos-managed-agents",
-  "source_commit": "155802ad42c72f647903e3714898bb18a62fb093",
+  "source_commit": "6282fcc88d273f3e7c6e3111076550d1dfa81522",
   "protocols": [
     "bma.executor.v1",
     "bma.executor.v1.1"
@@ -22,7 +22,7 @@
   },
   "generated": {
     "go/executor/generated.go": "7fab3b2ef122a4b937be0a18d70a5fa88ee80bbf4690a5bf37cb9734aa204b4d",
-    "python/src/bma_sdk/executor/generated.py": "6b972d5057315bda2077c59700b83016f0af850cd6216867e37c2da8a1e26e1b",
+    "python/src/bma_sdk/executor/generated.py": "20918830d27bf46cfcb0f042094ce5cc5e5465cc50627eb322cb37ca5b337ff8",
     "typescript/src/generated/executor.ts": "dd72aa55cb9fa8d64c7191a6012a5b1c7532c5b93ff4f671d7c2d402415a015b"
   }
 }
