@@ -3,7 +3,9 @@
 package bmaexecutor
 
 import (
+	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -69,7 +71,7 @@ func TestCoreDenyEnvHidesExecutorPrivateVariables(t *testing.T) {
 		t.Fatal(err)
 	}
 	frame, err := channel.Read(ctx)
-	if err != nil || !strings.Contains(string(frame), "PATH=") {
+	if err != nil || !strings.Contains(string(frame), "BMA_TEST_MCP_SERVER=1") {
 		t.Fatalf("mcp env = %s err %v", frame, err)
 	}
 	requireHidden("stdio MCP", string(frame))
@@ -106,5 +108,106 @@ func TestProcessOptionsEnvReachesProcessesOnly(t *testing.T) {
 	bash, err := session.CallTool(ctx, ToolCallParams{Tool: ToolNameBash, Input: NewToolInput(ToolInput{Command: `printf '[%s]' "$SKILL_ROOT"`})})
 	if err != nil || !strings.HasPrefix(textOf(bash), "[]") {
 		t.Fatalf("bash SKILL_ROOT = %q err %v", textOf(bash), err)
+	}
+}
+
+// TestStdioMCPEnvIsExplicitOnly: a stdio MCP server sees only its configured
+// env (v1 §8.1): no inherited host variable, BMA_* or HOME, while processes
+// keep the canonical BMA_HOME.
+func TestStdioMCPEnvIsExplicitOnly(t *testing.T) {
+	requireUnix(t)
+	t.Setenv("BMA_MACHINE_TOKEN", "machine-secret")
+	t.Setenv("BMA_API_URL", "https://bma.internal")
+	t.Setenv("BMA_HOME", "/private/bma-home")
+	t.Setenv("HOST_ONLY_SECRET", "host-secret")
+	ctx := testContext(t)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	core := newTestCore(t, CoreOptions{DenyEnv: func(name string) bool {
+		name = strings.ToUpper(name)
+		// bmad's rule; BMA_TEST_MCP_SERVER only selects the fake server.
+		return strings.HasPrefix(name, "BMA_") && name != "BMA_HOME" && name != "BMA_TEST_MCP_SERVER"
+	}})
+	if err := core.Register(NewProcessCapability(core, ProcessOptions{Env: map[string]string{"BMA_HOME": "/private/bma-home"}})); err != nil {
+		t.Fatal(err)
+	}
+	b := attachBrain(t, core, "local")
+	session := readySession(t, b, SessionAssignParams{SessionID: "sess_mcp_env", Lease: Lease{Token: "lease"}, MCPServers: []MCPServerConfig{{
+		ServerKey: "env", ConnectionOrigin: MCPConnectionOriginEnvironment,
+		Transport: MCPServerTransport{Type: MCPTransportTypeStdio, Command: executable,
+			Env: map[string]string{"BMA_TEST_MCP_SERVER": "1", "EXPLICIT": "yes"}},
+	}}})
+	channel, err := session.MCP(ctx, "env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := channel.Write(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"env"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := channel.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(frame, &response); err != nil || len(response.Result.Content) != 1 {
+		t.Fatalf("mcp env frame = %s err %v", frame, err)
+	}
+	got := strings.Split(response.Result.Content[0].Text, "\n")
+	slices.Sort(got)
+	if want := []string{"BMA_TEST_MCP_SERVER=1", "EXPLICIT=yes"}; !slices.Equal(got, want) {
+		t.Fatalf("stdio MCP env = %q, want only the configured %q", got, want)
+	}
+
+	var state ProcessState
+	if err := b.executor.Call(ctx, MethodProcessStart, ProcessStartParams{SessionID: session.ID(), ProcessID: "env", Argv: []string{"env"}, WaitMS: 5000}, &state); err != nil {
+		t.Fatal(err)
+	}
+	var bma []string
+	for _, line := range strings.Split(readAll(t, b.executor, session.ID(), "env"), "\n") {
+		if strings.HasPrefix(line, "BMA_") {
+			bma = append(bma, line)
+		}
+	}
+	if !slices.Equal(bma, []string{"BMA_HOME=/private/bma-home"}) {
+		t.Fatalf("process BMA variables = %q, want only BMA_HOME", bma)
+	}
+}
+
+// TestAssignRejectsUnusableMCPEnv: an environment-origin server whose env
+// holds a secret: reference (which the executor cannot resolve) or a denied
+// name fails session.assign, instead of the server receiving the reference
+// as its credential.
+func TestAssignRejectsUnusableMCPEnv(t *testing.T) {
+	requireUnix(t)
+	ctx := testContext(t)
+	core := newTestCore(t, CoreOptions{DenyEnv: func(name string) bool { return name == "BMA_MACHINE_TOKEN" }})
+	b := attachBrain(t, core, "local")
+	for name, env := range map[string]map[string]string{
+		"secret": {"TOKEN": "secret:sec_123"},
+		"denied": {"BMA_MACHINE_TOKEN": "x"},
+		"loader": {"LD_PRELOAD": "/tmp/x.so"},
+	} {
+		_, err := b.executor.AssignSession(ctx, SessionAssignParams{SessionID: "sess_" + name, Lease: Lease{Token: "lease"}, MCPServers: []MCPServerConfig{{
+			ServerKey: "srv", ConnectionOrigin: MCPConnectionOriginEnvironment,
+			Transport: MCPServerTransport{Type: MCPTransportTypeStdio, Command: "/bin/true", Env: env},
+		}}})
+		rpcErr := requireCode(t, err, CodeInvalidParams)
+		if !strings.Contains(rpcErr.Message, `"srv"`) {
+			t.Fatalf("%s: message %q does not name the server", name, rpcErr.Message)
+		}
+		if name == "secret" && (!strings.Contains(rpcErr.Message, "secret:") || strings.Contains(rpcErr.Message, "sec_123")) {
+			t.Fatalf("secret: message %q must name the secret: reference without echoing it", rpcErr.Message)
+		}
+		if core.session(coreKey{"local", "sess_" + name}) != nil {
+			t.Fatalf("%s: a rejected session was kept", name)
+		}
 	}
 }

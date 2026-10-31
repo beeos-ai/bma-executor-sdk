@@ -416,6 +416,11 @@ func (c *Core) assign(brain string, client *Client, params SessionAssignParams) 
 	if len(params.MCPServers) > c.opts.MaxMCPServersPerSession {
 		return SessionAssignResult{}, &RPCError{Code: CodeInvalidParams, Message: "too many mcp_servers"}
 	}
+	for _, server := range params.MCPServers {
+		if err := c.checkMCPEnv(server); err != nil {
+			return SessionAssignResult{}, &RPCError{Code: CodeInvalidParams, Message: err.Error()}
+		}
+	}
 	key := coreKey{brain, params.SessionID}
 	c.mu.Lock()
 	if c.closed {
@@ -456,6 +461,29 @@ func (c *Core) assign(brain string, client *Client, params SessionAssignParams) 
 	}
 	go c.prepare(client, session, params)
 	return SessionAssignResult{Accepted: true, SessionID: params.SessionID}, nil
+}
+
+// mcpSecretPrefix marks an env value that references a platform secret. The
+// executor has no store to resolve one from, so such a server is refused
+// rather than given the reference as its credential.
+const mcpSecretPrefix = "secret:"
+
+// checkMCPEnv rejects an environment-origin server whose env the executor
+// will not pass: a secret: reference, a loader variable or a DenyEnv name.
+// Errors name the variable, never its value.
+func (c *Core) checkMCPEnv(server MCPServerConfig) error {
+	if server.ConnectionOrigin != MCPConnectionOriginEnvironment {
+		return nil
+	}
+	for name, value := range server.Transport.Env {
+		switch {
+		case strings.HasPrefix(value, mcpSecretPrefix):
+			return fmt.Errorf("mcp server %q: env %s is a secret: reference, which this executor cannot resolve", server.ServerKey, name)
+		case deniedEnv[strings.ToUpper(name)] || c.opts.DenyEnv(name):
+			return fmt.Errorf("mcp server %q: env %s is not allowed", server.ServerKey, name)
+		}
+	}
+	return nil
 }
 
 // prepare starts the session's environment-origin stdio MCP servers, waits
@@ -1057,15 +1085,11 @@ func (c *Core) runMCPOnce(client *Client, session *CoreSession, server MCPServer
 	cmd := exec.CommandContext(ctx, command, transport.Args...)
 	setProcessGroup(cmd)
 	cmd.Dir = dir
-	for _, entry := range os.Environ() {
-		if name, _, _ := strings.Cut(entry, "="); !c.opts.DenyEnv(name) {
-			cmd.Env = append(cmd.Env, entry)
-		}
-	}
+	// v1 §8.1: env is explicit; the host environment is not inherited. A
+	// non-nil empty slice, because a nil cmd.Env inherits everything.
+	// session.assign already rejected denied names and secret: values.
+	cmd.Env = make([]string, 0, len(transport.Env))
 	for name, value := range transport.Env {
-		if c.opts.DenyEnv(name) {
-			return fmt.Errorf("mcp env %s is not allowed", name)
-		}
 		cmd.Env = append(cmd.Env, name+"="+value)
 	}
 	stdin, err := cmd.StdinPipe()
