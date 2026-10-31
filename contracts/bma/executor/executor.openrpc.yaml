@@ -279,7 +279,12 @@ methods:
       - $ref: "#/components/errors/InternalError"
   - name: session.event
     summary: Emit a durable session event.
-    description: Executor to harness request for durable session events. Idempotent by its JSON-RPC id.
+    description: Executor to harness request for durable session events. A tool executor's event is
+      idempotent by its JSON-RPC id. An agent executor (capability agent) also sends turn_id,
+      event_id and sequence; the harness deduplicates by (session_id, event_id), accepts a sequence at
+      or below acked_sequence as a duplicate, and rejects a gap with -32013 conflict
+      (data.expected_sequence). An agent event matches schemas/agent.json AgentEvent. The JSON-RPC response is the ACK; the executor keeps every unacked
+      event and resends them in sequence order after reconnect, before any new event.
     tags:
       - name: session
     x-bma-direction: executor-to-harness
@@ -292,6 +297,22 @@ methods:
         required: true
         schema:
           type: string
+      - name: turn_id
+        required: false
+        description: Agent sessions; the turn that produced the event.
+        schema:
+          type: string
+      - name: event_id
+        required: false
+        description: Agent sessions; executor-assigned, unique within the session, stable across resends.
+        schema:
+          type: string
+      - name: sequence
+        required: false
+        description: Agent sessions; starts at 1 and increases by 1 per durable event within the session.
+        schema:
+          type: integer
+          minimum: 1
       - name: event
         required: true
         schema:
@@ -306,6 +327,7 @@ methods:
       - $ref: "#/components/errors/SessionNotActive"
       - $ref: "#/components/errors/LeaseExpired"
       - $ref: "#/components/errors/PayloadTooLarge"
+      - $ref: "#/components/errors/Conflict"
       - $ref: "#/components/errors/InternalError"
   - name: session.status
     summary: Report session status.
@@ -1078,6 +1100,423 @@ methods:
     errors:
       - $ref: "#/components/errors/InvalidParams"
       - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: workspace.backup
+    summary: Upload one backup of the machine workspace.
+    description: Harness to executor request (machine-scoped). The executor walks paths (absolute),
+      skipping exclude entries and its own BMA_HOME, and streams a tar+zstd archive with PUT to
+      /daemon/machine-backups/{backup_id}/archive over the machine token, with the tree fingerprint
+      in X-BMA-Backup-Fingerprint. When the fingerprint equals skip_if_fingerprint nothing is
+      uploaded and the result is "unchanged". Restore has no method; a recreated executor fetches
+      /daemon/machine-backup-restore before executor.register.
+    tags:
+      - name: workspace
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: workspace.backup
+    x-bma-idempotent-by: backup_id
+    params:
+      - name: backup_id
+        required: true
+        schema:
+          type: string
+      - name: paths
+        required: true
+        schema:
+          type: array
+          items:
+            type: string
+      - name: exclude
+        schema:
+          type: array
+          items:
+            type: string
+      - name: skip_if_fingerprint
+        schema:
+          type: string
+    result:
+      name: WorkspaceBackupResult
+      schema:
+        $ref: schemas/workspace.json#/$defs/WorkspaceBackupResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: turn.start
+    summary: Start an agent turn.
+    description: Harness to executor request (capability agent). Opens the agent session on first use
+      (no session.assign) or continues it; executor_session_ref from an earlier TurnStartResult lets
+      the executor resume its local conversation after a restart. The executor answers as soon as the
+      turn is accepted and reports progress with session.event. Idempotent by turn_id. A session
+      with a running turn answers -32013 conflict (use turn.input); a new session beyond
+      max_sessions answers -32009.
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    x-bma-idempotent-by: turn_id
+    params:
+      - name: session_id
+        required: true
+        description: Platform session id.
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        schema:
+          type: string
+      - name: input_id
+        required: true
+        description: Platform input id of the user message that starts the turn.
+        schema:
+          type: string
+      - name: input
+        required: true
+        schema:
+          type: array
+          minItems: 1
+          items:
+            $ref: schemas/agent.json#/$defs/AgentInputBlock
+      - name: executor_session_ref
+        required: false
+        schema:
+          type: string
+      - name: config
+        required: false
+        schema:
+          $ref: schemas/agent.json#/$defs/AgentTurnConfig
+      - name: deadline_ms
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+      - name: metadata
+        required: false
+        schema:
+          type: object
+          additionalProperties:
+            type: string
+    result:
+      name: TurnStartResult
+      schema:
+        $ref: schemas/agent.json#/$defs/TurnStartResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/ExecutorBusy"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+  - name: turn.input
+    summary: Add user input to the running turn.
+    description: Harness to executor request (capability agent). The local agent consumes the input
+      at its next step. Idempotent by input_id. When turn_id is not the running turn the executor
+      answers -32013 conflict and the harness starts a new turn instead.
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    x-bma-idempotent-by: input_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        schema:
+          type: string
+      - name: input_id
+        required: true
+        schema:
+          type: string
+      - name: input
+        required: true
+        schema:
+          type: array
+          minItems: 1
+          items:
+            $ref: schemas/agent.json#/$defs/AgentInputBlock
+    result:
+      name: Ack
+      schema:
+        $ref: schemas/common.json#/$defs/Ack
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+  - name: turn.cancel
+    summary: Stop the running turn.
+    description: Harness to executor request (capability agent). The executor stops the agent loop,
+      cancels its local tool calls, withdraws open interactions (interaction.cancel turn_canceled),
+      and ends the turn with session.status_idle turn_outcome=canceled. The session stays open for
+      the next turn.start. Unlike tool.cancel (one harness-dispatched tool call) and session.stop
+      (a hand session and its processes), it targets only the agent turn.
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        schema:
+          type: string
+      - name: reason
+        required: false
+        schema:
+          type: string
+    result:
+      name: TurnCancelResult
+      schema:
+        $ref: schemas/agent.json#/$defs/TurnCancelResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/InternalError"
+  - name: session.close
+    summary: Close an agent session.
+    description: Harness to executor request (capability agent). The executor cancels a running turn
+      as turn.cancel does, waits until its events are acknowledged, releases the local conversation,
+      and then sends session.ended. closed=false for an unknown session. A later turn.start with the
+      same session_id starts a new local conversation.
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: reason
+        required: true
+        schema:
+          type: string
+    result:
+      name: SessionCloseResult
+      schema:
+        $ref: schemas/agent.json#/$defs/SessionCloseResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/InternalError"
+  - name: session.event_delta
+    summary: Stream a preview of a durable agent event.
+    description: Executor to harness notification (capability agent). Transient and lossy; never
+      acknowledged or resent. event_id is the event_id of the durable session.event that finalizes
+      the preview. The harness relays it to subscribers as Anthropic event_start and event_delta.
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: notification
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        schema:
+          type: string
+      - name: event_id
+        required: true
+        schema:
+          type: string
+      - name: event_type
+        required: true
+        schema:
+          $ref: schemas/agent.json#/$defs/EventDeltaType
+      - name: index
+        required: true
+        description: Content block index within the event.
+        schema:
+          type: integer
+          minimum: 0
+      - name: text
+        required: true
+        description: Text appended to the block.
+        schema:
+          type: string
+  - name: interaction.request
+    summary: Ask the platform for an approval or an answer.
+    description: Executor to harness request (capability agent). The harness opens one platform agent
+      interaction (the same request on desktop, mobile and integrations) and answers with
+      interaction.response later. Idempotent by interaction_id. A permission request references the
+      agent.tool_use event in tool_use_id, sent earlier with evaluated_permission ask. The executor
+      keeps local authority; it may still deny, and it treats expires_at as a local deny.
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    x-bma-idempotent-by: interaction_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        schema:
+          type: string
+      - name: interaction_id
+        required: true
+        description: Executor-assigned, unique within the session.
+        schema:
+          type: string
+      - name: kind
+        required: true
+        schema:
+          $ref: schemas/agent.json#/$defs/InteractionKind
+      - name: tool_use_id
+        required: false
+        description: Required for permission.
+        schema:
+          type: string
+      - name: tool_name
+        required: false
+        schema:
+          type: string
+      - name: tool_input
+        required: false
+        schema:
+          type: object
+          additionalProperties: true
+      - name: scopes
+        required: false
+        description: Grant scopes the user may pick for permission; defaults to once.
+        schema:
+          type: array
+          items:
+            $ref: schemas/agent.json#/$defs/InteractionScope
+      - name: question
+        required: false
+        description: Required for question.
+        schema:
+          $ref: schemas/agent.json#/$defs/InteractionQuestion
+      - name: expires_at
+        required: false
+        description: RFC 3339 time after which the executor stops waiting.
+        schema:
+          type: string
+    result:
+      name: InteractionRequestResult
+      schema:
+        $ref: schemas/agent.json#/$defs/InteractionRequestResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+  - name: interaction.response
+    summary: Deliver the answer to an interaction.
+    description: Harness to executor request (capability agent). Sent once the platform interaction
+      resolves, expires or is canceled; retried with the same interaction_id until answered. The
+      first answer wins; a repeat or an unknown interaction answers accepted=false.
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    x-bma-idempotent-by: interaction_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: interaction_id
+        required: true
+        schema:
+          type: string
+      - name: outcome
+        required: true
+        schema:
+          $ref: schemas/agent.json#/$defs/InteractionOutcome
+      - name: scope
+        required: false
+        description: Granted scope for allow.
+        schema:
+          $ref: schemas/agent.json#/$defs/InteractionScope
+      - name: deny_message
+        required: false
+        schema:
+          type: string
+      - name: answers
+        required: false
+        description: Selected option ids or free text for answered.
+        schema:
+          type: array
+          items:
+            type: string
+      - name: responder
+        required: false
+        schema:
+          $ref: schemas/agent.json#/$defs/InteractionResponder
+    result:
+      name: InteractionResponseResult
+      schema:
+        $ref: schemas/agent.json#/$defs/InteractionResponseResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/InternalError"
+  - name: interaction.cancel
+    summary: Withdraw an open interaction.
+    description: Executor to harness request (capability agent). The executor no longer needs the
+      answer, for example the user answered in the local UI (resolved_locally) or the turn was
+      canceled. The harness cancels the platform interaction so every client dismisses it.
+      Idempotent by interaction_id.
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    x-bma-idempotent-by: interaction_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: interaction_id
+        required: true
+        schema:
+          type: string
+      - name: reason
+        required: true
+        schema:
+          $ref: schemas/agent.json#/$defs/InteractionCancelReason
+    result:
+      name: Ack
+      schema:
+        $ref: schemas/common.json#/$defs/Ack
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
       - $ref: "#/components/errors/InternalError"
 components:
   errors:

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.bma.beeos.ai/schemas/workspace.json",
+  "title": "BMA executor workspace types",
+  "description": "workspace.backup (machine-scoped executors). The archive upload, the pending restore lookup and the restore result are machine-token HTTP routes, not executor methods.",
+  "$defs": {
+    "WorkspaceBackupResult": {
+      "type": "object",
+      "description": "workspace.backup result. digest and size_bytes describe the archive as the server stored it; skipped counts entries that could not be read (missing from the archive).",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "uploaded",
+            "unchanged",
+            "failed"
+          ]
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "entries": {
+          "type": "integer",
+          "x-go-type": "int"
+        },
+        "skipped": {
+          "type": "integer",
+          "x-go-type": "int"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

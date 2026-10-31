@@ -94,6 +94,12 @@ func TestConformanceCorePeer(t *testing.T) {
 		if example.Message == nil || Methods[example.Method].Direction != DirectionHarnessToExecutor {
 			continue
 		}
+		switch Methods[example.Method].Capability {
+		case "agent", "workspace.backup":
+			// Not Core capabilities: the agent end has its own conformance
+			// test, and the embedding executor (bmad) serves workspace.backup.
+			continue
+		}
 		switch example.Method {
 		case MethodSessionAssign:
 			ordered = append([]conformanceExample{example}, ordered...)

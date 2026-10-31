@@ -6,6 +6,144 @@ export interface Ack {
   accepted: boolean
 }
 
+/** agent capability. Present with enabled=true when the executor runs a complete agent and accepts turn.start, turn.input, turn.cancel, session.close and interaction.response. */
+export interface AgentCapability {
+  enabled: boolean
+  /** Models the local agent can run. An empty list means the executor picks its own model and ignores AgentTurnConfig.model. */
+  models?: Array<AgentModel>
+  /** Permission mode ids the local agent understands, for example default, accept_edits, plan, bypass_permissions. The executor defines the ids; the platform only passes one back in AgentTurnConfig.permission_mode. */
+  permission_modes?: Array<string>
+  /** Interaction kinds the executor may open with interaction.request. */
+  interaction_kinds?: Array<InteractionKind>
+  /** The executor resolves file input blocks (session file ids) itself. */
+  file_inputs?: boolean
+  /** Concurrent agent sessions. turn.start for a new session beyond it answers -32009 executor_busy. */
+  max_sessions?: number
+}
+
+/** Typed session error. */
+export interface AgentErrorInfo {
+  type: string
+  message?: string
+}
+
+/** One durable agent event. The event id is the session.event event_id; agent.tool_result.tool_use_id references the event_id of its agent.tool_use. */
+export type AgentEvent =
+  | AgentMessageEvent
+  | AgentThinkingEvent
+  | AgentToolUseEvent
+  | AgentToolResultEvent
+  | AgentMcpToolUseEvent
+  | AgentMcpToolResultEvent
+  | SessionStatusRunningEvent
+  | SessionStatusIdleEvent
+  | SessionErrorEvent
+
+/** Durable events an agent executor emits with session.event. Names and members follow Anthropic Managed Agents session events. user.* events are written by the platform, never by the executor. */
+export type AgentEventType =
+  | 'agent.message'
+  | 'agent.thinking'
+  | 'agent.tool_use'
+  | 'agent.tool_result'
+  | 'agent.mcp_tool_use'
+  | 'agent.mcp_tool_result'
+  | 'session.status_running'
+  | 'session.status_idle'
+  | 'session.error'
+export const AgentEventType = {
+  AgentMessage: 'agent.message',
+  AgentThinking: 'agent.thinking',
+  AgentToolUse: 'agent.tool_use',
+  AgentToolResult: 'agent.tool_result',
+  AgentMcpToolUse: 'agent.mcp_tool_use',
+  AgentMcpToolResult: 'agent.mcp_tool_result',
+  SessionStatusRunning: 'session.status_running',
+  SessionStatusIdle: 'session.status_idle',
+  SessionError: 'session.error',
+} as const
+
+/** One block of user input. A file block references a platform session file by file_id; the executor downloads it through the executor files API. File bytes never travel on the control channel. */
+export interface AgentInputBlock {
+  type: AgentInputBlockType
+  text?: string
+  file_id?: string
+  name?: string
+  mime_type?: string
+  size_bytes?: number
+}
+
+/** Agent input block type. */
+export type AgentInputBlockType = 'text' | 'file'
+export const AgentInputBlockType = {
+  Text: 'text',
+  File: 'file',
+} as const
+
+/** Result of an agent.mcp_tool_use. */
+export interface AgentMcpToolResultEvent {
+  type: 'agent.mcp_tool_result'
+  mcp_tool_use_id: string
+  content?: Array<ContentBlock>
+  is_error?: boolean
+}
+
+/** An MCP tool the local agent is calling. Its event_id is the mcp_tool_use_id. */
+export interface AgentMcpToolUseEvent {
+  type: 'agent.mcp_tool_use'
+  mcp_server_name: string
+  name: string
+  input: Record<string, unknown>
+  evaluated_permission?: EvaluatedPermission
+}
+
+/** Final assistant text. Streaming previews for the same event_id arrive earlier as session.event_delta. */
+export interface AgentMessageEvent {
+  type: 'agent.message'
+  content: Array<ContentBlock>
+}
+
+/** One model the local agent can run. */
+export interface AgentModel {
+  id: string
+  display_name?: string
+  /** Thinking or reasoning-effort levels the model accepts, for example off, low, medium, high. */
+  thinking_levels?: Array<string>
+  default_thinking_level?: string
+}
+
+/** Model thinking. content may be empty when the model only reports that it thought. */
+export interface AgentThinkingEvent {
+  type: 'agent.thinking'
+  content?: Array<ContentBlock>
+}
+
+/** Result of an agent.tool_use. */
+export interface AgentToolResultEvent {
+  type: 'agent.tool_result'
+  tool_use_id: string
+  content?: Array<ContentBlock>
+  is_error?: boolean
+}
+
+/** A built-in or custom tool the local agent is calling. Its event_id is the tool_use_id. */
+export interface AgentToolUseEvent {
+  type: 'agent.tool_use'
+  name: string
+  input: Record<string, unknown>
+  evaluated_permission?: EvaluatedPermission
+}
+
+/** Requested (turn.start) or effective (TurnStartResult.effective) turn configuration. Every member is optional in a request; the executor reports the values it actually applied. */
+export interface AgentTurnConfig {
+  model?: string
+  thinking_level?: string
+  permission_mode?: string
+  /** Working directory on the executor host. The executor rejects a directory outside its allowed roots with -32001 forbidden. */
+  cwd?: string
+  /** Extra system instructions from the platform agent definition. */
+  system?: string
+}
+
 /** v1.1 artifact upload (POST /v1/executors/artifacts). Environment-scoped executors only. */
 export interface ArtifactCapability {
   upload: boolean
@@ -36,6 +174,8 @@ export interface Capabilities {
   artifacts?: ArtifactCapability
   terminal?: TerminalCapability
   skills?: SkillsCapability
+  workspace?: WorkspaceCapability
+  agent?: AgentCapability
 }
 
 /** Channels a short-lived executor JWT may open. */
@@ -96,6 +236,18 @@ export interface Cursors {
 export interface DisplayCapability {
   rfb?: boolean
 }
+
+/** Permission decision the executor applied to a tool use. ask means the executor opened an interaction.request for it. */
+export interface EvaluatedPermission {
+  type: 'allow' | 'ask' | 'deny'
+}
+
+/** Durable event type a streaming preview belongs to. */
+export type EventDeltaType = 'agent.message' | 'agent.thinking'
+export const EventDeltaType = {
+  AgentMessage: 'agent.message',
+  AgentThinking: 'agent.thinking',
+} as const
 
 /** executor.drain result. */
 export interface ExecutorDrainResult {
@@ -196,6 +348,71 @@ export const IOMode = {
   Pty: 'pty',
 } as const
 
+/** Why the executor withdrew an open interaction. */
+export type InteractionCancelReason =
+  'resolved_locally' | 'turn_canceled' | 'expired' | 'tool_canceled'
+export const InteractionCancelReason = {
+  ResolvedLocally: 'resolved_locally',
+  TurnCanceled: 'turn_canceled',
+  Expired: 'expired',
+  ToolCanceled: 'tool_canceled',
+} as const
+
+/** Interaction kinds; they map 1:1 to platform agent interactions. */
+export type InteractionKind = 'permission' | 'question'
+export const InteractionKind = {
+  Permission: 'permission',
+  Question: 'question',
+} as const
+
+/** How the platform resolved an interaction. allow/deny answer permission, answered answers question, expired and canceled close either kind without an answer. */
+export type InteractionOutcome = 'allow' | 'deny' | 'answered' | 'expired' | 'canceled'
+export const InteractionOutcome = {
+  Allow: 'allow',
+  Deny: 'deny',
+  Answered: 'answered',
+  Expired: 'expired',
+  Canceled: 'canceled',
+} as const
+
+/** Question shown to the user. */
+export interface InteractionQuestion {
+  prompt: string
+  options?: Array<InteractionQuestionOption>
+  multi_select?: boolean
+  allow_free_text?: boolean
+}
+
+/** One answer option of a question interaction. */
+export interface InteractionQuestionOption {
+  id: string
+  label: string
+}
+
+/** interaction.request result. Idempotent by interaction_id: a repeat returns the same platform interaction. */
+export interface InteractionRequestResult {
+  accepted: boolean
+  platform_interaction_id: string
+}
+
+/** Who answered, for local audit. surface is the client that resolved it, for example desktop, mobile, web, slack. */
+export interface InteractionResponder {
+  actor_id?: string
+  surface?: string
+}
+
+/** interaction.response result. accepted=false when the interaction is unknown or already resolved (first answer wins); the platform then marks its copy stale. */
+export interface InteractionResponseResult {
+  accepted: boolean
+}
+
+/** How long a permission grant lasts on the executor: this tool use only, or the rest of the session. */
+export type InteractionScope = 'once' | 'session'
+export const InteractionScope = {
+  Once: 'once',
+  Session: 'session',
+} as const
+
 /** JSON-RPC 2.0 error object. */
 export interface JsonRpcError {
   code: JsonRpcErrorCode
@@ -225,25 +442,25 @@ export type JsonRpcErrorCode =
   | -32012
   | -32013
 export const JsonRpcErrorCode = {
-  Value32700: -32700,
-  Value32600: -32600,
-  Value32601: -32601,
-  Value32602: -32602,
-  Value32603: -32603,
-  Value32000: -32000,
-  Value32001: -32001,
-  Value32002: -32002,
-  Value32003: -32003,
-  Value32004: -32004,
-  Value32005: -32005,
-  Value32006: -32006,
-  Value32007: -32007,
-  Value32008: -32008,
-  Value32009: -32009,
-  Value32010: -32010,
-  Value32011: -32011,
-  Value32012: -32012,
-  Value32013: -32013,
+  ParseError: -32700,
+  InvalidRequest: -32600,
+  MethodNotFound: -32601,
+  InvalidParams: -32602,
+  InternalError: -32603,
+  Unauthorized: -32000,
+  Forbidden: -32001,
+  NotFound: -32002,
+  LeaseExpired: -32003,
+  Timeout: -32004,
+  Canceled: -32005,
+  PayloadTooLarge: -32006,
+  SessionNotActive: -32007,
+  McpUnavailable: -32008,
+  ExecutorBusy: -32009,
+  UnsupportedProtocol: -32010,
+  ResourceUnavailable: -32011,
+  CapabilityUnavailable: -32012,
+  Conflict: -32013,
 } as const
 
 /** JSON-RPC error.data. Members are code-specific; unknown members are ignored. */
@@ -257,6 +474,8 @@ export interface JsonRpcErrorData {
   reason?: string
   /** bma.terminal.v1 error code for a failed terminal.* call. */
   terminal_code?: string
+  /** Agent session.event gap (-32013): the sequence the harness expects next. */
+  expected_sequence?: number
 }
 
 /** JSON-RPC 2.0 error response envelope. */
@@ -542,6 +761,17 @@ export interface SessionAssignResult {
   session_id: string
 }
 
+/** session.close result. */
+export interface SessionCloseResult {
+  closed: boolean
+}
+
+/** A turn-level error. A failed turn still ends with session.status_idle turn_outcome=failed. */
+export interface SessionErrorEvent {
+  type: 'session.error'
+  error: AgentErrorInfo
+}
+
 /** Durable session event emitted by the executor. */
 export interface SessionEvent {
   type: SessionEventType
@@ -554,12 +784,31 @@ export interface SessionEvent {
 export interface SessionEventResult {
   accepted: boolean
   event_id: string
+  /** Agent sessions: highest contiguous sequence the platform has persisted for the session. A duplicate event is accepted and reports the current value. */
+  acked_sequence?: number
 }
 
-/** Durable event types an executor may emit. Event names follow Anthropic Managed Agents; the executor must not invent new names. */
-export type SessionEventType = 'agent.tool_result'
+/** Durable event types an executor may emit. Event names follow Anthropic Managed Agents; the executor must not invent new names. A tool executor emits agent.tool_result only; an agent executor (capability agent) emits every type, shaped as schemas/agent.json AgentEvent. */
+export type SessionEventType =
+  | 'agent.tool_result'
+  | 'agent.message'
+  | 'agent.thinking'
+  | 'agent.tool_use'
+  | 'agent.mcp_tool_use'
+  | 'agent.mcp_tool_result'
+  | 'session.status_running'
+  | 'session.status_idle'
+  | 'session.error'
 export const SessionEventType = {
   AgentToolResult: 'agent.tool_result',
+  AgentMessage: 'agent.message',
+  AgentThinking: 'agent.thinking',
+  AgentToolUse: 'agent.tool_use',
+  AgentMcpToolUse: 'agent.mcp_tool_use',
+  AgentMcpToolResult: 'agent.mcp_tool_result',
+  SessionStatusRunning: 'session.status_running',
+  SessionStatusIdle: 'session.status_idle',
+  SessionError: 'session.error',
 } as const
 
 /** A memory store mounted into the session workspace. */
@@ -579,6 +828,18 @@ export const SessionStatus = {
   Stopped: 'stopped',
   Error: 'error',
 } as const
+
+/** The turn ended. It is the last event of its turn_id; the platform publishes the turn as finished only after it accepted this event and every lower sequence. */
+export interface SessionStatusIdleEvent {
+  type: 'session.status_idle'
+  stop_reason: StopReason
+  turn_outcome: TurnOutcome
+}
+
+/** The local agent started working on the turn. */
+export interface SessionStatusRunningEvent {
+  type: 'session.status_running'
+}
 
 /** session.stop result. */
 export interface SessionStopResult {
@@ -613,6 +874,18 @@ export type StdinMode = 'open' | 'closed'
 export const StdinMode = {
   Open: 'open',
   Closed: 'closed',
+} as const
+
+/** Why the turn stopped. */
+export interface StopReason {
+  type: StopReasonType
+}
+
+/** Anthropic stop_reason types an executor may report. requires_action is not in the list: the platform projects it from open interactions. */
+export type StopReasonType = 'end_turn' | 'retries_exhausted'
+export const StopReasonType = {
+  EndTurn: 'end_turn',
+  RetriesExhausted: 'retries_exhausted',
 } as const
 
 /** terminal.attach result, returned after the host socket is connected and the attached frame was written on it. */
@@ -716,6 +989,46 @@ export interface ToolPermission {
   mode: PermissionMode
 }
 
+/** turn.cancel result. canceled=false when the turn is unknown or already ended; the turn still ends with its own session.status_idle event. */
+export interface TurnCancelResult {
+  canceled: boolean
+}
+
+/** BMA extension on session.status_idle: how the turn ended. */
+export type TurnOutcome = 'completed' | 'canceled' | 'failed'
+export const TurnOutcome = {
+  Completed: 'completed',
+  Canceled: 'canceled',
+  Failed: 'failed',
+} as const
+
+/** turn.start result. Idempotent by turn_id: a repeated turn.start for a turn the executor already accepted returns the same result without starting a second run. */
+export interface TurnStartResult {
+  accepted: boolean
+  turn_id: string
+  /** Opaque local session handle (for example the local agent's conversation id). The platform stores it and sends it back in the next turn.start so the executor can resume the local conversation after a restart. */
+  executor_session_ref: string
+  /** true when the executor continued an existing local conversation, false when it started a new one. */
+  resumed: boolean
+  effective: AgentTurnConfig
+}
+
+/** workspace.backup result. digest and size_bytes describe the archive as the server stored it; skipped counts entries that could not be read (missing from the archive). */
+export interface WorkspaceBackupResult {
+  state: 'uploaded' | 'unchanged' | 'failed'
+  fingerprint?: string
+  digest?: string
+  size_bytes?: number
+  entries?: number
+  skipped?: number
+  error?: string
+}
+
+/** workspace.backup support and the startup restore of a pending backup. Machine-scoped executors only. */
+export interface WorkspaceCapability {
+  backup: boolean
+}
+
 /** Params object of executor.register. */
 export interface ExecutorRegisterParams {
   protocol: ProtocolVersion
@@ -772,6 +1085,12 @@ export interface SessionReadyParams {
 /** Params object of session.event. */
 export interface SessionEventParams {
   session_id: string
+  /** Agent sessions; the turn that produced the event. */
+  turn_id?: string
+  /** Agent sessions; executor-assigned, unique within the session, stable across resends. */
+  event_id?: string
+  /** Agent sessions; starts at 1 and increases by 1 per durable event within the session. */
+  sequence?: number
   event: SessionEvent
 }
 
@@ -937,6 +1256,100 @@ export interface SkillInstallParams {
   download_expires_at: number
 }
 
+/** Params object of workspace.backup. */
+export interface WorkspaceBackupParams {
+  backup_id: string
+  paths: Array<string>
+  exclude?: Array<string>
+  skip_if_fingerprint?: string
+}
+
+/** Params object of turn.start. */
+export interface TurnStartParams {
+  /** Platform session id. */
+  session_id: string
+  turn_id: string
+  /** Platform input id of the user message that starts the turn. */
+  input_id: string
+  input: Array<AgentInputBlock>
+  executor_session_ref?: string
+  config?: AgentTurnConfig
+  deadline_ms?: number
+  metadata?: Record<string, string>
+}
+
+/** Params object of turn.input. */
+export interface TurnInputParams {
+  session_id: string
+  turn_id: string
+  input_id: string
+  input: Array<AgentInputBlock>
+}
+
+/** Params object of turn.cancel. */
+export interface TurnCancelParams {
+  session_id: string
+  turn_id: string
+  reason?: string
+}
+
+/** Params object of session.close. */
+export interface SessionCloseParams {
+  session_id: string
+  reason: string
+}
+
+/** Params object of session.event_delta. */
+export interface SessionEventDeltaParams {
+  session_id: string
+  turn_id: string
+  event_id: string
+  event_type: EventDeltaType
+  /** Content block index within the event. */
+  index: number
+  /** Text appended to the block. */
+  text: string
+}
+
+/** Params object of interaction.request. */
+export interface InteractionRequestParams {
+  session_id: string
+  turn_id: string
+  /** Executor-assigned, unique within the session. */
+  interaction_id: string
+  kind: InteractionKind
+  /** Required for permission. */
+  tool_use_id?: string
+  tool_name?: string
+  tool_input?: Record<string, unknown>
+  /** Grant scopes the user may pick for permission; defaults to once. */
+  scopes?: Array<InteractionScope>
+  /** Required for question. */
+  question?: InteractionQuestion
+  /** RFC 3339 time after which the executor stops waiting. */
+  expires_at?: string
+}
+
+/** Params object of interaction.response. */
+export interface InteractionResponseParams {
+  session_id: string
+  interaction_id: string
+  outcome: InteractionOutcome
+  /** Granted scope for allow. */
+  scope?: InteractionScope
+  deny_message?: string
+  /** Selected option ids or free text for answered. */
+  answers?: Array<string>
+  responder?: InteractionResponder
+}
+
+/** Params object of interaction.cancel. */
+export interface InteractionCancelParams {
+  session_id: string
+  interaction_id: string
+  reason: InteractionCancelReason
+}
+
 /** Every executor protocol method. */
 export type MethodName =
   | 'executor.register'
@@ -965,6 +1378,15 @@ export type MethodName =
   | 'terminal.attach'
   | 'terminal.close'
   | 'skill.install'
+  | 'workspace.backup'
+  | 'turn.start'
+  | 'turn.input'
+  | 'turn.cancel'
+  | 'session.close'
+  | 'session.event_delta'
+  | 'interaction.request'
+  | 'interaction.response'
+  | 'interaction.cancel'
 export type ExecutorToHarnessRequestMethod =
   | 'executor.register'
   | 'executor.heartbeat'
@@ -972,12 +1394,15 @@ export type ExecutorToHarnessRequestMethod =
   | 'session.event'
   | 'session.ended'
   | 'tool.result'
+  | 'interaction.request'
+  | 'interaction.cancel'
 export type ExecutorToHarnessNotificationMethod =
   | 'executor.capabilities.update'
   | 'executor.close'
   | 'session.status'
   | 'tool.progress'
   | 'process.status'
+  | 'session.event_delta'
 export type HarnessToExecutorRequestMethod =
   | 'executor.drain'
   | 'session.assign'
@@ -994,6 +1419,12 @@ export type HarnessToExecutorRequestMethod =
   | 'terminal.attach'
   | 'terminal.close'
   | 'skill.install'
+  | 'workspace.backup'
+  | 'turn.start'
+  | 'turn.input'
+  | 'turn.cancel'
+  | 'session.close'
+  | 'interaction.response'
 export type HarnessToExecutorNotificationMethod = 'executor.close'
 
 export interface MethodParamsMap {
@@ -1023,6 +1454,15 @@ export interface MethodParamsMap {
   'terminal.attach': TerminalAttachParams
   'terminal.close': TerminalCloseParams
   'skill.install': SkillInstallParams
+  'workspace.backup': WorkspaceBackupParams
+  'turn.start': TurnStartParams
+  'turn.input': TurnInputParams
+  'turn.cancel': TurnCancelParams
+  'session.close': SessionCloseParams
+  'session.event_delta': SessionEventDeltaParams
+  'interaction.request': InteractionRequestParams
+  'interaction.response': InteractionResponseParams
+  'interaction.cancel': InteractionCancelParams
 }
 
 export interface MethodResultMap {
@@ -1047,6 +1487,14 @@ export interface MethodResultMap {
   'terminal.attach': TerminalAttachResult
   'terminal.close': TerminalCloseResult
   'skill.install': SkillInstallResult
+  'workspace.backup': WorkspaceBackupResult
+  'turn.start': TurnStartResult
+  'turn.input': Ack
+  'turn.cancel': TurnCancelResult
+  'session.close': SessionCloseResult
+  'interaction.request': InteractionRequestResult
+  'interaction.response': InteractionResponseResult
+  'interaction.cancel': Ack
 }
 
 /** since is the first protocol that has the method; capability is the capability bit the harness checks before sending it. */
@@ -1267,5 +1715,77 @@ export const methods: Readonly<Record<MethodName, MethodSpec>> = {
     since: 'bma.executor.v1.1',
     capability: 'skills.install',
     idempotentBy: 'skill_id+revision_id+digest',
+  },
+  'workspace.backup': {
+    name: 'workspace.backup',
+    direction: 'harness-to-executor',
+    kind: 'request',
+    since: 'bma.executor.v1.1',
+    capability: 'workspace.backup',
+    idempotentBy: 'backup_id',
+  },
+  'turn.start': {
+    name: 'turn.start',
+    direction: 'harness-to-executor',
+    kind: 'request',
+    since: 'bma.executor.v1.1',
+    capability: 'agent',
+    idempotentBy: 'turn_id',
+  },
+  'turn.input': {
+    name: 'turn.input',
+    direction: 'harness-to-executor',
+    kind: 'request',
+    since: 'bma.executor.v1.1',
+    capability: 'agent',
+    idempotentBy: 'input_id',
+  },
+  'turn.cancel': {
+    name: 'turn.cancel',
+    direction: 'harness-to-executor',
+    kind: 'request',
+    since: 'bma.executor.v1.1',
+    capability: 'agent',
+    idempotentBy: null,
+  },
+  'session.close': {
+    name: 'session.close',
+    direction: 'harness-to-executor',
+    kind: 'request',
+    since: 'bma.executor.v1.1',
+    capability: 'agent',
+    idempotentBy: null,
+  },
+  'session.event_delta': {
+    name: 'session.event_delta',
+    direction: 'executor-to-harness',
+    kind: 'notification',
+    since: 'bma.executor.v1.1',
+    capability: 'agent',
+    idempotentBy: null,
+  },
+  'interaction.request': {
+    name: 'interaction.request',
+    direction: 'executor-to-harness',
+    kind: 'request',
+    since: 'bma.executor.v1.1',
+    capability: 'agent',
+    idempotentBy: 'interaction_id',
+  },
+  'interaction.response': {
+    name: 'interaction.response',
+    direction: 'harness-to-executor',
+    kind: 'request',
+    since: 'bma.executor.v1.1',
+    capability: 'agent',
+    idempotentBy: 'interaction_id',
+  },
+  'interaction.cancel': {
+    name: 'interaction.cancel',
+    direction: 'executor-to-harness',
+    kind: 'request',
+    since: 'bma.executor.v1.1',
+    capability: 'agent',
+    idempotentBy: 'interaction_id',
   },
 }

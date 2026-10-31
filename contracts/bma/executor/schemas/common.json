@@ -148,6 +148,11 @@
         "terminal_code": {
           "type": "string",
           "description": "bma.terminal.v1 error code for a failed terminal.* call."
+        },
+        "expected_sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Agent session.event gap (-32013): the sequence the harness expects next."
         }
       },
       "required": [],
@@ -197,6 +202,27 @@
         "-32011": "CodeResourceUnavailable",
         "-32012": "CodeCapabilityUnavailable",
         "-32013": "CodeConflict"
+      },
+      "x-bma-enum-names": {
+        "-32700": "ParseError",
+        "-32600": "InvalidRequest",
+        "-32601": "MethodNotFound",
+        "-32602": "InvalidParams",
+        "-32603": "InternalError",
+        "-32000": "Unauthorized",
+        "-32001": "Forbidden",
+        "-32002": "NotFound",
+        "-32003": "LeaseExpired",
+        "-32004": "Timeout",
+        "-32005": "Canceled",
+        "-32006": "PayloadTooLarge",
+        "-32007": "SessionNotActive",
+        "-32008": "McpUnavailable",
+        "-32009": "ExecutorBusy",
+        "-32010": "UnsupportedProtocol",
+        "-32011": "ResourceUnavailable",
+        "-32012": "CapabilityUnavailable",
+        "-32013": "Conflict"
       }
     },
     "JsonRpcError": {

@@ -1,0 +1,643 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.bma.beeos.ai/schemas/agent.json",
+  "title": "BMA agent executor types",
+  "description": "Agent executor capability: the platform sends natural-language turns to an executor that runs a complete agent (model loop and tools) locally, and the executor streams Anthropic Managed Agents events back. See docs/architecture/executor-agent-capability.zh-CN.md.",
+  "$defs": {
+    "AgentCapability": {
+      "type": "object",
+      "description": "agent capability. Present with enabled=true when the executor runs a complete agent and accepts turn.start, turn.input, turn.cancel, session.close and interaction.response.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "models": {
+          "type": "array",
+          "description": "Models the local agent can run. An empty list means the executor picks its own model and ignores AgentTurnConfig.model.",
+          "items": {
+            "$ref": "agent.json#/$defs/AgentModel"
+          }
+        },
+        "permission_modes": {
+          "type": "array",
+          "description": "Permission mode ids the local agent understands, for example default, accept_edits, plan, bypass_permissions. The executor defines the ids; the platform only passes one back in AgentTurnConfig.permission_mode.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "interaction_kinds": {
+          "type": "array",
+          "description": "Interaction kinds the executor may open with interaction.request.",
+          "items": {
+            "$ref": "agent.json#/$defs/InteractionKind"
+          }
+        },
+        "file_inputs": {
+          "type": "boolean",
+          "description": "The executor resolves file input blocks (session file ids) itself."
+        },
+        "max_sessions": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Concurrent agent sessions. turn.start for a new session beyond it answers -32009 executor_busy."
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": true
+    },
+    "AgentModel": {
+      "type": "object",
+      "description": "One model the local agent can run.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "thinking_levels": {
+          "type": "array",
+          "description": "Thinking or reasoning-effort levels the model accepts, for example off, low, medium, high.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "default_thinking_level": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": true
+    },
+    "AgentTurnConfig": {
+      "type": "object",
+      "description": "Requested (turn.start) or effective (TurnStartResult.effective) turn configuration. Every member is optional in a request; the executor reports the values it actually applied.",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "thinking_level": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Working directory on the executor host. The executor rejects a directory outside its allowed roots with -32001 forbidden."
+        },
+        "system": {
+          "type": "string",
+          "description": "Extra system instructions from the platform agent definition."
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "AgentInputBlockType": {
+      "type": "string",
+      "description": "Agent input block type.",
+      "enum": [
+        "text",
+        "file"
+      ]
+    },
+    "AgentInputBlock": {
+      "type": "object",
+      "description": "One block of user input. A file block references a platform session file by file_id; the executor downloads it through the executor files API. File bytes never travel on the control channel.",
+      "properties": {
+        "type": {
+          "$ref": "agent.json#/$defs/AgentInputBlockType"
+        },
+        "text": {
+          "type": "string"
+        },
+        "file_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "TurnStartResult": {
+      "type": "object",
+      "description": "turn.start result. Idempotent by turn_id: a repeated turn.start for a turn the executor already accepted returns the same result without starting a second run.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "turn_id": {
+          "type": "string"
+        },
+        "executor_session_ref": {
+          "type": "string",
+          "description": "Opaque local session handle (for example the local agent's conversation id). The platform stores it and sends it back in the next turn.start so the executor can resume the local conversation after a restart."
+        },
+        "resumed": {
+          "type": "boolean",
+          "description": "true when the executor continued an existing local conversation, false when it started a new one."
+        },
+        "effective": {
+          "$ref": "agent.json#/$defs/AgentTurnConfig"
+        }
+      },
+      "required": [
+        "accepted",
+        "turn_id",
+        "executor_session_ref",
+        "resumed",
+        "effective"
+      ],
+      "additionalProperties": true
+    },
+    "TurnCancelResult": {
+      "type": "object",
+      "description": "turn.cancel result. canceled=false when the turn is unknown or already ended; the turn still ends with its own session.status_idle event.",
+      "properties": {
+        "canceled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "canceled"
+      ],
+      "additionalProperties": true
+    },
+    "SessionCloseResult": {
+      "type": "object",
+      "description": "session.close result.",
+      "properties": {
+        "closed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "closed"
+      ],
+      "additionalProperties": true
+    },
+    "AgentEventType": {
+      "type": "string",
+      "description": "Durable events an agent executor emits with session.event. Names and members follow Anthropic Managed Agents session events. user.* events are written by the platform, never by the executor.",
+      "enum": [
+        "agent.message",
+        "agent.thinking",
+        "agent.tool_use",
+        "agent.tool_result",
+        "agent.mcp_tool_use",
+        "agent.mcp_tool_result",
+        "session.status_running",
+        "session.status_idle",
+        "session.error"
+      ]
+    },
+    "AgentEvent": {
+      "description": "One durable agent event. The event id is the session.event event_id; agent.tool_result.tool_use_id references the event_id of its agent.tool_use.",
+      "oneOf": [
+        {
+          "$ref": "agent.json#/$defs/AgentMessageEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/AgentThinkingEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/AgentToolUseEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/AgentToolResultEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/AgentMcpToolUseEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/AgentMcpToolResultEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/SessionStatusRunningEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/SessionStatusIdleEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/SessionErrorEvent"
+        }
+      ]
+    },
+    "AgentMessageEvent": {
+      "type": "object",
+      "description": "Final assistant text. Streaming previews for the same event_id arrive earlier as session.event_delta.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "agent.message"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "tool.json#/$defs/ContentBlock"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "content"
+      ],
+      "additionalProperties": true
+    },
+    "AgentThinkingEvent": {
+      "type": "object",
+      "description": "Model thinking. content may be empty when the model only reports that it thought.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "agent.thinking"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "tool.json#/$defs/ContentBlock"
+          }
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "EvaluatedPermission": {
+      "type": "object",
+      "description": "Permission decision the executor applied to a tool use. ask means the executor opened an interaction.request for it.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "ask",
+            "deny"
+          ]
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "AgentToolUseEvent": {
+      "type": "object",
+      "description": "A built-in or custom tool the local agent is calling. Its event_id is the tool_use_id.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "agent.tool_use"
+        },
+        "name": {
+          "type": "string"
+        },
+        "input": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "evaluated_permission": {
+          "$ref": "agent.json#/$defs/EvaluatedPermission"
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "input"
+      ],
+      "additionalProperties": true
+    },
+    "AgentToolResultEvent": {
+      "type": "object",
+      "description": "Result of an agent.tool_use.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "agent.tool_result"
+        },
+        "tool_use_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "tool.json#/$defs/ContentBlock"
+          }
+        },
+        "is_error": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "tool_use_id"
+      ],
+      "additionalProperties": true
+    },
+    "AgentMcpToolUseEvent": {
+      "type": "object",
+      "description": "An MCP tool the local agent is calling. Its event_id is the mcp_tool_use_id.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "agent.mcp_tool_use"
+        },
+        "mcp_server_name": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "input": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "evaluated_permission": {
+          "$ref": "agent.json#/$defs/EvaluatedPermission"
+        }
+      },
+      "required": [
+        "type",
+        "mcp_server_name",
+        "name",
+        "input"
+      ],
+      "additionalProperties": true
+    },
+    "AgentMcpToolResultEvent": {
+      "type": "object",
+      "description": "Result of an agent.mcp_tool_use.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "agent.mcp_tool_result"
+        },
+        "mcp_tool_use_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "tool.json#/$defs/ContentBlock"
+          }
+        },
+        "is_error": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "mcp_tool_use_id"
+      ],
+      "additionalProperties": true
+    },
+    "SessionStatusRunningEvent": {
+      "type": "object",
+      "description": "The local agent started working on the turn.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "session.status_running"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "StopReasonType": {
+      "type": "string",
+      "description": "Anthropic stop_reason types an executor may report. requires_action is not in the list: the platform projects it from open interactions.",
+      "enum": [
+        "end_turn",
+        "retries_exhausted"
+      ]
+    },
+    "StopReason": {
+      "type": "object",
+      "description": "Why the turn stopped.",
+      "properties": {
+        "type": {
+          "$ref": "agent.json#/$defs/StopReasonType"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "TurnOutcome": {
+      "type": "string",
+      "description": "BMA extension on session.status_idle: how the turn ended.",
+      "enum": [
+        "completed",
+        "canceled",
+        "failed"
+      ]
+    },
+    "SessionStatusIdleEvent": {
+      "type": "object",
+      "description": "The turn ended. It is the last event of its turn_id; the platform publishes the turn as finished only after it accepted this event and every lower sequence.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "session.status_idle"
+        },
+        "stop_reason": {
+          "$ref": "agent.json#/$defs/StopReason"
+        },
+        "turn_outcome": {
+          "$ref": "agent.json#/$defs/TurnOutcome"
+        }
+      },
+      "required": [
+        "type",
+        "stop_reason",
+        "turn_outcome"
+      ],
+      "additionalProperties": true
+    },
+    "AgentErrorInfo": {
+      "type": "object",
+      "description": "Typed session error.",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "SessionErrorEvent": {
+      "type": "object",
+      "description": "A turn-level error. A failed turn still ends with session.status_idle turn_outcome=failed.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "session.error"
+        },
+        "error": {
+          "$ref": "agent.json#/$defs/AgentErrorInfo"
+        }
+      },
+      "required": [
+        "type",
+        "error"
+      ],
+      "additionalProperties": true
+    },
+    "EventDeltaType": {
+      "type": "string",
+      "description": "Durable event type a streaming preview belongs to.",
+      "enum": [
+        "agent.message",
+        "agent.thinking"
+      ]
+    },
+    "InteractionKind": {
+      "type": "string",
+      "description": "Interaction kinds; they map 1:1 to platform agent interactions.",
+      "enum": [
+        "permission",
+        "question"
+      ]
+    },
+    "InteractionScope": {
+      "type": "string",
+      "description": "How long a permission grant lasts on the executor: this tool use only, or the rest of the session.",
+      "enum": [
+        "once",
+        "session"
+      ]
+    },
+    "InteractionQuestionOption": {
+      "type": "object",
+      "description": "One answer option of a question interaction.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "additionalProperties": true
+    },
+    "InteractionQuestion": {
+      "type": "object",
+      "description": "Question shown to the user.",
+      "properties": {
+        "prompt": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "agent.json#/$defs/InteractionQuestionOption"
+          }
+        },
+        "multi_select": {
+          "type": "boolean"
+        },
+        "allow_free_text": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "additionalProperties": true
+    },
+    "InteractionRequestResult": {
+      "type": "object",
+      "description": "interaction.request result. Idempotent by interaction_id: a repeat returns the same platform interaction.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "platform_interaction_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accepted",
+        "platform_interaction_id"
+      ],
+      "additionalProperties": true
+    },
+    "InteractionOutcome": {
+      "type": "string",
+      "description": "How the platform resolved an interaction. allow/deny answer permission, answered answers question, expired and canceled close either kind without an answer.",
+      "enum": [
+        "allow",
+        "deny",
+        "answered",
+        "expired",
+        "canceled"
+      ]
+    },
+    "InteractionResponder": {
+      "type": "object",
+      "description": "Who answered, for local audit. surface is the client that resolved it, for example desktop, mobile, web, slack.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "surface": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "InteractionResponseResult": {
+      "type": "object",
+      "description": "interaction.response result. accepted=false when the interaction is unknown or already resolved (first answer wins); the platform then marks its copy stale.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "accepted"
+      ],
+      "additionalProperties": true
+    },
+    "InteractionCancelReason": {
+      "type": "string",
+      "description": "Why the executor withdrew an open interaction.",
+      "enum": [
+        "resolved_locally",
+        "turn_canceled",
+        "expired",
+        "tool_canceled"
+      ]
+    }
+  }
+}

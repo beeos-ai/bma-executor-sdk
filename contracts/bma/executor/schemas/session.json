@@ -40,9 +40,17 @@
     },
     "SessionEventType": {
       "type": "string",
-      "description": "Durable event types an executor may emit. Event names follow Anthropic Managed Agents; the executor must not invent new names.",
+      "description": "Durable event types an executor may emit. Event names follow Anthropic Managed Agents; the executor must not invent new names. A tool executor emits agent.tool_result only; an agent executor (capability agent) emits every type, shaped as schemas/agent.json AgentEvent.",
       "enum": [
-        "agent.tool_result"
+        "agent.tool_result",
+        "agent.message",
+        "agent.thinking",
+        "agent.tool_use",
+        "agent.mcp_tool_use",
+        "agent.mcp_tool_result",
+        "session.status_running",
+        "session.status_idle",
+        "session.error"
       ]
     },
     "SessionEvent": {
@@ -96,6 +104,11 @@
         },
         "event_id": {
           "type": "string"
+        },
+        "acked_sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Agent sessions: highest contiguous sequence the platform has persisted for the session. A duplicate event is accepted and reports the current value."
         }
       },
       "required": [

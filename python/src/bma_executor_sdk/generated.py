@@ -15,6 +15,100 @@ class Ack(TypedDict):
     """Generic acknowledgement returned by executor RPC methods."""
     accepted: bool
 
+class AgentCapability(TypedDict):
+    """agent capability. Present with enabled=true when the executor runs a complete agent and accepts turn.start, turn.input, turn.cancel, session.close and interaction.response."""
+    enabled: bool
+    models: NotRequired[list[AgentModel]]
+    permission_modes: NotRequired[list[str]]
+    interaction_kinds: NotRequired[list[InteractionKind]]
+    file_inputs: NotRequired[bool]
+    max_sessions: NotRequired[int]
+
+class AgentErrorInfo(TypedDict):
+    """Typed session error."""
+    type: str
+    message: NotRequired[str]
+
+class AgentEventType(str, Enum):
+    """Durable events an agent executor emits with session.event. Names and members follow Anthropic Managed Agents session events. user.* events are written by the platform, never by the executor."""
+    AgentMessage = "agent.message"
+    AgentThinking = "agent.thinking"
+    AgentToolUse = "agent.tool_use"
+    AgentToolResult = "agent.tool_result"
+    AgentMcpToolUse = "agent.mcp_tool_use"
+    AgentMcpToolResult = "agent.mcp_tool_result"
+    SessionStatusRunning = "session.status_running"
+    SessionStatusIdle = "session.status_idle"
+    SessionError = "session.error"
+
+class AgentInputBlock(TypedDict):
+    """One block of user input. A file block references a platform session file by file_id; the executor downloads it through the executor files API. File bytes never travel on the control channel."""
+    type: AgentInputBlockType
+    text: NotRequired[str]
+    file_id: NotRequired[str]
+    name: NotRequired[str]
+    mime_type: NotRequired[str]
+    size_bytes: NotRequired[int]
+
+class AgentInputBlockType(str, Enum):
+    """Agent input block type."""
+    Text = "text"
+    File = "file"
+
+class AgentMcpToolResultEvent(TypedDict):
+    """Result of an agent.mcp_tool_use."""
+    type: Literal["agent.mcp_tool_result"]
+    mcp_tool_use_id: str
+    content: NotRequired[list[ContentBlock]]
+    is_error: NotRequired[bool]
+
+class AgentMcpToolUseEvent(TypedDict):
+    """An MCP tool the local agent is calling. Its event_id is the mcp_tool_use_id."""
+    type: Literal["agent.mcp_tool_use"]
+    mcp_server_name: str
+    name: str
+    input: dict[str, Any]
+    evaluated_permission: NotRequired[EvaluatedPermission]
+
+class AgentMessageEvent(TypedDict):
+    """Final assistant text. Streaming previews for the same event_id arrive earlier as session.event_delta."""
+    type: Literal["agent.message"]
+    content: list[ContentBlock]
+
+class AgentModel(TypedDict):
+    """One model the local agent can run."""
+    id: str
+    display_name: NotRequired[str]
+    thinking_levels: NotRequired[list[str]]
+    default_thinking_level: NotRequired[str]
+
+class AgentThinkingEvent(TypedDict):
+    """Model thinking. content may be empty when the model only reports that it thought."""
+    type: Literal["agent.thinking"]
+    content: NotRequired[list[ContentBlock]]
+
+class AgentToolResultEvent(TypedDict):
+    """Result of an agent.tool_use."""
+    type: Literal["agent.tool_result"]
+    tool_use_id: str
+    content: NotRequired[list[ContentBlock]]
+    is_error: NotRequired[bool]
+
+class AgentToolUseEvent(TypedDict):
+    """A built-in or custom tool the local agent is calling. Its event_id is the tool_use_id."""
+    type: Literal["agent.tool_use"]
+    name: str
+    input: dict[str, Any]
+    evaluated_permission: NotRequired[EvaluatedPermission]
+
+class AgentTurnConfig(TypedDict):
+    """Requested (turn.start) or effective (TurnStartResult.effective) turn configuration. Every member is optional in a request; the executor reports the values it actually applied."""
+    model: NotRequired[str]
+    thinking_level: NotRequired[str]
+    permission_mode: NotRequired[str]
+    cwd: NotRequired[str]
+    system: NotRequired[str]
+
 class ArtifactCapability(TypedDict):
     """v1.1 artifact upload (POST /v1/executors/artifacts). Environment-scoped executors only."""
     upload: bool
@@ -41,6 +135,8 @@ class Capabilities(TypedDict):
     artifacts: NotRequired[ArtifactCapability]
     terminal: NotRequired[TerminalCapability]
     skills: NotRequired[SkillsCapability]
+    workspace: NotRequired[WorkspaceCapability]
+    agent: NotRequired[AgentCapability]
 
 class ChannelScope(str, Enum):
     """Channels a short-lived executor JWT may open."""
@@ -88,6 +184,15 @@ class Cursors(TypedDict):
 class DisplayCapability(TypedDict):
     """v1.1 display object. v1 sent a boolean; the server accepts both."""
     rfb: NotRequired[bool]
+
+class EvaluatedPermission(TypedDict):
+    """Permission decision the executor applied to a tool use. ask means the executor opened an interaction.request for it."""
+    type: Literal["allow", "ask", "deny"]
+
+class EventDeltaType(str, Enum):
+    """Durable event type a streaming preview belongs to."""
+    AgentMessage = "agent.message"
+    AgentThinking = "agent.thinking"
 
 class ExecutorDrainResult(TypedDict):
     """executor.drain result."""
@@ -171,6 +276,57 @@ class IOMode(str, Enum):
     """process.start io_mode. "pty" runs the command on a 24x80 pseudo-terminal: stdout is the PTY output, stdin writes go to the PTY and close_stdin is rejected. Requires process.pty."""
     Pty = "pty"
 
+class InteractionCancelReason(str, Enum):
+    """Why the executor withdrew an open interaction."""
+    ResolvedLocally = "resolved_locally"
+    TurnCanceled = "turn_canceled"
+    Expired = "expired"
+    ToolCanceled = "tool_canceled"
+
+class InteractionKind(str, Enum):
+    """Interaction kinds; they map 1:1 to platform agent interactions."""
+    Permission = "permission"
+    Question = "question"
+
+class InteractionOutcome(str, Enum):
+    """How the platform resolved an interaction. allow/deny answer permission, answered answers question, expired and canceled close either kind without an answer."""
+    Allow = "allow"
+    Deny = "deny"
+    Answered = "answered"
+    Expired = "expired"
+    Canceled = "canceled"
+
+class InteractionQuestion(TypedDict):
+    """Question shown to the user."""
+    prompt: str
+    options: NotRequired[list[InteractionQuestionOption]]
+    multi_select: NotRequired[bool]
+    allow_free_text: NotRequired[bool]
+
+class InteractionQuestionOption(TypedDict):
+    """One answer option of a question interaction."""
+    id: str
+    label: str
+
+class InteractionRequestResult(TypedDict):
+    """interaction.request result. Idempotent by interaction_id: a repeat returns the same platform interaction."""
+    accepted: bool
+    platform_interaction_id: str
+
+class InteractionResponder(TypedDict):
+    """Who answered, for local audit. surface is the client that resolved it, for example desktop, mobile, web, slack."""
+    actor_id: NotRequired[str]
+    surface: NotRequired[str]
+
+class InteractionResponseResult(TypedDict):
+    """interaction.response result. accepted=false when the interaction is unknown or already resolved (first answer wins); the platform then marks its copy stale."""
+    accepted: bool
+
+class InteractionScope(str, Enum):
+    """How long a permission grant lasts on the executor: this tool use only, or the rest of the session."""
+    Once = "once"
+    Session = "session"
+
 class JsonRpcError(TypedDict):
     """JSON-RPC 2.0 error object."""
     code: JsonRpcErrorCode
@@ -179,25 +335,25 @@ class JsonRpcError(TypedDict):
 
 class JsonRpcErrorCode(IntEnum):
     """Executor protocol JSON-RPC error codes. -32011..-32013 are v1.1 additions."""
-    Value32700 = -32700
-    Value32600 = -32600
-    Value32601 = -32601
-    Value32602 = -32602
-    Value32603 = -32603
-    Value32000 = -32000
-    Value32001 = -32001
-    Value32002 = -32002
-    Value32003 = -32003
-    Value32004 = -32004
-    Value32005 = -32005
-    Value32006 = -32006
-    Value32007 = -32007
-    Value32008 = -32008
-    Value32009 = -32009
-    Value32010 = -32010
-    Value32011 = -32011
-    Value32012 = -32012
-    Value32013 = -32013
+    ParseError = -32700
+    InvalidRequest = -32600
+    MethodNotFound = -32601
+    InvalidParams = -32602
+    InternalError = -32603
+    Unauthorized = -32000
+    Forbidden = -32001
+    NotFound = -32002
+    LeaseExpired = -32003
+    Timeout = -32004
+    Canceled = -32005
+    PayloadTooLarge = -32006
+    SessionNotActive = -32007
+    McpUnavailable = -32008
+    ExecutorBusy = -32009
+    UnsupportedProtocol = -32010
+    ResourceUnavailable = -32011
+    CapabilityUnavailable = -32012
+    Conflict = -32013
 
 class JsonRpcErrorData(TypedDict):
     """JSON-RPC error.data. Members are code-specific; unknown members are ignored."""
@@ -206,14 +362,13 @@ class JsonRpcErrorData(TypedDict):
     capability: NotRequired[str]
     reason: NotRequired[str]
     terminal_code: NotRequired[str]
+    expected_sequence: NotRequired[int]
 
 class JsonRpcErrorResponse(TypedDict):
     """JSON-RPC 2.0 error response envelope."""
     jsonrpc: Literal["2.0"]
     id: JsonRpcId
     error: JsonRpcError
-
-JsonRpcId = str
 
 class JsonRpcNotification(TypedDict):
     """JSON-RPC 2.0 notification envelope (no id)."""
@@ -290,8 +445,6 @@ class McpJsonRpcErrorResponse(TypedDict):
     jsonrpc: Literal["2.0"]
     id: McpJsonRpcId
     error: McpJsonRpcError
-
-McpJsonRpcId = str | int
 
 class McpJsonRpcNotification(TypedDict):
     jsonrpc: Literal["2.0"]
@@ -437,6 +590,15 @@ class SessionAssignResult(TypedDict):
     accepted: bool
     session_id: str
 
+class SessionCloseResult(TypedDict):
+    """session.close result."""
+    closed: bool
+
+class SessionErrorEvent(TypedDict):
+    """A turn-level error. A failed turn still ends with session.status_idle turn_outcome=failed."""
+    type: Literal["session.error"]
+    error: AgentErrorInfo
+
 class SessionEvent(TypedDict):
     """Durable session event emitted by the executor."""
     type: SessionEventType
@@ -448,10 +610,19 @@ class SessionEventResult(TypedDict):
     """session.event result."""
     accepted: bool
     event_id: str
+    acked_sequence: NotRequired[int]
 
 class SessionEventType(str, Enum):
-    """Durable event types an executor may emit. Event names follow Anthropic Managed Agents; the executor must not invent new names."""
+    """Durable event types an executor may emit. Event names follow Anthropic Managed Agents; the executor must not invent new names. A tool executor emits agent.tool_result only; an agent executor (capability agent) emits every type, shaped as schemas/agent.json AgentEvent."""
     AgentToolResult = "agent.tool_result"
+    AgentMessage = "agent.message"
+    AgentThinking = "agent.thinking"
+    AgentToolUse = "agent.tool_use"
+    AgentMcpToolUse = "agent.mcp_tool_use"
+    AgentMcpToolResult = "agent.mcp_tool_result"
+    SessionStatusRunning = "session.status_running"
+    SessionStatusIdle = "session.status_idle"
+    SessionError = "session.error"
 
 class SessionMemoryResource(TypedDict):
     """A memory store mounted into the session workspace."""
@@ -467,6 +638,16 @@ class SessionStatus(str, Enum):
     Stopping = "stopping"
     Stopped = "stopped"
     Error = "error"
+
+class SessionStatusIdleEvent(TypedDict):
+    """The turn ended. It is the last event of its turn_id; the platform publishes the turn as finished only after it accepted this event and every lower sequence."""
+    type: Literal["session.status_idle"]
+    stop_reason: StopReason
+    turn_outcome: TurnOutcome
+
+class SessionStatusRunningEvent(TypedDict):
+    """The local agent started working on the turn."""
+    type: Literal["session.status_running"]
 
 class SessionStopResult(TypedDict):
     """session.stop result."""
@@ -494,6 +675,15 @@ class StdinMode(str, Enum):
     """process.start stdin mode. Empty or "closed" closes stdin at start; "open" keeps it open for process.write."""
     Open = "open"
     Closed = "closed"
+
+class StopReason(TypedDict):
+    """Why the turn stopped."""
+    type: StopReasonType
+
+class StopReasonType(str, Enum):
+    """Anthropic stop_reason types an executor may report. requires_action is not in the list: the platform projects it from open interactions."""
+    EndTurn = "end_turn"
+    RetriesExhausted = "retries_exhausted"
 
 class TerminalAttachResult(TypedDict):
     """terminal.attach result, returned after the host socket is connected and the attached frame was written on it."""
@@ -574,6 +764,44 @@ class ToolPermission(TypedDict):
     """Tool permission resolved by the harness."""
     mode: PermissionMode
 
+class TurnCancelResult(TypedDict):
+    """turn.cancel result. canceled=false when the turn is unknown or already ended; the turn still ends with its own session.status_idle event."""
+    canceled: bool
+
+class TurnOutcome(str, Enum):
+    """BMA extension on session.status_idle: how the turn ended."""
+    Completed = "completed"
+    Canceled = "canceled"
+    Failed = "failed"
+
+class TurnStartResult(TypedDict):
+    """turn.start result. Idempotent by turn_id: a repeated turn.start for a turn the executor already accepted returns the same result without starting a second run."""
+    accepted: bool
+    turn_id: str
+    executor_session_ref: str
+    resumed: bool
+    effective: AgentTurnConfig
+
+class WorkspaceBackupResult(TypedDict):
+    """workspace.backup result. digest and size_bytes describe the archive as the server stored it; skipped counts entries that could not be read (missing from the archive)."""
+    state: Literal["uploaded", "unchanged", "failed"]
+    fingerprint: NotRequired[str]
+    digest: NotRequired[str]
+    size_bytes: NotRequired[int]
+    entries: NotRequired[int]
+    skipped: NotRequired[int]
+    error: NotRequired[str]
+
+class WorkspaceCapability(TypedDict):
+    """workspace.backup support and the startup restore of a pending backup. Machine-scoped executors only."""
+    backup: bool
+
+AgentEvent = AgentMessageEvent | AgentThinkingEvent | AgentToolUseEvent | AgentToolResultEvent | AgentMcpToolUseEvent | AgentMcpToolResultEvent | SessionStatusRunningEvent | SessionStatusIdleEvent | SessionErrorEvent
+
+JsonRpcId = str
+
+McpJsonRpcId = str | int
+
 class ExecutorRegisterParams(TypedDict):
     "Params object of executor.register."
     protocol: ProtocolVersion
@@ -622,6 +850,9 @@ class SessionReadyParams(TypedDict):
 class SessionEventParams(TypedDict):
     "Params object of session.event."
     session_id: str
+    turn_id: NotRequired[str]
+    event_id: NotRequired[str]
+    sequence: NotRequired[int]
     event: SessionEvent
 
 class SessionStatusParams(TypedDict):
@@ -760,16 +991,91 @@ class SkillInstallParams(TypedDict):
     download_token: str
     download_expires_at: int
 
+class WorkspaceBackupParams(TypedDict):
+    "Params object of workspace.backup."
+    backup_id: str
+    paths: list[str]
+    exclude: NotRequired[list[str]]
+    skip_if_fingerprint: NotRequired[str]
+
+class TurnStartParams(TypedDict):
+    "Params object of turn.start."
+    session_id: str
+    turn_id: str
+    input_id: str
+    input: list[AgentInputBlock]
+    executor_session_ref: NotRequired[str]
+    config: NotRequired[AgentTurnConfig]
+    deadline_ms: NotRequired[int]
+    metadata: NotRequired[dict[str, str]]
+
+class TurnInputParams(TypedDict):
+    "Params object of turn.input."
+    session_id: str
+    turn_id: str
+    input_id: str
+    input: list[AgentInputBlock]
+
+class TurnCancelParams(TypedDict):
+    "Params object of turn.cancel."
+    session_id: str
+    turn_id: str
+    reason: NotRequired[str]
+
+class SessionCloseParams(TypedDict):
+    "Params object of session.close."
+    session_id: str
+    reason: str
+
+class SessionEventDeltaParams(TypedDict):
+    "Params object of session.event_delta."
+    session_id: str
+    turn_id: str
+    event_id: str
+    event_type: EventDeltaType
+    index: int
+    text: str
+
+class InteractionRequestParams(TypedDict):
+    "Params object of interaction.request."
+    session_id: str
+    turn_id: str
+    interaction_id: str
+    kind: InteractionKind
+    tool_use_id: NotRequired[str]
+    tool_name: NotRequired[str]
+    tool_input: NotRequired[dict[str, Any]]
+    scopes: NotRequired[list[InteractionScope]]
+    question: NotRequired[InteractionQuestion]
+    expires_at: NotRequired[str]
+
+class InteractionResponseParams(TypedDict):
+    "Params object of interaction.response."
+    session_id: str
+    interaction_id: str
+    outcome: InteractionOutcome
+    scope: NotRequired[InteractionScope]
+    deny_message: NotRequired[str]
+    answers: NotRequired[list[str]]
+    responder: NotRequired[InteractionResponder]
+
+class InteractionCancelParams(TypedDict):
+    "Params object of interaction.cancel."
+    session_id: str
+    interaction_id: str
+    reason: InteractionCancelReason
+
 
 @dataclass(frozen=True, slots=True)
 class MethodSpec:
-    "since is the first protocol that has the method; capability is the capability bit the harness checks before sending it."
+    "since is the first protocol that has the method; result_type is the Python type expression of a request result; capability is the capability bit the harness checks before sending it."
 
     name: str
     direction: str
     kind: str
     since: str
     params_type: str
+    result_type: str | None = None
     capability: str | None = None
     idempotent_by: str | None = None
 
@@ -800,32 +1106,50 @@ METHOD_TERMINAL_OPEN = "terminal.open"
 METHOD_TERMINAL_ATTACH = "terminal.attach"
 METHOD_TERMINAL_CLOSE = "terminal.close"
 METHOD_SKILL_INSTALL = "skill.install"
+METHOD_WORKSPACE_BACKUP = "workspace.backup"
+METHOD_TURN_START = "turn.start"
+METHOD_TURN_INPUT = "turn.input"
+METHOD_TURN_CANCEL = "turn.cancel"
+METHOD_SESSION_CLOSE = "session.close"
+METHOD_SESSION_EVENT_DELTA = "session.event_delta"
+METHOD_INTERACTION_REQUEST = "interaction.request"
+METHOD_INTERACTION_RESPONSE = "interaction.response"
+METHOD_INTERACTION_CANCEL = "interaction.cancel"
 
 METHODS: dict[str, MethodSpec] = {
-    "executor.register": MethodSpec(name="executor.register", direction="executor-to-harness", kind="request", since="bma.executor.v1", params_type="ExecutorRegisterParams", capability=None, idempotent_by=None),
-    "executor.heartbeat": MethodSpec(name="executor.heartbeat", direction="executor-to-harness", kind="request", since="bma.executor.v1", params_type="ExecutorHeartbeatParams", capability=None, idempotent_by=None),
-    "executor.capabilities.update": MethodSpec(name="executor.capabilities.update", direction="executor-to-harness", kind="notification", since="bma.executor.v1", params_type="ExecutorCapabilitiesUpdateParams", capability=None, idempotent_by=None),
-    "executor.drain": MethodSpec(name="executor.drain", direction="harness-to-executor", kind="request", since="bma.executor.v1", params_type="ExecutorDrainParams", capability=None, idempotent_by=None),
-    "executor.close": MethodSpec(name="executor.close", direction="bidirectional", kind="notification", since="bma.executor.v1", params_type="ExecutorCloseParams", capability=None, idempotent_by=None),
-    "session.assign": MethodSpec(name="session.assign", direction="harness-to-executor", kind="request", since="bma.executor.v1", params_type="SessionAssignParams", capability=None, idempotent_by=None),
-    "session.ready": MethodSpec(name="session.ready", direction="executor-to-harness", kind="request", since="bma.executor.v1", params_type="SessionReadyParams", capability=None, idempotent_by=None),
-    "session.event": MethodSpec(name="session.event", direction="executor-to-harness", kind="request", since="bma.executor.v1", params_type="SessionEventParams", capability=None, idempotent_by="jsonrpc_id"),
-    "session.status": MethodSpec(name="session.status", direction="executor-to-harness", kind="notification", since="bma.executor.v1", params_type="SessionStatusParams", capability=None, idempotent_by=None),
-    "session.stop": MethodSpec(name="session.stop", direction="harness-to-executor", kind="request", since="bma.executor.v1", params_type="SessionStopParams", capability=None, idempotent_by=None),
-    "session.ended": MethodSpec(name="session.ended", direction="executor-to-harness", kind="request", since="bma.executor.v1", params_type="SessionEndedParams", capability=None, idempotent_by=None),
-    "tool.call": MethodSpec(name="tool.call", direction="harness-to-executor", kind="request", since="bma.executor.v1", params_type="ToolCallParams", capability=None, idempotent_by=None),
-    "tool.result": MethodSpec(name="tool.result", direction="executor-to-harness", kind="request", since="bma.executor.v1", params_type="ToolResultParams", capability=None, idempotent_by="tool_call_id"),
-    "tool.cancel": MethodSpec(name="tool.cancel", direction="harness-to-executor", kind="request", since="bma.executor.v1", params_type="ToolCancelParams", capability=None, idempotent_by=None),
-    "tool.progress": MethodSpec(name="tool.progress", direction="executor-to-harness", kind="notification", since="bma.executor.v1", params_type="ToolProgressParams", capability=None, idempotent_by=None),
-    "process.start": MethodSpec(name="process.start", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="ProcessStartParams", capability="process.enabled", idempotent_by="session_id+process_id"),
-    "process.read": MethodSpec(name="process.read", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="ProcessReadParams", capability="process.enabled", idempotent_by=None),
-    "process.write": MethodSpec(name="process.write", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="ProcessWriteParams", capability="process.enabled", idempotent_by=None),
-    "process.interrupt": MethodSpec(name="process.interrupt", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="ProcessSignalParams", capability="process.enabled", idempotent_by=None),
-    "process.terminate": MethodSpec(name="process.terminate", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="ProcessSignalParams", capability="process.enabled", idempotent_by=None),
-    "process.list": MethodSpec(name="process.list", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="ProcessListParams", capability="process.enabled", idempotent_by=None),
-    "process.status": MethodSpec(name="process.status", direction="executor-to-harness", kind="notification", since="bma.executor.v1.1", params_type="ProcessStatusParams", capability="process.enabled", idempotent_by=None),
-    "terminal.open": MethodSpec(name="terminal.open", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="TerminalOpenParams", capability="terminal.enabled", idempotent_by="terminal_id"),
-    "terminal.attach": MethodSpec(name="terminal.attach", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="TerminalAttachParams", capability="terminal.enabled", idempotent_by=None),
-    "terminal.close": MethodSpec(name="terminal.close", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="TerminalCloseParams", capability="terminal.enabled", idempotent_by="terminal_id"),
-    "skill.install": MethodSpec(name="skill.install", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="SkillInstallParams", capability="skills.install", idempotent_by="skill_id+revision_id+digest"),
+    "executor.register": MethodSpec(name="executor.register", direction="executor-to-harness", kind="request", since="bma.executor.v1", params_type="ExecutorRegisterParams", result_type="ExecutorRegisterResult", capability=None, idempotent_by=None),
+    "executor.heartbeat": MethodSpec(name="executor.heartbeat", direction="executor-to-harness", kind="request", since="bma.executor.v1", params_type="ExecutorHeartbeatParams", result_type="ExecutorHeartbeatResult", capability=None, idempotent_by=None),
+    "executor.capabilities.update": MethodSpec(name="executor.capabilities.update", direction="executor-to-harness", kind="notification", since="bma.executor.v1", params_type="ExecutorCapabilitiesUpdateParams", result_type=None, capability=None, idempotent_by=None),
+    "executor.drain": MethodSpec(name="executor.drain", direction="harness-to-executor", kind="request", since="bma.executor.v1", params_type="ExecutorDrainParams", result_type="ExecutorDrainResult", capability=None, idempotent_by=None),
+    "executor.close": MethodSpec(name="executor.close", direction="bidirectional", kind="notification", since="bma.executor.v1", params_type="ExecutorCloseParams", result_type=None, capability=None, idempotent_by=None),
+    "session.assign": MethodSpec(name="session.assign", direction="harness-to-executor", kind="request", since="bma.executor.v1", params_type="SessionAssignParams", result_type="SessionAssignResult", capability=None, idempotent_by=None),
+    "session.ready": MethodSpec(name="session.ready", direction="executor-to-harness", kind="request", since="bma.executor.v1", params_type="SessionReadyParams", result_type="Ack", capability=None, idempotent_by=None),
+    "session.event": MethodSpec(name="session.event", direction="executor-to-harness", kind="request", since="bma.executor.v1", params_type="SessionEventParams", result_type="SessionEventResult", capability=None, idempotent_by="jsonrpc_id"),
+    "session.status": MethodSpec(name="session.status", direction="executor-to-harness", kind="notification", since="bma.executor.v1", params_type="SessionStatusParams", result_type=None, capability=None, idempotent_by=None),
+    "session.stop": MethodSpec(name="session.stop", direction="harness-to-executor", kind="request", since="bma.executor.v1", params_type="SessionStopParams", result_type="SessionStopResult", capability=None, idempotent_by=None),
+    "session.ended": MethodSpec(name="session.ended", direction="executor-to-harness", kind="request", since="bma.executor.v1", params_type="SessionEndedParams", result_type="Ack", capability=None, idempotent_by=None),
+    "tool.call": MethodSpec(name="tool.call", direction="harness-to-executor", kind="request", since="bma.executor.v1", params_type="ToolCallParams", result_type="Ack", capability=None, idempotent_by=None),
+    "tool.result": MethodSpec(name="tool.result", direction="executor-to-harness", kind="request", since="bma.executor.v1", params_type="ToolResultParams", result_type="Ack", capability=None, idempotent_by="tool_call_id"),
+    "tool.cancel": MethodSpec(name="tool.cancel", direction="harness-to-executor", kind="request", since="bma.executor.v1", params_type="ToolCancelParams", result_type="ToolCancelResult", capability=None, idempotent_by=None),
+    "tool.progress": MethodSpec(name="tool.progress", direction="executor-to-harness", kind="notification", since="bma.executor.v1", params_type="ToolProgressParams", result_type=None, capability=None, idempotent_by=None),
+    "process.start": MethodSpec(name="process.start", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="ProcessStartParams", result_type="ProcessState", capability="process.enabled", idempotent_by="session_id+process_id"),
+    "process.read": MethodSpec(name="process.read", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="ProcessReadParams", result_type="ProcessReadResult", capability="process.enabled", idempotent_by=None),
+    "process.write": MethodSpec(name="process.write", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="ProcessWriteParams", result_type="ProcessWriteResult", capability="process.enabled", idempotent_by=None),
+    "process.interrupt": MethodSpec(name="process.interrupt", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="ProcessSignalParams", result_type="ProcessState", capability="process.enabled", idempotent_by=None),
+    "process.terminate": MethodSpec(name="process.terminate", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="ProcessSignalParams", result_type="ProcessState", capability="process.enabled", idempotent_by=None),
+    "process.list": MethodSpec(name="process.list", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="ProcessListParams", result_type="ProcessListResult", capability="process.enabled", idempotent_by=None),
+    "process.status": MethodSpec(name="process.status", direction="executor-to-harness", kind="notification", since="bma.executor.v1.1", params_type="ProcessStatusParams", result_type=None, capability="process.enabled", idempotent_by=None),
+    "terminal.open": MethodSpec(name="terminal.open", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="TerminalOpenParams", result_type="TerminalOpenResult", capability="terminal.enabled", idempotent_by="terminal_id"),
+    "terminal.attach": MethodSpec(name="terminal.attach", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="TerminalAttachParams", result_type="TerminalAttachResult", capability="terminal.enabled", idempotent_by=None),
+    "terminal.close": MethodSpec(name="terminal.close", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="TerminalCloseParams", result_type="TerminalCloseResult", capability="terminal.enabled", idempotent_by="terminal_id"),
+    "skill.install": MethodSpec(name="skill.install", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="SkillInstallParams", result_type="SkillInstallResult", capability="skills.install", idempotent_by="skill_id+revision_id+digest"),
+    "workspace.backup": MethodSpec(name="workspace.backup", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="WorkspaceBackupParams", result_type="WorkspaceBackupResult", capability="workspace.backup", idempotent_by="backup_id"),
+    "turn.start": MethodSpec(name="turn.start", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="TurnStartParams", result_type="TurnStartResult", capability="agent", idempotent_by="turn_id"),
+    "turn.input": MethodSpec(name="turn.input", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="TurnInputParams", result_type="Ack", capability="agent", idempotent_by="input_id"),
+    "turn.cancel": MethodSpec(name="turn.cancel", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="TurnCancelParams", result_type="TurnCancelResult", capability="agent", idempotent_by=None),
+    "session.close": MethodSpec(name="session.close", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="SessionCloseParams", result_type="SessionCloseResult", capability="agent", idempotent_by=None),
+    "session.event_delta": MethodSpec(name="session.event_delta", direction="executor-to-harness", kind="notification", since="bma.executor.v1.1", params_type="SessionEventDeltaParams", result_type=None, capability="agent", idempotent_by=None),
+    "interaction.request": MethodSpec(name="interaction.request", direction="executor-to-harness", kind="request", since="bma.executor.v1.1", params_type="InteractionRequestParams", result_type="InteractionRequestResult", capability="agent", idempotent_by="interaction_id"),
+    "interaction.response": MethodSpec(name="interaction.response", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="InteractionResponseParams", result_type="InteractionResponseResult", capability="agent", idempotent_by="interaction_id"),
+    "interaction.cancel": MethodSpec(name="interaction.cancel", direction="executor-to-harness", kind="request", since="bma.executor.v1.1", params_type="InteractionCancelParams", result_type="Ack", capability="agent", idempotent_by="interaction_id"),
 }

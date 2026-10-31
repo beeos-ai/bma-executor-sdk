@@ -181,6 +181,19 @@
       ],
       "additionalProperties": true
     },
+    "WorkspaceCapability": {
+      "type": "object",
+      "description": "workspace.backup support and the startup restore of a pending backup. Machine-scoped executors only.",
+      "properties": {
+        "backup": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "backup"
+      ],
+      "additionalProperties": true
+    },
     "Capabilities": {
       "type": "object",
       "description": "Executor capability object. The server only sends a method to an executor that advertised its capability; otherwise the executor answers -32012 capability_unavailable.",
@@ -223,6 +236,12 @@
         },
         "skills": {
           "$ref": "executor.json#/$defs/SkillsCapability"
+        },
+        "workspace": {
+          "$ref": "executor.json#/$defs/WorkspaceCapability"
+        },
+        "agent": {
+          "$ref": "agent.json#/$defs/AgentCapability"
         }
       },
       "required": [],

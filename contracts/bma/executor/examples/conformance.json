@@ -43,6 +43,9 @@
             },
             "skills": {
               "install": true
+            },
+            "workspace": {
+              "backup": true
             }
           },
           "resume": {
@@ -865,6 +868,327 @@
       "kind": "result",
       "result": {
         "state": "ready"
+      }
+    },
+    {
+      "name": "workspace.backup request",
+      "method": "workspace.backup",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_22",
+        "method": "workspace.backup",
+        "params": {
+          "backup_id": "mbk_aaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "paths": [
+            "/home/user"
+          ],
+          "exclude": [
+            "/home/user/.cache"
+          ],
+          "skip_if_fingerprint": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+        }
+      }
+    },
+    {
+      "name": "workspace.backup result",
+      "method": "workspace.backup",
+      "kind": "result",
+      "result": {
+        "state": "uploaded",
+        "fingerprint": "sha256:fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9",
+        "digest": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+        "size_bytes": 1048576,
+        "entries": 42
+      }
+    },
+    {
+      "name": "turn.start request",
+      "method": "turn.start",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_turn_start",
+        "method": "turn.start",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "input_id": "ain_01JAGENT",
+          "input": [
+            {
+              "type": "text",
+              "text": "Fix the failing test in pkg/foo"
+            },
+            {
+              "type": "file",
+              "file_id": "file_01JAGENT",
+              "name": "log.txt",
+              "mime_type": "text/plain",
+              "size_bytes": 2048
+            }
+          ],
+          "executor_session_ref": "local_conv_42",
+          "config": {
+            "model": "claude-opus-4-5",
+            "thinking_level": "medium",
+            "permission_mode": "default",
+            "cwd": "/Users/me/src/foo"
+          },
+          "deadline_ms": 3600000
+        }
+      }
+    },
+    {
+      "name": "turn.start result",
+      "method": "turn.start",
+      "kind": "result",
+      "result": {
+        "accepted": true,
+        "turn_id": "turn_01JAGENT",
+        "executor_session_ref": "local_conv_42",
+        "resumed": true,
+        "effective": {
+          "model": "claude-opus-4-5",
+          "thinking_level": "medium",
+          "permission_mode": "default",
+          "cwd": "/Users/me/src/foo"
+        }
+      }
+    },
+    {
+      "name": "turn.input request",
+      "method": "turn.input",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_turn_input",
+        "method": "turn.input",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "input_id": "ain_01JAGENT2",
+          "input": [
+            {
+              "type": "text",
+              "text": "Also run go vet"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "turn.input result",
+      "method": "turn.input",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "turn.cancel request",
+      "method": "turn.cancel",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_turn_cancel",
+        "method": "turn.cancel",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "reason": "user_interrupt"
+        }
+      }
+    },
+    {
+      "name": "turn.cancel result",
+      "method": "turn.cancel",
+      "kind": "result",
+      "result": {
+        "canceled": true
+      }
+    },
+    {
+      "name": "session.close request",
+      "method": "session.close",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_session_close",
+        "method": "session.close",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "reason": "archived"
+        }
+      }
+    },
+    {
+      "name": "session.close result",
+      "method": "session.close",
+      "kind": "result",
+      "result": {
+        "closed": true
+      }
+    },
+    {
+      "name": "session.event_delta notification",
+      "method": "session.event_delta",
+      "kind": "notification",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "session.event_delta",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "event_id": "evt_0003",
+          "event_type": "agent.message",
+          "index": 0,
+          "text": "Running the tests"
+        }
+      }
+    },
+    {
+      "name": "interaction.request request",
+      "method": "interaction.request",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_interaction_request",
+        "method": "interaction.request",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "interaction_id": "int_0001",
+          "kind": "permission",
+          "tool_use_id": "evt_0004",
+          "tool_name": "bash",
+          "tool_input": {
+            "command": "go test ./pkg/foo"
+          },
+          "scopes": [
+            "once",
+            "session"
+          ],
+          "expires_at": "2026-10-31T16:10:00Z"
+        }
+      }
+    },
+    {
+      "name": "interaction.request result",
+      "method": "interaction.request",
+      "kind": "result",
+      "result": {
+        "accepted": true,
+        "platform_interaction_id": "aint_01JAGENT"
+      }
+    },
+    {
+      "name": "interaction.response request",
+      "method": "interaction.response",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_interaction_response",
+        "method": "interaction.response",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "interaction_id": "int_0001",
+          "outcome": "allow",
+          "scope": "once",
+          "responder": {
+            "actor_id": "usr_01JAGENT",
+            "surface": "mobile"
+          }
+        }
+      }
+    },
+    {
+      "name": "interaction.response result",
+      "method": "interaction.response",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "interaction.cancel request",
+      "method": "interaction.cancel",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_interaction_cancel",
+        "method": "interaction.cancel",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "interaction_id": "int_0002",
+          "reason": "resolved_locally"
+        }
+      }
+    },
+    {
+      "name": "interaction.cancel result",
+      "method": "interaction.cancel",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "session.event agent request",
+      "method": "session.event",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_session_event_agent",
+        "method": "session.event",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "event_id": "evt_0004",
+          "sequence": 4,
+          "event": {
+            "type": "agent.tool_use",
+            "name": "bash",
+            "input": {
+              "command": "go test ./pkg/foo"
+            },
+            "evaluated_permission": {
+              "type": "ask"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "session.event agent idle request",
+      "method": "session.event",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_session_event_idle",
+        "method": "session.event",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "event_id": "evt_0009",
+          "sequence": 9,
+          "event": {
+            "type": "session.status_idle",
+            "stop_reason": {
+              "type": "end_turn"
+            },
+            "turn_outcome": "completed"
+          }
+        }
+      }
+    },
+    {
+      "name": "session.event agent result",
+      "method": "session.event",
+      "kind": "result",
+      "result": {
+        "accepted": true,
+        "event_id": "evt_0004",
+        "acked_sequence": 4
       }
     }
   ]
