@@ -137,7 +137,9 @@ func TestConformanceCorePeer(t *testing.T) {
 	client, err := NewClient(Options{
 		EnvironmentID: "env_test", Executor: ExecutorInfo{Name: "conformance", OS: "linux", Arch: "amd64", Version: "test"},
 		Capabilities: core.Capabilities(), TokenSource: StaticToken("pipe://", ""),
-		Dial: func(context.Context, ExecutorTokenResponse, string) (Conn, error) { return executorEnd, nil },
+		Dial: func(context.Context, ExecutorTokenResponse, string, ChannelTarget) (Conn, error) {
+			return executorEnd, nil
+		},
 	})
 	must(err)
 	must(core.Attach("cloud", client))

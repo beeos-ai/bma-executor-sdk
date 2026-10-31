@@ -328,7 +328,7 @@ func TestClientStopsOnReplacedAndReconnectsAfterDrain(t *testing.T) {
 	client, err := NewClient(Options{
 		Executor: ExecutorInfo{Name: "close-codes"}, TokenSource: StaticToken("pipe://", ""),
 		ReconnectBaseDelay: time.Millisecond,
-		Dial: func(context.Context, ExecutorTokenResponse, string) (Conn, error) {
+		Dial: func(context.Context, ExecutorTokenResponse, string, ChannelTarget) (Conn, error) {
 			dials.Add(1)
 			executorEnd, harnessEnd := Pipe(ProtocolV11)
 			harnessEnds <- harnessEnd
@@ -388,7 +388,7 @@ func TestClientDropsSessionsAfterLeaseExpiry(t *testing.T) {
 	client, err := NewClient(Options{
 		Executor: ExecutorInfo{Name: "lease"}, TokenSource: StaticToken("pipe://", ""),
 		ReconnectBaseDelay: 20 * time.Millisecond, MaxReconnectAttempts: -1,
-		Dial: func(context.Context, ExecutorTokenResponse, string) (Conn, error) {
+		Dial: func(context.Context, ExecutorTokenResponse, string, ChannelTarget) (Conn, error) {
 			if dials.Add(1) > 1 {
 				return nil, errors.New("harness unreachable")
 			}
@@ -451,7 +451,7 @@ func TestClientStopsOnReplacedDuringReregister(t *testing.T) {
 	client, err := NewClient(Options{
 		Executor: ExecutorInfo{Name: "close-codes"}, TokenSource: StaticToken("pipe://", ""),
 		ReconnectBaseDelay: time.Millisecond,
-		Dial: func(context.Context, ExecutorTokenResponse, string) (Conn, error) {
+		Dial: func(context.Context, ExecutorTokenResponse, string, ChannelTarget) (Conn, error) {
 			executorEnd, harnessEnd := Pipe(ProtocolV11)
 			if dials.Add(1) == 1 {
 				first <- harnessEnd

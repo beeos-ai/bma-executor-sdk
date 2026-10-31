@@ -757,7 +757,7 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 		token.WSURL = c.options.WSURL
 	}
 	c.setState(ConnectionStateConnecting)
-	transport, err := c.options.Dial(ctx, token, c.options.Protocol)
+	transport, err := c.options.Dial(ctx, token, c.options.Protocol, ChannelTarget{Channel: ChannelControl})
 	if err != nil {
 		return err
 	}

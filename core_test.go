@@ -38,6 +38,8 @@ func serveFakeMCP() {
 		}
 		var result any
 		switch request.Method {
+		case "exit-now":
+			os.Exit(0)
 		case "initialize":
 			result = map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "fake", "version": "0"}}
 		case "tools/call":
