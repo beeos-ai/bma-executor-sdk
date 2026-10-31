@@ -94,7 +94,7 @@ class Peer:
         self._pending[request_id] = future
         try:
             await self._send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
-            return await asyncio.wait_for(asyncio.shield(future), timeout)
+            return await asyncio.wait_for(future, timeout)
         except asyncio.TimeoutError as error:
             raise TimeoutError(f"{method}: no response within {timeout}s") from error
         finally:
