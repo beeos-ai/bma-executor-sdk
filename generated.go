@@ -213,6 +213,8 @@ type Cursors struct {
 // DisplayCapability v1.1 display object. v1 sent a boolean; the server accepts both.
 type DisplayCapability struct {
 	RFB bool `json:"rfb,omitempty"`
+	// The machine can host its own desktop for a desktop session (it carries bma-desktop-session, started through process.start). Absent means unknown (an executor that predates the field).
+	Desktop bool `json:"desktop,omitempty"`
 }
 
 // EvaluatedPermission Permission decision the executor applied to a tool use. ask means the executor opened an interaction.request for it.
@@ -272,6 +274,12 @@ type ExecutorResume struct {
 	ExecutorID       string   `json:"executor_id,omitempty"`
 	LastConnectionID string   `json:"last_connection_id,omitempty"`
 	ActiveSessions   []string `json:"active_sessions,omitempty"`
+}
+
+// ExecutorTokenRefreshResult executor.token.refresh result: the connection now closes with 4001 at expires_at.
+type ExecutorTokenRefreshResult struct {
+	// RFC 3339 time of the new connection deadline.
+	ExpiresAt string `json:"expires_at"`
 }
 
 // ExecutorTokenRequest POST /v1/executors/token body. The bearer is an environment key, or a machine daemon token. An empty environment_id with a machine token requests a machine-scoped executor: its executor_id is exec_<machine_id>, stable across refreshes, and the JWT carries machine_id and daemon_token_id.
@@ -981,6 +989,7 @@ type MethodSpec struct {
 const (
 	MethodExecutorRegister           = "executor.register"
 	MethodExecutorHeartbeat          = "executor.heartbeat"
+	MethodExecutorTokenRefresh       = "executor.token.refresh"
 	MethodExecutorCapabilitiesUpdate = "executor.capabilities.update"
 	MethodExecutorDrain              = "executor.drain"
 	MethodExecutorClose              = "executor.close"
@@ -1020,6 +1029,7 @@ const (
 var Methods = map[string]MethodSpec{
 	MethodExecutorRegister:           {Name: MethodExecutorRegister, Direction: DirectionExecutorToHarness, Notification: false, Since: "bma.executor.v1", Capability: "", IdempotentBy: ""},
 	MethodExecutorHeartbeat:          {Name: MethodExecutorHeartbeat, Direction: DirectionExecutorToHarness, Notification: false, Since: "bma.executor.v1", Capability: "", IdempotentBy: ""},
+	MethodExecutorTokenRefresh:       {Name: MethodExecutorTokenRefresh, Direction: DirectionExecutorToHarness, Notification: false, Since: "bma.executor.v1.1", Capability: "", IdempotentBy: ""},
 	MethodExecutorCapabilitiesUpdate: {Name: MethodExecutorCapabilitiesUpdate, Direction: DirectionExecutorToHarness, Notification: true, Since: "bma.executor.v1", Capability: "", IdempotentBy: ""},
 	MethodExecutorDrain:              {Name: MethodExecutorDrain, Direction: DirectionHarnessToExecutor, Notification: false, Since: "bma.executor.v1", Capability: "", IdempotentBy: ""},
 	MethodExecutorClose:              {Name: MethodExecutorClose, Direction: DirectionBidirectional, Notification: true, Since: "bma.executor.v1", Capability: "", IdempotentBy: ""},
@@ -1070,6 +1080,11 @@ type ExecutorHeartbeatParams struct {
 	ConnectionID   string        `json:"connection_id"`
 	ActiveSessions []string      `json:"active_sessions"`
 	Load           *ExecutorLoad `json:"load,omitempty"`
+}
+
+// ExecutorTokenRefreshParams is the params object of executor.token.refresh.
+type ExecutorTokenRefreshParams struct {
+	Token string `json:"token"`
 }
 
 // ExecutorCapabilitiesUpdateParams is the params object of executor.capabilities.update.
@@ -1384,6 +1399,8 @@ func NewParams(method string) any {
 		return new(ExecutorRegisterParams)
 	case MethodExecutorHeartbeat:
 		return new(ExecutorHeartbeatParams)
+	case MethodExecutorTokenRefresh:
+		return new(ExecutorTokenRefreshParams)
 	case MethodExecutorCapabilitiesUpdate:
 		return new(ExecutorCapabilitiesUpdateParams)
 	case MethodExecutorDrain:
@@ -1462,6 +1479,8 @@ func NewResult(method string) any {
 		return new(ExecutorRegisterResult)
 	case MethodExecutorHeartbeat:
 		return new(ExecutorHeartbeatResult)
+	case MethodExecutorTokenRefresh:
+		return new(ExecutorTokenRefreshResult)
 	case MethodExecutorDrain:
 		return new(ExecutorDrainResult)
 	case MethodSessionAssign:
@@ -1537,6 +1556,13 @@ func SendExecutorRegister(ctx context.Context, rpc RPC, params ExecutorRegisterP
 func SendExecutorHeartbeat(ctx context.Context, rpc RPC, params ExecutorHeartbeatParams) (ExecutorHeartbeatResult, error) {
 	var result ExecutorHeartbeatResult
 	err := rpc.Call(ctx, MethodExecutorHeartbeat, params, &result)
+	return result, err
+}
+
+// SendExecutorTokenRefresh calls executor.token.refresh.
+func SendExecutorTokenRefresh(ctx context.Context, rpc RPC, params ExecutorTokenRefreshParams) (ExecutorTokenRefreshResult, error) {
+	var result ExecutorTokenRefreshResult
+	err := rpc.Call(ctx, MethodExecutorTokenRefresh, params, &result)
 	return result, err
 }
 

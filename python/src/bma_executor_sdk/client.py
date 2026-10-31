@@ -21,6 +21,7 @@ from .generated import (
     METHOD_EXECUTOR_DRAIN,
     METHOD_EXECUTOR_HEARTBEAT,
     METHOD_EXECUTOR_REGISTER,
+    METHOD_EXECUTOR_TOKEN_REFRESH,
     METHOD_SESSION_ASSIGN,
     METHOD_SESSION_ENDED,
     METHOD_SESSION_READY,
@@ -69,6 +70,8 @@ PROTOCOL_V11 = ProtocolVersion.BmaExecutorV11.value
 _MAX_TRACKED_TOOL_RESULTS = 8192
 _MAX_TOOL_RESULT_RETRY_DELAY = 10.0
 _MAX_RECONNECT_DELAY = 30.0
+# Fraction of a token's lifetime after which executor.token.refresh is sent.
+_TOKEN_REFRESH_AT = 0.7
 
 TokenSource = Callable[[], Awaitable[ExecutorTokenResponse]]
 ToolCallHandler = Callable[[ToolCallParams], Awaitable[ToolResultParams]]
@@ -127,6 +130,7 @@ class ExecutorClient:
         heartbeat_load: Callable[[], ExecutorLoad | None] | None = None,
         max_reconnect_attempts: int = DEFAULT_MAX_RECONNECT_ATTEMPTS,
         reconnect_base_delay: float = DEFAULT_RECONNECT_BASE_DELAY,
+        reconnect_max_delay: float = _MAX_RECONNECT_DELAY,
         random: Callable[[], float] = _random.random,
         tool_result_retry_attempts: int = DEFAULT_TOOL_RESULT_RETRY_ATTEMPTS,
         tool_result_retry_base_delay: float = DEFAULT_TOOL_RESULT_RETRY_BASE_DELAY,
@@ -153,6 +157,7 @@ class ExecutorClient:
         self._heartbeat_load = heartbeat_load
         self._max_reconnect_attempts = max_reconnect_attempts
         self._reconnect_base_delay = reconnect_base_delay
+        self._reconnect_max_delay = reconnect_max_delay
         self._random = random
         self._tool_result_retry_attempts = max(1, tool_result_retry_attempts)
         self._tool_result_retry_base_delay = tool_result_retry_base_delay
@@ -411,6 +416,45 @@ class ExecutorClient:
         registered, self._registered = self._registered, asyncio.Event()
         registered.set()
         self._log("info", f"executor registered as {result['executor_id']}")
+        if token.get("expires_in"):
+            self._spawn(self._refresh_token_loop(peer, float(token["expires_in"])))
+
+    async def _refresh_token_loop(self, peer: Peer, lifetime: float) -> None:
+        """Keep peer open across token lifetimes: at 70% of the token's
+        lifetime fetch a new token and send executor.token.refresh. A harness
+        without the method (-32601) closes with 4001 at expiry and the client
+        reconnects as before."""
+        loop = asyncio.get_running_loop()
+        expires_at = loop.time() + lifetime
+        wait = lifetime * _TOKEN_REFRESH_AT
+        while True:
+            await asyncio.sleep(wait)
+            if self._stopped or self._peer is not peer:
+                return
+            try:
+                fresh = await self._fetch_token()
+                await self.call(METHOD_EXECUTOR_TOKEN_REFRESH, {"token": fresh["token"]})
+            except RPCError as error:
+                if error.code in (-32601, -32012):
+                    self._log("info", "harness does not refresh executor tokens; reconnecting at expiry")
+                    return
+                failure: BaseException = error
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                failure = error
+            else:
+                lifetime = float(fresh.get("expires_in") or 0)
+                if lifetime <= 0:
+                    return
+                expires_at = loop.time() + lifetime
+                wait = lifetime * _TOKEN_REFRESH_AT
+                continue
+            self._log("warn", "executor token refresh failed", failure)
+            remaining = expires_at - loop.time()
+            if remaining < 2:
+                return
+            wait = remaining / 2
 
     def _resume_state(self) -> dict[str, Any] | None:
         if not self._executor_id and not self._connection_id and not self._sessions:
@@ -448,7 +492,7 @@ class ExecutorClient:
                 return
             attempt = self._reconnect_attempts
             self._reconnect_attempts += 1
-            delay = min(self._reconnect_base_delay * (1 << attempt), _MAX_RECONNECT_DELAY)
+            delay = min(self._reconnect_base_delay * (1 << attempt), self._reconnect_max_delay)
             delay *= 0.5 + self._random() * 0.5
             self._log("info", f"reconnecting executor channel in {delay:.3f}s")
             await asyncio.sleep(delay)

@@ -124,6 +124,35 @@ methods:
       - $ref: "#/components/errors/Unauthorized"
       - $ref: "#/components/errors/LeaseExpired"
       - $ref: "#/components/errors/InternalError"
+  - name: executor.token.refresh
+    summary: Extend the connection with a fresh executor token.
+    description: Executor to harness request. Before the current token expires the executor fetches
+      a new one from POST /v1/executors/token with its original credential and sends it on the open
+      control channel. The harness verifies that it names the same executor, scope and machine
+      credential as the connection and moves the connection's 4001 deadline to the new token's
+      expiry; nothing else about the connection changes. A rejected token leaves the old deadline in
+      place. A harness without the method answers -32601; the executor then keeps reconnecting on
+      4001.
+    tags:
+      - name: executor
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    params:
+      - name: token
+        required: true
+        schema:
+          type: string
+    result:
+      name: ExecutorTokenRefreshResult
+      schema:
+        $ref: schemas/executor.json#/$defs/ExecutorTokenRefreshResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Unauthorized"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/InternalError"
   - name: executor.capabilities.update
     summary: Publish changed executor capabilities.
     description: Executor to harness notification. It may change capabilities, not the protocol version.

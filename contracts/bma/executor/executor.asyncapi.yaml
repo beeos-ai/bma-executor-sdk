@@ -43,6 +43,8 @@ channels:
         $ref: "#/components/messages/executorRegister"
       executorHeartbeat:
         $ref: "#/components/messages/executorHeartbeat"
+      executorTokenRefresh:
+        $ref: "#/components/messages/executorTokenRefresh"
       executorCapabilitiesUpdate:
         $ref: "#/components/messages/executorCapabilitiesUpdate"
       executorDrain:
@@ -149,6 +151,12 @@ operations:
       $ref: "#/channels/control"
     messages:
       - $ref: "#/components/messages/executorHeartbeat"
+  executorTokenRefreshSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/executorTokenRefresh"
   executorCapabilitiesUpdateSend:
     action: send
     channel:
@@ -434,6 +442,41 @@ components:
           - method
           - params
       x-bma-jsonrpc-method: executor.heartbeat
+      x-bma-direction: executor-to-harness
+      x-bma-kind: request
+      x-bma-channel: control
+    executorTokenRefresh:
+      name: executor.token.refresh
+      title: executor.token.refresh
+      summary: Extend the connection with a fresh executor token.
+      description: Executor to harness request. Before the current token expires the executor fetches a new one from POST /v1/executors/token with its original credential and sends it on the open control channel. The harness verifies that it names the same executor, scope and machine credential as the connection and moves the connection's 4001 deadline to the new token's expiry; nothing else about the connection changes. A rejected token leaves the old deadline in place. A harness without the method answers -32601; the executor then keeps reconnecting on 4001.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: executor.token.refresh
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              token:
+                type: string
+            required:
+              - token
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: executor.token.refresh
       x-bma-direction: executor-to-harness
       x-bma-kind: request
       x-bma-channel: control

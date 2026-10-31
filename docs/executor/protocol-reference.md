@@ -75,7 +75,7 @@ Sec-WebSocket-Protocol: bma.executor.v1.1
 Authorization: Bearer <jwt>
 ```
 
-`channel` defaults to `control`; the other value is `mcp` (§7). The JWT goes only in `Authorization`. HTTP errors before the upgrade: `400` bad channel or no supported subprotocol; `401` missing/invalid JWT; `403` channel not in `channel_scope`; `404` machine JWT on a server that does not serve machines; `503` not configured. The first frame must be the executor's `executor.register`. The server closes with `4001` when the JWT expires.
+`channel` defaults to `control`; the other value is `mcp` (§7). The JWT goes only in `Authorization`. HTTP errors before the upgrade: `400` bad channel or no supported subprotocol; `401` missing/invalid JWT; `403` channel not in `channel_scope`; `404` machine JWT on a server that does not serve machines; `503` not configured. The first frame must be the executor's `executor.register`. The server closes with `4001` when the JWT expires, unless the executor sent a fresh token first with `executor.token.refresh` (same executor, scope and machine credential; the SDK clients do this at 70% of `expires_in`), which moves the deadline to the new token's expiry.
 
 ### 2.4 WebSocket close codes
 

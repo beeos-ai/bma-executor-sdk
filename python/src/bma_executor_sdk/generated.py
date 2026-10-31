@@ -184,6 +184,7 @@ class Cursors(TypedDict):
 class DisplayCapability(TypedDict):
     """v1.1 display object. v1 sent a boolean; the server accepts both."""
     rfb: NotRequired[bool]
+    desktop: NotRequired[bool]
 
 class EvaluatedPermission(TypedDict):
     """Permission decision the executor applied to a tool use. ask means the executor opened an interaction.request for it."""
@@ -235,6 +236,10 @@ class ExecutorResume(TypedDict):
     executor_id: NotRequired[str]
     last_connection_id: NotRequired[str]
     active_sessions: NotRequired[list[str]]
+
+class ExecutorTokenRefreshResult(TypedDict):
+    """executor.token.refresh result: the connection now closes with 4001 at expires_at."""
+    expires_at: str
 
 class ExecutorTokenRequest(TypedDict):
     """POST /v1/executors/token body. The bearer is an environment key, or a machine daemon token. An empty environment_id with a machine token requests a machine-scoped executor: its executor_id is exec_<machine_id>, stable across refreshes, and the JWT carries machine_id and daemon_token_id."""
@@ -816,6 +821,10 @@ class ExecutorHeartbeatParams(TypedDict):
     active_sessions: list[str]
     load: NotRequired[ExecutorLoad]
 
+class ExecutorTokenRefreshParams(TypedDict):
+    "Params object of executor.token.refresh."
+    token: str
+
 class ExecutorCapabilitiesUpdateParams(TypedDict):
     "Params object of executor.capabilities.update."
     capabilities: Capabilities
@@ -1082,6 +1091,7 @@ class MethodSpec:
 
 METHOD_EXECUTOR_REGISTER = "executor.register"
 METHOD_EXECUTOR_HEARTBEAT = "executor.heartbeat"
+METHOD_EXECUTOR_TOKEN_REFRESH = "executor.token.refresh"
 METHOD_EXECUTOR_CAPABILITIES_UPDATE = "executor.capabilities.update"
 METHOD_EXECUTOR_DRAIN = "executor.drain"
 METHOD_EXECUTOR_CLOSE = "executor.close"
@@ -1119,6 +1129,7 @@ METHOD_INTERACTION_CANCEL = "interaction.cancel"
 METHODS: dict[str, MethodSpec] = {
     "executor.register": MethodSpec(name="executor.register", direction="executor-to-harness", kind="request", since="bma.executor.v1", params_type="ExecutorRegisterParams", result_type="ExecutorRegisterResult", capability=None, idempotent_by=None),
     "executor.heartbeat": MethodSpec(name="executor.heartbeat", direction="executor-to-harness", kind="request", since="bma.executor.v1", params_type="ExecutorHeartbeatParams", result_type="ExecutorHeartbeatResult", capability=None, idempotent_by=None),
+    "executor.token.refresh": MethodSpec(name="executor.token.refresh", direction="executor-to-harness", kind="request", since="bma.executor.v1.1", params_type="ExecutorTokenRefreshParams", result_type="ExecutorTokenRefreshResult", capability=None, idempotent_by=None),
     "executor.capabilities.update": MethodSpec(name="executor.capabilities.update", direction="executor-to-harness", kind="notification", since="bma.executor.v1", params_type="ExecutorCapabilitiesUpdateParams", result_type=None, capability=None, idempotent_by=None),
     "executor.drain": MethodSpec(name="executor.drain", direction="harness-to-executor", kind="request", since="bma.executor.v1", params_type="ExecutorDrainParams", result_type="ExecutorDrainResult", capability=None, idempotent_by=None),
     "executor.close": MethodSpec(name="executor.close", direction="bidirectional", kind="notification", since="bma.executor.v1", params_type="ExecutorCloseParams", result_type=None, capability=None, idempotent_by=None),

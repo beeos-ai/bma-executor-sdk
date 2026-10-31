@@ -155,6 +155,27 @@
       }
     },
     {
+      "name": "executor.token.refresh request",
+      "method": "executor.token.refresh",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_token_refresh",
+        "method": "executor.token.refresh",
+        "params": {
+          "token": "eyJhbGciOiJIUzI1NiJ9.e30.c2lnbmF0dXJl"
+        }
+      }
+    },
+    {
+      "name": "executor.token.refresh result",
+      "method": "executor.token.refresh",
+      "kind": "result",
+      "result": {
+        "expires_at": "2026-10-31T12:05:00Z"
+      }
+    },
+    {
       "name": "executor.capabilities.update notification",
       "method": "executor.capabilities.update",
       "kind": "notification",
