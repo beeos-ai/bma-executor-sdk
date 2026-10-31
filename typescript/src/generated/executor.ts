@@ -235,6 +235,8 @@ export interface Cursors {
 /** v1.1 display object. v1 sent a boolean; the server accepts both. */
 export interface DisplayCapability {
   rfb?: boolean
+  /** The machine can host its own desktop for a desktop session (it carries bma-desktop-session, started through process.start). Absent means unknown (an executor that predates the field). */
+  desktop?: boolean
 }
 
 /** Permission decision the executor applied to a tool use. ask means the executor opened an interaction.request for it. */
@@ -295,6 +297,12 @@ export interface ExecutorResume {
   executor_id?: string
   last_connection_id?: string
   active_sessions?: Array<string>
+}
+
+/** executor.token.refresh result: the connection now closes with 4001 at expires_at. */
+export interface ExecutorTokenRefreshResult {
+  /** RFC 3339 time of the new connection deadline. */
+  expires_at: string
 }
 
 /** POST /v1/executors/token body. The bearer is an environment key, or a machine daemon token. An empty environment_id with a machine token requests a machine-scoped executor: its executor_id is exec_<machine_id>, stable across refreshes, and the JWT carries machine_id and daemon_token_id. */
@@ -1046,6 +1054,11 @@ export interface ExecutorHeartbeatParams {
   load?: ExecutorLoad
 }
 
+/** Params object of executor.token.refresh. */
+export interface ExecutorTokenRefreshParams {
+  token: string
+}
+
 /** Params object of executor.capabilities.update. */
 export interface ExecutorCapabilitiesUpdateParams {
   capabilities: Capabilities
@@ -1354,6 +1367,7 @@ export interface InteractionCancelParams {
 export type MethodName =
   | 'executor.register'
   | 'executor.heartbeat'
+  | 'executor.token.refresh'
   | 'executor.capabilities.update'
   | 'executor.drain'
   | 'executor.close'
@@ -1390,6 +1404,7 @@ export type MethodName =
 export type ExecutorToHarnessRequestMethod =
   | 'executor.register'
   | 'executor.heartbeat'
+  | 'executor.token.refresh'
   | 'session.ready'
   | 'session.event'
   | 'session.ended'
@@ -1430,6 +1445,7 @@ export type HarnessToExecutorNotificationMethod = 'executor.close'
 export interface MethodParamsMap {
   'executor.register': ExecutorRegisterParams
   'executor.heartbeat': ExecutorHeartbeatParams
+  'executor.token.refresh': ExecutorTokenRefreshParams
   'executor.capabilities.update': ExecutorCapabilitiesUpdateParams
   'executor.drain': ExecutorDrainParams
   'executor.close': ExecutorCloseParams
@@ -1468,6 +1484,7 @@ export interface MethodParamsMap {
 export interface MethodResultMap {
   'executor.register': ExecutorRegisterResult
   'executor.heartbeat': ExecutorHeartbeatResult
+  'executor.token.refresh': ExecutorTokenRefreshResult
   'executor.drain': ExecutorDrainResult
   'session.assign': SessionAssignResult
   'session.ready': Ack
@@ -1521,6 +1538,14 @@ export const methods: Readonly<Record<MethodName, MethodSpec>> = {
     direction: 'executor-to-harness',
     kind: 'request',
     since: 'bma.executor.v1',
+    capability: null,
+    idempotentBy: null,
+  },
+  'executor.token.refresh': {
+    name: 'executor.token.refresh',
+    direction: 'executor-to-harness',
+    kind: 'request',
+    since: 'bma.executor.v1.1',
     capability: null,
     idempotentBy: null,
   },

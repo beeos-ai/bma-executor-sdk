@@ -91,6 +91,10 @@
       "properties": {
         "rfb": {
           "type": "boolean"
+        },
+        "desktop": {
+          "type": "boolean",
+          "description": "The machine can host its own desktop for a desktop session (it carries bma-desktop-session, started through process.start). Absent means unknown (an executor that predates the field)."
         }
       },
       "required": [],
@@ -332,6 +336,20 @@
         "server_time",
         "lease_ttl_ms",
         "drain"
+      ],
+      "additionalProperties": true
+    },
+    "ExecutorTokenRefreshResult": {
+      "type": "object",
+      "description": "executor.token.refresh result: the connection now closes with 4001 at expires_at.",
+      "properties": {
+        "expires_at": {
+          "type": "string",
+          "description": "RFC 3339 time of the new connection deadline."
+        }
+      },
+      "required": [
+        "expires_at"
       ],
       "additionalProperties": true
     },

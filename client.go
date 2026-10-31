@@ -34,10 +34,14 @@ const (
 	// DefaultToolResultRetryBaseDelay is the first retry backoff for tool.result.
 	DefaultToolResultRetryBaseDelay = 250 * time.Millisecond
 	defaultHeartbeatInterval        = 15 * time.Second
-	defaultLeaseTTL                 = time.Minute
-	maxTrackedToolResults           = 8192
-	maxToolResultRetryDelay         = 10 * time.Second
-	maxFrameBytes                   = 4 << 20
+	defaultReconnectMaxDelay        = 30 * time.Second
+	// tokenRefreshAt is the fraction of a token's lifetime after which the
+	// client sends executor.token.refresh.
+	tokenRefreshAt          = 0.7
+	defaultLeaseTTL         = time.Minute
+	maxTrackedToolResults   = 8192
+	maxToolResultRetryDelay = 10 * time.Second
+	maxFrameBytes           = 4 << 20
 
 	// Artifact upload (v1.1 §6.5).
 	artifactPath         = "/v1/executors/artifacts"
@@ -126,7 +130,10 @@ type Options struct {
 	// a negative value reconnects until Stop.
 	MaxReconnectAttempts int
 	ReconnectBaseDelay   time.Duration
-	Random               func() float64
+	// ReconnectMaxDelay caps the reconnect backoff before jitter. Defaults
+	// to 30s.
+	ReconnectMaxDelay time.Duration
+	Random            func() float64
 	// ToolResultRetryAttempts is the total number of attempts for tool.result,
 	// session.ready and session.ended, including the first. It defaults to 5;
 	// set it to 1 to disable retries.
@@ -295,6 +302,9 @@ func NewClient(options Options) (*Client, error) {
 	}
 	if options.ReconnectBaseDelay <= 0 {
 		options.ReconnectBaseDelay = DefaultReconnectBaseDelay
+	}
+	if options.ReconnectMaxDelay <= 0 {
+		options.ReconnectMaxDelay = defaultReconnectMaxDelay
 	}
 	if options.Random == nil {
 		options.Random = rand.Float64
@@ -816,7 +826,67 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 	c.registered = make(chan struct{})
 	c.mu.Unlock()
 	c.log(LogInfo, "executor registered as "+result.ExecutorID, nil)
+	go c.refreshTokenLoop(conn, token)
 	return nil
+}
+
+// refreshTokenLoop keeps conn open across token lifetimes: at 70% of the
+// current token's lifetime it fetches a new token and sends it with
+// executor.token.refresh. It ends with the connection, or when the harness
+// does not serve the method; the harness then closes with 4001 at expiry and
+// the client reconnects as before. A token without expires_in (StaticToken)
+// is never refreshed.
+func (c *Client) refreshTokenLoop(conn *connection, token ExecutorTokenResponse) {
+	if token.ExpiresIn <= 0 {
+		return
+	}
+	expiry := time.Now().Add(time.Duration(token.ExpiresIn) * time.Second)
+	wait := time.Duration(float64(time.Duration(token.ExpiresIn)*time.Second) * tokenRefreshAt)
+	for {
+		timer := time.NewTimer(wait)
+		select {
+		case <-c.rootCtx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		if c.currentConn() != conn {
+			return
+		}
+		fresh, err := c.fetchToken(c.rootCtx)
+		if err == nil {
+			var result ExecutorTokenRefreshResult
+			err = c.Call(c.rootCtx, MethodExecutorTokenRefresh, ExecutorTokenRefreshParams{Token: fresh.Token}, &result)
+			if err == nil {
+				c.mu.Lock()
+				if c.conn == conn {
+					c.token.Token = fresh.Token
+					c.token.ExpiresIn = fresh.ExpiresIn
+				}
+				c.mu.Unlock()
+				lifetime := time.Duration(fresh.ExpiresIn) * time.Second
+				if fresh.ExpiresIn <= 0 {
+					return
+				}
+				expiry = time.Now().Add(lifetime)
+				wait = time.Duration(float64(lifetime) * tokenRefreshAt)
+				continue
+			}
+			var rpcErr *RPCError
+			if errors.As(err, &rpcErr) && (rpcErr.Code == -32601 || rpcErr.Code == -32012) {
+				c.log(LogInfo, "harness does not refresh executor tokens; reconnecting at expiry", nil)
+				return
+			}
+		}
+		// Retry halfway to the expiry; give up when too little is left and let
+		// the 4001 reconnect take over.
+		remaining := time.Until(expiry)
+		c.log(LogWarn, "executor token refresh failed", err)
+		if remaining < 2*time.Second {
+			return
+		}
+		wait = remaining / 2
+	}
 }
 
 func (c *Client) resumeState() *ExecutorResume {
@@ -1373,17 +1443,23 @@ func (c *Client) scheduleReconnect() {
 		}
 	}
 
+	delay := c.reconnectDelay(attempt)
+	c.log(LogInfo, fmt.Sprintf("reconnecting executor channel in %s", delay), nil)
+	time.AfterFunc(delay, func() { c.reconnect() })
+}
+
+// reconnectDelay is the exponential backoff for attempt, capped at
+// ReconnectMaxDelay, with 50–100% jitter.
+func (c *Client) reconnectDelay(attempt int) time.Duration {
 	shift := attempt
 	if shift > 6 {
 		shift = 6
 	}
 	delay := float64(c.options.ReconnectBaseDelay) * float64(int(1)<<shift)
-	if delay > float64(30*time.Second) {
-		delay = float64(30 * time.Second)
+	if delay > float64(c.options.ReconnectMaxDelay) {
+		delay = float64(c.options.ReconnectMaxDelay)
 	}
-	delay *= 0.5 + c.options.Random()*0.5
-	c.log(LogInfo, fmt.Sprintf("reconnecting executor channel in %s", time.Duration(delay)), nil)
-	time.AfterFunc(time.Duration(delay), func() { c.reconnect() })
+	return time.Duration(delay * (0.5 + c.options.Random()*0.5))
 }
 
 func (c *Client) reconnect() {
