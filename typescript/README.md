@@ -1,26 +1,28 @@
 # @beeos-ai/bma-executor-sdk (TypeScript)
 
+[![npm](https://img.shields.io/npm/v/@beeos-ai/bma-executor-sdk.svg)](https://www.npmjs.com/package/@beeos-ai/bma-executor-sdk)
+
 Executor (`ExecutorClient`), harness (`Harness`) and agent ends of the BMA
-executor protocol `bma.executor.v1.1`, with protocol types generated from the
-BMA contract (`contracts/bma/executor`). Transports: WebSocket, WebSocket over
-a Unix domain socket or Windows named pipe (`unix://`, `npipe://`), in-process.
-Node >= 20.
+Executor Protocol `bma.executor.v1.1` (and `v1`), with the same three parts and
+behavior as the [Go `executor` module](../README.md). Protocol types are
+generated from the contract ([`src/generated/executor.ts`](src/generated/executor.ts),
+snapshot and lock in [`contracts/bma/executor`](../../contracts/bma/executor));
+the runtime is handwritten. Transports: WebSocket, WebSocket over a Unix domain
+socket or Windows named pipe (`unix://`, `npipe://`), in-process.
+
+| | |
+| --- | --- |
+| Version | 0.4.1 (tag `executor-ts/v0.4.1`), see [CHANGELOG](../../CHANGELOG.md) |
+| Protocol | `bma.executor.v1.1` (contract 1.1.0, [`lock.json`](../../contracts/bma/executor/lock.json)) |
+| Node.js | 20 or newer; ESM, depends on `ws` |
+| Integration guide | [docs/executor](../../docs/executor/README.md) ([中文](../../docs/executor/README.zh-CN.md)) |
 
 ```sh
-npm install @beeos-ai/bma-executor-sdk
+npm install @beeos-ai/bma-executor-sdk@0.4.1
 ```
 
-The REST/façade client is the separate
-`@beeos-ai/bma-sdk` package.
-
-## Usage
-
-The executor protocol (`bma.executor.v1.1` and `v1`) for Node.js 20+, with
-the same three parts and behavior as [Go `executor`](..). Protocol
-types are generated from the contract
-([`src/generated/executor.ts`](src/generated/executor.ts), snapshot and lock in
-[`contracts/bma/executor`](../contracts/bma/executor)); the runtime is
-handwritten.
+The REST / façade client is the separate package
+[`@beeos-ai/bma-sdk`](../../typescript).
 
 ### Executor quick start
 
@@ -99,7 +101,7 @@ negotiation, bearer token, close codes) over a Unix domain socket
 (`unix:///path.sock`, 0700 directory, 0600 socket) or a Windows named pipe
 (`npipe:////./pipe/<name>`), as the Go and Python SDKs do. Each start writes a
 fresh local token (`createLocalToken`, 0600); environment keys are never used
-locally (see [`src/executor/local.ts`](src/executor/local.ts)). When the harness
+locally (see [`src/local.ts`](src/local.ts)). When the harness
 dials the executor it also dials the session MCP channels (`session.mcp`).
 
 ### Agent executors
@@ -153,11 +155,11 @@ executor and in-memory platform in one process).
 | `AgentPlatform` | `AgentPlatform` |
 | `*RPCError`, `ErrNotConnected`, `ErrClientStopped`, `ErrSessionEnded`, `ErrToolOutcomeUnknown`, `ErrAssignRejected` | `RpcError`, `NotConnectedError`, `ClientStoppedError`, `SessionEndedError`, `ToolOutcomeUnknownError`, `AssignRejectedError` |
 | `Core` (bash/files/stdio MCP) | not provided |
-| — (TCP WebSocket only) | `Harness.listenLocal` / `listenExecutor` + `Harness.dialExecutor` / `inProcessPair` |
+| `StaticToken("unix://…")`, `ListenUnixSocket` + `Harness.DialExecutor`, `InProcessDialer` | `Harness.listenLocal` / `listenExecutor` + `Harness.dialExecutor` / `inProcessDialer` (named pipes only in TypeScript) |
 
 ### Tests
 
-`npm test` runs, besides the REST tests: the conformance examples against
+`npm test` runs the conformance examples against
 both TS ends ([`test/conformance.test.ts`](test/conformance.test.ts)), executor ↔
 harness over every transport with reconnect and lease
 ([`test/executor.test.ts`](test/executor.test.ts)), the agent capability
@@ -167,5 +169,5 @@ agent ↔ Go platform, TS harness ↔ Go executor; needs Go), and interop with t
 Python SDK over WebSocket on a Unix socket
 ([`test/interop-python.test.ts`](test/interop-python.test.ts): TS executor ↔
 Python harness, Python executor ↔ TS harness; `BMA_PYTHON_SDK=<python dir with
-.venv>`, skipped without it). Go has no Unix-socket dialer yet, so TS ↔ Go
-local-socket interop is pending.
+.venv>`, skipped without it), and TS ↔ Go over a Unix socket
+([`test/interop-go-unix.test.ts`](test/interop-go-unix.test.ts)).
