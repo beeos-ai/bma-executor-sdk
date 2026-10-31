@@ -38,7 +38,7 @@ import {
 } from '../generated/executor.js'
 import { AgentRuntime, type AgentHandler, type AgentHost } from './agent.js'
 import { ClientStoppedError, deferred, NotConnectedError, RequestTimeoutError, RpcError } from './errors.js'
-import { DEFAULT_PROTOCOLS, dialLocal } from './local.js'
+import { DEFAULT_PROTOCOLS } from './local.js'
 import { RpcPeer, type LogLevel, type Logger } from './rpc.js'
 import { dialWebSocket, FrameChannel, type Conn } from './transport.js'
 
@@ -70,7 +70,7 @@ export type Dialer = (target: ChannelTarget) => Promise<Conn>
 
 export type TokenSource = () => Promise<Pick<ExecutorTokenResponse, 'token' | 'ws_url'> & Partial<ExecutorTokenResponse>>
 
-/** A TokenSource for a harness reached directly, typically ws://127.0.0.1. */
+/** A TokenSource for a harness reached directly: ws://127.0.0.1, unix:///path.sock or npipe:////./pipe/<name>. */
 export function staticToken(wsUrl: string, token = ''): TokenSource {
   return async () => ({ token, ws_url: wsUrl })
 }
@@ -90,7 +90,9 @@ export interface WebSocketDialerOptions {
 
 export function channelUrl(rawUrl: string, target: ChannelTarget): string {
   const url = new URL(rawUrl)
-  if (url.protocol !== 'ws:' && url.protocol !== 'wss:') throw new Error('executor channel URL must use ws or wss')
+  if (!['ws:', 'wss:', 'unix:', 'npipe:'].includes(url.protocol)) {
+    throw new Error('executor channel URL must use ws, wss, unix or npipe')
+  }
   if (target.channel === ChannelScope.Mcp) {
     url.searchParams.set('channel', 'mcp')
     url.searchParams.set('session_id', target.sessionId ?? '')
@@ -130,12 +132,6 @@ export function webSocketDialer(options: WebSocketDialerOptions): Dialer {
   }
 }
 
-/** Dials a harness listening on a local socket (Unix domain socket or Windows named pipe). */
-export function localDialer(options: { path: string; token?: string; protocols?: string[] }): Dialer {
-  return (target) =>
-    dialLocal({ ...options, channel: target.channel, sessionId: target.sessionId, serverKey: target.serverKey })
-}
-
 /** What a tool handler returns; the client fills in session_id and tool_call_id. */
 export type ToolResult = Omit<ToolResultParams, 'session_id' | 'tool_call_id'>
 
@@ -156,7 +152,7 @@ export interface ExecutorClientOptions extends Omit<WebSocketDialerOptions, 'env
   environmentKey?: string
   tokenSource?: TokenSource
   capabilities?: Capabilities
-  /** Replaces the WebSocket dialer, for example localDialer or Harness.inProcessDialer. */
+  /** Replaces the WebSocket dialer, for example listenExecutor().dialer or Harness.inProcessDialer. */
   dialer?: Dialer
   /** false for a connection that cannot be redialed (an accepted local connection). */
   reconnect?: boolean

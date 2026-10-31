@@ -47,7 +47,7 @@ import {
   type TurnStartParams,
   type TurnStartResult,
 } from '../generated/executor.js'
-import type { ChannelTarget, Dialer } from './client.js'
+import { channelUrl, type ChannelTarget, type Dialer } from './client.js'
 import {
   AssignRejectedError,
   deferred,
@@ -58,9 +58,9 @@ import {
   ToolOutcomeUnknownError,
   type Deferred,
 } from './errors.js'
-import { DEFAULT_PROTOCOLS, dialLocal, type DialLocalOptions } from './local.js'
+import { DEFAULT_PROTOCOLS, listenHttpLocal, localUrl, refuseUpgrade } from './local.js'
 import { RpcPeer, type LogLevel, type Logger } from './rpc.js'
-import { FrameChannel, inProcessPair, MAX_FRAME_BYTES, webSocketConn, type Conn } from './transport.js'
+import { dialWebSocket, FrameChannel, inProcessPair, MAX_FRAME_BYTES, webSocketConn, type Conn } from './transport.js'
 
 export const DEFAULT_HARNESS_HEARTBEAT_INTERVAL_MS = 15_000
 export const DEFAULT_HARNESS_LEASE_TTL_MS = 60_000
@@ -129,6 +129,14 @@ export interface AcceptOptions {
   channel?: ChannelScope
   sessionId?: string
   serverKey?: string
+  /** @internal Set when the harness dialed the executor: where to dial its MCP channels. */
+  dialBack?: DialBack
+}
+
+/** @internal */
+export interface DialBack {
+  url: string
+  token?: string
 }
 
 export class Harness {
@@ -193,9 +201,7 @@ export class Harness {
    * channel by default, an MCP channel with ?channel=mcp&session_id=&server_key=.
    */
   async handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
-    const refuse = (status: number, message: string) => {
-      socket.end(`HTTP/1.1 ${status} ${message}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
-    }
+    const refuse = (status: number, message: string) => refuseUpgrade(socket, status, message)
     let principal: Principal = {}
     if (this.options.authenticate) {
       try {
@@ -252,9 +258,44 @@ export class Harness {
     }
   }
 
-  /** Dials an executor that listens on a local socket (the local "who dials" inversion). */
-  async dialLocal(options: Omit<DialLocalOptions, 'channel'>): Promise<void> {
-    this.accept(await dialLocal({ protocols: this.options.protocols, ...options, channel: 'control' }), {})
+  /**
+   * Listens on a Unix domain socket or Windows named pipe (\\.\pipe\<name>)
+   * and returns its unix:// or npipe:// URL. Same handler, subprotocols,
+   * authenticate and close codes as listen; set authenticate (for example
+   * bearerAuthenticator with the local token).
+   */
+  async listenLocal(path: string): Promise<{ url: string; close(): Promise<void> }> {
+    const server = createServer((_request, response) => response.writeHead(426).end())
+    this.attach(server)
+    const closeServer = await listenHttpLocal(server, path)
+    return {
+      url: localUrl(path),
+      close: () => {
+        for (const client of this.wss.clients) client.terminate()
+        return closeServer()
+      },
+    }
+  }
+
+  /**
+   * Dials an executor that listens (listenExecutor) at a unix://, npipe:// or
+   * ws:// URL: the local "who dials" inversion. The harness also dials the
+   * MCP channels of that executor's sessions (HarnessSession.mcp).
+   */
+  async dialExecutor(url: string, options: { token?: string } = {}): Promise<void> {
+    const conn = await dialWebSocket(channelUrl(url, { channel: ChannelScope.Control }), {
+      protocols: this.options.protocols,
+      token: options.token,
+    })
+    this.accept(conn, { dialBack: { url, token: options.token } })
+  }
+
+  /** @internal Opens the MCP channel of a session whose executor this harness dialed. */
+  async dialMcp(executor: HarnessExecutor, sessionId: string, serverKey: string): Promise<void> {
+    const dialBack = executor.dialBack!
+    const target: ChannelTarget = { channel: ChannelScope.Mcp, sessionId, serverKey }
+    const conn = await dialWebSocket(channelUrl(dialBack.url, target), { protocols: this.options.protocols, token: dialBack.token })
+    this.accept(conn, { principal: { executorId: executor.id }, ...target })
   }
 
   /** A Dialer for an ExecutorClient in the same process. */
@@ -279,7 +320,7 @@ export class Harness {
       session.attachMcp(options.serverKey, new HarnessMcpChannel(conn))
       return
     }
-    new HarnessConn(this, conn, options.principal ?? {}, `conn_${++this.nextConn}_${randomId(4)}`)
+    new HarnessConn(this, conn, options.principal ?? {}, `conn_${++this.nextConn}_${randomId(4)}`, options.dialBack)
   }
 
   /** Only the executor holding the session may serve its MCP servers. */
@@ -325,6 +366,7 @@ export class HarnessExecutor {
   /** @internal */ draining = false
   /** @internal */ gone = false
   /** @internal */ readonly eventIds = new Map<string, SessionEventResult>()
+  /** @internal */ dialBack?: DialBack
 
   constructor(
     private readonly harness: Harness,
@@ -531,7 +573,10 @@ export class HarnessSession {
       if (this.endReason) throw new SessionEndedError()
       const channel = this.mcpChannels.get(serverKey)
       if (channel) return channel
-      await this.race(this.mcpChanged.promise, signal)
+      const changed = this.mcpChanged.promise
+      // The executor cannot dial a harness that dialed it; open the channel from here.
+      if (this.executor.dialBack) await this.race(this.harness.dialMcp(this.executor, this.id, serverKey), signal)
+      await this.race(changed, signal)
     }
   }
 
@@ -645,6 +690,7 @@ class HarnessConn {
     readonly conn: Conn,
     private readonly principal: Principal,
     private readonly id: string,
+    private readonly dialBack?: DialBack,
   ) {
     this.peer = new RpcPeer(conn, {
       idPrefix: 'h_',
@@ -688,6 +734,7 @@ class HarnessConn {
     executor.capabilities = params.capabilities ?? {}
     executor.environmentId = params.environment_id
     executor.protocol = params.protocol
+    executor.dialBack = this.dialBack
     clearTimeout(executor.leaseTimer)
     executor.leaseTimer = undefined
     this.executor = executor

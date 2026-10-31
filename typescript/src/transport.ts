@@ -1,18 +1,16 @@
 // Transports carry protocol frames unchanged: one JSON-RPC message (control
-// channel) or one raw MCP JSON-RPC message (MCP channel) per frame. Three
-// transports exist: WebSocket (cloud), local stream sockets (Unix domain
-// socket / Windows named pipe, see local.ts) and in-process pairs.
+// channel) or one raw MCP JSON-RPC message (MCP channel) per frame. Two
+// transports exist: WebSocket, over TCP (ws://, wss://) or a local socket
+// (unix://, npipe://, see local.ts), and in-process pairs.
 
-import type { Socket } from 'node:net'
+import { connect } from 'node:net'
 import WebSocket from 'ws'
 
 import { NotConnectedError } from './errors.js'
+import { localSocketPath } from './local.js'
 
 /** Largest frame accepted on any transport (1 MiB), as in the Go SDK. */
 export const MAX_FRAME_BYTES = 1 << 20
-
-/** WebSocket close code a peer reports when the transport dropped without a close frame. */
-export const CLOSE_ABNORMAL = 1006
 
 export interface ConnHandlers {
   message(frame: string): void
@@ -116,15 +114,21 @@ export function webSocketConn(ws: WebSocket): Conn {
   return new WebSocketConn(ws)
 }
 
-/** Dials a WebSocket and resolves once it is open. */
+/**
+ * Dials a WebSocket and resolves once it is open. unix:// and npipe:// URLs
+ * run the same handshake over the local socket; their query is the request's.
+ */
 export function dialWebSocket(
   url: string,
   options: { protocols: string[]; token?: string; maxPayload?: number; signal?: AbortSignal },
 ): Promise<Conn> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url, options.protocols, {
+    const socketPath = localSocketPath(url)
+    const target = socketPath === undefined ? url : `ws://localhost/v1/executors/channel${new URL(url).search}`
+    const ws = new WebSocket(target, options.protocols, {
       headers: options.token ? { Authorization: `Bearer ${options.token}` } : {},
       maxPayload: options.maxPayload ?? MAX_FRAME_BYTES,
+      ...(socketPath === undefined ? {} : { createConnection: () => connect(socketPath) }),
     })
     const onAbort = () => ws.terminate()
     options.signal?.addEventListener('abort', onAbort, { once: true })
@@ -138,104 +142,6 @@ export function dialWebSocket(
     })
     ws.once('error', (error) => reject(new Error(`websocket dial ${url}: ${error.message}`)))
   })
-}
-
-// --- local stream sockets ---------------------------------------------------
-//
-// A stream carries newline-delimited JSON: one frame per line. JSON.stringify
-// never emits a raw newline, and MCP frames are single-line by the MCP stdio
-// rules. Two control lines exist besides frames; neither is a valid JSON-RPC
-// message, so they cannot collide with one:
-//   {"bma_hello":{...}}                    the handshake (local.ts)
-//   {"bma_close":{"code":4004,"reason":""}} a WebSocket-equivalent close code
-
-/** Splits a byte stream into lines, enforcing MAX_FRAME_BYTES per line. */
-export class LineSplitter {
-  private buffer = ''
-
-  push(chunk: string): string[] {
-    this.buffer += chunk
-    const lines = this.buffer.split('\n')
-    this.buffer = lines.pop() ?? ''
-    if (Buffer.byteLength(this.buffer) > MAX_FRAME_BYTES) throw new Error('local frame exceeds 1 MiB')
-    return lines.filter((line) => line.length > 0)
-  }
-
-  rest(): string {
-    const rest = this.buffer
-    this.buffer = ''
-    return rest
-  }
-}
-
-interface CloseLine {
-  bma_close: { code: number; reason?: string }
-}
-
-function closeLine(line: string): CloseLine['bma_close'] | undefined {
-  if (!line.startsWith('{"bma_close"')) return undefined
-  try {
-    return (JSON.parse(line) as CloseLine).bma_close
-  } catch {
-    return undefined
-  }
-}
-
-export function encodeClose(code: number, reason: string): string {
-  return `${JSON.stringify({ bma_close: { code, reason } })}\n`
-}
-
-class StreamConn extends BaseConn {
-  private readonly splitter = new LineSplitter()
-
-  constructor(
-    private readonly socket: Socket,
-    protocol: string,
-    initial: string,
-  ) {
-    super(protocol)
-    socket.setEncoding('utf8')
-    socket.on('data', (chunk: string) => this.consume(chunk))
-    socket.on('close', () => this.closedWith(CLOSE_ABNORMAL, 'local socket closed'))
-    socket.on('error', () => {})
-    if (initial) this.consume(initial)
-    socket.resume()
-  }
-
-  private consume(chunk: string): void {
-    let lines: string[]
-    try {
-      lines = this.splitter.push(chunk)
-    } catch (error) {
-      this.close(1009, (error as Error).message)
-      return
-    }
-    for (const line of lines) {
-      const close = closeLine(line)
-      if (close) {
-        this.closedWith(close.code, close.reason ?? '')
-        this.socket.end()
-        return
-      }
-      this.deliver(line)
-    }
-  }
-
-  send(frame: string): void {
-    if (this.closed || this.socket.destroyed) throw new NotConnectedError()
-    this.socket.write(`${frame}\n`)
-  }
-
-  close(code = 1000, reason = ''): void {
-    if (this.closed) return
-    this.closedWith(code, reason)
-    if (!this.socket.destroyed) this.socket.end(encodeClose(code, reason))
-  }
-}
-
-/** Wraps a connected local socket after the handshake; initial is data read past the hello line. */
-export function streamConn(socket: Socket, protocol: string, initial = ''): Conn {
-  return new StreamConn(socket, protocol, initial)
 }
 
 /**

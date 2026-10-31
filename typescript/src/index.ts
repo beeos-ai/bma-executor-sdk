@@ -9,7 +9,6 @@ export {
   ExecutorClient,
   channelUrl,
   isTerminalCloseCode,
-  localDialer,
   retryableToolResultError,
   staticToken,
   webSocketDialer,
@@ -47,24 +46,21 @@ export {
   type Principal,
 } from './harness.js'
 export {
+  bearerAuthenticator,
   createLocalToken,
   defaultLocalEndpoint,
-  dialLocal,
-  listenLocal,
+  listenExecutor,
+  localSocketPath,
+  localUrl,
   readLocalToken,
   DEFAULT_PROTOCOLS,
-  LocalCloseCode,
-  LocalHandshakeError,
-  type DialLocalOptions,
-  type ListenLocalOptions,
-  type LocalHello,
-  type LocalListener,
+  type ExecutorListener,
+  type ListenExecutorOptions,
 } from './local.js'
 export { type LogEvent, type LogLevel, type Logger } from './rpc.js'
 export {
   dialWebSocket,
   inProcessPair,
-  streamConn,
   webSocketConn,
   FrameChannel,
   MAX_FRAME_BYTES,

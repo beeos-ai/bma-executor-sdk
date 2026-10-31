@@ -1,13 +1,18 @@
 // TypeScript executor end against the TypeScript harness end, over every
-// transport: in-process, WebSocket, and local sockets in both dial directions.
+// transport: in-process, WebSocket over TCP, and WebSocket over a local
+// socket (Unix domain socket / Windows named pipe) in both dial directions.
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import {
+  bearerAuthenticator,
+  channelUrl,
+  ChannelScope,
   Harness,
   JsonRpcErrorCode,
-  listenLocal,
-  localDialer,
+  listenExecutor,
+  localSocketPath,
+  localUrl,
   RpcError,
   staticToken,
   ToolOutcomeUnknownError,
@@ -118,35 +123,52 @@ describe('executor end ↔ harness end', () => {
     }
   })
 
-  test('local socket, executor dials the harness', async () => {
-    const harness = new Harness()
-    const path = await socketPath('h')
-    const listener = await listenLocal({ path, token: 'tok' }, (conn, hello) =>
-      harness.accept(conn, { channel: hello.channel, sessionId: hello.session_id, serverKey: hello.server_key }),
-    )
+  test('local socket (WebSocket over UDS), executor dials the harness', async () => {
+    const harness = new Harness({ authenticate: bearerAuthenticator('tok') })
+    const server = await harness.listenLocal(await socketPath('h'))
+    assert.match(server.url, /^unix:\/\/\//)
+    const dialer = (token: string): Dialer =>
+      webSocketDialer({ environmentId: 'env_test', executor: executorInfo, tokenSource: staticToken(server.url, token) })
     try {
-      await assert.rejects(testExecutor({ dialer: localDialer({ path, token: 'bad' }) }).client.start(), /4401/)
-      await scenario(harness, () => started(testExecutor({ dialer: localDialer({ path, token: 'tok' }) })), true)
+      await assert.rejects(testExecutor({ dialer: dialer('bad') }).client.start(), /HTTP 401/)
+      await scenario(harness, () => started(testExecutor({ dialer: dialer('tok') })), true)
+    } finally {
+      await server.close()
+    }
+  })
+
+  test('local socket (WebSocket over UDS), harness dials the executor', async () => {
+    const harness = new Harness()
+    const listener = await listenExecutor({ path: await socketPath('e'), token: 'tok' })
+    try {
+      await assert.rejects(harness.dialExecutor(listener.url, { token: 'bad' }), /HTTP 401/)
+      const made = testExecutor({ dialer: listener.dialer })
+      const starting = made.client.start()
+      await harness.dialExecutor(listener.url, { token: 'tok' })
+      await starting
+      await scenario(harness, async () => made, true)
     } finally {
       await listener.close()
     }
   })
+})
 
-  test('local socket, harness dials the executor', async () => {
-    const harness = new Harness()
-    const path = await socketPath('e')
-    let resolveClient!: (made: TestExecutor) => void
-    const accepted = new Promise<TestExecutor>((resolve) => (resolveClient = resolve))
-    const listener = await listenLocal({ path, token: 'tok' }, (conn) => {
-      const made = testExecutor({ dialer: async () => conn, reconnect: false })
-      void made.client.start().then(() => resolveClient(made))
-    })
-    try {
-      await harness.dialLocal({ path, token: 'tok' })
-      await scenario(harness, () => accepted, false)
-    } finally {
-      await listener.close()
-    }
+describe('local socket URLs', () => {
+  test('unix:// maps to a socket path and keeps the channel query', () => {
+    assert.equal(localUrl('/tmp/bma/executor.sock'), 'unix:///tmp/bma/executor.sock')
+    assert.equal(localSocketPath('unix:///tmp/bma/executor.sock'), '/tmp/bma/executor.sock')
+    const mcp = channelUrl('unix:///tmp/bma/executor.sock', { channel: ChannelScope.Mcp, sessionId: 's', serverKey: 'k' })
+    assert.equal(localSocketPath(mcp), '/tmp/bma/executor.sock')
+    assert.match(mcp, /\?channel=mcp&session_id=s&server_key=k$/)
+    assert.equal(localSocketPath('ws://127.0.0.1:1/v1/executors/channel'), undefined)
+  })
+
+  // No Windows runner: the named pipe mapping is checked here; the transport is
+  // the same node:net connection a Unix socket uses.
+  test('npipe:// maps to a Windows named pipe path', () => {
+    assert.equal(localUrl('\\\\.\\pipe\\bma-executor-me'), 'npipe:////./pipe/bma-executor-me')
+    assert.equal(localSocketPath('npipe:////./pipe/bma-executor-me'), '\\\\.\\pipe\\bma-executor-me')
+    assert.equal(localSocketPath('npipe:////./pipe/bma-executor-me?channel=mcp'), '\\\\.\\pipe\\bma-executor-me')
   })
 })
 
