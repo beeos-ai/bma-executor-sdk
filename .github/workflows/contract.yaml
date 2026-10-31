@@ -8,6 +8,8 @@ on:
       - 'go/v*'
       - 'ts/v*'
       - 'python/v*'
+  # The tag release workflows run this same check suite before publishing.
+  workflow_call:
 
 permissions:
   contents: read
