@@ -206,6 +206,10 @@ type Client struct {
 	requestHandlers      map[string]func(context.Context, json.RawMessage) (any, error)
 	notificationHandlers map[string]func(json.RawMessage)
 	nextID               uint64
+	// agent is set by ServeAgent; registered is closed and replaced after
+	// every successful executor.register so agent outboxes resend.
+	agent      *agentRuntime
+	registered chan struct{}
 }
 
 // NewClient validates options and returns a disconnected client.
@@ -262,6 +266,7 @@ func NewClient(options Options) (*Client, error) {
 		runningToolCalls:     make(map[string]*runningToolCall),
 		requestHandlers:      make(map[string]func(context.Context, json.RawMessage) (any, error)),
 		notificationHandlers: make(map[string]func(json.RawMessage)),
+		registered:           make(chan struct{}),
 	}, nil
 }
 
@@ -617,12 +622,17 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 	c.mu.Unlock()
 	go c.readLoop(conn)
 
-	params := ExecutorRegisterParams{
-		Protocol:      ProtocolVersion,
-		EnvironmentID: c.options.EnvironmentID,
-		Executor:      c.options.Executor,
-		Capabilities:  c.options.Capabilities,
-		Resume:        c.resumeState(),
+	params := registerParams{
+		ExecutorRegisterParams: ExecutorRegisterParams{
+			Protocol:      ProtocolVersion,
+			EnvironmentID: c.options.EnvironmentID,
+			Executor:      c.options.Executor,
+			Resume:        c.resumeState(),
+		},
+		Capabilities: registerCapabilities{ExecutorCapabilities: c.options.Capabilities},
+	}
+	if c.agent != nil {
+		params.Capabilities.Agent = &c.agent.capability
 	}
 	var result ExecutorRegisterResult
 	if err := c.Call(ctx, MethodExecutorRegister, params, &result); err != nil {
@@ -640,6 +650,8 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 	c.heartbeatInterval = interval
 	c.state = ConnectionStateReady
 	c.reconnectAttempts = 0
+	close(c.registered)
+	c.registered = make(chan struct{})
 	c.mu.Unlock()
 	c.log(LogInfo, "executor registered as "+result.ExecutorID, nil)
 	return nil
@@ -1233,6 +1245,26 @@ func authHeader(token string) http.Header {
 		return nil
 	}
 	return http.Header{"Authorization": []string{"Bearer " + token}}
+}
+
+// registerParams and registerCapabilities add the agent capability to the v1
+// register shape. They go away when generated.go is regenerated from the v1.1
+// contract, whose Capabilities carries Agent.
+type registerParams struct {
+	ExecutorRegisterParams
+	Capabilities registerCapabilities `json:"capabilities"`
+}
+
+type registerCapabilities struct {
+	ExecutorCapabilities
+	Agent *AgentCapability `json:"agent,omitempty"`
+}
+
+// registeredSignal is closed after the next successful executor.register.
+func (c *Client) registeredSignal() <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.registered
 }
 
 func stringPtr(value string) *string {

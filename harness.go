@@ -72,6 +72,9 @@ type HarnessOptions struct {
 	OnSessionStatus func(executor *Executor, params SessionStatusParams)
 	OnToolProgress  func(executor *Executor, params ToolProgressParams)
 	OnLog           func(LogEvent)
+	// Agent receives agent-capability traffic: agent session events,
+	// previews and interactions. nil rejects them as unknown methods.
+	Agent AgentPlatform
 }
 
 // Harness is the harness ("brain") end of the executor protocol: an
@@ -87,6 +90,8 @@ type Harness struct {
 	sessions  map[string]*Session
 	changed   chan struct{}
 	nextConn  atomic.Uint64
+
+	agentLedger agentLedger
 }
 
 // NewHarness returns a harness with defaults applied.
@@ -823,6 +828,9 @@ func (c *harnessConn) handleRequest(id, method string, raw json.RawMessage) {
 }
 
 func (c *harnessConn) dispatch(executor *Executor, id, method string, raw json.RawMessage) (any, *JSONRPCError) {
+	if result, rpcError, handled := c.h.dispatchAgent(c.ctx, executor, method, raw); handled {
+		return result, rpcError
+	}
 	switch method {
 	case MethodExecutorHeartbeat:
 		executor.mu.Lock()
@@ -903,6 +911,9 @@ func (c *harnessConn) dispatch(executor *Executor, id, method string, raw json.R
 func (c *harnessConn) handleNotification(method string, raw json.RawMessage) {
 	executor := c.currentExecutor()
 	if executor == nil {
+		return
+	}
+	if c.h.handleAgentNotification(executor, method, raw) {
 		return
 	}
 	switch method {
