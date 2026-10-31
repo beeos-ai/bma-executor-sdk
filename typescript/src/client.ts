@@ -6,6 +6,7 @@ import {
   ChannelScope,
   ConnectionState,
   JsonRpcErrorCode,
+  methods,
   ProtocolVersion,
   type Ack,
   type Capabilities,
@@ -558,7 +559,7 @@ export class ExecutorClient {
     const agentResult = this.agent?.dispatch(method, params)
     if (agentResult !== undefined) return agentResult
     const handler = this.requestHandlers.get(method)
-    if (!handler) throw new RpcError(JsonRpcErrorCode.MethodNotFound, `unknown method ${method}`)
+    if (!handler) throw unregisteredMethodError(method)
     return handler(params)
   }
 
@@ -705,4 +706,17 @@ function failedToolResult(message: string): ToolResult {
 
 function canceledToolResult(reason: string): ToolResult {
   return { outcome: 'canceled', is_error: false, content: [{ type: 'text', text: reason ? `canceled: ${reason}` : 'canceled' }] }
+}
+
+/**
+ * A contract method behind a capability this executor did not register is
+ * capability_unavailable naming that capability; anything else is
+ * method_not_found.
+ */
+function unregisteredMethodError(method: string): RpcError {
+  const spec = Object.hasOwn(methods, method) ? methods[method as keyof typeof methods] : undefined
+  if (!spec?.capability || spec.direction === 'executor-to-harness') {
+    return new RpcError(JsonRpcErrorCode.MethodNotFound, `unknown method ${method}`)
+  }
+  return new RpcError(JsonRpcErrorCode.CapabilityUnavailable, 'capability_unavailable', { capability: spec.capability })
 }

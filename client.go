@@ -1003,7 +1003,7 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 		handler, ok := c.requestHandlers[method]
 		c.mu.Unlock()
 		if !ok {
-			c.respondError(conn, id, CodeMethodNotFound, "unknown method "+method)
+			c.respondHandlerError(conn, id, unregisteredMethodError(method))
 			return
 		}
 		result, err := handler(context.WithValue(c.rootCtx, requestIDKey{}, id), params)
@@ -1013,6 +1013,19 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 		}
 		c.respondResult(conn, id, result)
 	}
+}
+
+// unregisteredMethodError answers a request no handler serves: a contract
+// method behind a capability this executor did not register is
+// capability_unavailable naming that capability; anything else is
+// method_not_found.
+func unregisteredMethodError(method string) *RPCError {
+	spec, ok := Methods[method]
+	if !ok || spec.Capability == "" || spec.Direction == DirectionExecutorToHarness {
+		return &RPCError{Code: CodeMethodNotFound, Message: "unknown method " + method}
+	}
+	return &RPCError{Code: CodeCapabilityUnavailable, Message: "capability_unavailable",
+		Data: &JSONRPCErrorData{Capability: spec.Capability}}
 }
 
 func (c *Client) dispatchNotification(method string, params json.RawMessage) {
