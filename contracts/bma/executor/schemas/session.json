@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.bma.beeos.ai/schemas/session.json",
+  "title": "BMA executor session types",
+  "description": "Session assignment, readiness, events, and termination.",
+  "$defs": {
+    "SessionMemoryResource": {
+      "type": "object",
+      "description": "A memory store mounted into the session workspace.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "memory_store"
+        },
+        "memory_store_id": {
+          "type": "string"
+        },
+        "mount_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "memory_store_id",
+        "mount_path"
+      ],
+      "additionalProperties": true
+    },
+    "SessionStatus": {
+      "type": "string",
+      "description": "Lifecycle status reported by the executor.",
+      "enum": [
+        "starting",
+        "running",
+        "idle",
+        "stopping",
+        "stopped",
+        "error"
+      ]
+    },
+    "SessionEventType": {
+      "type": "string",
+      "description": "Durable event types an executor may emit. Event names follow Anthropic Managed Agents; the executor must not invent new names. A tool executor emits agent.tool_result only; an agent executor (capability agent) emits every type, shaped as schemas/agent.json AgentEvent.",
+      "enum": [
+        "agent.tool_result",
+        "agent.message",
+        "agent.thinking",
+        "agent.tool_use",
+        "agent.mcp_tool_use",
+        "agent.mcp_tool_result",
+        "session.status_running",
+        "session.status_idle",
+        "session.error"
+      ]
+    },
+    "SessionEvent": {
+      "type": "object",
+      "description": "Durable session event emitted by the executor.",
+      "properties": {
+        "type": {
+          "$ref": "session.json#/$defs/SessionEventType"
+        },
+        "tool_use_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "tool.json#/$defs/ContentBlock"
+          }
+        },
+        "is_error": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "SessionAssignResult": {
+      "type": "object",
+      "description": "session.assign result.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accepted",
+        "session_id"
+      ],
+      "additionalProperties": true
+    },
+    "SessionEventResult": {
+      "type": "object",
+      "description": "session.event result.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "acked_sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Agent sessions: highest contiguous sequence the platform has persisted for the session. A duplicate event is accepted and reports the current value."
+        }
+      },
+      "required": [
+        "accepted",
+        "event_id"
+      ],
+      "additionalProperties": true
+    },
+    "SessionStopResult": {
+      "type": "object",
+      "description": "session.stop result.",
+      "properties": {
+        "stopped": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "stopped"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

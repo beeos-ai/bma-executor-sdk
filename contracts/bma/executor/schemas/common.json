@@ -1,0 +1,344 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.bma.beeos.ai/schemas/common.json",
+  "title": "BMA executor common types",
+  "description": "JSON-RPC envelopes, error codes, leases, limits and shared enums for bma.executor.v1 and bma.executor.v1.1. Object types accept unknown members: both peers ignore them (v1.1 §1.1).",
+  "$defs": {
+    "ProtocolVersion": {
+      "type": "string",
+      "description": "Value of both the WebSocket subprotocol and executor.register protocol. A v1.1 server serves v1 executors and never sends them v1.1 methods.",
+      "enum": [
+        "bma.executor.v1",
+        "bma.executor.v1.1"
+      ],
+      "x-go-names": {
+        "bma.executor.v1": "ProtocolV1",
+        "bma.executor.v1.1": "ProtocolV11"
+      }
+    },
+    "Ack": {
+      "type": "object",
+      "description": "Generic acknowledgement returned by executor RPC methods.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "accepted"
+      ],
+      "additionalProperties": true
+    },
+    "Lease": {
+      "type": "object",
+      "description": "Fencing lease for a session assignment.",
+      "properties": {
+        "token": {
+          "type": "string"
+        },
+        "fencing_token": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "token",
+        "fencing_token"
+      ],
+      "additionalProperties": true
+    },
+    "ConnectionState": {
+      "type": "string",
+      "description": "Executor control channel state machine.",
+      "enum": [
+        "disconnected",
+        "connecting",
+        "registered",
+        "ready",
+        "draining",
+        "closed"
+      ]
+    },
+    "ChannelScope": {
+      "type": "string",
+      "description": "Channels a short-lived executor JWT may open.",
+      "enum": [
+        "control",
+        "mcp"
+      ],
+      "x-go-names": {
+        "control": "ChannelControl",
+        "mcp": "ChannelMCP"
+      }
+    },
+    "ExecutorLoad": {
+      "type": "object",
+      "description": "Advisory executor load reported with executor.heartbeat. The server does not act on it.",
+      "properties": {
+        "cpu_percent": {
+          "type": "number"
+        },
+        "memory_percent": {
+          "type": "number"
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "Limits": {
+      "type": "object",
+      "description": "Limits the executor must enforce, advertised in the v1.1 executor.register result (v1.1 §1.3).",
+      "properties": {
+        "max_inflight_requests": {
+          "type": "integer",
+          "x-go-type": "int"
+        },
+        "max_concurrent_process_reads": {
+          "type": "integer",
+          "x-go-type": "int"
+        },
+        "max_process_read_bytes": {
+          "type": "integer",
+          "x-go-type": "int"
+        },
+        "max_process_write_bytes": {
+          "type": "integer",
+          "x-go-type": "int"
+        },
+        "max_processes_per_session": {
+          "type": "integer",
+          "x-go-type": "int"
+        },
+        "max_artifact_bytes": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_inflight_requests",
+        "max_concurrent_process_reads",
+        "max_process_read_bytes",
+        "max_process_write_bytes",
+        "max_processes_per_session",
+        "max_artifact_bytes"
+      ],
+      "additionalProperties": true
+    },
+    "JsonRpcId": {
+      "type": "string",
+      "description": "JSON-RPC request id. Both peers use strings."
+    },
+    "JsonRpcErrorData": {
+      "type": "object",
+      "description": "JSON-RPC error.data. Members are code-specific; unknown members are ignored.",
+      "properties": {
+        "retryable": {
+          "type": "boolean",
+          "description": "Capacity or timeout failure the caller should retry with backoff."
+        },
+        "detail": {
+          "type": "string"
+        },
+        "capability": {
+          "type": "string",
+          "description": "Missing capability for -32012, for example \"tool:read\" or \"process.pty\"."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Machine-readable cause, for example \"spawn_failed\" for process.start."
+        },
+        "terminal_code": {
+          "type": "string",
+          "description": "bma.terminal.v1 error code for a failed terminal.* call."
+        },
+        "expected_sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Agent session.event gap (-32013): the sequence the harness expects next."
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "JsonRpcErrorCode": {
+      "type": "integer",
+      "description": "Executor protocol JSON-RPC error codes. -32011..-32013 are v1.1 additions.",
+      "enum": [
+        -32700,
+        -32600,
+        -32601,
+        -32602,
+        -32603,
+        -32000,
+        -32001,
+        -32002,
+        -32003,
+        -32004,
+        -32005,
+        -32006,
+        -32007,
+        -32008,
+        -32009,
+        -32010,
+        -32011,
+        -32012,
+        -32013
+      ],
+      "x-go-names": {
+        "-32700": "CodeParseError",
+        "-32600": "CodeInvalidRequest",
+        "-32601": "CodeMethodNotFound",
+        "-32602": "CodeInvalidParams",
+        "-32603": "CodeInternalError",
+        "-32000": "CodeUnauthorized",
+        "-32001": "CodeForbidden",
+        "-32002": "CodeNotFound",
+        "-32003": "CodeLeaseExpired",
+        "-32004": "CodeTimeout",
+        "-32005": "CodeCanceled",
+        "-32006": "CodePayloadTooLarge",
+        "-32007": "CodeSessionNotActive",
+        "-32008": "CodeMCPUnavailable",
+        "-32009": "CodeExecutorBusy",
+        "-32010": "CodeUnsupportedProtocol",
+        "-32011": "CodeResourceUnavailable",
+        "-32012": "CodeCapabilityUnavailable",
+        "-32013": "CodeConflict"
+      },
+      "x-bma-enum-names": {
+        "-32700": "ParseError",
+        "-32600": "InvalidRequest",
+        "-32601": "MethodNotFound",
+        "-32602": "InvalidParams",
+        "-32603": "InternalError",
+        "-32000": "Unauthorized",
+        "-32001": "Forbidden",
+        "-32002": "NotFound",
+        "-32003": "LeaseExpired",
+        "-32004": "Timeout",
+        "-32005": "Canceled",
+        "-32006": "PayloadTooLarge",
+        "-32007": "SessionNotActive",
+        "-32008": "McpUnavailable",
+        "-32009": "ExecutorBusy",
+        "-32010": "UnsupportedProtocol",
+        "-32011": "ResourceUnavailable",
+        "-32012": "CapabilityUnavailable",
+        "-32013": "Conflict"
+      }
+    },
+    "JsonRpcError": {
+      "type": "object",
+      "description": "JSON-RPC 2.0 error object.",
+      "properties": {
+        "code": {
+          "$ref": "common.json#/$defs/JsonRpcErrorCode",
+          "x-go-type": "int"
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "common.json#/$defs/JsonRpcErrorData"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": true
+    },
+    "JsonRpcRequest": {
+      "type": "object",
+      "description": "JSON-RPC 2.0 request envelope.",
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "common.json#/$defs/JsonRpcId"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object",
+          "x-go-type": "json.RawMessage"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "additionalProperties": true
+    },
+    "JsonRpcNotification": {
+      "type": "object",
+      "description": "JSON-RPC 2.0 notification envelope (no id).",
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object",
+          "x-go-type": "json.RawMessage"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ],
+      "additionalProperties": true
+    },
+    "JsonRpcSuccessResponse": {
+      "type": "object",
+      "description": "JSON-RPC 2.0 success response envelope.",
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "common.json#/$defs/JsonRpcId"
+        },
+        "result": {
+          "x-go-type": "json.RawMessage"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": true
+    },
+    "JsonRpcErrorResponse": {
+      "type": "object",
+      "description": "JSON-RPC 2.0 error response envelope.",
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "common.json#/$defs/JsonRpcId"
+        },
+        "error": {
+          "$ref": "common.json#/$defs/JsonRpcError"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "error"
+      ],
+      "additionalProperties": true
+    }
+  }
+}
