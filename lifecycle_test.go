@@ -162,7 +162,7 @@ func startTestServer(t *testing.T, session func(ctx context.Context, s *testSess
 				http.Error(w, "authorization", http.StatusUnauthorized)
 				return
 			}
-			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV1}})
+			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV11}})
 			if err != nil {
 				ts.done <- err
 				return
@@ -203,7 +203,7 @@ func registerSession(ctx context.Context, s *testSession, heartbeatMS int64) err
 	return s.write(rpcSuccessEnvelope{
 		JSONRPC: "2.0",
 		ID:      *frame.ID,
-		Result: ExecutorRegisterResult{
+		Result: ExecutorRegisterResult{Protocol: ProtocolV11,
 			ExecutorID:           "exec_test",
 			ConnectionID:         "conn_test",
 			ServerTime:           "2026-10-31T00:00:00Z",
@@ -267,7 +267,7 @@ func TestToolCancelCancelsHandlerAndReportsCanceled(t *testing.T) {
 			SessionID:  "sess_test",
 			ToolCallID: "toolu_cancel",
 			Tool:       ToolNameBash,
-			Input:      mustJSON(ToolInput{Command: "sleep 60"}),
+			Input:      NewToolInput(ToolInput{Command: "sleep 60"}),
 		}); err != nil {
 			return err
 		}
@@ -338,7 +338,7 @@ func TestToolResultRetriesOnBusy(t *testing.T) {
 			SessionID:  "sess_test",
 			ToolCallID: "toolu_retry",
 			Tool:       ToolNameBash,
-			Input:      mustJSON(ToolInput{Command: "true"}),
+			Input:      NewToolInput(ToolInput{Command: "true"}),
 		}); err != nil {
 			return err
 		}
@@ -407,7 +407,7 @@ func TestToolResultReportsLostAfterRetries(t *testing.T) {
 			SessionID:  "sess_test",
 			ToolCallID: "toolu_lost",
 			Tool:       ToolNameBash,
-			Input:      mustJSON(ToolInput{Command: "true"}),
+			Input:      NewToolInput(ToolInput{Command: "true"}),
 		}); err != nil {
 			return err
 		}
@@ -559,7 +559,7 @@ func TestDuplicateToolCallRunsOnce(t *testing.T) {
 			SessionID:  "sess_test",
 			ToolCallID: "toolu_once",
 			Tool:       ToolNameBash,
-			Input:      mustJSON(ToolInput{Command: "true"}),
+			Input:      NewToolInput(ToolInput{Command: "true"}),
 		}
 		if err := writeToolCall(s, "srv_tool_1", params); err != nil {
 			return err
@@ -623,7 +623,7 @@ func TestMCPChannelDialsWithScopedQuery(t *testing.T) {
 				http.Error(w, "channel", http.StatusBadRequest)
 				return
 			}
-			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV1}})
+			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV11}})
 			if err != nil {
 				return
 			}
@@ -701,13 +701,18 @@ func TestMCPChannelURLKeepsExistingQuery(t *testing.T) {
 }
 
 func TestArtifactReferenceHelpers(t *testing.T) {
-	ref := NewArtifactRef("art_1", "out.txt", "text/plain", 12, "sha256:00")
-	want := ArtifactRef{ArtifactID: "art_1", Name: "out.txt", MimeType: "text/plain", SizeBytes: 12, Digest: "sha256:00"}
-	if ref != want {
+	ref := NewArtifactRef("art_1", "out.txt", "text/plain", 12)
+	if ref.ArtifactID != "art_1" || ref.Name != "out.txt" {
+		t.Fatalf("unexpected ref: %+v", ref)
+	}
+	if ref.MimeType != "text/plain" || ref.SizeBytes != 12 {
 		t.Fatalf("unexpected ref: %+v", ref)
 	}
 	block := NewArtifactContentBlock(ref)
-	if block != (ContentBlock{Type: ContentBlockTypeArtifact, ArtifactID: "art_1", MimeType: "text/plain"}) {
+	if block.Type != ContentBlockTypeArtifact || block.ArtifactID != "art_1" {
 		t.Fatalf("unexpected block: %+v", block)
+	}
+	if block.MimeType != "text/plain" {
+		t.Fatalf("unexpected block mime: %+v", block)
 	}
 }

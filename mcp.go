@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 
@@ -58,10 +57,9 @@ func (c *Client) OpenMCPChannel(ctx context.Context, sessionID, serverKey string
 		return nil, err
 	}
 
-	headers := http.Header{"Authorization": []string{"Bearer " + token.Token}}
 	ws, _, err := websocket.Dial(ctx, channelURL, &websocket.DialOptions{
-		HTTPHeader:   headers,
-		Subprotocols: []string{ProtocolV1},
+		HTTPHeader:   authHeader(token.Token),
+		Subprotocols: []string{ProtocolV11},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("bmaexecutor: mcp websocket dial: %w", err)

@@ -43,7 +43,7 @@ func TestClientRegistersAndRunsToolCall(t *testing.T) {
 				http.Error(w, "authorization", http.StatusUnauthorized)
 				return
 			}
-			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV1}})
+			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV11}})
 			if err != nil {
 				serverDone <- err
 				return
@@ -142,13 +142,13 @@ func runExecutorServer(ctx context.Context, ws *websocket.Conn) error {
 	if err := json.Unmarshal(register.Params, &registerParams); err != nil {
 		return err
 	}
-	if registerParams.Protocol != ProtocolV1 || registerParams.EnvironmentID != "env_test" {
+	if registerParams.Protocol != ProtocolV11 || registerParams.EnvironmentID != "env_test" {
 		return errString("unexpected register params")
 	}
 	if err := write(rpcSuccessEnvelope{
 		JSONRPC: "2.0",
 		ID:      *register.ID,
-		Result: ExecutorRegisterResult{
+		Result: ExecutorRegisterResult{Protocol: ProtocolV11,
 			ExecutorID:           "exec_test",
 			ConnectionID:         "conn_test",
 			ServerTime:           "2026-10-30T12:00:00Z",
@@ -165,7 +165,7 @@ func runExecutorServer(ctx context.Context, ws *websocket.Conn) error {
 		SessionID:  "sess_test",
 		ToolCallID: "toolu_test",
 		Tool:       ToolNameBash,
-		Input:      mustJSON(ToolInput{Command: "true"}),
+		Input:      NewToolInput(ToolInput{Command: "true"}),
 	})
 	if err != nil {
 		return err
@@ -214,11 +214,3 @@ func runExecutorServer(ctx context.Context, ws *websocket.Conn) error {
 type errString string
 
 func (e errString) Error() string { return string(e) }
-
-func mustJSON(value any) json.RawMessage {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		panic(err)
-	}
-	return raw
-}
