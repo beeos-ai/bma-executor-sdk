@@ -362,7 +362,7 @@ class Executor:
         sent, so session.ready and MCP channels racing the answer are accepted."""
         params = dict(params)  # type: ignore[assignment]
         if not str(params.get("session_id", "")).strip():
-            raise ValueError("bma_sdk.executor: session_id is required")
+            raise ValueError("bma_executor_sdk: session_id is required")
         if not params.get("work_id"):
             params["work_id"] = f"work_{_random_id(8)}"
         lease = dict(params.get("lease") or {})

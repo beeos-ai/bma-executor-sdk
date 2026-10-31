@@ -18,7 +18,7 @@ import type { Duplex } from 'node:stream'
 
 import { WebSocketServer } from 'ws'
 
-import { ChannelScope, ProtocolVersion } from '../generated/executor.js'
+import { ChannelScope, ProtocolVersion } from './generated/executor.js'
 import type { ChannelTarget, Dialer } from './client.js'
 import { ClientStoppedError } from './errors.js'
 import { MAX_FRAME_BYTES, webSocketConn, type Conn } from './transport.js'

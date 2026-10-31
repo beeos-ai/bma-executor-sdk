@@ -1,5 +1,5 @@
 {
-  "name": "bma-sdk-ts-examples",
+  "name": "bma-executor-sdk-ts-examples",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,6 +8,6 @@
     "agent-minimal": "node agent-minimal/main.mjs"
   },
   "dependencies": {
-    "@beeos-ai/bma-sdk": "file:../../typescript"
+    "@beeos-ai/bma-executor-sdk": "file:.."
   }
 }

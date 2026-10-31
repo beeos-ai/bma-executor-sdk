@@ -35,7 +35,7 @@ import {
   type ToolProgressParams,
   type ToolResultParams,
   type AgentCapability,
-} from '../generated/executor.js'
+} from './generated/executor.js'
 import { AgentRuntime, type AgentHandler, type AgentHost } from './agent.js'
 import { ClientStoppedError, deferred, NotConnectedError, RequestTimeoutError, RpcError } from './errors.js'
 import { DEFAULT_PROTOCOLS } from './local.js'

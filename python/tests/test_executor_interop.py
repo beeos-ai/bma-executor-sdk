@@ -1,5 +1,5 @@
 """Cross-language interop: Python executor <-> Go harness and Python harness
-<-> Go executor, built from go/internal/interop. Skipped without Go."""
+<-> Go executor, built from executor/internal/interop. Skipped without Go."""
 
 from __future__ import annotations
 
@@ -13,10 +13,10 @@ from typing import Any
 
 import pytest
 
-from bma_sdk import executor as bx
+import bma_executor_sdk as bx
 from executor_helpers import RecordingPlatform
 
-GO_DIR = Path(__file__).resolve().parents[2] / "go"
+GO_DIR = Path(__file__).resolve().parents[2]
 
 pytestmark = pytest.mark.skipif(shutil.which("go") is None, reason="Go toolchain not installed")
 

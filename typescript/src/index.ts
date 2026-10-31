@@ -1,9 +1,9 @@
-// @beeos-ai/bma-sdk/executor: the BMA executor protocol (bma.executor.v1.1
+// @beeos-ai/bma-executor-sdk: the BMA executor protocol (bma.executor.v1.1
 // and v1) for Node.js. Protocol types are generated from contracts/bma
 // (src/generated/executor.ts); the executor end, harness end, agent
 // capability and transports are handwritten to match go/executor.
 
-export * from '../generated/executor.js'
+export * from './generated/executor.js'
 export * from './errors.js'
 export {
   ExecutorClient,

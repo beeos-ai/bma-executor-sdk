@@ -129,7 +129,7 @@ async def dial(url: str, token: str, subprotocols: Sequence[str], *, max_size: i
     elif parts.scheme in ("ws", "wss"):
         ws = await connect(url, additional_headers=headers, subprotocols=offered, max_size=max_size)  # type: ignore[arg-type]
     else:
-        raise ValueError(f"bma_sdk.executor: unsupported channel URL scheme {parts.scheme!r}")
+        raise ValueError(f"bma_executor_sdk: unsupported channel URL scheme {parts.scheme!r}")
     return WebSocketConnection(ws)
 
 
@@ -137,7 +137,7 @@ def channel_url(base: str, **query: str) -> str:
     """Return base with the given query members set (used for the MCP channel)."""
     parts = urlsplit(base)
     if parts.scheme not in ("ws", "wss", "unix", "inprocess"):
-        raise ValueError("bma_sdk.executor: channel URL must use ws, wss or unix")
+        raise ValueError("bma_executor_sdk: channel URL must use ws, wss or unix")
     merged = dict(parse_qsl(parts.query))
     merged.update(query)
     return parts._replace(query=urlencode(merged)).geturl()

@@ -11,7 +11,7 @@ import {
   Harness,
   listenExecutor,
   readLocalToken,
-} from '@beeos-ai/bma-sdk/executor'
+} from '@beeos-ai/bma-executor-sdk'
 
 const endpoint = defaultLocalEndpoint()
 

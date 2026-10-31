@@ -1,7 +1,7 @@
 // A local agent served over the executor protocol, with an in-memory platform
 // in the same process: turn.start, a permission interaction, durable events
 // with sequences and ACKs, and session.close. Run: node agent-minimal/main.mjs
-import { ExecutorClient, Harness } from '@beeos-ai/bma-sdk/executor'
+import { ExecutorClient, Harness } from '@beeos-ai/bma-executor-sdk'
 
 // --- the platform: persists events, answers interactions ---
 const events = []

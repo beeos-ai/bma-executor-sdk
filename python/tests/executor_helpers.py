@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from bma_sdk.executor import AgentEventRecord
+from bma_executor_sdk import AgentEventRecord
 
 
 class RecordingPlatform:

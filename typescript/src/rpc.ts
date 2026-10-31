@@ -1,6 +1,6 @@
 // JSON-RPC 2.0 over one Conn, shared by the executor and the harness ends.
 
-import type { JsonRpcError } from '../generated/executor.js'
+import type { JsonRpcError } from './generated/executor.js'
 import { Code, NotConnectedError, RequestTimeoutError, RpcError } from './errors.js'
 import type { Conn } from './transport.js'
 

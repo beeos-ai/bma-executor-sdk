@@ -12,8 +12,8 @@ import asyncio
 import os
 import platform
 
-from bma_sdk.executor import ExecutorClient, static_token
-from bma_sdk.executor.generated import ToolCallParams, ToolResultParams
+from bma_executor_sdk import ExecutorClient, static_token
+from bma_executor_sdk.generated import ToolCallParams, ToolResultParams
 
 
 async def run_bash(call: ToolCallParams) -> ToolResultParams:

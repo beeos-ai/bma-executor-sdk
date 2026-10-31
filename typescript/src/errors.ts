@@ -1,4 +1,4 @@
-import { JsonRpcErrorCode, type JsonRpcError, type JsonRpcErrorData } from '../generated/executor.js'
+import { JsonRpcErrorCode, type JsonRpcError, type JsonRpcErrorData } from './generated/executor.js'
 
 /**
  * A JSON-RPC error from the peer, or one a handler throws to choose the wire

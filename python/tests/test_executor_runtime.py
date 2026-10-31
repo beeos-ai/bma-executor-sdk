@@ -12,8 +12,8 @@ from typing import Any
 
 import pytest
 
-from bma_sdk import executor as bx
-from bma_sdk.executor.generated import JsonRpcErrorCode
+import bma_executor_sdk as bx
+from bma_executor_sdk.generated import JsonRpcErrorCode
 from executor_helpers import RecordingPlatform
 
 EXECUTOR = {"name": "py-test", "os": "linux", "arch": "arm64", "version": "0.1.0"}

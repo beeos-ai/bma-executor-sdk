@@ -1,0 +1,59 @@
+name: Release Python executor SDK
+
+on:
+  push:
+    tags:
+      - 'executor-python/v*'
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Contract and SDK checks
+    uses: ./.github/workflows/contract.yaml
+
+  publish:
+    name: Publish bma-executor-sdk to PyPI
+    needs: checks
+    runs-on: ubuntu-latest
+    environment:
+      name: releases
+      url: https://pypi.org/project/bma-executor-sdk/
+    permissions:
+      contents: read
+      # PyPI Trusted Publishing exchanges this job's OIDC token for an upload
+      # token, so the release never needs a long-lived PyPI API token.
+      id-token: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release tag is on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Verify the tag matches the package version
+        run: |
+          tag_version="${GITHUB_REF_NAME#executor-python/v}"
+          package_version="$(python3 -c 'import tomllib; print(tomllib.load(open("executor/python/pyproject.toml", "rb"))["project"]["version"])')"
+          if [ "$tag_version" != "$package_version" ]; then
+            printf 'tag %s does not match executor/python/pyproject.toml version %s\n' \
+              "$GITHUB_REF_NAME" "$package_version" >&2
+            exit 1
+          fi
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Build sdist and wheel
+        working-directory: executor/python
+        run: uv build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: executor/python/dist/

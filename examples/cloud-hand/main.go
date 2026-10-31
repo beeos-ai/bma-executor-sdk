@@ -16,7 +16,7 @@ import (
 	"os/signal"
 	"runtime"
 
-	bmaexecutor "github.com/beeos-ai/bma-sdks/go/executor"
+	bmaexecutor "github.com/beeos-ai/bma-sdks/executor"
 )
 
 func main() {

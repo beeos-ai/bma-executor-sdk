@@ -20,7 +20,7 @@ import {
   type Dialer,
   type HarnessExecutor,
   type ToolProgressParams,
-} from '../src/executor/index.js'
+} from '../src/index.js'
 import { executorInfo, socketPath, testExecutor, waitFor } from './helpers.js'
 
 type TestExecutor = ReturnType<typeof testExecutor>

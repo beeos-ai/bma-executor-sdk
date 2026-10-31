@@ -13,7 +13,7 @@ import (
 // BMA contract strictly into the SDK types, and runs agent session events
 // through the harness validation.
 func TestAgentConformanceFixtures(t *testing.T) {
-	raw, err := os.ReadFile("../../contracts/bma/executor/examples/conformance.json")
+	raw, err := os.ReadFile("../contracts/bma/executor/examples/conformance.json")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -46,7 +46,7 @@ import {
   type TurnInputParams,
   type TurnStartParams,
   type TurnStartResult,
-} from '../generated/executor.js'
+} from './generated/executor.js'
 import { channelUrl, type ChannelTarget, type Dialer } from './client.js'
 import {
   AssignRejectedError,

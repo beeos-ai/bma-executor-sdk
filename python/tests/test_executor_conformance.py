@@ -16,12 +16,12 @@ from typing import Any, Literal, Union
 
 import pytest
 
-from bma_sdk import executor as bx
-from bma_sdk.executor import agent as bx_agent
-from bma_sdk.executor import generated as g
+import bma_executor_sdk as bx
+from bma_executor_sdk import agent as bx_agent
+from bma_executor_sdk import generated as g
 from executor_helpers import RecordingPlatform
 
-FIXTURES = Path(__file__).resolve().parents[2] / "contracts/bma/executor/examples/conformance.json"
+FIXTURES = Path(__file__).resolve().parents[3] / "contracts/bma/executor/examples/conformance.json"
 
 
 class _NotRequired:

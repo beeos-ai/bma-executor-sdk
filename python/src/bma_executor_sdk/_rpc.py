@@ -12,7 +12,7 @@ from .transport import ChannelClosed, Connection
 
 
 class ExecutorError(Exception):
-    """Base class of bma_sdk.executor errors."""
+    """Base class of bma_executor_sdk errors."""
 
 
 class NotConnectedError(ExecutorError):

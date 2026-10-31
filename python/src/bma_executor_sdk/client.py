@@ -135,9 +135,9 @@ class ExecutorClient:
         # environment_id may be empty: a machine-scoped executor registers
         # without one (executor.register in the v1.1 contract).
         if token_source is None and not environment_key.strip():
-            raise ValueError("bma_sdk.executor: environment_key is required without token_source")
+            raise ValueError("bma_executor_sdk: environment_key is required without token_source")
         if not executor.get("name"):
-            raise ValueError("bma_sdk.executor: executor['name'] is required")
+            raise ValueError("bma_executor_sdk: executor['name'] is required")
         self._environment_id = environment_id
         self._executor = executor
         self._capabilities: Capabilities = capabilities or {}
@@ -189,7 +189,7 @@ class ExecutorClient:
         if self._stopped:
             raise ClientStoppedError()
         if self._peer is not None:
-            raise RuntimeError("bma_sdk.executor: client already started")
+            raise RuntimeError("bma_executor_sdk: client already started")
         self._state = ConnectionState.Connecting
         try:
             token = await self._fetch_token()
@@ -325,7 +325,7 @@ class ExecutorClient:
         """Open the MCP channel for one session.assign mcp_servers entry with a
         fresh executor token; frames are raw MCP JSON-RPC."""
         if not session_id.strip() or not server_key.strip():
-            raise ValueError("bma_sdk.executor: session_id and server_key are required")
+            raise ValueError("bma_executor_sdk: session_id and server_key are required")
         if self._stopped:
             raise ClientStoppedError()
         token = await self._fetch_token()
@@ -352,7 +352,7 @@ class ExecutorClient:
         if self._token_source is not None:
             token = await self._token_source()
             if not token.get("ws_url"):
-                raise ValueError("bma_sdk.executor: token source returned no ws_url")
+                raise ValueError("bma_executor_sdk: token source returned no ws_url")
             return token
         client = self._http_client or httpx.AsyncClient()
         try:

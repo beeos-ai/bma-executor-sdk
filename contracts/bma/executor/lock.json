@@ -1,6 +1,6 @@
 {
   "source_repository": "beeos-ai/beeos-managed-agents",
-  "source_commit": "acf9a128c59fe43047fd710689a62cb10bdeb9c5",
+  "source_commit": "ecc5df4286503dcc71d0b21f488c6f2e7ceb40ec",
   "protocols": [
     "bma.executor.v1",
     "bma.executor.v1.1"
@@ -22,8 +22,8 @@
     "contracts/bma/executor/schemas/workspace.json": "4e8d0ebbab963c9f7f179125a96cb2b89fa79c6a03e3899a1b94c14bed54f5c0"
   },
   "generated": {
-    "go/executor/generated.go": "61d3fe0f4843ad573d29ef8a0cbff28c81b2d9784e0c545edcfb870098c51124",
-    "python/src/bma_sdk/executor/generated.py": "bfee297b213cf0e0a6a4f33dbb6c7983d4bb099d6d97da3cdf14ec6071099e2d",
-    "typescript/src/generated/executor.ts": "54108621183eb583f00f8243ea0eb3fd568d36307e9562d505250132234e0c28"
+    "executor/generated.go": "61d3fe0f4843ad573d29ef8a0cbff28c81b2d9784e0c545edcfb870098c51124",
+    "executor/python/src/bma_executor_sdk/generated.py": "bfee297b213cf0e0a6a4f33dbb6c7983d4bb099d6d97da3cdf14ec6071099e2d",
+    "executor/typescript/src/generated/executor.ts": "54108621183eb583f00f8243ea0eb3fd568d36307e9562d505250132234e0c28"
   }
 }

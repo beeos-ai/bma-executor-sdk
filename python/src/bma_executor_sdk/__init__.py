@@ -1,8 +1,8 @@
 """BMA executor protocol (bma.executor.v1.1): executor, harness and agent ends.
 
-Install with ``pip install 'bma-sdk[executor]'`` (adds ``websockets``).
+Install with ``pip install bma-executor-sdk``.
 Protocol types are generated from the BMA contract into
-:mod:`bma_sdk.executor.generated` (TypedDicts: plain JSON dicts on the wire).
+:mod:`bma_executor_sdk.generated` (TypedDicts: plain JSON dicts on the wire).
 """
 
 from . import generated

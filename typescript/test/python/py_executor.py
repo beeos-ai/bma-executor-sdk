@@ -6,7 +6,7 @@ import asyncio
 import sys
 from typing import Any
 
-from bma_sdk import executor as bx
+import bma_executor_sdk as bx
 
 
 async def main(url: str, token: str) -> None:

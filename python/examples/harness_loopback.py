@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from bma_sdk.executor import ExecutorClient, Harness, static_token
+from bma_executor_sdk import ExecutorClient, Harness, static_token
 from executor_minimal import run_bash
 
 

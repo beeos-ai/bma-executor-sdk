@@ -29,7 +29,7 @@ import {
   type TurnInputParams,
   type TurnStartParams,
   type TurnStartResult,
-} from '../generated/executor.js'
+} from './generated/executor.js'
 import { AgentSessionClosedError, ClientStoppedError, deferred, RpcError, type Deferred } from './errors.js'
 import type { LogLevel } from './rpc.js'
 

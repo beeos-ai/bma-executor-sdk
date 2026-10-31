@@ -6,7 +6,7 @@
 import { exec } from 'node:child_process'
 import os from 'node:os'
 
-import { ExecutorClient } from '@beeos-ai/bma-sdk/executor'
+import { ExecutorClient } from '@beeos-ai/bma-executor-sdk'
 
 const client = new ExecutorClient({
   baseUrl: process.env.BMA_BASE_URL,

@@ -5,7 +5,7 @@ a session (idempotent tool.call, MCP echo, session.stop), prints PASS."""
 import asyncio
 import sys
 
-from bma_sdk import executor as bx
+import bma_executor_sdk as bx
 
 
 async def main(path: str, token: str) -> None:
