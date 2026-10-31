@@ -76,7 +76,7 @@ type Options struct {
 	EnvironmentKey string
 	EnvironmentID  string
 	Executor       ExecutorInfo
-	Capabilities   ExecutorCapabilities
+	Capabilities   Capabilities
 
 	BaseURL string
 	WSURL   string
@@ -107,7 +107,7 @@ type Options struct {
 
 // RPCError is a JSON-RPC error returned by the harness.
 type RPCError struct {
-	Code    JSONRPCErrorCode
+	Code    int
 	Message string
 	Data    *JSONRPCErrorData
 }
@@ -183,7 +183,7 @@ type Client struct {
 
 	mu                   sync.Mutex
 	conn                 *connection
-	state                ConnectionState
+	state                string
 	stopped              bool
 	registerResult       *ExecutorRegisterResult
 	connectionID         string
@@ -325,7 +325,7 @@ func (c *Client) Stop(ctx context.Context, reason string) error {
 }
 
 // State returns the current connection state.
-func (c *Client) State() ConnectionState {
+func (c *Client) State() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.state
@@ -476,10 +476,10 @@ func (c *Client) SessionReady(ctx context.Context, params SessionReadyParams) (A
 
 // SessionEnded reports that every process and MCP server for the session has
 // stopped. The session leaves ActiveSessions after the harness accepts.
-func (c *Client) SessionEnded(ctx context.Context, params SessionEndedParams) (SessionEndedResult, error) {
-	var result SessionEndedResult
+func (c *Client) SessionEnded(ctx context.Context, params SessionEndedParams) (Ack, error) {
+	var result Ack
 	if err := c.Call(ctx, MethodSessionEnded, params, &result); err != nil {
-		return SessionEndedResult{}, err
+		return Ack{}, err
 	}
 	c.mu.Lock()
 	delete(c.sessions, params.SessionID)
@@ -490,11 +490,11 @@ func (c *Client) SessionEnded(ctx context.Context, params SessionEndedParams) (S
 func retryableToolResultError(err error) bool {
 	var rpcErr *RPCError
 	if errors.As(err, &rpcErr) {
-		if rpcErr.Data != nil && rpcErr.Data.Retryable != nil {
-			return *rpcErr.Data.Retryable
+		if rpcErr.Data != nil && rpcErr.Data.Retryable {
+			return true
 		}
 		switch rpcErr.Code {
-		case JSONRPCErrorCodeExecutorBusy, JSONRPCErrorCodeTimeout:
+		case CodeExecutorBusy, CodeTimeout:
 			return true
 		default:
 			return false
@@ -580,7 +580,7 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 	c.setState(ConnectionStateConnecting)
 	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPHeader:   http.Header{"Authorization": []string{"Bearer " + token.Token}},
-		Subprotocols: []string{WSSubprotocol},
+		Subprotocols: []string{ProtocolV1},
 	})
 	if err != nil {
 		return fmt.Errorf("bmaexecutor: websocket dial: %w", err)
@@ -598,7 +598,7 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 	go c.readLoop(conn)
 
 	params := ExecutorRegisterParams{
-		Protocol:      ProtocolVersion,
+		Protocol:      ProtocolV1,
 		EnvironmentID: c.options.EnvironmentID,
 		Executor:      c.options.Executor,
 		Capabilities:  c.options.Capabilities,
@@ -633,10 +633,10 @@ func (c *Client) resumeState() *ExecutorResume {
 	}
 	resume := &ExecutorResume{ActiveSessions: c.sessionIDsLocked()}
 	if c.executorID != "" {
-		resume.ExecutorID = stringPtr(c.executorID)
+		resume.ExecutorID = c.executorID
 	}
 	if c.connectionID != "" {
-		resume.LastConnectionID = stringPtr(c.connectionID)
+		resume.LastConnectionID = c.connectionID
 	}
 	return resume
 }
@@ -747,7 +747,7 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 	case MethodToolCall:
 		var call ToolCallParams
 		if err := json.Unmarshal(params, &call); err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInvalidParams, "invalid tool.call params")
+			c.respondError(conn, id, CodeInvalidParams, "invalid tool.call params")
 			return
 		}
 		callCtx, started := c.beginToolCall(call)
@@ -760,43 +760,43 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 	case MethodToolCancel:
 		var cancel ToolCancelParams
 		if err := json.Unmarshal(params, &cancel); err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInvalidParams, "invalid tool.cancel params")
+			c.respondError(conn, id, CodeInvalidParams, "invalid tool.cancel params")
 			return
 		}
 		c.respondResult(conn, id, c.cancelToolCall(cancel))
 	case MethodSessionAssign:
 		var assign SessionAssignParams
 		if err := json.Unmarshal(params, &assign); err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInvalidParams, "invalid session.assign params")
+			c.respondError(conn, id, CodeInvalidParams, "invalid session.assign params")
 			return
 		}
 		result, err := c.assignSession(assign)
 		if err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInternalError, err.Error())
+			c.respondError(conn, id, CodeInternalError, err.Error())
 			return
 		}
 		c.respondResult(conn, id, result)
 	case MethodSessionStop:
 		var stop SessionStopParams
 		if err := json.Unmarshal(params, &stop); err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInvalidParams, "invalid session.stop params")
+			c.respondError(conn, id, CodeInvalidParams, "invalid session.stop params")
 			return
 		}
 		result, err := c.stopSession(stop)
 		if err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInternalError, err.Error())
+			c.respondError(conn, id, CodeInternalError, err.Error())
 			return
 		}
 		c.respondResult(conn, id, result)
 	case MethodExecutorDrain:
 		var drain ExecutorDrainParams
 		if err := json.Unmarshal(params, &drain); err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInvalidParams, "invalid executor.drain params")
+			c.respondError(conn, id, CodeInvalidParams, "invalid executor.drain params")
 			return
 		}
 		result, err := c.drain(drain)
 		if err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInternalError, err.Error())
+			c.respondError(conn, id, CodeInternalError, err.Error())
 			return
 		}
 		c.respondResult(conn, id, result)
@@ -805,12 +805,12 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 		handler, ok := c.requestHandlers[method]
 		c.mu.Unlock()
 		if !ok {
-			c.respondError(conn, id, JSONRPCErrorCodeMethodNotFound, "unknown method "+method)
+			c.respondError(conn, id, CodeMethodNotFound, "unknown method "+method)
 			return
 		}
 		result, err := handler(c.rootCtx, params)
 		if err != nil {
-			c.respondError(conn, id, JSONRPCErrorCodeInternalError, err.Error())
+			c.respondError(conn, id, CodeInternalError, err.Error())
 			return
 		}
 		c.respondResult(conn, id, result)
@@ -909,8 +909,8 @@ func (c *Client) beginToolCall(params ToolCallParams) (context.Context, bool) {
 		callCtx context.Context
 		cancel  context.CancelFunc
 	)
-	if params.DeadlineMS != nil && *params.DeadlineMS > 0 {
-		callCtx, cancel = context.WithTimeout(c.rootCtx, time.Duration(*params.DeadlineMS)*time.Millisecond)
+	if params.DeadlineMS > 0 {
+		callCtx, cancel = context.WithTimeout(c.rootCtx, time.Duration(params.DeadlineMS)*time.Millisecond)
 	} else {
 		callCtx, cancel = context.WithCancel(c.rootCtx)
 	}
@@ -985,7 +985,7 @@ func failedToolResult(params ToolCallParams, message string) ToolResultParams {
 		ToolCallID: params.ToolCallID,
 		Outcome:    ToolOutcomeFailed,
 		IsError:    true,
-		Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: &text}},
+		Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: text}},
 	}
 }
 
@@ -998,7 +998,7 @@ func canceledToolResult(params ToolCallParams, reason string) ToolResultParams {
 		SessionID:  params.SessionID,
 		ToolCallID: params.ToolCallID,
 		Outcome:    ToolOutcomeCanceled,
-		Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: &text}},
+		Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: text}},
 	}
 }
 
@@ -1015,7 +1015,7 @@ func (c *Client) respondResult(conn *connection, id string, result any) {
 	}
 }
 
-func (c *Client) respondError(conn *connection, id string, code JSONRPCErrorCode, message string) {
+func (c *Client) respondError(conn *connection, id string, code int, message string) {
 	payload, err := json.Marshal(rpcErrorEnvelope{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -1165,7 +1165,7 @@ func (c *Client) failPending(err error) {
 	}
 }
 
-func (c *Client) setState(state ConnectionState) {
+func (c *Client) setState(state string) {
 	c.mu.Lock()
 	c.state = state
 	c.mu.Unlock()
@@ -1184,8 +1184,4 @@ func terminalCloseCode(code int) bool {
 	default:
 		return false
 	}
-}
-
-func stringPtr(value string) *string {
-	return &value
 }

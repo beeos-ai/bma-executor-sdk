@@ -155,14 +155,14 @@ func startTestServer(t *testing.T, session func(ctx context.Context, s *testSess
 				Token:        "jwt_test",
 				ExpiresIn:    300,
 				WSURL:        "ws://" + r.Host + "/v1/executors/channel",
-				ChannelScope: []ChannelScope{ChannelScopeControl, ChannelScopeMcp},
+				ChannelScope: []string{ChannelControl, ChannelMCP},
 			})
 		case "/v1/executors/channel":
 			if got := r.Header.Get("Authorization"); got != "Bearer jwt_test" {
 				http.Error(w, "authorization", http.StatusUnauthorized)
 				return
 			}
-			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{WSSubprotocol}})
+			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV1}})
 			if err != nil {
 				ts.done <- err
 				return
@@ -267,7 +267,7 @@ func TestToolCancelCancelsHandlerAndReportsCanceled(t *testing.T) {
 			SessionID:  "sess_test",
 			ToolCallID: "toolu_cancel",
 			Tool:       ToolNameBash,
-			Input:      ToolInput{Command: stringPtr("sleep 60")},
+			Input:      mustJSON(ToolInput{Command: "sleep 60"}),
 		}); err != nil {
 			return err
 		}
@@ -338,7 +338,7 @@ func TestToolResultRetriesOnBusy(t *testing.T) {
 			SessionID:  "sess_test",
 			ToolCallID: "toolu_retry",
 			Tool:       ToolNameBash,
-			Input:      ToolInput{Command: stringPtr("true")},
+			Input:      mustJSON(ToolInput{Command: "true"}),
 		}); err != nil {
 			return err
 		}
@@ -353,7 +353,7 @@ func TestToolResultRetriesOnBusy(t *testing.T) {
 		if err := s.write(rpcErrorEnvelope{
 			JSONRPC: "2.0",
 			ID:      *first.ID,
-			Error:   JSONRPCError{Code: JSONRPCErrorCodeExecutorBusy, Message: "executor_busy"},
+			Error:   JSONRPCError{Code: CodeExecutorBusy, Message: "executor_busy"},
 		}); err != nil {
 			return err
 		}
@@ -386,7 +386,7 @@ func TestToolResultRetriesOnBusy(t *testing.T) {
 			SessionID:  params.SessionID,
 			ToolCallID: params.ToolCallID,
 			Outcome:    ToolOutcomeSucceeded,
-			Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: stringPtr("ok")}},
+			Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "ok"}},
 		}, nil
 	})
 	startTestClient(t, client)
@@ -407,7 +407,7 @@ func TestToolResultReportsLostAfterRetries(t *testing.T) {
 			SessionID:  "sess_test",
 			ToolCallID: "toolu_lost",
 			Tool:       ToolNameBash,
-			Input:      ToolInput{Command: stringPtr("true")},
+			Input:      mustJSON(ToolInput{Command: "true"}),
 		}); err != nil {
 			return err
 		}
@@ -422,7 +422,7 @@ func TestToolResultReportsLostAfterRetries(t *testing.T) {
 			if err := s.write(rpcErrorEnvelope{
 				JSONRPC: "2.0",
 				ID:      *frame.ID,
-				Error:   JSONRPCError{Code: JSONRPCErrorCodeExecutorBusy, Message: "executor_busy"},
+				Error:   JSONRPCError{Code: CodeExecutorBusy, Message: "executor_busy"},
 			}); err != nil {
 				return err
 			}
@@ -447,7 +447,7 @@ func TestToolResultReportsLostAfterRetries(t *testing.T) {
 			SessionID:  params.SessionID,
 			ToolCallID: params.ToolCallID,
 			Outcome:    ToolOutcomeSucceeded,
-			Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: stringPtr("ok")}},
+			Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "ok"}},
 		}, nil
 	})
 	startTestClient(t, client)
@@ -458,7 +458,7 @@ func TestToolResultReportsLostAfterRetries(t *testing.T) {
 			t.Fatalf("lost tool_call_id = %q", result.params.ToolCallID)
 		}
 		var rpcErr *RPCError
-		if !errors.As(result.err, &rpcErr) || rpcErr.Code != JSONRPCErrorCodeExecutorBusy {
+		if !errors.As(result.err, &rpcErr) || rpcErr.Code != CodeExecutorBusy {
 			t.Fatalf("lost error = %v, want -32009", result.err)
 		}
 	case <-time.After(5 * time.Second):
@@ -517,7 +517,7 @@ func TestSessionReadyAndEnded(t *testing.T) {
 		return s.write(rpcSuccessEnvelope{
 			JSONRPC: "2.0",
 			ID:      *ended.ID,
-			Result:  SessionEndedResult{Accepted: true},
+			Result:  Ack{Accepted: true},
 		})
 	})
 
@@ -559,7 +559,7 @@ func TestDuplicateToolCallRunsOnce(t *testing.T) {
 			SessionID:  "sess_test",
 			ToolCallID: "toolu_once",
 			Tool:       ToolNameBash,
-			Input:      ToolInput{Command: stringPtr("true")},
+			Input:      mustJSON(ToolInput{Command: "true"}),
 		}
 		if err := writeToolCall(s, "srv_tool_1", params); err != nil {
 			return err
@@ -594,7 +594,7 @@ func TestDuplicateToolCallRunsOnce(t *testing.T) {
 			SessionID:  params.SessionID,
 			ToolCallID: params.ToolCallID,
 			Outcome:    ToolOutcomeSucceeded,
-			Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: stringPtr("ok")}},
+			Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "ok"}},
 		}, nil
 	})
 	startTestClient(t, client)
@@ -615,7 +615,7 @@ func TestMCPChannelDialsWithScopedQuery(t *testing.T) {
 				Token:        "jwt_mcp",
 				ExpiresIn:    300,
 				WSURL:        "ws://" + r.Host + "/v1/executors/channel",
-				ChannelScope: []ChannelScope{ChannelScopeMcp},
+				ChannelScope: []string{ChannelMCP},
 			})
 		case "/v1/executors/channel":
 			defer func() { handled <- checkMCPRequest(r) }()
@@ -623,7 +623,7 @@ func TestMCPChannelDialsWithScopedQuery(t *testing.T) {
 				http.Error(w, "channel", http.StatusBadRequest)
 				return
 			}
-			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{WSSubprotocol}})
+			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV1}})
 			if err != nil {
 				return
 			}
@@ -701,18 +701,13 @@ func TestMCPChannelURLKeepsExistingQuery(t *testing.T) {
 }
 
 func TestArtifactReferenceHelpers(t *testing.T) {
-	ref := NewArtifactRef("art_1", "out.txt", "text/plain", 12)
-	if ref.ArtifactID != "art_1" || ref.Name == nil || *ref.Name != "out.txt" {
-		t.Fatalf("unexpected ref: %+v", ref)
-	}
-	if ref.MimeType == nil || *ref.MimeType != "text/plain" || ref.SizeBytes == nil || *ref.SizeBytes != 12 {
+	ref := NewArtifactRef("art_1", "out.txt", "text/plain", 12, "sha256:00")
+	want := ArtifactRef{ArtifactID: "art_1", Name: "out.txt", MimeType: "text/plain", SizeBytes: 12, Digest: "sha256:00"}
+	if ref != want {
 		t.Fatalf("unexpected ref: %+v", ref)
 	}
 	block := NewArtifactContentBlock(ref)
-	if block.Type != ContentBlockTypeArtifact || block.ArtifactID == nil || *block.ArtifactID != "art_1" {
+	if block != (ContentBlock{Type: ContentBlockTypeArtifact, ArtifactID: "art_1", MimeType: "text/plain"}) {
 		t.Fatalf("unexpected block: %+v", block)
-	}
-	if block.MimeType == nil || *block.MimeType != "text/plain" {
-		t.Fatalf("unexpected block mime: %+v", block)
 	}
 }
