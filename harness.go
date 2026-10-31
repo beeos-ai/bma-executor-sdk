@@ -70,6 +70,8 @@ type HarnessOptions struct {
 	OnSessionEvent  func(ctx context.Context, executor *Executor, params SessionEventParams) (SessionEventResult, error)
 	OnSessionStatus func(executor *Executor, params SessionStatusParams)
 	OnToolProgress  func(executor *Executor, params ToolProgressParams)
+	// OnProcessStatus receives the advisory process.status notification.
+	OnProcessStatus func(executor *Executor, params ProcessStatusParams)
 	OnLog           func(LogEvent)
 }
 
@@ -928,6 +930,11 @@ func (c *harnessConn) handleNotification(method string, raw json.RawMessage) {
 		var params ToolProgressParams
 		if json.Unmarshal(raw, &params) == nil && c.h.opts.OnToolProgress != nil {
 			c.h.opts.OnToolProgress(executor, params)
+		}
+	case MethodProcessStatus:
+		var params ProcessStatusParams
+		if json.Unmarshal(raw, &params) == nil && c.h.opts.OnProcessStatus != nil {
+			c.h.opts.OnProcessStatus(executor, params)
 		}
 	case MethodExecutorCapabilitiesUpdate:
 		var params struct {

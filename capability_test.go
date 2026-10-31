@@ -18,7 +18,12 @@ import (
 // in-process transport.
 func attachInProcess(t *testing.T, core *Core, name string, configure func(*Options)) (brain, *Client) {
 	t.Helper()
-	harness := NewHarness(HarnessOptions{})
+	return attachInProcessHarness(t, core, name, HarnessOptions{}, configure)
+}
+
+func attachInProcessHarness(t *testing.T, core *Core, name string, harnessOptions HarnessOptions, configure func(*Options)) (brain, *Client) {
+	t.Helper()
+	harness := NewHarness(harnessOptions)
 	options := Options{
 		Executor: ExecutorInfo{Name: "core-test"}, Capabilities: core.Capabilities(),
 		TokenSource: StaticToken("pipe://", ""), Dial: InProcessDialer(harness, Principal{}),
@@ -373,4 +378,68 @@ func answerRegister(conn Conn) {
 func processAlive(pid int) bool {
 	process, err := os.FindProcess(pid)
 	return err == nil && process.Signal(syscall.Signal(0)) == nil
+}
+
+// A client that stays disconnected past the harness lease gives up its
+// sessions (v1.1 §3.9) and keeps reconnecting.
+func TestClientDropsSessionsAfterLeaseExpiry(t *testing.T) {
+	var dials atomic.Int32
+	first := make(chan Conn, 1)
+	client, err := NewClient(Options{
+		Executor: ExecutorInfo{Name: "lease"}, TokenSource: StaticToken("pipe://", ""),
+		ReconnectBaseDelay: 20 * time.Millisecond, MaxReconnectAttempts: -1,
+		Dial: func(context.Context, ExecutorTokenResponse, string) (Conn, error) {
+			if dials.Add(1) > 1 {
+				return nil, errors.New("harness unreachable")
+			}
+			executorEnd, harnessEnd := Pipe(ProtocolV11)
+			first <- harnessEnd
+			go answerRegisterWithLease(harnessEnd, 50)
+			return executorEnd, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lost := make(chan []string, 1)
+	client.onSessionsLost(func(ids []string) { lost <- ids })
+	ctx := testContext(t)
+	if _, err := client.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Stop(context.Background(), "done") })
+	if _, err := client.assignSession(SessionAssignParams{SessionID: "sess_lease"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = (<-first).Close(1011, "harness restarted")
+	select {
+	case ids := <-lost:
+		if len(ids) != 1 || ids[0] != "sess_lease" || len(client.ActiveSessions()) != 0 {
+			t.Fatalf("lost = %v active = %v", ids, client.ActiveSessions())
+		}
+	case <-ctx.Done():
+		t.Fatal("sessions were kept past the lease")
+	}
+	select {
+	case <-client.Done():
+		t.Fatal("unlimited reconnects stopped")
+	default:
+	}
+}
+
+func answerRegisterWithLease(conn Conn, leaseMS int64) {
+	for {
+		raw, err := conn.Read(context.Background())
+		if err != nil {
+			return
+		}
+		var message rpcInbound
+		if json.Unmarshal(raw, &message) != nil || message.ID == nil || message.Method != MethodExecutorRegister {
+			continue
+		}
+		payload, _ := json.Marshal(rpcSuccessEnvelope{JSONRPC: "2.0", ID: *message.ID, Result: ExecutorRegisterResult{
+			ExecutorID: "exec_1", ConnectionID: "conn", Protocol: ProtocolV11, HeartbeatIntervalMS: 60000, LeaseTTLMS: leaseMS,
+		}})
+		_ = conn.Write(context.Background(), payload)
+	}
 }
