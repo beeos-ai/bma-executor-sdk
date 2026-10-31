@@ -15,6 +15,8 @@ import {
   type ExecutorDrainResult,
   type ExecutorHeartbeatParams,
   type ExecutorHeartbeatResult,
+  type ExecutorTokenRefreshParams,
+  type ExecutorTokenRefreshResult,
   type ExecutorInfo,
   type ExecutorLoad,
   type ExecutorRegisterParams,
@@ -53,6 +55,8 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000
 const MAX_TRACKED_TOOL_CALLS = 8192
 const MAX_TOOL_RESULT_RETRY_DELAY_MS = 10_000
 const MAX_RECONNECT_DELAY_MS = 30_000
+/** Fraction of a token's lifetime after which executor.token.refresh is sent. */
+const TOKEN_REFRESH_AT = 0.7
 
 /** Close codes after which the executor must not reconnect (1008 policy, 4002 revoked, 4003 protocol, 4004 replaced, 4005 drained). */
 export function isTerminalCloseCode(code: number): boolean {
@@ -104,8 +108,14 @@ export function channelUrl(rawUrl: string, target: ChannelTarget): string {
 
 /** The cloud dialer: token bootstrap, then an outbound WebSocket with the bearer token. */
 export function webSocketDialer(options: WebSocketDialerOptions): Dialer {
+  const fetchToken = executorTokenSource(options)
+  return async (target) => dialWithToken(options, await fetchToken(), target)
+}
+
+/** options.tokenSource, or POST {baseUrl}/v1/executors/token with environmentKey. */
+function executorTokenSource(options: WebSocketDialerOptions): TokenSource {
   if (!options.tokenSource && !options.environmentKey?.trim()) throw new Error('environmentKey or tokenSource is required')
-  const fetchToken: TokenSource =
+  return (
     options.tokenSource ??
     (async () => {
       const base = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '')
@@ -122,15 +132,16 @@ export function webSocketDialer(options: WebSocketDialerOptions): Dialer {
       if (!token.token || !token.ws_url) throw new Error('executor token response is missing token or ws_url')
       return token
     })
-  return async (target) => {
-    const token = await fetchToken()
-    const wsUrl = options.wsUrl || token.ws_url
-    if (!wsUrl) throw new Error('token source returned no ws_url')
-    if (target.channel === ChannelScope.Mcp && token.channel_scope?.length && !token.channel_scope.includes(ChannelScope.Mcp)) {
-      throw new Error('executor token does not allow the mcp channel')
-    }
-    return dialWebSocket(channelUrl(wsUrl, target), { protocols: options.protocols ?? DEFAULT_PROTOCOLS, token: token.token })
+  )
+}
+
+function dialWithToken(options: WebSocketDialerOptions, token: Awaited<ReturnType<TokenSource>>, target: ChannelTarget): Promise<Conn> {
+  const wsUrl = options.wsUrl || token.ws_url
+  if (!wsUrl) throw new Error('token source returned no ws_url')
+  if (target.channel === ChannelScope.Mcp && token.channel_scope?.length && !token.channel_scope.includes(ChannelScope.Mcp)) {
+    throw new Error('executor token does not allow the mcp channel')
   }
+  return dialWebSocket(channelUrl(wsUrl, target), { protocols: options.protocols ?? DEFAULT_PROTOCOLS, token: token.token })
 }
 
 /** What a tool handler returns; the client fills in session_id and tool_call_id. */
@@ -163,6 +174,8 @@ export interface ExecutorClientOptions extends Omit<WebSocketDialerOptions, 'env
   heartbeatLoad?: () => ExecutorLoad | undefined
   maxReconnectAttempts?: number
   reconnectBaseDelayMs?: number
+  /** Caps the reconnect backoff before jitter; defaults to 30 s. */
+  reconnectMaxDelayMs?: number
   random?: () => number
   /** Total tool.result attempts including the first; 1 disables retries. */
   toolResultRetryAttempts?: number
@@ -218,6 +231,8 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 export class ExecutorClient {
   private readonly options: ExecutorClientOptions
   private readonly dialer: Dialer
+  /** Set when the client bootstraps tokens itself; such a connection refreshes its token in place. */
+  private readonly tokenSource?: TokenSource
   private peer?: RpcPeer
   private currentState: ConnectionState = ConnectionState.Disconnected
   private stopped = false
@@ -247,6 +262,7 @@ export class ExecutorClient {
     if (!options.executor?.name) throw new Error('executor.name is required')
     this.options = options
     this.dialer = options.dialer ?? webSocketDialer(options)
+    if (!options.dialer) this.tokenSource = executorTokenSource(options)
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS
   }
 
@@ -431,7 +447,9 @@ export class ExecutorClient {
 
   private async connect(): Promise<void> {
     this.currentState = ConnectionState.Connecting
-    const conn = await this.dialer({ channel: ChannelScope.Control })
+    const control = { channel: ChannelScope.Control }
+    const token = this.tokenSource ? await this.tokenSource() : undefined
+    const conn = token ? await dialWithToken(this.options, token, control) : await this.dialer(control)
     if (this.stopped) {
       conn.close(1000, 'stopped')
       throw new ClientStoppedError()
@@ -473,6 +491,33 @@ export class ExecutorClient {
     this.registration = deferred()
     registered.resolve()
     this.log('info', `executor registered as ${result.executor_id}`)
+    if (token?.expires_in) this.scheduleTokenRefresh(peer, token.expires_in * 1000, Date.now() + token.expires_in * 1000)
+  }
+
+  /**
+   * Keeps peer open across token lifetimes: at 70% of the token's lifetime it
+   * fetches a new token and sends executor.token.refresh. A harness without
+   * the method (-32601) closes with 4001 at expiry and the client reconnects.
+   */
+  private scheduleTokenRefresh(peer: RpcPeer, lifetimeMs: number, expiresAt: number, waitMs = lifetimeMs * TOKEN_REFRESH_AT): void {
+    const timer = setTimeout(() => void refresh(), waitMs)
+    timer.unref?.()
+    const refresh = async () => {
+      if (this.stopped || this.peer !== peer || !this.tokenSource) return
+      try {
+        const fresh = await this.tokenSource()
+        await this.call<ExecutorTokenRefreshResult>('executor.token.refresh', { token: fresh.token } satisfies ExecutorTokenRefreshParams)
+        if (fresh.expires_in) this.scheduleTokenRefresh(peer, fresh.expires_in * 1000, Date.now() + fresh.expires_in * 1000)
+      } catch (error) {
+        if (error instanceof RpcError && (error.code === -32601 || error.code === -32012)) {
+          this.log('info', 'harness does not refresh executor tokens; reconnecting at expiry')
+          return
+        }
+        this.log('warn', 'executor token refresh failed', error)
+        const remaining = expiresAt - Date.now()
+        if (remaining >= 2000) this.scheduleTokenRefresh(peer, lifetimeMs, expiresAt, remaining / 2)
+      }
+    }
   }
 
   private disconnected(peer: RpcPeer, code: number): void {
@@ -501,7 +546,8 @@ export class ExecutorClient {
     }
     const attempt = this.reconnectAttempts++
     const base = this.options.reconnectBaseDelayMs ?? DEFAULT_RECONNECT_BASE_DELAY_MS
-    const delay = Math.min(base * 2 ** attempt, MAX_RECONNECT_DELAY_MS) * (0.5 + this.random() * 0.5)
+    const cap = this.options.reconnectMaxDelayMs ?? MAX_RECONNECT_DELAY_MS
+    const delay = Math.min(base * 2 ** attempt, cap) * (0.5 + this.random() * 0.5)
     this.log('info', `reconnecting executor channel in ${Math.round(delay)}ms`)
     setTimeout(() => void this.reconnect(), delay)
   }
