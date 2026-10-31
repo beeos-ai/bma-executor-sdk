@@ -190,6 +190,10 @@ def check_fixtures(report: Report, rest: dict[str, Any], facade: dict[str, Any])
                     report.fail(f"fixtures: {label}: operation has no JSON request body")
                 else:
                     validate(report, label + " request", document, uri, schema, request["json"])
+            if "text" in request:
+                body = resolve(document, operation.get("requestBody", {}))
+                if "application/octet-stream" not in body.get("content", {}):
+                    report.fail(f"fixtures: {label}: operation has no application/octet-stream request body")
             status = str(response["status"])
             responses = operation["responses"]
             declared = responses.get(status) or responses.get(f"{status[0]}XX") or responses.get("default")
