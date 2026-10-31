@@ -18,7 +18,7 @@ Status labels used across these documents:
 - **[Coming]**: defined in the contract but not served yet; capability-gated, so a peer that does not advertise the capability bit never receives those methods.
 - **[Design]**: designed, not implemented.
 
-> Baseline: bma-executor-sdk **0.4.0**, protocol `bma.executor.v1.1` (contract 1.1.0, [`contracts/bma/executor`](../../contracts/bma/executor)).
+> Baseline: bma-executor-sdk **0.4.1** (features available since 0.4.0), protocol `bma.executor.v1.1` (contract 1.1.0, [`contracts/bma/executor`](../../contracts/bma/executor)).
 
 ---
 
@@ -152,7 +152,7 @@ Protocol messages are the same on every transport.
 
 ## 5. Capability status
 
-| Capability | Protocol | Platform | bmad | Go SDK 0.4.0 |
+| Capability | Protocol | Platform | bmad | Go SDK 0.4.x |
 | --- | --- | --- | --- | --- |
 | register/heartbeat/reconnect/drain/4004 | v1 | available | available | available (both ends) |
 | `tool.call` (bash, file tools) | v1 | environment path; the machine path does not use `tool.call` | `bash` only | `Core`: bash/read/write/edit/glob/grep |

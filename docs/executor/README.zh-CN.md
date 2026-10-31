@@ -18,7 +18,7 @@
 - **【即将提供】**：契约中已定义、尚未提供服务；按能力位（capability-gated）发布，未声明对应能力位的一方不会收到这些方法。
 - **【设计中】**：只有设计，没有实现。
 
-> 基线：bma-executor-sdk **0.4.0**，协议 `bma.executor.v1.1`（契约 1.1.0，[`contracts/bma/executor`](../../contracts/bma/executor)）。
+> 基线：bma-executor-sdk **0.4.1**（相关功能自 0.4.0 起提供），协议 `bma.executor.v1.1`（契约 1.1.0，[`contracts/bma/executor`](../../contracts/bma/executor)）。
 
 ---
 
@@ -156,7 +156,7 @@ bma-sdks/executor（Go）
 
 ## 5. 能力现状一览
 
-| 能力 | 协议 | 平台 | bmad | Go SDK 0.4.0 |
+| 能力 | 协议 | 平台 | bmad | Go SDK 0.4.x |
 | --- | --- | --- | --- | --- |
 | 注册/心跳/重连/drain/4004 替换 | v1 | 已有 | 已有 | 已有（两端） |
 | `tool.call`（bash、文件工具） | v1 | environment 路径已有；机器路径不用 `tool.call` | 只实现 `bash` | `Core`：bash/read/write/edit/glob/grep |
