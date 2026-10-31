@@ -44,6 +44,9 @@ func serveFakeMCP() {
 			var params MCPToolsCallParams
 			_ = json.Unmarshal(request.Params, &params)
 			text := fmt.Sprintf("echo:%v pid:%d", params.Arguments["text"], os.Getpid())
+			if params.Name == "env" {
+				text = strings.Join(os.Environ(), "\n")
+			}
 			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}}
 		default:
 			result = map[string]any{}
