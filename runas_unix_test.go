@@ -88,7 +88,7 @@ func TestCoreRunAsRunsEveryWorkloadAsTheWorkloadUser(t *testing.T) {
 	if err := channel.Write(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"id"}}`)); err != nil {
 		t.Fatal(err)
 	}
-	if frame, err := channel.Read(ctx); err != nil || !strings.Contains(string(frame), "uid:65534 gid:65534") {
+	if frame, err := channel.Read(ctx); err != nil || !strings.Contains(string(frame), "uid:65534 gid:65534 user:workload logname:workload") {
 		t.Fatalf("stdio MCP identity = %s err %v", frame, err)
 	}
 }

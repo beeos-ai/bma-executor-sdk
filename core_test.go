@@ -50,7 +50,7 @@ func serveFakeMCP() {
 			case "env":
 				text = strings.Join(os.Environ(), "\n")
 			case "id":
-				text = fmt.Sprintf("uid:%d gid:%d", os.Getuid(), os.Getgid())
+				text = fmt.Sprintf("uid:%d gid:%d user:%s logname:%s", os.Getuid(), os.Getgid(), os.Getenv("USER"), os.Getenv("LOGNAME"))
 			}
 			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}}
 		default:

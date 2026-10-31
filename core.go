@@ -1169,6 +1169,12 @@ func (c *Core) runMCPOnce(client *Client, session *CoreSession, server MCPServer
 			values[name] = value
 		}
 	}
+	// Under RunAs the server's identity variables are the workload's, not
+	// the executor's (HOME stays uninherited, as without RunAs).
+	if runAs := c.opts.RunAs; runAs != nil {
+		setOrDrop(values, "USER", runAs.User)
+		setOrDrop(values, "LOGNAME", runAs.User)
+	}
 	for name, value := range transport.Env {
 		values[name] = value
 	}
