@@ -215,6 +215,36 @@ describe('agent capability', () => {
     }
   })
 
+  test('an unregistered contract method is capability_unavailable; an unknown method is method_not_found', async () => {
+    const harness = new Harness({})
+    const client = new ExecutorClient({ environmentId: 'env_test', executor: executorInfo, dialer: harness.inProcessDialer() })
+    await client.start()
+    try {
+      const executor = await harness.waitExecutor()
+      for (const [method, capability] of [
+        ['terminal.open', 'terminal.enabled'],
+        ['skill.install', 'skills.install'],
+        ['workspace.backup', 'workspace.backup'],
+        ['turn.start', 'agent'],
+      ] as const) {
+        await assert.rejects(
+          executor.call(method, {}),
+          (error: unknown) =>
+            error instanceof RpcError &&
+            error.code === JsonRpcErrorCode.CapabilityUnavailable &&
+            error.data?.capability === capability,
+          method,
+        )
+      }
+      await assert.rejects(
+        executor.call('vendor.unknown', {}),
+        (error: unknown) => error instanceof RpcError && error.code === JsonRpcErrorCode.MethodNotFound,
+      )
+    } finally {
+      client.stop()
+    }
+  })
+
   test('the harness rejects a sequence gap with expected_sequence and turn.start without the capability', async () => {
     const platform = new MemoryPlatform()
     const harness = new Harness({ agent: platform })
