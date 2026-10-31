@@ -52,6 +52,9 @@ func exitStatus(state *os.ProcessState) (int, string) {
 	return state.ExitCode(), ""
 }
 
-func startPTY(*exec.Cmd) (*os.File, error) {
+// setCredential is never reached: NewCore rejects CoreOptions.RunAs here.
+func setCredential(*exec.Cmd, *RunAs) {}
+
+func startPTY(*exec.Cmd, *RunAs) (*os.File, error) {
 	return nil, errors.New("io_mode=pty is not supported on windows")
 }
