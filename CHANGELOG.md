@@ -1,5 +1,31 @@
 # Changelog
 
+## bma-executor-sdk v0.4.2
+
+Released 2026-10-31 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.2) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.2) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.2).
+
+Go tag `executor/v0.4.2`, npm `@beeos-ai/bma-executor-sdk@0.4.2`, PyPI
+`bma-executor-sdk` 0.4.2 (tag `executor-python/v0.4.2`).
+
+### Security fixes (Go `Core`)
+
+- **stdio MCP servers get only their configured env.** An
+  environment-origin stdio MCP server now starts with exactly
+  `transport.env` (protocol v1 §8.1); 0.4.0–0.4.1 passed the executor's whole
+  environment minus `DenyEnv`, so host variables such as `HOME`, `BMA_HOME`
+  or unrelated credentials reached the server. Bash tools, processes and
+  terminals are unchanged (base env + `CoreOptions.Env` /
+  `ProcessOptions.Env`, `DenyEnv` filtered).
+- **`secret:` env references are refused.** `session.assign` fails with
+  `-32602 invalid_params` naming the server and variable (never the value)
+  when an environment-origin server's env holds a `secret:` reference, which
+  the executor cannot resolve, instead of handing the literal reference to
+  the server. A loader variable (`LD_PRELOAD`, …) or a `DenyEnv` name in that
+  env is refused the same way, at assign time rather than on every restart.
+
+The TypeScript and Python packages start no processes; they are released at
+0.4.2 to keep the family in lockstep.
+
 ## bma-executor-sdk v0.4.1
 
 Released 2026-10-31 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.1) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.1) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.1).
