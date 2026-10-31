@@ -1,0 +1,394 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.bma.beeos.ai/schemas/mcp.json",
+  "title": "BMA executor MCP types",
+  "description": "Local MCP server configuration and raw MCP JSON-RPC payloads carried by the mcp channel.",
+  "$defs": {
+    "McpConnectionOrigin": {
+      "type": "string",
+      "description": "Who connects the MCP server. environment means the executor starts/connects it; service means the harness connects.",
+      "enum": [
+        "service",
+        "environment"
+      ]
+    },
+    "McpTransportType": {
+      "type": "string",
+      "enum": [
+        "stdio",
+        "http"
+      ]
+    },
+    "McpServerTransport": {
+      "type": "object",
+      "description": "Transport for one MCP server. stdio requires command; http requires url. Fields for the other transport are omitted.",
+      "properties": {
+        "type": {
+          "$ref": "mcp.json#/$defs/McpTransportType"
+        },
+        "command": {
+          "type": "string",
+          "description": "stdio: absolute or allowlisted executable. No shell, no sh -c."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string",
+          "description": "stdio: working directory under the session workspace."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "command_sha256": {
+          "type": "string",
+          "description": "Pins the executable when supplied."
+        },
+        "url": {
+          "type": "string",
+          "description": "http: Streamable HTTP MCP endpoint."
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "McpServerConfig": {
+      "type": "object",
+      "properties": {
+        "server_key": {
+          "type": "string"
+        },
+        "connection_origin": {
+          "$ref": "mcp.json#/$defs/McpConnectionOrigin"
+        },
+        "transport": {
+          "$ref": "mcp.json#/$defs/McpServerTransport"
+        }
+      },
+      "required": [
+        "server_key",
+        "connection_origin",
+        "transport"
+      ],
+      "additionalProperties": false
+    },
+    "McpJsonRpcId": {
+      "type": [
+        "string",
+        "integer"
+      ],
+      "description": "MCP JSON-RPC id.",
+      "x-go-type": "json.RawMessage"
+    },
+    "McpJsonRpcError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {}
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "McpJsonRpcRequest": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "mcp.json#/$defs/McpJsonRpcId"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "additionalProperties": false
+    },
+    "McpJsonRpcNotification": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method"
+      ],
+      "additionalProperties": false
+    },
+    "McpJsonRpcSuccessResponse": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "mcp.json#/$defs/McpJsonRpcId"
+        },
+        "result": {}
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "McpJsonRpcErrorResponse": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "mcp.json#/$defs/McpJsonRpcId"
+        },
+        "error": {
+          "$ref": "mcp.json#/$defs/McpJsonRpcError"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "McpImplementation": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "McpInitializeParams": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "clientInfo": {
+          "$ref": "mcp.json#/$defs/McpImplementation"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "capabilities",
+        "clientInfo"
+      ],
+      "additionalProperties": false
+    },
+    "McpInitializeResult": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "serverInfo": {
+          "$ref": "mcp.json#/$defs/McpImplementation"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "capabilities",
+        "serverInfo"
+      ],
+      "additionalProperties": false
+    },
+    "McpTool": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "name",
+        "inputSchema"
+      ],
+      "additionalProperties": false
+    },
+    "McpToolsListParams": {
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpToolsListResult": {
+      "type": "object",
+      "properties": {
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "mcp.json#/$defs/McpTool"
+          }
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "tools"
+      ],
+      "additionalProperties": false
+    },
+    "McpToolsCallParams": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "name",
+        "arguments"
+      ],
+      "additionalProperties": false
+    },
+    "McpContentBlock": {
+      "type": "object",
+      "description": "MCP tool content block. Large binary content must go to artifact storage.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "text",
+            "image",
+            "resource"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "resource": {}
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "McpToolsCallResult": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "mcp.json#/$defs/McpContentBlock"
+          }
+        },
+        "isError": {
+          "type": "boolean"
+        },
+        "structuredContent": {}
+      },
+      "required": [
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "McpProgressParams": {
+      "type": "object",
+      "properties": {
+        "progressToken": {
+          "type": [
+            "string",
+            "integer"
+          ],
+          "x-go-type": "json.RawMessage"
+        },
+        "progress": {
+          "type": "number"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "progressToken",
+        "progress"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
