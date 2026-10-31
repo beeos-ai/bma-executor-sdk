@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.bma.beeos.ai/schemas/terminal.json",
+  "title": "BMA executor terminal types",
+  "description": "v1.1 terminal.* control methods (machine-scoped executors). PTY bytes never cross the control channel: each terminal.attach makes the executor dial one outbound host WebSocket (subprotocol bma.terminal.v1) that carries exactly one attachment.",
+  "$defs": {
+    "TerminalHost": {
+      "type": "object",
+      "description": "Outbound host socket for one attach. The ticket is a single-use, short-lived bearer credential sent only in the Authorization header, never in the URL.",
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "ticket": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "ticket"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalOpenResult": {
+      "type": "object",
+      "description": "terminal.open result. epoch starts at 1 and increments when the executor recreates the PTY under the same terminal_id; attach is fenced by it.",
+      "properties": {
+        "terminal_id": {
+          "type": "string"
+        },
+        "epoch": {
+          "type": "integer"
+        },
+        "pid": {
+          "type": "integer",
+          "x-go-type": "int"
+        },
+        "rows": {
+          "type": "integer",
+          "x-go-type": "uint16"
+        },
+        "cols": {
+          "type": "integer",
+          "x-go-type": "uint16"
+        },
+        "earliest_seq": {
+          "type": "integer"
+        },
+        "latest_seq": {
+          "type": "integer"
+        },
+        "created_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "epoch",
+        "pid",
+        "rows",
+        "cols",
+        "earliest_seq",
+        "latest_seq",
+        "created_at"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalAttachResult": {
+      "type": "object",
+      "description": "terminal.attach result, returned after the host socket is connected and the attached frame was written on it.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "writer_epoch": {
+          "type": "integer",
+          "x-go-type": "uint64"
+        }
+      },
+      "required": [
+        "accepted",
+        "writer_epoch"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalCloseResult": {
+      "type": "object",
+      "description": "terminal.close result. Idempotent: closing an unknown or closed terminal returns closed=true.",
+      "properties": {
+        "closed": {
+          "type": "boolean"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-go-type": "int"
+        }
+      },
+      "required": [
+        "closed"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalErrorData": {
+      "type": "object",
+      "description": "JSON-RPC error.data of a failed terminal.* call. terminal_code is the bma.terminal.v1 code the harness relays to the attach (for example terminal_writer_busy).",
+      "properties": {
+        "terminal_code": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    }
+  }
+}
