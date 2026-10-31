@@ -399,7 +399,7 @@ func (p *processes) create(session *CoreSession, params ProcessStartParams) (*pr
 			return nil, spawnFailed(err)
 		}
 	}
-	proc, err := spawn(params, cwd, env)
+	proc, err := spawn(params, cwd, env, p.core.opts.RunAs)
 	if err != nil {
 		if release != nil {
 			release()
@@ -462,14 +462,19 @@ func (p *processes) startTransfer(params ProcessStartParams) *process {
 	return proc
 }
 
-func spawn(params ProcessStartParams, cwd string, env []string) (*process, error) {
+func spawn(params ProcessStartParams, cwd string, env []string, runAs *RunAs) (*process, error) {
 	cmd := exec.Command(params.Argv[0], params.Argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = env
 	if params.IOMode == IOModePTY {
-		return spawnPTY(params, cmd)
+		master, err := startPTY(cmd, runAs)
+		if err != nil {
+			return nil, fmt.Errorf("spawn %s on a pty: %w", params.Argv[0], err)
+		}
+		return ptyProcess(params, cmd, master), nil
 	}
 	setProcessGroupID(cmd)
+	setCredential(cmd, runAs)
 	stdoutR, stdoutW, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -534,17 +539,13 @@ func newCommandProcess(id string, cmd *exec.Cmd) *process {
 
 // spawnPTY runs the command on a pseudo-terminal. Output is one stream (the
 // terminal merges stderr), so the process reports stderr "merge".
-func spawnPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
-	master, err := startPTY(cmd)
-	if err != nil {
-		return nil, fmt.Errorf("spawn %s on a pty: %w", params.Argv[0], err)
-	}
+func ptyProcess(params ProcessStartParams, cmd *exec.Cmd, master *os.File) *process {
 	proc := newCommandProcess(params.ProcessID, cmd)
 	proc.stdin, proc.pty = master, true
 	proc.stderrMode = StderrMerge
 	proc.stderr.eof = true
 	go proc.pump(master, func(p *process) *stream { return &p.stdout })
-	return proc, nil
+	return proc
 }
 
 func (p *process) pump(r *os.File, pick func(*process) *stream) {

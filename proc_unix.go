@@ -93,7 +93,21 @@ func signalName(signal syscall.Signal) string {
 // startPTY runs cmd on a new 24x80 pseudo-terminal. The child leads its own
 // session, so its pid is the process group interrupt/terminate signal. The
 // master carries input and output.
-func startPTY(cmd *exec.Cmd) (*os.File, error) {
+func startPTY(cmd *exec.Cmd, runAs *RunAs) (*os.File, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{}
+	setCredential(cmd, runAs)
 	return pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
+}
+
+// setCredential makes cmd run as runAs (nil keeps the executor's identity).
+func setCredential(cmd *exec.Cmd, runAs *RunAs) {
+	if runAs == nil {
+		return
+	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Credential = &syscall.Credential{
+		Uid: runAs.UID, Gid: runAs.GID, Groups: append([]uint32{}, runAs.Groups...),
+	}
 }

@@ -1,5 +1,25 @@
 # Changelog
 
+## bma-executor-sdk v0.4.4
+
+Released 2026-11-01 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.4) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.4) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.4).
+
+Go tag `executor/v0.4.4`, npm `@beeos-ai/bma-executor-sdk@0.4.4`, PyPI
+`bma-executor-sdk` 0.4.4 (tag `executor-python/v0.4.4`).
+
+### Features (Go `Core`)
+
+- `CoreOptions.RunAs` (Unix): a privileged executor runs every bash tool,
+  `process.start` child (pipe and PTY) and stdio MCP server as a separate
+  workload uid/gid with its supplementary groups; bash and process `HOME`/`USER`
+  are the workload's, and a session workspace the core creates is owned by it.
+  In-process file tools (read/write/edit/glob/grep) are refused while `RunAs`
+  is set, because they would run as the executor. bmad uses this so machine
+  workloads cannot read the executor's credentials.
+
+The TypeScript and Python packages start no processes; they are released at
+0.4.4 to keep the family in lockstep.
+
 ## bma-executor-sdk v0.4.3
 
 Released 2026-10-31 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.3) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.3) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.3).

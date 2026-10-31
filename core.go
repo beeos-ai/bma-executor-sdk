@@ -101,11 +101,28 @@ type CoreOptions struct {
 	// dropped from the inherited environment and a request setting one is
 	// rejected. NewCore rejects an Env entry it denies.
 	DenyEnv func(name string) bool
+	// RunAs, when set, is the OS identity every bash tool, process and stdio
+	// MCP server runs as, so a privileged executor (for example root) keeps
+	// its own credentials and state out of the workload's reach. HOME and
+	// USER in bash and process environments are the workload's. File tools
+	// (read/write/edit/glob/grep) run inside the executor and would bypass
+	// that boundary, so they are refused. Unix only.
+	RunAs *RunAs
 	// EndAfterToolCall marks sessions that carry exactly one tool call: the
 	// core ends them (session.ended "completed") after the result is
 	// delivered. BMA's durable selfhost queue assigns such sessions.
 	EndAfterToolCall func(SessionAssignParams) bool
 	OnLog            func(LogEvent)
+}
+
+// RunAs is a workload OS identity (CoreOptions.RunAs).
+type RunAs struct {
+	UID, GID uint32
+	// Groups are the supplementary groups (for example one that may write a
+	// shared session directory); empty means none.
+	Groups []uint32
+	// Home and User replace the executor's HOME and USER.
+	Home, User string
 }
 
 // Handler serves one harness-to-executor request method registered by a
@@ -253,6 +270,9 @@ func NewCore(opts CoreOptions) (*Core, error) {
 	}
 	if opts.DenyEnv == nil {
 		opts.DenyEnv = func(string) bool { return false }
+	}
+	if opts.RunAs != nil && runtime.GOOS == "windows" {
+		return nil, errors.New("bmaexecutor: CoreOptions.RunAs is not supported on windows")
 	}
 	for key := range opts.Env {
 		if opts.DenyEnv(key) {
@@ -469,12 +489,27 @@ func (c *Core) assign(brain string, client *Client, params SessionAssignParams) 
 	c.sessions[key] = session
 	c.mu.Unlock()
 
-	if err := os.MkdirAll(session.workspace, 0o700); err != nil {
+	if err := c.createWorkspace(session.workspace); err != nil {
 		c.stop(key)
 		return SessionAssignResult{}, fmt.Errorf("create workspace: %w", err)
 	}
 	go c.prepare(client, session, params)
 	return SessionAssignResult{Accepted: true, SessionID: params.SessionID}, nil
+}
+
+// createWorkspace creates a missing session workspace, owned by the RunAs
+// identity when set. An existing directory is left as it is.
+func (c *Core) createWorkspace(dir string) error {
+	if _, err := os.Stat(dir); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if c.opts.RunAs != nil {
+		return os.Chown(dir, int(c.opts.RunAs.UID), int(c.opts.RunAs.GID))
+	}
+	return nil
 }
 
 // mcpSecretPrefix marks an env value that references a platform secret. The
@@ -637,16 +672,12 @@ func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams
 	switch params.Tool {
 	case ToolNameBash:
 		result = c.bash(ctx, session, params, input)
-	case ToolNameRead:
-		result, err = c.read(session, input)
-	case ToolNameWrite:
-		result, err = c.write(session, input)
-	case ToolNameEdit:
-		result, err = c.edit(session, input)
-	case ToolNameGlob:
-		result, err = c.glob(session, input)
-	case ToolNameGrep:
-		result, err = c.grep(session, input)
+	case ToolNameRead, ToolNameWrite, ToolNameEdit, ToolNameGlob, ToolNameGrep:
+		if c.opts.RunAs != nil {
+			err = fmt.Errorf("tool %q is unavailable: this executor runs workloads as another OS user; use bash", params.Tool)
+			break
+		}
+		result, err = c.fileTool(session, params.Tool, input)
 	default:
 		err = fmt.Errorf("capability_unavailable: tool %q is not supported", params.Tool)
 	}
@@ -655,6 +686,21 @@ func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams
 	}
 	result.DurationMS = time.Since(started).Milliseconds()
 	return result
+}
+
+func (c *Core) fileTool(session *CoreSession, tool string, input ToolInput) (ToolResultParams, error) {
+	switch tool {
+	case ToolNameRead:
+		return c.read(session, input)
+	case ToolNameWrite:
+		return c.write(session, input)
+	case ToolNameEdit:
+		return c.edit(session, input)
+	case ToolNameGlob:
+		return c.glob(session, input)
+	default:
+		return c.grep(session, input)
+	}
 }
 
 func textResult(isError bool, texts ...string) ToolResultParams {
@@ -739,12 +785,24 @@ func (c *Core) Env(explicit map[string]string) ([]string, error) {
 	for key, value := range c.opts.Env {
 		values[key] = value
 	}
+	if runAs := c.opts.RunAs; runAs != nil {
+		setOrDrop(values, "HOME", runAs.Home)
+		setOrDrop(values, "USER", runAs.User)
+	}
 	env := make([]string, 0, len(values))
 	for key, value := range values {
 		env = append(env, key+"="+value)
 	}
 	sort.Strings(env)
 	return env, nil
+}
+
+func setOrDrop(values map[string]string, key, value string) {
+	if value == "" {
+		delete(values, key)
+		return
+	}
+	values[key] = value
 }
 
 type cappedBuffer struct {
@@ -819,6 +877,7 @@ func (c *Core) runShell(ctx context.Context, session *CoreSession, input ToolInp
 		return shellExecution{}, err
 	}
 	cmd := shellCommand(ctx, input.Command)
+	setCredential(cmd, c.opts.RunAs)
 	cmd.Dir = cwd
 	cmd.Env = env
 	stdout := &cappedBuffer{limit: c.opts.MaxOutputBytes}
@@ -1098,6 +1157,7 @@ func (c *Core) runMCPOnce(client *Client, session *CoreSession, server MCPServer
 	defer cancel()
 	cmd := exec.CommandContext(ctx, command, transport.Args...)
 	setProcessGroup(cmd)
+	setCredential(cmd, c.opts.RunAs)
 	cmd.Dir = dir
 	// v1 §8.1: the host environment is not inherited beyond mcpBaseEnv
 	// (minus DenyEnv names, and functions as the MCP SDKs skip them); the
