@@ -635,9 +635,16 @@ func (c *Core) runMCPOnce(client *Client, session *coreSession, server MCPServer
 			return err
 		}
 	}
-	dir, err := session.resolve(transport.Cwd)
-	if err != nil {
-		return err
+	// The harness chose the command, so an absolute cwd is honored; a
+	// relative one is inside the session workspace.
+	dir := session.workspace
+	if transport.Cwd != nil && *transport.Cwd != "" {
+		dir = *transport.Cwd
+		if !filepath.IsAbs(dir) {
+			if dir, err = session.resolve(transport.Cwd); err != nil {
+				return err
+			}
+		}
 	}
 	ctx, cancel := context.WithCancel(session.ctx)
 	defer cancel()
