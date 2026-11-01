@@ -668,6 +668,14 @@ export const McpTransportType = {
   Http: 'http',
 } as const
 
+/** Package manager for process.start package_install. */
+export type PackageManager = 'apt' | 'pip' | 'npm'
+export const PackageManager = {
+  Apt: 'apt',
+  Pip: 'pip',
+  Npm: 'npm',
+} as const
+
 /** Tool permission mode; always_ask means the harness already resolved approval. */
 export type PermissionMode = 'always_allow' | 'always_ask'
 export const PermissionMode = {
@@ -675,7 +683,7 @@ export const PermissionMode = {
   AlwaysAsk: 'always_ask',
 } as const
 
-/** v1.1 process.* support. pty, file_transfer and git_credentials are additive: the harness only sends the matching process.start fields to an executor that set them, and fails the process explicitly otherwise. */
+/** v1.1 process.* support. pty, file_transfer, package_install and git_credentials are additive: the harness only sends the matching process.start fields to an executor that set them, and fails the process explicitly otherwise. */
 export interface ProcessCapability {
   enabled: boolean
   max_processes?: number
@@ -686,6 +694,8 @@ export interface ProcessCapability {
   file_transfer?: boolean
   /** Accepts process.start git_credentials. */
   git_credentials?: boolean
+  /** Accepts process.start package_install. */
+  package_install?: boolean
 }
 
 /** Replaces argv: the executor moves one file between the machine and the process BMA file endpoint and reports the outcome in ProcessState.file_transfer. Requires process.file_transfer. */
@@ -697,6 +707,12 @@ export interface ProcessFileTransfer {
 /** process.list result. */
 export interface ProcessListResult {
   processes: Array<ProcessState>
+}
+
+/** Replaces argv: the executor installs packages with a fixed command it builds itself, streaming the package manager output as the process output. apt installs from the machine's configured (official) sources with the executor's own privileges; pip (--user) and npm (global under the workload user's ~/.local) run as the workload user. Package names are plain names only: no options, versions, paths or URLs. Requires process.package_install. */
+export interface ProcessPackageInstall {
+  manager: PackageManager
+  packages: Array<string>
 }
 
 /** process.read result. */
@@ -1166,7 +1182,7 @@ export interface ToolProgressParams {
 export interface ProcessStartParams {
   session_id: string
   process_id: string
-  /** Command and arguments (at most 256 entries, 4 KiB each, 16 KiB total). Must be empty when file_transfer is set. */
+  /** Command and arguments (at most 256 entries, 4 KiB each, 16 KiB total). Must be empty when file_transfer or package_install is set. */
   argv: Array<string>
   cwd?: string
   env?: Record<string, string>
@@ -1181,6 +1197,8 @@ export interface ProcessStartParams {
   io_mode?: IOMode
   /** Requires capability process.file_transfer. Excludes argv entries, io_mode and git_credentials. */
   file_transfer?: ProcessFileTransfer
+  /** Requires capability process.package_install. Excludes argv entries, io_mode, file_transfer and git_credentials. */
+  package_install?: ProcessPackageInstall
   /** Installs a per-process Git credential helper for https://github.com that fetches short-lived tokens for this process while it runs. Requires capability process.git_credentials. */
   git_credentials?: boolean
 }

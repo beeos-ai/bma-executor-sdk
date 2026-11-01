@@ -6,13 +6,13 @@ Go module `github.com/beeos-ai/bma-sdks/executor` (package `bmaexecutor`): the e
 
 | | |
 | --- | --- |
-| Version | 0.4.7 (tag `executor/v0.4.7`), see [CHANGELOG](../CHANGELOG.md) |
+| Version | 0.4.8 (tag `executor/v0.4.8`), see [CHANGELOG](../CHANGELOG.md) |
 | Protocol | `bma.executor.v1.1` (contract 1.1.0, [`lock.json`](../contracts/bma/executor/lock.json)) |
 | Go | 1.24 or newer |
 | Integration guide | [docs/executor](../docs/executor/README.md) ([中文](../docs/executor/README.zh-CN.md)) |
 
 ```sh
-go get github.com/beeos-ai/bma-sdks/executor@v0.4.7
+go get github.com/beeos-ai/bma-sdks/executor@v0.4.8
 ```
 
 The REST / façade client is the separate module `github.com/beeos-ai/bma-sdks/go` ([repository README](../README.md)).

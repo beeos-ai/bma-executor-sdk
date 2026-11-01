@@ -1,5 +1,27 @@
 # Changelog
 
+## bma-executor-sdk v0.4.8
+
+Released 2026-11-01 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.8) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.8) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.8).
+
+Go tag `executor/v0.4.8`, npm `@beeos-ai/bma-executor-sdk@0.4.8`, PyPI
+`bma-executor-sdk` 0.4.8 (tag `executor-python/v0.4.8`).
+
+### Features
+
+- Contract (additive): `process.start package_install {manager: apt|pip|npm,
+  packages[]}` and `capabilities.process.package_install`. Generated types in
+  Go, TypeScript and Python.
+- Go `Core`: `ProcessOptions.PackageInstaller` serves it. The core validates
+  the request (manager enum; 1-32 plain package names matching
+  `^[A-Za-z0-9][A-Za-z0-9.+-]{0,127}$`, so no option, version, path, URL or
+  shell syntax; excludes argv, io_mode, file_transfer and git_credentials) and
+  runs the installer's fixed command as a process with stdin closed: output,
+  read, timeout and terminate work as for any process. Only a command the
+  installer marks `Privileged` keeps the executor's identity; everything else
+  runs as `CoreOptions.RunAs`. Without an installer the field is answered
+  with `capability_unavailable` (`process.package_install`).
+
 ## bma-executor-sdk v0.4.7
 
 Released 2026-11-01 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.7) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.7) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.7).
