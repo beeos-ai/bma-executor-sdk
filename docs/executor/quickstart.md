@@ -67,13 +67,13 @@ Not supported yet: stdio MCP / CUA tools through bmad (the platform does not dis
 BMA provisions the selfhost environment and environment key for you; ask your BMA contact.
 
 ```sh
-cd bma-sdks/executor
+cd bma-executor-sdk
 BMA_BASE_URL=https://api.<env>.bma.beeos.ai \
 BMA_ENVIRONMENT_ID=shenv_… BMA_ENVIRONMENT_KEY=… \
 go run ./examples/cloud-hand -work-root ~/bma-work
 ```
 
-Core of [`examples/cloud-hand`](../../executor/examples/cloud-hand/main.go):
+Core of [`examples/cloud-hand`](../../examples/cloud-hand/main.go):
 
 ```go
 core, _ := bmaexecutor.NewCore(bmaexecutor.CoreOptions{WorkRoot: workRoot})
@@ -88,27 +88,27 @@ registered, _ := client.Start(ctx)
 
 The platform dispatches one-shot sessions per work item: `session.assign` → `session.ready` → `tool.call` (`bash`/`read`/`write`/`list_files`) → `tool.result` → `session.ended`. `Core` starts stdio servers listed in `session.assign.mcp_servers[]` with `connection_origin:"environment"` and bridges them to MCP channels (the platform does not send `mcp_servers` yet [Coming]).
 
-Without `Core`, implement execution with `client.OnToolCall(handler)`, kill the process group when the handler's `ctx` is canceled, call `SessionReady` after setup and `SessionEnded` after every child exited (see the [Go executor README](../../executor/README.md#executor-quick-start)).
+Without `Core`, implement execution with `client.OnToolCall(handler)`, kill the process group when the handler's `ctx` is canceled, call `SessionReady` after setup and `SessionEnded` after every child exited (see the [Go executor README](../../README.md#executor-quick-start)).
 
 ## 2. Local brain → local hand → events to the platform
 
 ### 2.1 Local brain drives the local hand (runs offline) [Available]
 
 ```sh
-cd bma-sdks/executor
+cd bma-executor-sdk
 go run ./examples/local-brain -mcp-command "go run ./examples/echo-mcp"
 ```
 
-Flow ([source](../../executor/examples/local-brain/main.go)): the brain serves `Harness` on `127.0.0.1:0` with a per-run token; the executor's `Core` attaches a `Client` with `StaticToken`; the brain runs `WaitExecutor` → `AssignSession` (with a stdio MCP server) → `Ready` → `CallTool(bash)` ×2 → `session.MCP("echo")` raw MCP JSON-RPC → `Stop`. Replace the script with your model loop. Auth and sharing rules: [local connection](local-connection.md). TypeScript: [`harness-loopback`](../../executor/typescript/examples/harness-loopback/main.mjs); Python: [`harness_loopback.py`](../../executor/python/examples/harness_loopback.py).
+Flow ([source](../../examples/local-brain/main.go)): the brain serves `Harness` on `127.0.0.1:0` with a per-run token; the executor's `Core` attaches a `Client` with `StaticToken`; the brain runs `WaitExecutor` → `AssignSession` (with a stdio MCP server) → `Ready` → `CallTool(bash)` ×2 → `session.MCP("echo")` raw MCP JSON-RPC → `Stop`. Replace the script with your model loop. Auth and sharing rules: [local connection](local-connection.md). TypeScript: [`harness-loopback`](../../typescript/examples/harness-loopback/main.mjs); Python: [`harness_loopback.py`](../../python/examples/harness_loopback.py).
 
 ### 2.2 Agent events to the platform [SDK Available; platform Coming]
 
 ```sh
-cd bma-sdks/executor
+cd bma-executor-sdk
 go run ./examples/agentexecutor
 ```
 
-A simulated platform walks the whole lifecycle: `turn.start` → streamed `session.event_delta` and durable `session.event` → `interaction.request` → `interaction.response` → result → `turn.input` → resend by sequence after a dropped connection → `turn.cancel` → `session.close`. You implement `AgentHandler`, see [agent capability](agent-capability.md#6-sdk-usage). TypeScript and Python equivalents: [`agent-minimal`](../../executor/typescript/examples/agent-minimal/main.mjs), [`agent_minimal.py`](../../executor/python/examples/agent_minimal.py).
+A simulated platform walks the whole lifecycle: `turn.start` → streamed `session.event_delta` and durable `session.event` → `interaction.request` → `interaction.response` → result → `turn.input` → resend by sequence after a dropped connection → `turn.cancel` → `session.close`. You implement `AgentHandler`, see [agent capability](agent-capability.md#6-sdk-usage). TypeScript and Python equivalents: [`agent-minimal`](../../typescript/examples/agent-minimal/main.mjs), [`agent_minimal.py`](../../python/examples/agent_minimal.py).
 
 Once the platform implements the agent capability, the same program points its credentials at the platform (machine token); clients subscribe to the platform session event stream (SSE).
 

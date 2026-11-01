@@ -18,7 +18,7 @@
 - **【即将提供】**：契约中已定义、尚未提供服务；按能力位（capability-gated）发布，未声明对应能力位的一方不会收到这些方法。
 - **【设计中】**：只有设计，没有实现。
 
-> 基线：bma-executor-sdk **0.4.8**（相关功能自 0.4.0 起提供），协议 `bma.executor.v1.1`（契约 1.1.0，[`contracts/bma/executor`](../../contracts/bma/executor)）。
+> 基线：bma-executor-sdk **0.4.9**（相关功能自 0.4.0 起提供），协议 `bma.executor.v1.1`（契约 1.1.0，[`contracts/bma/executor`](../../contracts/bma/executor)）。
 
 ---
 
@@ -114,10 +114,10 @@ Desktop 用 SDK 的 executor 端自己当执行端，并完成这台电脑的配
 
 ## 4. SDK 结构
 
-SDK 按协议命名、按角色分模块。Go 是参考实现（`github.com/beeos-ai/bma-sdks/executor`），TypeScript 与 Python 提供同样的三端：
+SDK 按协议命名、按角色分模块。Go 是参考实现（`github.com/beeos-ai/bma-executor-sdk`），TypeScript 与 Python 提供同样的三端：
 
 ```text
-bma-sdks/executor（Go）
+bma-executor-sdk（Go）
 ├── executor 端   Client     token 交换（environment key 或机器 token）、注册、心跳、带 resume 的重连、
 │                            会话、tool.call/cancel、结果重试、产物上传、MCP 通道
 │   └── Core                 与“谁驱动”无关的执行核心：bash、read/write/edit/glob/grep、stdio MCP supervisor、清理、
@@ -126,7 +126,7 @@ bma-sdks/executor（Go）
 └── agent         ServeAgent / AgentHandler（executor 侧），AgentPlatform / StartTurn…（harness 侧）
 ```
 
-| 部件 | Go [`executor`](../../executor) | TypeScript [`@beeos-ai/bma-executor-sdk`](../../executor/typescript) | Python [`bma-executor-sdk`](../../executor/python) |
+| 部件 | Go [`executor`](../../README.md) | TypeScript [`@beeos-ai/bma-executor-sdk`](../../typescript) | Python [`bma-executor-sdk`](../../python) |
 | --- | --- | --- | --- |
 | executor 端（`Client` / `ExecutorClient`） | 【已有】 | 【已有】 | 【已有】 |
 | 执行核心 `Core`（bash、文件工具、stdio MCP） | 【已有】 | 未提供 | 未提供 |

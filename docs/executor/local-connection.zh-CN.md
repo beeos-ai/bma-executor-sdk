@@ -56,7 +56,7 @@ local, _ := bmaexecutor.NewClient(bmaexecutor.Options{
 _ = core.Attach("local", local)
 ```
 
-可运行版本见 [`executor/examples/local-brain`](../../executor/examples/local-brain/main.go)（`cd executor && go run ./examples/local-brain`）。改用 Unix socket 时，把同一个 `Harness` 挂到 `net.Listen("unix", path)`，执行端用 `StaticToken("unix://"+path, localToken)`；默认 dialer（与 `UnixSocketDialer(path)` 一样）在 socket 上跑 WebSocket。Python 的 [`harness_loopback.py --unix PATH`](../../executor/python/examples/harness_loopback.py) 做的是同一件事。
+可运行版本见 [`examples/local-brain`](../../examples/local-brain/main.go)（`go run ./examples/local-brain`）。改用 Unix socket 时，把同一个 `Harness` 挂到 `net.Listen("unix", path)`，执行端用 `StaticToken("unix://"+path, localToken)`；默认 dialer（与 `UnixSocketDialer(path)` 一样）在 socket 上跑 WebSocket。Python 的 [`harness_loopback.py --unix PATH`](../../python/examples/harness_loopback.py) 做的是同一件事。
 
 ### 1.2 鉴权
 
@@ -114,7 +114,7 @@ go harness.DialExecutor(ctx, sockPath, localToken) // 服务该连接直到关�
 executor, _ := harness.WaitExecutor(ctx)
 ```
 
-TypeScript：[`executor/typescript/examples/harness-loopback`](../../executor/typescript/examples/harness-loopback/main.mjs)（`listenExecutor` + `dialExecutor`，Unix socket 或 named pipe）。
+TypeScript：[`typescript/examples/harness-loopback`](../../typescript/examples/harness-loopback/main.mjs)（`listenExecutor` + `dialExecutor`，Unix socket 或 named pipe）。
 
 Windows named pipe（Go）：调用相同，把 `ListenUnixSocket` 换成 `ListenNamedPipe(name, token)`，本机脑用 `harness.DialExecutor(ctx, "npipe:////./pipe/"+name, localToken)`（`\\.\pipe\<name>` 路径也可）。脑监听时，在 `NamedPipeListener(name)` 上服务 `Harness`，执行端用默认 dialer 或 `NamedPipeDialer(name)` 拨 `npipe:////./pipe/<name>`。非 Windows 平台这些调用返回 `ErrNamedPipeUnsupported`。Python 需要 Windows 的 `ProactorEventLoop`（Windows 上 asyncio 默认）：脑端 `await harness.serve_npipe(name)`，执行端 `static_token("npipe:////./pipe/<name>", token)`。
 
@@ -126,4 +126,4 @@ bmad 目前还不监听本机 socket【即将提供】。支持后，本机脑�
 
 ## 3. 进程内
 
-脑和手在同一进程（方案 B 的典型情况）时，用进程内传输连接：Go 用 `InProcessDialer(harness, principal)`（harness 侧为 `Harness.ServeConn`），TypeScript 用 `harness.inProcessDialer()`，Python 用 `harness.inprocess_dialer()`。语义与远程完全一致，测试也可复用。示例：[`agent-minimal`](../../executor/typescript/examples/agent-minimal/main.mjs)、[`harness_loopback.py`](../../executor/python/examples/harness_loopback.py)。
+脑和手在同一进程（方案 B 的典型情况）时，用进程内传输连接：Go 用 `InProcessDialer(harness, principal)`（harness 侧为 `Harness.ServeConn`），TypeScript 用 `harness.inProcessDialer()`，Python 用 `harness.inprocess_dialer()`。语义与远程完全一致，测试也可复用。示例：[`agent-minimal`](../../typescript/examples/agent-minimal/main.mjs)、[`harness_loopback.py`](../../python/examples/harness_loopback.py)。

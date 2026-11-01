@@ -148,11 +148,11 @@ client.ServeAgent(myAgent, bmaexecutor.AgentCapability{
 
 `myAgent` 实现 `AgentHandler{OpenTurn, RunTurn, CloseSession}`：`OpenTurn` 回报生效配置；`RunTurn` 用 `turn.Emit`（持久事件）、`turn.Delta`（预览）、`turn.Inputs()`（`turn.input`）、`turn.RequestInteraction`（审批/问答）完成工作；`CloseSession` 释放本地对话。SDK 负责 `event_id`/`sequence`、outbox、重连补报、running/idle 框架、interaction 等待/过期/撤回。
 
-TypeScript：`client.serveAgent(handler, capability)` 与 `new Harness({ agent })`，示例 [`agent-minimal`](../../executor/typescript/examples/agent-minimal/main.mjs)。Python：`client.serve_agent(handler, capability)` 与 `Harness(agent=...)`，示例 [`agent_minimal.py`](../../executor/python/examples/agent_minimal.py)。
+TypeScript：`client.serveAgent(handler, capability)` 与 `new Harness({ agent })`，示例 [`agent-minimal`](../../typescript/examples/agent-minimal/main.mjs)。Python：`client.serve_agent(handler, capability)` 与 `Harness(agent=...)`，示例 [`agent_minimal.py`](../../python/examples/agent_minimal.py)。
 
 harness 侧（平台或测试用的模拟平台）：`HarnessOptions.Agent`（`AgentPlatform`）+ `Executor.StartTurn / SendTurnInput / CancelTurn / CloseAgentSession / RespondInteraction`。
 
-完整流程示例：`cd executor && go run ./examples/agentexecutor`（[源码](../../executor/examples/agentexecutor/main.go)）（脚本化本机 agent + 模拟平台 + 可断网 TCP 代理：任务 → 流式事件 → 审批 → 结果 → 追问 → 追加输入 → 断线补报 → 取消 → 关闭）。
+完整流程示例：`go run ./examples/agentexecutor`（[源码](../../examples/agentexecutor/main.go)）（脚本化本机 agent + 模拟平台 + 可断网 TCP 代理：任务 → 流式事件 → 审批 → 结果 → 追问 → 追加输入 → 断线补报 → 取消 → 关闭）。
 
 ## 7. 待平台实现后才能端到端
 

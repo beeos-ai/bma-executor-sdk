@@ -27,7 +27,7 @@ type conformanceExample struct {
 
 func loadConformance(t *testing.T) []conformanceExample {
 	t.Helper()
-	raw, err := os.ReadFile("../contracts/bma/executor/examples/conformance.json")
+	raw, err := os.ReadFile("contracts/bma/executor/examples/conformance.json")
 	if err != nil {
 		t.Fatalf("read conformance examples: %v", err)
 	}

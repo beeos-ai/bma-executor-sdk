@@ -496,7 +496,7 @@ executor 重新注册时带 `resume{executor_id, last_connection_id, active_sess
 
 ### 8.4 必须重试的消息
 
-`tool.result`、`session.ended`（以及 agent 能力的持久 `session.event`）丢失会破坏正确性：executor 在可重试错误与断线后都必须重发直到被接受；SDK executor 端在所有重试失败后调用 `OnToolResultLost` 交给适配器持久化重放，绝不静默丢弃（见 [Go executor README](../../executor/README.md)）。
+`tool.result`、`session.ended`（以及 agent 能力的持久 `session.event`）丢失会破坏正确性：executor 在可重试错误与断线后都必须重发直到被接受；SDK executor 端在所有重试失败后调用 `OnToolResultLost` 交给适配器持久化重放，绝不静默丢弃（见 [Go executor README](../../README.md)）。
 
 ---
 

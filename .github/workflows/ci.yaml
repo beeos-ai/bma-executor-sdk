@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # release.yaml runs this same check suite before publishing.
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Contract lock and SDK tests (Go, TypeScript, Python)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Contract lock check
+        run: python3 tools/check_contract.py
+
+      - name: Go
+        run: |
+          go vet ./...
+          go test -race ./...
+
+      - name: TypeScript (with Go and Python interop)
+        working-directory: typescript
+        run: |
+          (cd ../python && uv sync)
+          npm ci
+          npm run build
+          npm test
+
+      - name: Python
+        working-directory: python
+        run: uv run pytest -q
+
+  # The Windows named pipe transport (npipe://) of the three SDKs. Only the
+  # transport tests run here; the full suites run on ubuntu above.
+  windows-named-pipe:
+    name: Windows named pipe transport (Go, TypeScript, Python)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Go (named pipe, both directions)
+        run: |
+          go vet ./...
+          go test -count=1 -v -run 'NamedPipe|ChannelURLAcceptsNamedPipes|ExecutorDialsAHarnessOnANamedPipe' .
+
+      - name: Python (named pipe, Go interop)
+        working-directory: python
+        run: |
+          uv sync
+          uv run pytest -v tests/test_npipe.py
+          uv run pytest -v -k npipe tests/test_executor_runtime.py tests/test_executor_interop.py
+
+      - name: TypeScript (local socket tests on a pipe, Go and Python interop)
+        working-directory: typescript
+        env:
+          BMA_PYTHON: ${{ github.workspace }}/python/.venv/Scripts/python.exe
+        run: |
+          npm ci
+          npx tsc -p tsconfig.test.json
+          node --test --test-name-pattern='local socket|npipe' build-test/test/executor.test.js
+          node --test build-test/test/interop-go-unix.test.js build-test/test/interop-python.test.js

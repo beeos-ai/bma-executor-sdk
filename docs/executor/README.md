@@ -18,7 +18,7 @@ Status labels used across these documents:
 - **[Coming]**: defined in the contract but not served yet; capability-gated, so a peer that does not advertise the capability bit never receives those methods.
 - **[Design]**: designed, not implemented.
 
-> Baseline: bma-executor-sdk **0.4.8** (features available since 0.4.0), protocol `bma.executor.v1.1` (contract 1.1.0, [`contracts/bma/executor`](../../contracts/bma/executor)).
+> Baseline: bma-executor-sdk **0.4.9** (features available since 0.4.0), protocol `bma.executor.v1.1` (contract 1.1.0, [`contracts/bma/executor`](../../contracts/bma/executor)).
 
 ---
 
@@ -110,10 +110,10 @@ The platform cannot tell the two options apart: it sees one `exec_<machine_id>`.
 
 ## 4. SDK layout
 
-Named after the protocol, split by role. Go is the reference implementation (`github.com/beeos-ai/bma-sdks/executor`); TypeScript and Python provide the same three ends.
+Named after the protocol, split by role. Go is the reference implementation (`github.com/beeos-ai/bma-executor-sdk`); TypeScript and Python provide the same three ends.
 
 ```text
-bma-sdks/executor (Go)
+bma-executor-sdk (Go)
 ├── executor end   Client     token exchange (environment key or machine token), register, heartbeat, reconnect with resume,
 │                             sessions, tool.call/cancel, result retries, artifact upload, MCP channel
 │   └── Core                  brain-independent execution core: bash, read/write/edit/glob/grep, stdio MCP supervisor, cleanup,
@@ -122,7 +122,7 @@ bma-sdks/executor (Go)
 └── agent          ServeAgent / AgentHandler (executor side), AgentPlatform / StartTurn ... (harness side)
 ```
 
-| Part | Go [`executor`](../../executor) | TypeScript [`@beeos-ai/bma-executor-sdk`](../../executor/typescript) | Python [`bma-executor-sdk`](../../executor/python) |
+| Part | Go [`executor`](../../README.md) | TypeScript [`@beeos-ai/bma-executor-sdk`](../../typescript) | Python [`bma-executor-sdk`](../../python) |
 | --- | --- | --- | --- |
 | Executor end (`Client` / `ExecutorClient`) | [Available] | [Available] | [Available] |
 | Execution `Core` (bash, file tools, stdio MCP) | [Available] | not provided | not provided |

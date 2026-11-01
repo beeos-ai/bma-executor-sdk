@@ -2,20 +2,20 @@
 
 [![PyPI](https://img.shields.io/pypi/v/bma-executor-sdk.svg)](https://pypi.org/project/bma-executor-sdk/)
 
-asyncio executor (`ExecutorClient`), harness (`Harness`) and agent ends of the BMA Executor Protocol `bma.executor.v1.1`, the counterpart of the [Go `executor` module](../README.md). Protocol types are TypedDicts generated into `bma_executor_sdk/generated.py` from the contract in [`contracts/bma/executor`](../../contracts/bma/executor), so messages are plain JSON dicts.
+asyncio executor (`ExecutorClient`), harness (`Harness`) and agent ends of the BMA Executor Protocol `bma.executor.v1.1`, the counterpart of the [Go `executor` module](../README.md). Protocol types are TypedDicts generated into `bma_executor_sdk/generated.py` from the contract in [`contracts/bma/executor`](../contracts/bma/executor), so messages are plain JSON dicts.
 
 | | |
 | --- | --- |
-| Version | 0.4.8 (tag `executor-python/v0.4.8`), see [CHANGELOG](../../CHANGELOG.md) |
-| Protocol | `bma.executor.v1.1` (contract 1.1.0, [`lock.json`](../../contracts/bma/executor/lock.json)) |
+| Version | 0.4.9 (tag `v0.4.9`), see [CHANGELOG](../CHANGELOG.md) |
+| Protocol | `bma.executor.v1.1` (contract 1.1.0, [`lock.json`](../contracts/bma/executor/lock.json)) |
 | Python | 3.10 or newer; depends on `httpx` and `websockets` |
-| Integration guide | [docs/executor](../../docs/executor/README.md) ([中文](../../docs/executor/README.zh-CN.md)) |
+| Integration guide | [docs/executor](../docs/executor/README.md) ([中文](../docs/executor/README.zh-CN.md)) |
 
 ```sh
-pip install bma-executor-sdk==0.4.8
+pip install bma-executor-sdk==0.4.9
 ```
 
-The REST / façade client is the separate package [`bma-sdk`](../../python).
+The REST / façade client is the separate package [`bma-sdk`](https://github.com/beeos-ai/bma-sdk/tree/main/python).
 
 ## Executor quick start
 
@@ -79,11 +79,11 @@ Chosen by the channel URL of the token source:
 | Windows named pipe (`npipe:////./pipe/<name>`, Windows ProactorEventLoop) | `token_source=static_token("npipe:////./pipe/<name>", token)` | `await harness.serve_npipe(name)` |
 | In process | `dialer=harness.inprocess_dialer()` | — |
 
-The executor-listens local socket is not implemented in Python (use the Go or TypeScript SDK); named pipes need the Windows `ProactorEventLoop` (the asyncio default there) and are tested on a Windows runner in CI. See [local connection](../../docs/executor/local-connection.md).
+The executor-listens local socket is not implemented in Python (use the Go or TypeScript SDK); named pipes need the Windows `ProactorEventLoop` (the asyncio default there) and are tested on a Windows runner in CI. See [local connection](../docs/executor/local-connection.md).
 
 ## Agent executors
 
-`client.serve_agent(handler, capability)` serves the `agent` capability; `handler` implements `open_turn`, `run_turn` and `close_session` (async; cancellation is task cancellation), and `run_turn` uses `turn.emit`, `await turn.delta(...)`, `turn.inputs` (an `asyncio.Queue`) and `turn.request_interaction`. The harness side is `Harness(agent=platform)` with an `AgentPlatform`. See [agent capability](../../docs/executor/agent-capability.md).
+`client.serve_agent(handler, capability)` serves the `agent` capability; `handler` implements `open_turn`, `run_turn` and `close_session` (async; cancellation is task cancellation), and `run_turn` uses `turn.emit`, `await turn.delta(...)`, `turn.inputs` (an `asyncio.Queue`) and `turn.request_interaction`. The harness side is `Harness(agent=platform)` with an `AgentPlatform`. See [agent capability](../docs/executor/agent-capability.md).
 
 ## Go ↔ Python
 

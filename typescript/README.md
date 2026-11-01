@@ -6,23 +6,23 @@ Executor (`ExecutorClient`), harness (`Harness`) and agent ends of the BMA
 Executor Protocol `bma.executor.v1.1` (and `v1`), with the same three parts and
 behavior as the [Go `executor` module](../README.md). Protocol types are
 generated from the contract ([`src/generated/executor.ts`](src/generated/executor.ts),
-snapshot and lock in [`contracts/bma/executor`](../../contracts/bma/executor));
+snapshot and lock in [`contracts/bma/executor`](../contracts/bma/executor));
 the runtime is handwritten. Transports: WebSocket, WebSocket over a Unix domain
 socket or Windows named pipe (`unix://`, `npipe://`), in-process.
 
 | | |
 | --- | --- |
-| Version | 0.4.8 (tag `executor-ts/v0.4.8`), see [CHANGELOG](../../CHANGELOG.md) |
-| Protocol | `bma.executor.v1.1` (contract 1.1.0, [`lock.json`](../../contracts/bma/executor/lock.json)) |
+| Version | 0.4.9 (tag `v0.4.9`), see [CHANGELOG](../CHANGELOG.md) |
+| Protocol | `bma.executor.v1.1` (contract 1.1.0, [`lock.json`](../contracts/bma/executor/lock.json)) |
 | Node.js | 20 or newer; ESM, depends on `ws` |
-| Integration guide | [docs/executor](../../docs/executor/README.md) ([中文](../../docs/executor/README.zh-CN.md)) |
+| Integration guide | [docs/executor](../docs/executor/README.md) ([中文](../docs/executor/README.zh-CN.md)) |
 
 ```sh
-npm install @beeos-ai/bma-executor-sdk@0.4.8
+npm install @beeos-ai/bma-executor-sdk@0.4.9
 ```
 
 The REST / façade client is the separate package
-[`@beeos-ai/bma-sdk`](../../typescript).
+[`@beeos-ai/bma-sdk`](https://github.com/beeos-ai/bma-sdk/tree/main/typescript).
 
 ### Executor quick start
 
@@ -137,7 +137,7 @@ executor and in-memory platform in one process).
 
 ### Go ↔ TypeScript
 
-| Go (`github.com/beeos-ai/bma-sdks/executor`) | TypeScript (`@beeos-ai/bma-executor-sdk`) |
+| Go (`github.com/beeos-ai/bma-executor-sdk`) | TypeScript (`@beeos-ai/bma-executor-sdk`) |
 | --- | --- |
 | `NewClient(Options)` / `Start` / `Stop` | `new ExecutorClient(options)` / `start()` / `stop()` |
 | `Options.TokenSource`, `StaticToken` | `tokenSource`, `staticToken` (or `dialer`) |

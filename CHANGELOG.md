@@ -1,5 +1,23 @@
 # Changelog
 
+## bma-executor-sdk v0.4.9
+
+Repository migration; the Go import path changed. The code is identical to
+bma-executor-sdk 0.4.8.
+
+- The SDK moved from `beeos-ai/bma-sdks` (archived) to
+  [`beeos-ai/bma-executor-sdk`](https://github.com/beeos-ai/bma-executor-sdk),
+  with its git history.
+- **Go import path:** `github.com/beeos-ai/bma-sdks/executor` →
+  `github.com/beeos-ai/bma-executor-sdk` (package `bmaexecutor`, now at the
+  repository root). Update the import and run
+  `go get github.com/beeos-ai/bma-executor-sdk@v0.4.9`. The old module is
+  marked deprecated.
+- npm `@beeos-ai/bma-executor-sdk` and PyPI `bma-executor-sdk` keep their
+  names. TypeScript is in `typescript/`, Python in `python/`.
+- One tag `v0.4.9` now releases all three languages (was `executor/v*`,
+  `executor-ts/v*`, `executor-python/v*`).
+
 ## bma-executor-sdk v0.4.8
 
 Released 2026-11-01 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.8) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.8) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.8).
@@ -57,30 +75,6 @@ Go tag `executor/v0.4.7`, npm `@beeos-ai/bma-executor-sdk@0.4.7`, PyPI
   `mcp_unavailable: <key>` is still reported once per outage after 5
   failures, and each failure is logged with its cause. TypeScript and Python
   have no MCP supervisor and are unchanged apart from the version.
-
-## bma-sdk v0.4.1
-
-Tags `go/v0.4.1`, `ts/v0.4.1`, `python/v0.4.1` (`github.com/beeos-ai/bma-sdks/go`,
-`@beeos-ai/bma-sdk@0.4.1`, PyPI `bma-sdk` 0.4.1). Contract refreshed to
-beeos-ai/beeos-managed-agents@db2403f9.
-
-### Breaking changes (Go)
-
-- **Go nullable fields are now pointers (callers must dereference).** A
-  nullable `$ref` (`anyOf`/`oneOf` with `null`) was generated as a plain value
-  because OpenAPI 3.0 ignores keywords beside `$ref`, so `null` decoded to the
-  zero value and could not be told apart from a real one. `tools/downgrade_openapi.py`
-  now wraps it as `allOf: [$ref]` + `nullable: true`. For example
-  `File.Scope` is `*FileScope`, `AgentMachine.MachinePoolId` and
-  `Machine.MachinePoolId` are `*MachinePoolID`, and the nullable `Timestamp`
-  fields (`CronTrigger.LastFiredAt`, `PersonalAccessToken.RevokedAt`, ...) are
-  `*Timestamp`. Required nullable fields marshal `null` when nil. Optional
-  nullable fields keep `omitempty`. TypeScript and Python already modelled null.
-
-### Features
-
-- Contract: agent executor binding (`GetAgentExecutorBinding`,
-  `PutAgentExecutorBinding`) and MCP transport schemas, in all three SDKs.
 
 ## bma-executor-sdk v0.4.6
 
@@ -278,41 +272,6 @@ records the BMA commit (beeos-ai/beeos-managed-agents@69c05b65, #278).
   in-process pipe; MCP channels on every transport.
 - Cross-language conformance and interop suites (Go ↔ TypeScript,
   Go ↔ Python, TypeScript ↔ Python over `ws://` and `unix://`).
-
-### bma-sdk REST and façade (contract at BMA ceee7dcf)
-
-Breaking:
-
-- The machine-daemon runtime operations were removed upstream
-  (`registerMachineDaemonRuntime`, `endMachineDaemonRuntime`,
-  `sleepMachineDaemonRuntime`, `socketMachineDaemonRuntime`) together with the
-  `DaemonRuntime*` and `Process*Reconciliation*` schemas.
-- `AgentSession.status` is required: `idle`, `running`, `rescheduling` or
-  `terminated` (Go `AgentSessionStatus*` constants).
-- Python: the REST `File` schema is generated as `ProjectFile`
-  (`bma_sdk.rest.models.ProjectFile`), so it no longer shadows the generator's
-  `bma_sdk.rest.types.File` upload payload; `upload_file` previously crashed
-  parsing its own response.
-
-New REST operations:
-
-- Files API: `uploadFile`, `listFiles`, `getFile`, `getFileContent`,
-  `deleteFile`; session resources `addSessionResource`,
-  `listSessionResources`, `deleteSessionResource`; artifacts
-  `uploadSessionArtifact`, `listSessionArtifacts`,
-  `getSessionArtifactContent`, `promoteSessionArtifact`.
-- Agent machines: `createAgentPersistentMachine`, `listAgentMachines`,
-  `deleteAgentMachine`; `resumeMachine`; backups `createMachineBackup`,
-  `listMachineBackups`, `restoreMachineFromBackup`.
-- `cancelAgentSession`.
-- Machine-daemon: session files/outputs and machine backup archive/restore
-  endpoints.
-
-Façade extensions: `POST/GET /v1/sessions/{id}/resources` and
-`DELETE /v1/sessions/{id}/resources/{resource_id}` (`AddSessionResource`,
-`ListSessionResources`, `DeleteSessionResource`), session files download;
-`/v1/files` is the standard Anthropic surface. README shows upload → mount
-into a session → list outputs in all three languages.
 
 ### Behavior notes for bmad / BMA
 

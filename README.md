@@ -1,21 +1,37 @@
-# bma-executor-sdk (Go)
+# bma-executor-sdk
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/beeos-ai/bma-sdks/executor.svg)](https://pkg.go.dev/github.com/beeos-ai/bma-sdks/executor)
+Go, TypeScript and Python SDKs for the BMA (BeeOS Managed Agents) Executor
+Protocol `bma.executor.v1.1`: the executor, harness and agent ends, with
+protocol types generated from the contract in
+[`contracts/bma/executor`](contracts/bma/executor) and handwritten runtimes.
+bmad's execution model and the BMA server speak the same contract.
 
-Go module `github.com/beeos-ai/bma-sdks/executor` (package `bmaexecutor`): the executor, harness and agent ends of the BMA Executor Protocol `bma.executor.v1.1` (the harness also accepts `v1`). Protocol types are generated from the contract in [`contracts/bma/executor`](../contracts/bma/executor); the runtime is handwritten. bmad's execution model and the BMA server speak the same contract.
+> Moved from [`beeos-ai/bma-sdks`](https://github.com/beeos-ai/bma-sdks) (archived) in 0.4.9.
+> The Go import path changed from `github.com/beeos-ai/bma-executor-sdk` to
+> `github.com/beeos-ai/bma-executor-sdk`; the npm and PyPI package names are unchanged.
+> The REST / façade client is [`beeos-ai/bma-sdk`](https://github.com/beeos-ai/bma-sdk).
+
+| Language | Package | Install |
+| --- | --- | --- |
+| Go | [![Go Reference](https://pkg.go.dev/badge/github.com/beeos-ai/bma-executor-sdk.svg)](https://pkg.go.dev/github.com/beeos-ai/bma-executor-sdk) `github.com/beeos-ai/bma-executor-sdk` (package `bmaexecutor`, this directory) | `go get github.com/beeos-ai/bma-executor-sdk@v0.4.9` |
+| TypeScript | [![npm](https://img.shields.io/npm/v/@beeos-ai/bma-executor-sdk.svg)](https://www.npmjs.com/package/@beeos-ai/bma-executor-sdk) [`@beeos-ai/bma-executor-sdk`](typescript) | `npm install @beeos-ai/bma-executor-sdk@0.4.9` |
+| Python | [![PyPI](https://img.shields.io/pypi/v/bma-executor-sdk.svg)](https://pypi.org/project/bma-executor-sdk/) [`bma-executor-sdk`](python) (`bma_executor_sdk`) | `pip install bma-executor-sdk==0.4.9` |
 
 | | |
 | --- | --- |
-| Version | 0.4.8 (tag `executor/v0.4.8`), see [CHANGELOG](../CHANGELOG.md) |
-| Protocol | `bma.executor.v1.1` (contract 1.1.0, [`lock.json`](../contracts/bma/executor/lock.json)) |
-| Go | 1.24 or newer |
-| Integration guide | [docs/executor](../docs/executor/README.md) ([中文](../docs/executor/README.zh-CN.md)) |
+| Version | 0.4.9 (tag `v0.4.9`, all three languages), see [CHANGELOG](CHANGELOG.md) |
+| Protocol | `bma.executor.v1.1` (the harness also accepts `v1`; contract 1.1.0, [`lock.json`](contracts/bma/executor/lock.json)) |
+| Runtimes | Go 1.24+, Node.js 20+ (ESM), Python 3.10+ |
+| Integration guide | [docs/executor](docs/executor/README.md) ([中文](docs/executor/README.zh-CN.md)) |
 
-```sh
-go get github.com/beeos-ai/bma-sdks/executor@v0.4.8
-```
+| I want to | Start here |
+| --- | --- |
+| Understand roles, deployment shapes and what is available | [Overview](docs/executor/README.md) ([中文](docs/executor/README.zh-CN.md)) |
+| Write an executor (a "hand" the BMA cloud or a local brain drives) | [Quick start](docs/executor/quickstart.md) ([中文](docs/executor/quickstart.zh-CN.md)), then the [protocol reference](docs/executor/protocol-reference.md) ([中文](docs/executor/protocol-reference.zh-CN.md)) |
+| Drive an executor (be the harness / local brain) | [Local connection and auth](docs/executor/local-connection.md) ([中文](docs/executor/local-connection.zh-CN.md)) and `Harness` below and in the [TypeScript](typescript/README.md) and [Python](python/README.md) READMEs |
+| Connect a full local agent (turns in, agent events out) | [Agent capability](docs/executor/agent-capability.md) ([中文](docs/executor/agent-capability.zh-CN.md)) |
 
-The REST / façade client is the separate module `github.com/beeos-ai/bma-sdks/go` ([repository README](../README.md)).
+The rest of this README is the Go module; see [`typescript/README.md`](typescript/README.md) and [`python/README.md`](python/README.md) for the other languages.
 
 ## Executor quick start
 
@@ -29,7 +45,7 @@ import (
 	"log"
 	"os"
 
-	bmaexecutor "github.com/beeos-ai/bma-sdks/executor"
+	bmaexecutor "github.com/beeos-ai/bma-executor-sdk"
 )
 
 func main() {
@@ -126,7 +142,7 @@ _ = session.Stop(ctx, "done")
 | Harness dials the executor (executor listens) | `dial, closeFn, _ := ListenUnixSocket(path, token)` → `Options.Dial: dial` (0700 directory, 0600 socket, bearer token) | `harness.DialExecutor(ctx, path, token)`; the harness also dials the sessions' MCP channels |
 | Same process | `Options.Dial: InProcessDialer(harness, principal)` | `Harness.ServeConn` (used by `InProcessDialer`) |
 
-Details and authentication rules: [local connection](../docs/executor/local-connection.md).
+Details and authentication rules: [local connection](docs/executor/local-connection.md).
 
 ## Agent executors
 
@@ -141,11 +157,11 @@ client.ServeAgent(myAgent, bmaexecutor.AgentCapability{
 
 `myAgent` implements `AgentHandler`: `OpenTurn` reports the effective configuration, `RunTurn` does the work with `turn.Emit` (durable events), `turn.Delta` (streaming previews), `turn.Inputs()` (`turn.input`) and `turn.RequestInteraction` (approvals and questions), and `CloseSession` releases the local conversation. The SDK assigns event ids and sequences, resends unacknowledged events after a reconnect, and frames every turn with `session.status_running` and a final `session.status_idle` whose `turn_outcome` is `completed`, `canceled` or `failed`.
 
-The harness side is `HarnessOptions.Agent` (`AgentPlatform`) plus `Executor.StartTurn`, `SendTurnInput`, `CancelTurn`, `CloseAgentSession` and `RespondInteraction`. The BMA platform side of the agent capability is not available yet; see [agent capability](../docs/executor/agent-capability.md).
+The harness side is `HarnessOptions.Agent` (`AgentPlatform`) plus `Executor.StartTurn`, `SendTurnInput`, `CancelTurn`, `CloseAgentSession` and `RespondInteraction`. The BMA platform side of the agent capability is not available yet; see [agent capability](docs/executor/agent-capability.md).
 
 ## Examples
 
-Run from this directory (`cd executor`):
+Run from the repository root:
 
 | Example | What it shows | Run |
 | --- | --- | --- |
@@ -159,4 +175,36 @@ Run from this directory (`cd executor`):
 go vet ./... && go test -race ./...
 ```
 
-The tests cover the conformance examples in [`contracts/bma/executor/examples`](../contracts/bma/executor/examples), executor ↔ harness over every transport with reconnect and lease, `Core`, capabilities and the agent capability. The TypeScript and Python packages run interop suites against the Go peers in [`internal/interop`](internal/interop).
+The tests cover the conformance examples in [`contracts/bma/executor/examples`](contracts/bma/executor/examples), executor ↔ harness over every transport with reconnect and lease, `Core`, capabilities and the agent capability. The TypeScript and Python packages run interop suites against the Go peers in [`internal/interop`](internal/interop).
+
+## Development
+
+The executor contract snapshot and the generated types (`generated.go`,
+`typescript/src/generated/executor.ts`, `python/src/bma_executor_sdk/generated.py`)
+are generated in the BMA repository: `make contract-sdk SDK_DIR=<this checkout>`.
+`tools/check_contract.py` verifies them against `contracts/bma/executor/lock.json`;
+`--source <beeos-managed-agents checkout>` also compares the snapshot with BMA.
+
+```sh
+python3 tools/check_contract.py [--source ../beeos-managed-agents]
+go vet ./... && go test -race ./...
+(cd python && uv sync && uv run pytest -q)                        # interop tests need Go
+(cd typescript && npm ci && npm run build && npm test)            # Go + Python interop
+```
+
+## Release
+
+One tag `v<version>` releases all three languages at the same version: it must
+be on `main` and match `typescript/package.json` and `python/pyproject.toml`.
+[`release.yaml`](.github/workflows/release.yaml) first runs
+[`ci.yaml`](.github/workflows/ci.yaml), then publishes.
+
+| Channel | Publishes | Credentials |
+| --- | --- | --- |
+| Go | nothing; the module comes from the tag | none |
+| npm | `@beeos-ai/bma-executor-sdk` with provenance | secret `NPM_TOKEN` in the `releases` environment |
+| PyPI | `bma-executor-sdk` | a PyPI Trusted Publisher on `bma-executor-sdk`: owner `beeos-ai`, repository `bma-executor-sdk`, workflow `release.yaml`, environment `releases` |
+
+## License
+
+Apache License 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).

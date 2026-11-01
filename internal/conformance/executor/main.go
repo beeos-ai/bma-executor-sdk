@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	bmaexecutor "github.com/beeos-ai/bma-sdks/executor"
+	bmaexecutor "github.com/beeos-ai/bma-executor-sdk"
 )
 
 func main() {

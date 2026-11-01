@@ -143,11 +143,11 @@ client.ServeAgent(myAgent, bmaexecutor.AgentCapability{
 
 `myAgent` implements `AgentHandler{OpenTurn, RunTurn, CloseSession}`: `OpenTurn` reports the effective config; `RunTurn` works with `turn.Emit` (durable), `turn.Delta` (previews), `turn.Inputs()` (`turn.input`) and `turn.RequestInteraction`; `CloseSession` releases the local conversation. The SDK owns `event_id`/`sequence`, the outbox, resend after reconnect, running/idle framing and interaction waits/expiry/withdrawal.
 
-TypeScript: `client.serveAgent(handler, capability)` and `new Harness({ agent })`, example [`agent-minimal`](../../executor/typescript/examples/agent-minimal/main.mjs). Python: `client.serve_agent(handler, capability)` and `Harness(agent=...)`, example [`agent_minimal.py`](../../executor/python/examples/agent_minimal.py).
+TypeScript: `client.serveAgent(handler, capability)` and `new Harness({ agent })`, example [`agent-minimal`](../../typescript/examples/agent-minimal/main.mjs). Python: `client.serve_agent(handler, capability)` and `Harness(agent=...)`, example [`agent_minimal.py`](../../python/examples/agent_minimal.py).
 
 Harness side (the platform, or a simulated one in tests): `HarnessOptions.Agent` (`AgentPlatform`) plus `Executor.StartTurn / SendTurnInput / CancelTurn / CloseAgentSession / RespondInteraction`.
 
-Full flow: `cd executor && go run ./examples/agentexecutor` ([source](../../executor/examples/agentexecutor/main.go)) (scripted local agent + simulated platform + a TCP proxy that drops the connection: turn → streamed events → approval → result → follow-up → added input → resend after disconnect → cancel → close).
+Full flow: `go run ./examples/agentexecutor` ([source](../../examples/agentexecutor/main.go)) (scripted local agent + simulated platform + a TCP proxy that drops the connection: turn → streamed events → approval → result → follow-up → added input → resend after disconnect → cancel → close).
 
 ## 7. Needed on the platform before end to end
 

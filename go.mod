@@ -1,4 +1,4 @@
-module github.com/beeos-ai/bma-sdks/executor
+module github.com/beeos-ai/bma-executor-sdk
 
 go 1.24.0
 

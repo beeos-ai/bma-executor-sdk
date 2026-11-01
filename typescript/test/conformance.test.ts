@@ -31,7 +31,7 @@ interface Example {
 }
 
 const fixtures = JSON.parse(
-  readFileSync(resolve(process.cwd(), '../../contracts/bma/executor/examples/conformance.json'), 'utf8'),
+  readFileSync(resolve(process.cwd(), '../contracts/bma/executor/examples/conformance.json'), 'utf8'),
 ) as { protocol: string; messages: Example[] }
 
 function request(name: string): Example['message'] & {} {

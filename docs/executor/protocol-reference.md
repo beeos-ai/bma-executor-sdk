@@ -414,7 +414,7 @@ On every registration the platform calls `process.list` and uses the executor's 
 
 ### 8.4 Messages that must be retried
 
-`tool.result`, `session.ended` (and durable agent `session.event`s): retry after retryable errors and reconnects until accepted. The SDK executor end calls `OnToolResultLost` after all retries fail so the adapter can persist and replay; it never drops a result silently (see the [Go executor README](../../executor/README.md)).
+`tool.result`, `session.ended` (and durable agent `session.event`s): retry after retryable errors and reconnects until accepted. The SDK executor end calls `OnToolResultLost` after all retries fail so the adapter can persist and replay; it never drops a result silently (see the [Go executor README](../../README.md)).
 
 ---
 

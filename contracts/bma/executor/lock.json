@@ -22,8 +22,8 @@
     "contracts/bma/executor/schemas/workspace.json": "4e8d0ebbab963c9f7f179125a96cb2b89fa79c6a03e3899a1b94c14bed54f5c0"
   },
   "generated": {
-    "executor/generated.go": "db4b1d2defd2e71d33eda9e0c60634dbf5fc964e10e0821d490ae1c5a83e74c1",
-    "executor/python/src/bma_executor_sdk/generated.py": "cba9453100ea46c6db420ba4632b9c2ea72b48612a1cf0039f83f510d3d2d52e",
-    "executor/typescript/src/generated/executor.ts": "04618104d3bef237b58718163a4dab8ba79a5c44f00b32aac9fbe84e71a87400"
+    "generated.go": "db4b1d2defd2e71d33eda9e0c60634dbf5fc964e10e0821d490ae1c5a83e74c1",
+    "python/src/bma_executor_sdk/generated.py": "cba9453100ea46c6db420ba4632b9c2ea72b48612a1cf0039f83f510d3d2d52e",
+    "typescript/src/generated/executor.ts": "04618104d3bef237b58718163a4dab8ba79a5c44f00b32aac9fbe84e71a87400"
   }
 }

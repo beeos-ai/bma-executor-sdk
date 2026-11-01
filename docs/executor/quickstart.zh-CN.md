@@ -67,13 +67,13 @@ Desktop 用同一套 0.1 流程拿机器 token，保存在系统钥匙串之类�
 selfhost environment 与 environment key 由 BMA 为你开通，请联系 BMA 对接人。
 
 ```sh
-cd bma-sdks/executor
+cd bma-executor-sdk
 BMA_BASE_URL=https://api.<env>.bma.beeos.ai \
 BMA_ENVIRONMENT_ID=shenv_… BMA_ENVIRONMENT_KEY=… \
 go run ./examples/cloud-hand -work-root ~/bma-work
 ```
 
-核心代码（[`examples/cloud-hand`](../../executor/examples/cloud-hand/main.go)）：
+核心代码（[`examples/cloud-hand`](../../examples/cloud-hand/main.go)）：
 
 ```go
 core, _ := bmaexecutor.NewCore(bmaexecutor.CoreOptions{WorkRoot: workRoot})
@@ -88,27 +88,27 @@ registered, _ := client.Start(ctx)
 
 平台按工作项派发一次性会话：`session.assign` → `session.ready` → `tool.call`（`bash`/`read`/`write`/`list_files`）→ `tool.result` → `session.ended`。`Core` 会为 `session.assign.mcp_servers[]` 中 `connection_origin:"environment"` 的 stdio server 起进程并桥接到 MCP 通道（平台目前尚不发送 `mcp_servers`【即将提供】）。
 
-如果你不用 `Core`，而是自己实现执行：用 `client.OnToolCall(handler)`，在 handler 的 `ctx` 被取消时杀掉进程组；在准备好后调用 `SessionReady`、全部子进程退出后调用 `SessionEnded`（见 [Go executor README](../../executor/README.md#executor-quick-start)）。
+如果你不用 `Core`，而是自己实现执行：用 `client.OnToolCall(handler)`，在 handler 的 `ctx` 被取消时杀掉进程组；在准备好后调用 `SessionReady`、全部子进程退出后调用 `SessionEnded`（见 [Go executor README](../../README.md#executor-quick-start)）。
 
 ## 2. 本机脑 → 本机手 → 事件回平台
 
 ### 2.1 本机脑驱动本机手（离线可跑）【已有】
 
 ```sh
-cd bma-sdks/executor
+cd bma-executor-sdk
 go run ./examples/local-brain -mcp-command "go run ./examples/echo-mcp"
 ```
 
-流程（[源码](../../executor/examples/local-brain/main.go)）：本机脑在 `127.0.0.1:0` 起 `Harness`（每次运行随机 token）；执行端 `Core` 接一个 `Client`，用 `StaticToken` 连过去；本机脑 `WaitExecutor` → `AssignSession`（带 stdio MCP server）→ `Ready` → `CallTool(bash)` ×2 → `session.MCP("echo")` 收发原始 MCP JSON-RPC → `Stop`。把脚本换成你的模型循环，就是一个本机 Agent 的“手”部分。鉴权与并存规则见[本机连接](local-connection.zh-CN.md)。TypeScript：[`harness-loopback`](../../executor/typescript/examples/harness-loopback/main.mjs)；Python：[`harness_loopback.py`](../../executor/python/examples/harness_loopback.py)。
+流程（[源码](../../examples/local-brain/main.go)）：本机脑在 `127.0.0.1:0` 起 `Harness`（每次运行随机 token）；执行端 `Core` 接一个 `Client`，用 `StaticToken` 连过去；本机脑 `WaitExecutor` → `AssignSession`（带 stdio MCP server）→ `Ready` → `CallTool(bash)` ×2 → `session.MCP("echo")` 收发原始 MCP JSON-RPC → `Stop`。把脚本换成你的模型循环，就是一个本机 Agent 的“手”部分。鉴权与并存规则见[本机连接](local-connection.zh-CN.md)。TypeScript：[`harness-loopback`](../../typescript/examples/harness-loopback/main.mjs)；Python：[`harness_loopback.py`](../../python/examples/harness_loopback.py)。
 
 ### 2.2 Agent 事件回平台【SDK 已有；平台即将提供】
 
 ```sh
-cd bma-sdks/executor
+cd bma-executor-sdk
 go run ./examples/agentexecutor
 ```
 
-示例用模拟平台演示完整生命周期：`turn.start` → 流式 `session.event_delta` 与持久 `session.event` → `interaction.request` 审批 → `interaction.response` → 结果 → `turn.input` 追加 → 断线（TCP 代理断开）后按 sequence 补报 → `turn.cancel` → `session.close`。你的实现只需提供 `AgentHandler`，见 [agent 能力](agent-capability.zh-CN.md#6-sdk-用法)。TypeScript 与 Python 对应示例：[`agent-minimal`](../../executor/typescript/examples/agent-minimal/main.mjs)、[`agent_minimal.py`](../../executor/python/examples/agent_minimal.py)。
+示例用模拟平台演示完整生命周期：`turn.start` → 流式 `session.event_delta` 与持久 `session.event` → `interaction.request` 审批 → `interaction.response` → 结果 → `turn.input` 追加 → 断线（TCP 代理断开）后按 sequence 补报 → `turn.cancel` → `session.close`。你的实现只需提供 `AgentHandler`，见 [agent 能力](agent-capability.zh-CN.md#6-sdk-用法)。TypeScript 与 Python 对应示例：[`agent-minimal`](../../typescript/examples/agent-minimal/main.mjs)、[`agent_minimal.py`](../../python/examples/agent_minimal.py)。
 
 平台实现 agent 能力后，同一个程序把 `TokenSource`/凭据换成机器 token 指向平台即可；客户端从平台会话事件流（SSE）订阅事件。
 

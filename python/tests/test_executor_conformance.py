@@ -21,7 +21,7 @@ from bma_executor_sdk import agent as bx_agent
 from bma_executor_sdk import generated as g
 from executor_helpers import RecordingPlatform
 
-FIXTURES = Path(__file__).resolve().parents[3] / "contracts/bma/executor/examples/conformance.json"
+FIXTURES = Path(__file__).resolve().parents[2] / "contracts/bma/executor/examples/conformance.json"
 
 
 class _NotRequired:

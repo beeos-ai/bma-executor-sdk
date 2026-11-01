@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	bmaexecutor "github.com/beeos-ai/bma-sdks/executor"
+	bmaexecutor "github.com/beeos-ai/bma-executor-sdk"
 )
 
 type platform struct {

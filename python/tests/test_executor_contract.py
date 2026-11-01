@@ -7,7 +7,7 @@ from pathlib import Path
 
 from bma_executor_sdk import generated as executor
 
-EXAMPLES = Path(__file__).resolve().parents[3] / "contracts/bma/executor/examples/conformance.json"
+EXAMPLES = Path(__file__).resolve().parents[2] / "contracts/bma/executor/examples/conformance.json"
 
 
 def test_every_example_matches_the_catalog_and_params_type() -> None:
