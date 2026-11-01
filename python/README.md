@@ -6,13 +6,13 @@ asyncio executor (`ExecutorClient`), harness (`Harness`) and agent ends of the B
 
 | | |
 | --- | --- |
-| Version | 0.4.7 (tag `executor-python/v0.4.7`), see [CHANGELOG](../../CHANGELOG.md) |
+| Version | 0.4.8 (tag `executor-python/v0.4.8`), see [CHANGELOG](../../CHANGELOG.md) |
 | Protocol | `bma.executor.v1.1` (contract 1.1.0, [`lock.json`](../../contracts/bma/executor/lock.json)) |
 | Python | 3.10 or newer; depends on `httpx` and `websockets` |
 | Integration guide | [docs/executor](../../docs/executor/README.md) ([中文](../../docs/executor/README.zh-CN.md)) |
 
 ```sh
-pip install bma-executor-sdk==0.4.7
+pip install bma-executor-sdk==0.4.8
 ```
 
 The REST / façade client is the separate package [`bma-sdk`](../../python).
