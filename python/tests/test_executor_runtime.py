@@ -40,7 +40,7 @@ async def listen(harness: bx.Harness, transport: str) -> AsyncIterator[tuple[str
         if sys.platform != "win32":
             fake_named_pipes(asyncio.get_running_loop())
         name = f"bma-py-test-{os.getpid()}-{next(_PIPE_COUNTER)}"
-        server = harness.serve_npipe(name)
+        server = await harness.serve_npipe(name)
         await asyncio.sleep(0.05)
         try:
             yield f"npipe:////./pipe/{name}", None

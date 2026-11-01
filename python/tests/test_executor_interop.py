@@ -99,7 +99,7 @@ async def test_python_harness_with_go_executor(go_bin: Path, transport: str) -> 
     harness = bx.Harness(agent=platform, request_timeout=5)
     if transport == "npipe":
         name = f"bma-go-py-{os.getpid()}"
-        server = harness.serve_npipe(name)
+        server = await harness.serve_npipe(name)
         url = f"npipe:////./pipe/{name}"
     else:
         server = await harness.serve("127.0.0.1", 0)

@@ -18,7 +18,7 @@ async def main(path: str, token: str) -> None:
 
     harness = bx.Harness(authenticate=authenticate, request_timeout=5)
     if path.startswith(PIPE_DIR):
-        server = harness.serve_npipe(path)
+        server = await harness.serve_npipe(path)
         print(f"LISTEN {pipe_url(path)}", flush=True)
     else:
         server = await harness.serve_unix(path)

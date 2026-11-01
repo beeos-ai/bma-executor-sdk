@@ -79,4 +79,7 @@ def fake_named_pipes(loop: asyncio.AbstractEventLoop) -> None:
                 self.task.add_done_callback(lambda task: task.result().close())
 
     loop.create_pipe_connection = lambda factory, address: loop.create_unix_connection(factory, path(address))  # type: ignore[attr-defined]
-    loop.start_serving_pipe = lambda factory, address: [Listener(address, factory)]  # type: ignore[attr-defined]
+    async def start_serving_pipe(factory: Any, address: str) -> list[Listener]:
+        return [Listener(address, factory)]
+
+    loop.start_serving_pipe = start_serving_pipe  # type: ignore[attr-defined]

@@ -23,7 +23,8 @@ def test_pipe_addresses() -> None:
     for bad in ("", "\\\\.\\pipe\\", "a\\b", "npipe:////./pipe/a/b", "npipe:///other"):
         with pytest.raises(ValueError):
             _npipe.pipe_path(bad)
-    assert bx.transport.channel_url("npipe:////./pipe/bma-x", channel="mcp") == "npipe:////./pipe/bma-x?channel=mcp"
+    mcp = bx.transport.channel_url("npipe:////./pipe/bma-x", channel="mcp")
+    assert mcp.endswith("?channel=mcp") and _npipe.pipe_path(mcp) == "\\\\.\\pipe\\bma-x"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows has the pipe loop methods")
@@ -31,7 +32,7 @@ async def test_named_pipes_need_the_windows_event_loop() -> None:
     with pytest.raises(NotImplementedError, match="ProactorEventLoop"):
         await bx.transport.dial("npipe:////./pipe/bma-x", "", [bx.PROTOCOL_V11], max_size=bx.transport.MAX_FRAME_BYTES)
     with pytest.raises(NotImplementedError, match="ProactorEventLoop"):
-        bx.Harness().serve_npipe("bma-x")
+        await bx.Harness().serve_npipe("bma-x")
 
 
 async def test_a_large_frame_and_a_closing_harness_over_a_named_pipe() -> None:

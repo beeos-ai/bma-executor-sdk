@@ -215,7 +215,7 @@ class Harness:
 
         return await unix_serve(self._ws_handler, path, **self._ws_options())
 
-    def serve_npipe(self, name: str) -> Any:
+    async def serve_npipe(self, name: str) -> Any:
         """Listen for WebSocket channels on the Windows named pipe
         ``\\\\.\\pipe\\<name>`` (ProactorEventLoop, the Windows default);
         executors use ``npipe:////./pipe/<name>``. Returns a server with
@@ -232,7 +232,7 @@ class Harness:
 
             return handler
 
-        return _npipe.serve(name, admit, self.protocols, max_size=MAX_FRAME_BYTES)
+        return await _npipe.serve(name, admit, self.protocols, max_size=MAX_FRAME_BYTES)
 
     def inprocess_dialer(self) -> Dialer:
         """A Dialer that connects an ExecutorClient in the same event loop to

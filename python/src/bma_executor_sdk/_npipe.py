@@ -263,7 +263,7 @@ class NamedPipeServer:
             await asyncio.sleep(0.01)
 
 
-def serve(path_or_name: str, admit: Admit, subprotocols: Sequence[str], *, max_size: int) -> NamedPipeServer:
+async def serve(path_or_name: str, admit: Admit, subprotocols: Sequence[str], *, max_size: int) -> NamedPipeServer:
     """Listen on a named pipe for the current user (the first instance of the
     pipe name; Windows ProactorEventLoop)."""
     loop = asyncio.get_running_loop()
@@ -277,5 +277,5 @@ def serve(path_or_name: str, admit: Admit, subprotocols: Sequence[str], *, max_s
         ws.on_lost = connections.discard
         return ws
 
-    servers = loop.start_serving_pipe(factory, pipe_path(path_or_name))  # type: ignore[attr-defined]
+    servers = await loop.start_serving_pipe(factory, pipe_path(path_or_name))  # type: ignore[attr-defined]
     return NamedPipeServer(servers, connections)

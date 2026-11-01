@@ -9,7 +9,7 @@
 | WebSocket over loopback TCP | 脑（`Harness`） | `http.Serve(ln, harness)` + `StaticToken("ws://…", token)` | `harness.listen()` | `await harness.serve(host, port)` |
 | WebSocket over Unix domain socket（`unix://`） | 脑（`Harness`） | 在 `unix` listener 上服务 `Harness` + `StaticToken("unix:///path.sock", token)` | `harness.listenLocal(path)` | `await harness.serve_unix(path)` |
 | WebSocket over Unix domain socket | 手（executor） | `ListenUnixSocket(path, token)` + `Harness.DialExecutor(ctx, path, token)` | `listenExecutor({ path, token })` + `harness.dialExecutor(url, { token })` | 未提供 |
-| Windows named pipe（`npipe:////./pipe/<name>`），脑监听 | 脑（`Harness`） | 在 `NamedPipeListener(name)` 上服务 `Harness` + `StaticToken("npipe:////./pipe/<name>", token)` | `harness.listenLocal("\\\\.\\pipe\\<name>")` | `harness.serve_npipe(name)` |
+| Windows named pipe（`npipe:////./pipe/<name>`），脑监听 | 脑（`Harness`） | 在 `NamedPipeListener(name)` 上服务 `Harness` + `StaticToken("npipe:////./pipe/<name>", token)` | `harness.listenLocal("\\\\.\\pipe\\<name>")` | `await harness.serve_npipe(name)` |
 | Windows named pipe，手（executor）监听 | 手（executor） | `ListenNamedPipe(name, token)` + `Harness.DialExecutor(ctx, "npipe:////./pipe/<name>", token)` | 同上“执行端监听”行，路径换成 pipe 路径 | 未提供 |
 | 进程内 | — | `InProcessDialer(harness, principal)` | `harness.inProcessDialer()` | `harness.inprocess_dialer()` |
 
@@ -116,7 +116,7 @@ executor, _ := harness.WaitExecutor(ctx)
 
 TypeScript：[`executor/typescript/examples/harness-loopback`](../../executor/typescript/examples/harness-loopback/main.mjs)（`listenExecutor` + `dialExecutor`，Unix socket 或 named pipe）。
 
-Windows named pipe（Go）：调用相同，把 `ListenUnixSocket` 换成 `ListenNamedPipe(name, token)`，本机脑用 `harness.DialExecutor(ctx, "npipe:////./pipe/"+name, localToken)`（`\\.\pipe\<name>` 路径也可）。脑监听时，在 `NamedPipeListener(name)` 上服务 `Harness`，执行端用默认 dialer 或 `NamedPipeDialer(name)` 拨 `npipe:////./pipe/<name>`。非 Windows 平台这些调用返回 `ErrNamedPipeUnsupported`。Python 需要 Windows 的 `ProactorEventLoop`（Windows 上 asyncio 默认）：脑端 `harness.serve_npipe(name)`，执行端 `static_token("npipe:////./pipe/<name>", token)`。
+Windows named pipe（Go）：调用相同，把 `ListenUnixSocket` 换成 `ListenNamedPipe(name, token)`，本机脑用 `harness.DialExecutor(ctx, "npipe:////./pipe/"+name, localToken)`（`\\.\pipe\<name>` 路径也可）。脑监听时，在 `NamedPipeListener(name)` 上服务 `Harness`，执行端用默认 dialer 或 `NamedPipeDialer(name)` 拨 `npipe:////./pipe/<name>`。非 Windows 平台这些调用返回 `ErrNamedPipeUnsupported`。Python 需要 Windows 的 `ProactorEventLoop`（Windows 上 asyncio 默认）：脑端 `await harness.serve_npipe(name)`，执行端 `static_token("npipe:////./pipe/<name>", token)`。
 
 三种语言 SDK 的 named pipe 传输都在 CI 的 Windows runner 上测试（job `windows-named-pipe`）：Go 双向 loopback、TypeScript 本机 socket 测试、Go ↔ TypeScript ↔ Python 经 pipe 互通。
 
