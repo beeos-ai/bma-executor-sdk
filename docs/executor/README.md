@@ -49,7 +49,7 @@ Status labels used across these documents:
 
 - Cloud: the executor is always the WebSocket **client** and connects outbound (works behind NAT; the platform never dials in).
 - Local, executor dials: the local brain serves SDK `Harness` on loopback TCP or a local socket and the executor attaches a `Client` that dials it [Available].
-- Local, harness dials: the executor listens on a Unix domain socket (or a Windows named pipe in TypeScript) with a per-start token and the brain dials it with `Harness.DialExecutor` / `dialExecutor`; roles stay harness/executor [Available in the Go and TypeScript SDKs; bmad does not listen yet]. See [local connection](local-connection.md).
+- Local, harness dials: the executor listens on a Unix domain socket (or a Windows named pipe in Go and TypeScript) with a per-start token and the brain dials it with `Harness.DialExecutor` / `dialExecutor`; roles stay harness/executor [Available in the Go and TypeScript SDKs; bmad does not listen yet]. See [local connection](local-connection.md).
 
 ---
 
@@ -143,7 +143,8 @@ bma-sdks/executor (Go)
 | WebSocket over loopback TCP | local brain (`Harness`) ↔ local hand (`Client` + `Core`) | `StaticToken` + `HarnessOptions.Authenticate` | [Available] |
 | WebSocket over a Unix domain socket (`unix://`), executor dials | brain listens, hand dials | 0700 dir + 0600 socket + local token | [Available] Go, TypeScript, Python |
 | WebSocket over a Unix domain socket, harness dials | hand listens (`ListenUnixSocket` / `listenExecutor`), brain dials (`DialExecutor` / `dialExecutor`) | 0700 dir + 0600 socket + per-start token | [Available] Go, TypeScript |
-| Windows named pipe (`npipe://`) | as above, on Windows | current-user pipe + local token | [Available] TypeScript |
+| Windows named pipe (`npipe://`), executor dials | brain listens, hand dials | current-user pipe + local token | [Available] Go, TypeScript, Python (Windows) |
+| Windows named pipe, harness dials | hand listens (`ListenNamedPipe` / `listenExecutor`), brain dials | current-user pipe + per-start token | [Available] Go, TypeScript |
 | In process | brain and hand in one process | none | [Available] (`InProcessDialer`, `inProcessDialer`, `inprocess_dialer`) |
 
 Protocol messages are the same on every transport.

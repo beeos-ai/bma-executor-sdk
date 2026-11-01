@@ -9,7 +9,8 @@
 | WebSocket over loopback TCP | 脑（`Harness`） | `http.Serve(ln, harness)` + `StaticToken("ws://…", token)` | `harness.listen()` | `await harness.serve(host, port)` |
 | WebSocket over Unix domain socket（`unix://`） | 脑（`Harness`） | 在 `unix` listener 上服务 `Harness` + `StaticToken("unix:///path.sock", token)` | `harness.listenLocal(path)` | `await harness.serve_unix(path)` |
 | WebSocket over Unix domain socket | 手（executor） | `ListenUnixSocket(path, token)` + `Harness.DialExecutor(ctx, path, token)` | `listenExecutor({ path, token })` + `harness.dialExecutor(url, { token })` | 未提供 |
-| Windows named pipe（`npipe:////./pipe/<name>`） | 任一方 | 未提供 | 同上两行 | 未提供 |
+| Windows named pipe（`npipe:////./pipe/<name>`），脑监听 | 脑（`Harness`） | 在 `NamedPipeListener(name)` 上服务 `Harness` + `StaticToken("npipe:////./pipe/<name>", token)` | `harness.listenLocal("\\\\.\\pipe\\<name>")` | `harness.serve_npipe(name)` |
+| Windows named pipe，手（executor）监听 | 手（executor） | `ListenNamedPipe(name, token)` + `Harness.DialExecutor(ctx, "npipe:////./pipe/<name>", token)` | 同上“执行端监听”行，路径换成 pipe 路径 | 未提供 |
 | 进程内 | — | `InProcessDialer(harness, principal)` | `harness.inProcessDialer()` | `harness.inprocess_dialer()` |
 
 ---
@@ -91,7 +92,7 @@ _ = core.Attach("local", local)
 | 项 | 行为 |
 | --- | --- |
 | 方向 | 执行端监听、本机脑连入；连上后仍按 harness / executor 角色收发（执行端仍先发 `executor.register`） |
-| 位置 | 每用户运行目录；SDK 把目录设为 `0700`、socket 设为 `0600`。Windows（TypeScript）：当前用户的 named pipe |
+| 位置 | 每用户运行目录；SDK 把目录设为 `0700`、socket 设为 `0600`。Windows：named pipe `\\.\pipe\<name>`（URL `npipe:////./pipe/<name>`），拒绝远程客户端；Go 把 ACL 限定为当前用户，TypeScript / Python 使用平台默认的 pipe ACL，因此本机 token 才是鉴权依据 |
 | 本机 token | 每次启动生成（TypeScript 用 `createLocalToken` 写 `0600` 文件、`readLocalToken` 读取）；每次连接都必须带 `Authorization: Bearer` |
 | 网络 | 不监听任何网络接口 |
 | MCP | 拨号的 harness 也负责拨会话的 MCP 通道，server 重启后再次拨号 |
@@ -114,6 +115,10 @@ executor, _ := harness.WaitExecutor(ctx)
 ```
 
 TypeScript：[`executor/typescript/examples/harness-loopback`](../../executor/typescript/examples/harness-loopback/main.mjs)（`listenExecutor` + `dialExecutor`，Unix socket 或 named pipe）。
+
+Windows named pipe（Go）：调用相同，把 `ListenUnixSocket` 换成 `ListenNamedPipe(name, token)`，本机脑用 `harness.DialExecutor(ctx, "npipe:////./pipe/"+name, localToken)`（`\\.\pipe\<name>` 路径也可）。脑监听时，在 `NamedPipeListener(name)` 上服务 `Harness`，执行端用默认 dialer 或 `NamedPipeDialer(name)` 拨 `npipe:////./pipe/<name>`。非 Windows 平台这些调用返回 `ErrNamedPipeUnsupported`。Python 需要 Windows 的 `ProactorEventLoop`（Windows 上 asyncio 默认）：脑端 `harness.serve_npipe(name)`，执行端 `static_token("npipe:////./pipe/<name>", token)`。
+
+三种语言 SDK 的 named pipe 传输都在 CI 的 Windows runner 上测试（job `windows-named-pipe`）：Go 双向 loopback、TypeScript 本机 socket 测试、Go ↔ TypeScript ↔ Python 经 pipe 互通。
 
 bmad 目前还不监听本机 socket【即将提供】。支持后，本机脑用同样的 `DialExecutor` 连入；当本机脑注册为 agent 提供方时，bmad 在它的平台连接上声明 `capabilities.agent` 并转发 `turn.*` / 事件。
 
