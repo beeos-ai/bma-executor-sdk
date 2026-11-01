@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import os
+import sys
 import tempfile
 from collections.abc import AsyncIterator
 from typing import Any
@@ -14,8 +16,9 @@ import pytest
 
 import bma_executor_sdk as bx
 from bma_executor_sdk.generated import JsonRpcErrorCode
-from executor_helpers import RecordingPlatform
+from executor_helpers import RecordingPlatform, fake_named_pipes
 
+_PIPE_COUNTER = itertools.count()
 EXECUTOR = {"name": "py-test", "os": "linux", "arch": "arm64", "version": "0.1.0"}
 
 
@@ -29,6 +32,18 @@ async def listen(harness: bx.Harness, transport: str) -> AsyncIterator[tuple[str
         port = server.sockets[0].getsockname()[1]
         try:
             yield f"ws://127.0.0.1:{port}/v1/executors/channel", None
+        finally:
+            server.close()
+            await server.wait_closed()
+    elif transport == "npipe":
+        # The real named pipe on Windows; a Unix socket stands in elsewhere.
+        if sys.platform != "win32":
+            fake_named_pipes(asyncio.get_running_loop())
+        name = f"bma-py-test-{os.getpid()}-{next(_PIPE_COUNTER)}"
+        server = harness.serve_npipe(name)
+        await asyncio.sleep(0.05)
+        try:
+            yield f"npipe:////./pipe/{name}", None
         finally:
             server.close()
             await server.wait_closed()
@@ -56,7 +71,7 @@ def text_result(call: dict[str, Any], text: str) -> dict[str, Any]:
     return {"session_id": call["session_id"], "tool_call_id": call["tool_call_id"], "outcome": "succeeded", "is_error": False, "content": [{"type": "text", "text": text}]}
 
 
-@pytest.mark.parametrize("transport", ["inprocess", "ws", "unix"])
+@pytest.mark.parametrize("transport", ["inprocess", "ws", "unix", "npipe"])
 async def test_harness_drives_executor_client(transport: str) -> None:
     harness = bx.Harness(request_timeout=2.0)
     runs: list[str] = []
@@ -101,14 +116,15 @@ async def test_harness_drives_executor_client(transport: str) -> None:
         assert client.state == bx.generated.ConnectionState.Closed
 
 
-async def test_harness_authenticate_rejects_and_pins_identity() -> None:
+@pytest.mark.parametrize("transport", ["ws", "npipe"])
+async def test_harness_authenticate_rejects_and_pins_identity(transport: str) -> None:
     def authenticate(request: bx.ConnectRequest) -> bx.Principal:
         if request.bearer_token != "secret":
             raise bx.Unauthorized()
         return bx.Principal(executor_id="exe_pinned")
 
     harness = bx.Harness(authenticate=authenticate)
-    async with listen(harness, "ws") as (url, _):
+    async with listen(harness, transport) as (url, _):
         bad = make_client(url, None, token="wrong")
         with pytest.raises(Exception, match="401"):
             await bad.start()
@@ -223,9 +239,10 @@ async def test_newer_connection_replaces_older_with_4004() -> None:
         await first.stop()
 
 
-async def test_mcp_channel_is_isolated_by_session_and_server_key() -> None:
+@pytest.mark.parametrize("transport", ["unix", "npipe"])
+async def test_mcp_channel_is_isolated_by_session_and_server_key(transport: str) -> None:
     harness = bx.Harness()
-    async with listen(harness, "unix") as (url, _):
+    async with listen(harness, transport) as (url, _):
         client = make_client(url, None)
         await client.start()
         executor = await harness.wait_executor()

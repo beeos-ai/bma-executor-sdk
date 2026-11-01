@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import tempfile
 from typing import Any
 
 from bma_executor_sdk import AgentEventRecord
@@ -55,3 +57,26 @@ class RecordingPlatform:
                 await self.changed.wait()
 
         await asyncio.wait_for(loop(), timeout)
+
+
+def fake_named_pipes(loop: asyncio.AbstractEventLoop) -> None:
+    """Back create_pipe_connection and start_serving_pipe (Windows
+    ProactorEventLoop methods) with a Unix socket on other platforms, so the
+    named pipe transport is exercised everywhere. Windows uses the real pipe."""
+    directory = tempfile.mkdtemp(prefix="bmapipe")
+
+    def path(address: str) -> str:
+        return os.path.join(directory, address.rsplit("\\", 1)[-1])
+
+    class Listener:
+        def __init__(self, address: str, factory: Any) -> None:
+            self.task = asyncio.ensure_future(loop.create_unix_server(factory, path(address)))
+
+        def close(self) -> None:
+            if self.task.done():
+                self.task.result().close()
+            else:
+                self.task.add_done_callback(lambda task: task.result().close())
+
+    loop.create_pipe_connection = lambda factory, address: loop.create_unix_connection(factory, path(address))  # type: ignore[attr-defined]
+    loop.start_serving_pipe = lambda factory, address: [Listener(address, factory)]  # type: ignore[attr-defined]

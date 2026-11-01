@@ -2,13 +2,16 @@
 
 Every transport carries the same thing: WebSocket-style text messages, one
 JSON-RPC (control) or raw MCP (mcp) frame per message, with WebSocket close
-codes. Three are provided:
+codes. Four are provided:
 
 - ``ws://`` / ``wss://``: an outbound WebSocket (the BMA service, or a harness
   on a TCP listener).
 - ``unix:///path/to.sock``: the same WebSocket protocol over a Unix domain
   socket, for a harness on the same machine. The query string selects the
-  channel exactly as on ``ws://``. Windows named pipes are not implemented yet.
+  channel exactly as on ``ws://``.
+- ``npipe:////./pipe/<name>``: the same protocol over a Windows named pipe
+  (``\\\\.\\pipe\\<name>``), on the Windows ProactorEventLoop. Not available
+  elsewhere.
 - in-process: :meth:`Harness.inprocess_dialer` connects an executor to a
   harness in the same event loop without a socket.
 """
@@ -118,12 +121,17 @@ def _closed(error: Exception) -> ChannelClosed:
 
 
 async def dial(url: str, token: str, subprotocols: Sequence[str], *, max_size: int = MAX_FRAME_BYTES) -> Connection:
-    """Default dialer: ``ws://``, ``wss://`` and ``unix:///path?query``."""
+    """Default dialer: ``ws://``, ``wss://``, ``unix:///path?query`` and
+    ``npipe:////./pipe/name?query``."""
     from websockets.asyncio.client import connect, unix_connect
 
     headers = {"Authorization": f"Bearer {token}"} if token else None
     parts = urlsplit(url)
     offered = list(subprotocols)
+    if parts.scheme == "npipe":
+        from ._npipe import dial as dial_npipe
+
+        return await dial_npipe(url, token, offered, max_size=max_size)
     if parts.scheme == "unix":
         uri = "ws://localhost/v1/executors/channel" + (f"?{parts.query}" if parts.query else "")
         ws = await unix_connect(parts.path, uri, additional_headers=headers, subprotocols=offered, max_size=max_size)  # type: ignore[arg-type]
@@ -137,8 +145,8 @@ async def dial(url: str, token: str, subprotocols: Sequence[str], *, max_size: i
 def channel_url(base: str, **query: str) -> str:
     """Return base with the given query members set (used for the MCP channel)."""
     parts = urlsplit(base)
-    if parts.scheme not in ("ws", "wss", "unix", "inprocess"):
-        raise ValueError("bma_executor_sdk: channel URL must use ws, wss or unix")
+    if parts.scheme not in ("ws", "wss", "unix", "npipe", "inprocess"):
+        raise ValueError("bma_executor_sdk: channel URL must use ws, wss, unix or npipe")
     merged = dict(parse_qsl(parts.query))
     merged.update(query)
     return parts._replace(query=urlencode(merged)).geturl()

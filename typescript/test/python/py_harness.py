@@ -1,11 +1,13 @@
 """Python harness peer for test/interop-python.test.ts: serves WebSocket over a
-Unix domain socket (Harness.serve_unix), drives one TypeScript executor through
-a session (idempotent tool.call, MCP echo, session.stop), prints PASS."""
+Unix domain socket (Harness.serve_unix) or, for a Windows
+pipe path, a named pipe (Harness.serve_npipe); drives one TypeScript
+executor through a session (idempotent tool.call, MCP echo, session.stop), prints PASS."""
 
 import asyncio
 import sys
 
 import bma_executor_sdk as bx
+from bma_executor_sdk._npipe import PIPE_DIR, pipe_url
 
 
 async def main(path: str, token: str) -> None:
@@ -15,8 +17,12 @@ async def main(path: str, token: str) -> None:
         return bx.Principal()
 
     harness = bx.Harness(authenticate=authenticate, request_timeout=5)
-    server = await harness.serve_unix(path)
-    print(f"LISTEN unix://{path}", flush=True)
+    if path.startswith(PIPE_DIR):
+        server = harness.serve_npipe(path)
+        print(f"LISTEN {pipe_url(path)}", flush=True)
+    else:
+        server = await harness.serve_unix(path)
+        print(f"LISTEN unix://{path}", flush=True)
     executor = await asyncio.wait_for(harness.wait_executor(), 10)
     assert executor.protocol == bx.PROTOCOL_V11, executor.protocol
     session = await executor.assign_session({"session_id": "sess_py"})  # type: ignore[typeddict-item]

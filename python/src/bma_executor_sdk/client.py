@@ -91,7 +91,7 @@ class LogEvent:
 
 def static_token(ws_url: str, token: str = "") -> TokenSource:
     """TokenSource for a harness reached directly (a local harness on
-    ``ws://127.0.0.1``, ``unix:///path.sock`` or in-process). token may be empty
+    ``ws://127.0.0.1``, ``unix:///path.sock``, ``npipe:////./pipe/name`` or in-process). token may be empty
     when the harness has no authenticate hook."""
 
     async def source() -> ExecutorTokenResponse:
