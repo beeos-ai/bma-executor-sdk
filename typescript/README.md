@@ -12,13 +12,13 @@ socket or Windows named pipe (`unix://`, `npipe://`), in-process.
 
 | | |
 | --- | --- |
-| Version | 0.4.6 (tag `executor-ts/v0.4.6`), see [CHANGELOG](../../CHANGELOG.md) |
+| Version | 0.4.8 (tag `executor-ts/v0.4.8`), see [CHANGELOG](../../CHANGELOG.md) |
 | Protocol | `bma.executor.v1.1` (contract 1.1.0, [`lock.json`](../../contracts/bma/executor/lock.json)) |
 | Node.js | 20 or newer; ESM, depends on `ws` |
 | Integration guide | [docs/executor](../../docs/executor/README.md) ([中文](../../docs/executor/README.zh-CN.md)) |
 
 ```sh
-npm install @beeos-ai/bma-executor-sdk@0.4.6
+npm install @beeos-ai/bma-executor-sdk@0.4.8
 ```
 
 The REST / façade client is the separate package
@@ -155,7 +155,7 @@ executor and in-memory platform in one process).
 | `AgentPlatform` | `AgentPlatform` |
 | `*RPCError`, `ErrNotConnected`, `ErrClientStopped`, `ErrSessionEnded`, `ErrToolOutcomeUnknown`, `ErrAssignRejected` | `RpcError`, `NotConnectedError`, `ClientStoppedError`, `SessionEndedError`, `ToolOutcomeUnknownError`, `AssignRejectedError` |
 | `Core` (bash/files/stdio MCP) | not provided |
-| `StaticToken("unix://…")`, `ListenUnixSocket` + `Harness.DialExecutor`, `InProcessDialer` | `Harness.listenLocal` / `listenExecutor` + `Harness.dialExecutor` / `inProcessDialer` (named pipes only in TypeScript) |
+| `StaticToken("unix://…")`, `ListenUnixSocket` + `Harness.DialExecutor`, `InProcessDialer` | `Harness.listenLocal` / `listenExecutor` + `Harness.dialExecutor` / `inProcessDialer` (named pipes in Go: `ListenNamedPipe`, `NamedPipeListener`; Python: `serve_npipe`) |
 
 ### Tests
 

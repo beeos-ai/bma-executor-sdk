@@ -106,7 +106,7 @@
     },
     "ProcessCapability": {
       "type": "object",
-      "description": "v1.1 process.* support. pty, file_transfer and git_credentials are additive: the harness only sends the matching process.start fields to an executor that set them, and fails the process explicitly otherwise.",
+      "description": "v1.1 process.* support. pty, file_transfer, package_install and git_credentials are additive: the harness only sends the matching process.start fields to an executor that set them, and fails the process explicitly otherwise.",
       "properties": {
         "enabled": {
           "type": "boolean"
@@ -130,6 +130,10 @@
         "git_credentials": {
           "type": "boolean",
           "description": "Accepts process.start git_credentials."
+        },
+        "package_install": {
+          "type": "boolean",
+          "description": "Accepts process.start package_install."
         }
       },
       "required": [

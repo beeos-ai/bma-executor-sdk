@@ -1,9 +1,26 @@
 # Changelog
 
-## Unreleased
+## bma-executor-sdk v0.4.8
 
-### Features (Go core; contract types in all three languages)
+Released 2026-11-01 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.8) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.8) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.8).
 
+Go tag `executor/v0.4.8`, npm `@beeos-ai/bma-executor-sdk@0.4.8`, PyPI
+`bma-executor-sdk` 0.4.8 (tag `executor-python/v0.4.8`).
+
+### Features
+
+- Contract (additive): `process.start package_install {manager: apt|pip|npm,
+  packages[]}` and `capabilities.process.package_install`. Generated types in
+  Go, TypeScript and Python.
+- Go `Core`: `ProcessOptions.PackageInstaller` serves it. The core validates
+  the request (manager enum; 1-32 plain package names matching
+  `^[A-Za-z0-9][A-Za-z0-9.+-]{0,127}$`, so no option, version, path, URL or
+  shell syntax; excludes argv, io_mode, file_transfer and git_credentials) and
+  runs the installer's fixed command as a process with stdin closed: output,
+  read, timeout and terminate work as for any process. Only a command the
+  installer marks `Privileged` keeps the executor's identity; everything else
+  runs as `CoreOptions.RunAs`. Without an installer the field is answered
+  with `capability_unavailable` (`process.package_install`).
 - **stdio MCP `secret_env`.** The core advertises `capabilities.mcp.secret_env`
   and accepts `session.assign.mcp_servers[].transport.secret_env`: values the
   server resolved from `secret:` references. They are added to that server's
@@ -13,6 +30,48 @@
   only; violations fail `session.assign` with `invalid_params` naming the
   variable, never its value. A `secret:` reference left in `env` is still
   refused.
+
+## bma-executor-sdk v0.4.7
+
+Released 2026-11-01 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.7) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.7) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.7).
+
+Go tag `executor/v0.4.7`, npm `@beeos-ai/bma-executor-sdk@0.4.7`, PyPI
+`bma-executor-sdk` 0.4.7 (tag `executor-python/v0.4.7`).
+
+### Fixes (Go `Core`)
+
+- The stdio MCP supervisor no longer gives up after 5 consecutive failures.
+  It retries until the session ends, with exponential backoff from 200ms
+  capped at 30s and jitter, and resets the backoff once a channel stays open
+  for 1s. A channel the harness rejected for a while (for example a `404`
+  from a replica during a rollout) now recovers within the session.
+  `mcp_unavailable: <key>` is still reported once per outage after 5
+  failures, and each failure is logged with its cause. TypeScript and Python
+  have no MCP supervisor and are unchanged apart from the version.
+
+## bma-sdk v0.4.1
+
+Tags `go/v0.4.1`, `ts/v0.4.1`, `python/v0.4.1` (`github.com/beeos-ai/bma-sdks/go`,
+`@beeos-ai/bma-sdk@0.4.1`, PyPI `bma-sdk` 0.4.1). Contract refreshed to
+beeos-ai/beeos-managed-agents@db2403f9.
+
+### Breaking changes (Go)
+
+- **Go nullable fields are now pointers (callers must dereference).** A
+  nullable `$ref` (`anyOf`/`oneOf` with `null`) was generated as a plain value
+  because OpenAPI 3.0 ignores keywords beside `$ref`, so `null` decoded to the
+  zero value and could not be told apart from a real one. `tools/downgrade_openapi.py`
+  now wraps it as `allOf: [$ref]` + `nullable: true`. For example
+  `File.Scope` is `*FileScope`, `AgentMachine.MachinePoolId` and
+  `Machine.MachinePoolId` are `*MachinePoolID`, and the nullable `Timestamp`
+  fields (`CronTrigger.LastFiredAt`, `PersonalAccessToken.RevokedAt`, ...) are
+  `*Timestamp`. Required nullable fields marshal `null` when nil. Optional
+  nullable fields keep `omitempty`. TypeScript and Python already modelled null.
+
+### Features
+
+- Contract: agent executor binding (`GetAgentExecutorBinding`,
+  `PutAgentExecutorBinding`) and MCP transport schemas, in all three SDKs.
 
 ## bma-executor-sdk v0.4.6
 

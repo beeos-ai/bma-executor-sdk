@@ -515,19 +515,26 @@ class McpTransportType(str, Enum):
     Stdio = "stdio"
     Http = "http"
 
+class PackageManager(str, Enum):
+    """Package manager for process.start package_install."""
+    Apt = "apt"
+    Pip = "pip"
+    Npm = "npm"
+
 class PermissionMode(str, Enum):
     """Tool permission mode; always_ask means the harness already resolved approval."""
     AlwaysAllow = "always_allow"
     AlwaysAsk = "always_ask"
 
 class ProcessCapability(TypedDict):
-    """v1.1 process.* support. pty, file_transfer and git_credentials are additive: the harness only sends the matching process.start fields to an executor that set them, and fails the process explicitly otherwise."""
+    """v1.1 process.* support. pty, file_transfer, package_install and git_credentials are additive: the harness only sends the matching process.start fields to an executor that set them, and fails the process explicitly otherwise."""
     enabled: bool
     max_processes: NotRequired[int]
     buffer_bytes: NotRequired[int]
     pty: NotRequired[bool]
     file_transfer: NotRequired[bool]
     git_credentials: NotRequired[bool]
+    package_install: NotRequired[bool]
 
 class ProcessFileTransfer(TypedDict):
     """Replaces argv: the executor moves one file between the machine and the process BMA file endpoint and reports the outcome in ProcessState.file_transfer. Requires process.file_transfer."""
@@ -537,6 +544,11 @@ class ProcessFileTransfer(TypedDict):
 class ProcessListResult(TypedDict):
     """process.list result."""
     processes: list[ProcessState]
+
+class ProcessPackageInstall(TypedDict):
+    """Replaces argv: the executor installs packages with a fixed command it builds itself, streaming the package manager output as the process output. apt installs from the machine's configured (official) sources with the executor's own privileges; pip (--user) and npm (global under the workload user's ~/.local) run as the workload user. Package names are plain names only: no options, versions, paths or URLs. Requires process.package_install."""
+    manager: PackageManager
+    packages: list[str]
 
 class ProcessReadResult(TypedDict):
     """process.read result."""
@@ -928,6 +940,7 @@ class ProcessStartParams(TypedDict):
     metadata: NotRequired[dict[str, str]]
     io_mode: NotRequired[IOMode]
     file_transfer: NotRequired[ProcessFileTransfer]
+    package_install: NotRequired[ProcessPackageInstall]
     git_credentials: NotRequired[bool]
 
 class ProcessReadParams(TypedDict):

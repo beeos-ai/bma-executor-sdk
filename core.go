@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,8 +29,8 @@ const (
 	DefaultCoreBashTimeout       = 10 * time.Minute
 	DefaultCoreMaxOutputBytes    = 1024 * 1024
 	DefaultCoreInlineResultBytes = 48 * 1024
-	coreMCPMaxConsecutiveFailure = 5
-	coreMCPHealthyRun            = 30 * time.Second
+	coreMCPUnavailableAfter      = 5
+	coreMCPHealthyRun            = time.Second
 	maxGrepMatches               = 200
 	previewBytes                 = 8 * 1024
 	maxEnvEntries                = 64
@@ -1117,34 +1118,55 @@ func (c *Core) grep(session *CoreSession, input ToolInput) (ToolResultParams, er
 // and bridges it to an MCP channel opened by client: each channel frame is
 // one line on the server's stdin, each stdout line one channel frame. When
 // either side ends, both are torn down and restarted with backoff, so every
-// channel talks to a fresh server; after repeated failures the server is
-// reported as mcp_unavailable. firstDone is called after the first attempt.
+// channel talks to a fresh server. Retries continue until the session ends,
+// with capped, jittered backoff (mcpRetryDelay) that restarts once a channel
+// stayed open for coreMCPHealthyRun; after coreMCPUnavailableAfter
+// consecutive failures the server is reported as mcp_unavailable once per
+// outage. firstDone is called after the first attempt.
 func (c *Core) superviseMCP(client *Client, session *CoreSession, server MCPServerConfig, firstDone func()) {
 	var once sync.Once
 	defer once.Do(firstDone)
 	failures := 0
 	for session.ctx.Err() == nil {
-		started := time.Now()
-		err := c.runMCPOnce(client, session, server, func() { once.Do(firstDone) })
+		var opened time.Time
+		err := c.runMCPOnce(client, session, server, func() { opened = time.Now(); once.Do(firstDone) })
 		once.Do(firstDone)
 		if session.ctx.Err() != nil {
 			return
 		}
-		if time.Since(started) > coreMCPHealthyRun {
+		if !opened.IsZero() && time.Since(opened) >= coreMCPHealthyRun {
 			failures = 0
 		}
 		failures++
-		c.log(LogWarn, "mcp server "+server.ServerKey+" ended", err)
-		if failures >= coreMCPMaxConsecutiveFailure {
+		delay := mcpRetryDelay(failures)
+		c.log(LogWarn, fmt.Sprintf("mcp server %s ended (failure %d, retrying in %s)", server.ServerKey, failures, delay.Round(time.Millisecond)), err)
+		if failures == coreMCPUnavailableAfter {
 			c.status(client, session, SessionStatusError, "mcp_unavailable: "+server.ServerKey)
-			return
 		}
 		select {
 		case <-session.ctx.Done():
 			return
-		case <-time.After(time.Duration(1<<failures) * 100 * time.Millisecond):
+		case <-time.After(delay):
 		}
 	}
+}
+
+// The MCP supervisor's retry backoff (variables so tests can shorten them).
+var (
+	coreMCPRetryBase = 200 * time.Millisecond
+	coreMCPRetryMax  = 30 * time.Second
+)
+
+// mcpRetryDelay is the wait before the next attempt after failures
+// consecutive failures: exponential from coreMCPRetryBase, capped at
+// coreMCPRetryMax, with jitter in [d/2, d] so executors that lost the same
+// server do not redial in lockstep.
+func mcpRetryDelay(failures int) time.Duration {
+	delay := coreMCPRetryMax
+	if shift := failures - 1; shift < 30 && coreMCPRetryBase<<shift < coreMCPRetryMax {
+		delay = coreMCPRetryBase << shift
+	}
+	return delay/2 + rand.N(delay/2+1)
 }
 
 func (c *Core) runMCPOnce(client *Client, session *CoreSession, server MCPServerConfig, opened func()) error {

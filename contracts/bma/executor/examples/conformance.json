@@ -575,6 +575,30 @@
       }
     },
     {
+      "name": "process.start package install request",
+      "method": "process.start",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_pkg",
+        "method": "process.start",
+        "params": {
+          "session_id": "sess_01JABC",
+          "process_id": "proc_pkg",
+          "argv": [],
+          "stderr": "merge",
+          "timeout_ms": 900000,
+          "package_install": {
+            "manager": "apt",
+            "packages": [
+              "jq",
+              "libssl3"
+            ]
+          }
+        }
+      }
+    },
+    {
       "name": "process.start file transfer result",
       "method": "process.start",
       "kind": "result",

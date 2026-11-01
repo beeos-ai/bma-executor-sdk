@@ -1037,7 +1037,7 @@ components:
       name: process.start
       title: process.start
       summary: Start a process.
-      description: 'Harness to executor request (v1.1 §3.3). Idempotent by (session_id, process_id): a repeat returns the live state. wait_ms waits up to that long for the process to end before answering. A spawn failure is an error with data.reason "spawn_failed". io_mode, file_transfer and git_credentials each require the matching process capability bit.'
+      description: 'Harness to executor request (v1.1 §3.3). Idempotent by (session_id, process_id): a repeat returns the live state. wait_ms waits up to that long for the process to end before answering. A spawn failure is an error with data.reason "spawn_failed". io_mode, file_transfer, package_install and git_credentials each require the matching process capability bit.'
       contentType: application/json
       payload:
         type: object
@@ -1090,6 +1090,8 @@ components:
                 $ref: schemas/process.json#/$defs/IOMode
               file_transfer:
                 $ref: schemas/process.json#/$defs/ProcessFileTransfer
+              package_install:
+                $ref: schemas/process.json#/$defs/ProcessPackageInstall
               git_credentials:
                 type: boolean
             required:

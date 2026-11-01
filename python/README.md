@@ -6,13 +6,13 @@ asyncio executor (`ExecutorClient`), harness (`Harness`) and agent ends of the B
 
 | | |
 | --- | --- |
-| Version | 0.4.6 (tag `executor-python/v0.4.6`), see [CHANGELOG](../../CHANGELOG.md) |
+| Version | 0.4.8 (tag `executor-python/v0.4.8`), see [CHANGELOG](../../CHANGELOG.md) |
 | Protocol | `bma.executor.v1.1` (contract 1.1.0, [`lock.json`](../../contracts/bma/executor/lock.json)) |
 | Python | 3.10 or newer; depends on `httpx` and `websockets` |
 | Integration guide | [docs/executor](../../docs/executor/README.md) ([中文](../../docs/executor/README.zh-CN.md)) |
 
 ```sh
-pip install bma-executor-sdk==0.4.6
+pip install bma-executor-sdk==0.4.8
 ```
 
 The REST / façade client is the separate package [`bma-sdk`](../../python).
@@ -76,9 +76,10 @@ Chosen by the channel URL of the token source:
 | --- | --- | --- |
 | WebSocket (`ws://`, `wss://`) | default | `await harness.serve(host, port)` |
 | WebSocket over a Unix domain socket (`unix:///path.sock`) | `token_source=static_token("unix:///path.sock", token)` | `await harness.serve_unix(path)` |
+| Windows named pipe (`npipe:////./pipe/<name>`, Windows ProactorEventLoop) | `token_source=static_token("npipe:////./pipe/<name>", token)` | `await harness.serve_npipe(name)` |
 | In process | `dialer=harness.inprocess_dialer()` | — |
 
-The executor-listens local socket and Windows named pipes are not implemented in Python (use the Go or TypeScript SDK). See [local connection](../../docs/executor/local-connection.md).
+The executor-listens local socket is not implemented in Python (use the Go or TypeScript SDK); named pipes need the Windows `ProactorEventLoop` (the asyncio default there) and are tested on a Windows runner in CI. See [local connection](../../docs/executor/local-connection.md).
 
 ## Agent executors
 

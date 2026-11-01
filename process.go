@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -58,6 +59,31 @@ type GitCredentialGranter interface {
 	Grant(processID string, env []string) ([]string, func(), error)
 }
 
+// PackageInstaller builds the command for a process.start package_install.
+// The core has already checked manager and packages against the contract
+// (one of apt, pip, npm; plain package names only), so the installer passes
+// the packages as separate arguments after its own fixed options.
+type PackageInstaller interface {
+	PackageInstallCommand(processID string, install ProcessPackageInstall) (PackageInstallCommand, error)
+}
+
+// PackageInstallCommand is the fixed command one package install runs. Env
+// is its complete environment. Privileged runs it with the executor's own
+// identity instead of CoreOptions.RunAs: system package managers need root,
+// user-level ones must not get it.
+type PackageInstallCommand struct {
+	Argv       []string
+	Dir        string
+	Env        []string
+	Privileged bool
+}
+
+// packageNamePattern is a plain package name: no option, version, release,
+// path, URL or shell syntax can pass it.
+var packageNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+-]{0,127}$`)
+
+const maxPackages = 32
+
 // ProcessOptions configures the process capability. Nil hooks leave the
 // matching capability bit unset, and the core rejects those process.start
 // fields with capability_unavailable.
@@ -67,6 +93,8 @@ type ProcessOptions struct {
 	Env            map[string]string
 	FileTransfer   FileTransferer
 	GitCredentials GitCredentialGranter
+	// PackageInstaller serves process.start package_install.
+	PackageInstaller PackageInstaller
 }
 
 // NewProcessCapability serves process.start/read/write/interrupt/terminate/list
@@ -81,6 +109,7 @@ func NewProcessCapability(core *Core, opts ProcessOptions) Capability {
 			capabilities.Process = &ProcessCapability{
 				Enabled: true, MaxProcesses: MaxProcessesPerSession, BufferBytes: ProcessBufferBytes,
 				PTY: ptySupported, FileTransfer: opts.FileTransfer != nil, GitCredentials: opts.GitCredentials != nil,
+				PackageInstall: opts.PackageInstaller != nil,
 			}
 		},
 		SessionScoped: true,
@@ -271,7 +300,24 @@ func validateStart(params ProcessStartParams) error {
 	if params.IOMode != "" && params.IOMode != IOModePTY {
 		return invalidParams("io_mode must be empty or pty")
 	}
-	if params.FileTransfer != nil {
+	if install := params.PackageInstall; install != nil {
+		if len(params.Argv) != 0 || params.IOMode != "" || params.GitCredentials || params.FileTransfer != nil {
+			return invalidParams("package_install excludes argv, io_mode, file_transfer and git_credentials")
+		}
+		switch install.Manager {
+		case PackageManagerApt, PackageManagerPip, PackageManagerNpm:
+		default:
+			return invalidParams("package_install.manager must be apt, pip or npm")
+		}
+		if len(install.Packages) == 0 || len(install.Packages) > maxPackages {
+			return invalidParams("package_install.packages must have 1-%d entries", maxPackages)
+		}
+		for _, name := range install.Packages {
+			if !packageNamePattern.MatchString(name) {
+				return invalidParams("package_install.packages: %q is not a plain package name", name)
+			}
+		}
+	} else if params.FileTransfer != nil {
 		if len(params.Argv) != 0 || params.IOMode != "" || params.GitCredentials {
 			return invalidParams("file_transfer excludes argv, io_mode and git_credentials")
 		}
@@ -312,17 +358,18 @@ func validateStart(params ProcessStartParams) error {
 
 func startSpecHash(params ProcessStartParams) string {
 	normalized, _ := json.Marshal(struct {
-		Argv           []string             `json:"argv"`
-		Cwd            string               `json:"cwd"`
-		Env            map[string]string    `json:"env"`
-		Stdin          string               `json:"stdin"`
-		Stderr         string               `json:"stderr"`
-		TimeoutMS      int64                `json:"timeout_ms"`
-		IOMode         string               `json:"io_mode"`
-		FileTransfer   *ProcessFileTransfer `json:"file_transfer"`
-		GitCredentials bool                 `json:"git_credentials"`
+		Argv           []string               `json:"argv"`
+		Cwd            string                 `json:"cwd"`
+		Env            map[string]string      `json:"env"`
+		Stdin          string                 `json:"stdin"`
+		Stderr         string                 `json:"stderr"`
+		TimeoutMS      int64                  `json:"timeout_ms"`
+		IOMode         string                 `json:"io_mode"`
+		FileTransfer   *ProcessFileTransfer   `json:"file_transfer"`
+		PackageInstall *ProcessPackageInstall `json:"package_install"`
+		GitCredentials bool                   `json:"git_credentials"`
 	}{params.Argv, params.Cwd, params.Env, params.Stdin, params.Stderr, params.TimeoutMS,
-		params.IOMode, params.FileTransfer, params.GitCredentials})
+		params.IOMode, params.FileTransfer, params.PackageInstall, params.GitCredentials})
 	sum := sha256.Sum256(normalized)
 	return hex.EncodeToString(sum[:])
 }
@@ -347,6 +394,9 @@ func (p *processes) start(ctx context.Context, req Request) (any, error) {
 	case params.FileTransfer != nil && p.opts.FileTransfer == nil:
 		return nil, &RPCError{Code: CodeCapabilityUnavailable, Message: "file transfers are not supported by this executor",
 			Data: &JSONRPCErrorData{Capability: "process.file_transfer"}}
+	case params.PackageInstall != nil && p.opts.PackageInstaller == nil:
+		return nil, &RPCError{Code: CodeCapabilityUnavailable, Message: "package installs are not supported by this executor",
+			Data: &JSONRPCErrorData{Capability: "process.package_install"}}
 	case params.GitCredentials && p.opts.GitCredentials == nil:
 		return nil, &RPCError{Code: CodeCapabilityUnavailable, Message: "Git credentials are not supported by this executor",
 			Data: &JSONRPCErrorData{Capability: "process.git_credentials"}}
@@ -384,6 +434,9 @@ func (p *processes) create(session *CoreSession, params ProcessStartParams) (*pr
 	if params.FileTransfer != nil {
 		return p.startTransfer(params), nil
 	}
+	if params.PackageInstall != nil {
+		return p.startPackageInstall(params)
+	}
 	cwd, err := session.ResolveCwd(params.Cwd)
 	if err != nil {
 		return nil, invalidParams("%v", err)
@@ -407,6 +460,29 @@ func (p *processes) create(session *CoreSession, params ProcessStartParams) (*pr
 		return nil, spawnFailed(err)
 	}
 	proc.onEnd = release
+	return proc, nil
+}
+
+// startPackageInstall runs the installer's fixed command with stdin closed;
+// only a privileged command keeps the executor's identity.
+func (p *processes) startPackageInstall(params ProcessStartParams) (*process, error) {
+	command, err := p.opts.PackageInstaller.PackageInstallCommand(params.ProcessID, *params.PackageInstall)
+	if err != nil {
+		return nil, invalidParams("%v", err)
+	}
+	if len(command.Argv) == 0 {
+		return nil, spawnFailed(errors.New("package installer returned no command"))
+	}
+	runAs := p.core.opts.RunAs
+	if command.Privileged {
+		runAs = nil
+	}
+	spawnParams := params
+	spawnParams.Argv, spawnParams.Stdin, spawnParams.PackageInstall = command.Argv, StdinClosed, nil
+	proc, err := spawn(spawnParams, command.Dir, command.Env, runAs)
+	if err != nil {
+		return nil, spawnFailed(err)
+	}
 	return proc, nil
 }
 

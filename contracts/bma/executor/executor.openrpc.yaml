@@ -606,8 +606,8 @@ methods:
     summary: Start a process.
     description: 'Harness to executor request (v1.1 §3.3). Idempotent by (session_id, process_id): a
       repeat returns the live state. wait_ms waits up to that long for the process to end before
-      answering. A spawn failure is an error with data.reason "spawn_failed". io_mode, file_transfer
-      and git_credentials each require the matching process capability bit.'
+      answering. A spawn failure is an error with data.reason "spawn_failed". io_mode, file_transfer,
+      package_install and git_credentials each require the matching process capability bit.'
     tags:
       - name: process
     x-bma-direction: harness-to-executor
@@ -628,7 +628,7 @@ methods:
       - name: argv
         required: true
         description: Command and arguments (at most 256 entries, 4 KiB each, 16 KiB total). Must be empty
-          when file_transfer is set.
+          when file_transfer or package_install is set.
         schema:
           type: array
           items:
@@ -683,6 +683,12 @@ methods:
           git_credentials.
         schema:
           $ref: schemas/process.json#/$defs/ProcessFileTransfer
+      - name: package_install
+        required: false
+        description: Requires capability process.package_install. Excludes argv entries, io_mode,
+          file_transfer and git_credentials.
+        schema:
+          $ref: schemas/process.json#/$defs/ProcessPackageInstall
       - name: git_credentials
         required: false
         description: Installs a per-process Git credential helper for https://github.com that fetches

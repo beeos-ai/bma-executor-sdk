@@ -1,5 +1,5 @@
 // Cross-language interop with the Go SDK over WebSocket on a Unix domain
-// socket: TS executor ↔ Go harness (mcpharness -unix) and Go executor ↔ TS
+// socket or Windows named pipe: TS executor ↔ Go harness (mcpharness -unix/-npipe) and Go executor ↔ TS
 // harness (listenLocal, unix:// URL), each with a tool call and an MCP echo.
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
@@ -9,12 +9,12 @@ import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { before, describe, test } from 'node:test'
 
-import { bearerAuthenticator, Harness, staticToken, webSocketDialer } from '../src/index.js'
-import { executorInfo, socketPath, testExecutor, waitFor } from './helpers.js'
+import { bearerAuthenticator, Harness, localUrl, staticToken, webSocketDialer } from '../src/index.js'
+import { executorInfo, goListenArgs, socketPath, testExecutor, waitFor } from './helpers.js'
 
 const goDir = resolve(process.cwd(), '..')
 const binDir = mkdtempSync(join(tmpdir(), 'bma-interop-unix-'))
-const bin = (name: string) => join(binDir, name)
+const bin = (name: string) => join(binDir, process.platform === 'win32' ? `${name}.exe` : name)
 
 before(() => {
   for (const name of ['mcpharness', 'mcpexecutor']) {
@@ -30,14 +30,14 @@ function startGo(name: string, args: string[]) {
   return { child, lines, exited }
 }
 
-describe('cross-language interop with the Go SDK (WebSocket over UDS)', { timeout: 120_000 }, () => {
+describe('cross-language interop with the Go SDK (WebSocket over UDS or a Windows named pipe)', { timeout: 120_000 }, () => {
   test('TypeScript executor ↔ Go harness', async () => {
     const path = await socketPath('go')
-    const peer = startGo('mcpharness', ['-unix', path])
+    const peer = startGo('mcpharness', goListenArgs(path))
     try {
       await waitFor(() => peer.lines.some((line) => line.startsWith('LISTEN ')), 15_000)
       const url = peer.lines.find((line) => line.startsWith('LISTEN '))!.slice('LISTEN '.length)
-      assert.equal(url, `unix://${path}`)
+      assert.equal(url, localUrl(path))
       const { client } = testExecutor({
         dialer: webSocketDialer({ environmentId: 'env_interop', executor: executorInfo, tokenSource: staticToken(url, '') }),
         reconnect: false,
