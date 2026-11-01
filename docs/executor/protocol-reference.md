@@ -373,7 +373,7 @@ See §4.17.
 - At most one channel per `(environment, session_id, server_key)`; a newer one replaces the older (closed with 1001). `session_id` ≤256, `server_key` ≤128 bytes. Frames ≤1 MiB (else 1009).
 - Each frame is one MCP JSON-RPC message; the harness does `initialize`, `notifications/initialized`, `tools/list`, `tools/call`; the executor bridges newline-delimited stdio JSON-RPC. MCP errors pass through unchanged; never fake an empty `tools/list`.
 - Config (`schemas/mcp.json`): `connection_origin:"service"` = the harness connects itself; `"environment"` = the executor starts/connects. stdio: no shell, `cwd` inside the session workspace, explicit `env`, verify `command_sha256` when given.
-- Lifecycle (SDK `Core`): one process per (brain, session, server_key); restart with backoff when either side ends (the channel sees a fresh server: re-initialize); after 5 consecutive failures `session.status` `error` / `mcp_unavailable: <key>`; all closed when the session ends; sessions never share stdio pipes.
+- Lifecycle (SDK `Core`): one process per (brain, session, server_key); restart with backoff when either side ends (the channel sees a fresh server: re-initialize); retries continue until the session ends (0.4.7+: exponential backoff from 200ms capped at 30s with jitter, reset once a channel stays open for 1s); after 5 consecutive failures `session.status` `error` / `mcp_unavailable: <key>` once per outage; all closed when the session ends; sessions never share stdio pipes.
 
 ### 7.1 Chrome MCP and computer-use (executor requirements)
 

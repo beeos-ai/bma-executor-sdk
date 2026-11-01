@@ -1,5 +1,23 @@
 # Changelog
 
+## bma-executor-sdk v0.4.7
+
+Released 2026-11-01 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.7) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.7) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.7).
+
+Go tag `executor/v0.4.7`, npm `@beeos-ai/bma-executor-sdk@0.4.7`, PyPI
+`bma-executor-sdk` 0.4.7 (tag `executor-python/v0.4.7`).
+
+### Fixes (Go `Core`)
+
+- The stdio MCP supervisor no longer gives up after 5 consecutive failures.
+  It retries until the session ends, with exponential backoff from 200ms
+  capped at 30s and jitter, and resets the backoff once a channel stays open
+  for 1s. A channel the harness rejected for a while (for example a `404`
+  from a replica during a rollout) now recovers within the session.
+  `mcp_unavailable: <key>` is still reported once per outage after 5
+  failures, and each failure is logged with its cause. TypeScript and Python
+  have no MCP supervisor and are unchanged apart from the version.
+
 ## bma-executor-sdk v0.4.6
 
 Released 2026-11-01 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.6) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.6) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.6).
