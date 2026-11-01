@@ -53,7 +53,7 @@ WebSocket 上谁是客户端、谁是服务端，与协议角色无关：
 
 - 连云端：executor 永远是 WebSocket **客户端**，主动出站（NAT 后可用，平台从不拨入）。
 - 本机，执行端拨号：本机脑把 SDK `Harness` 挂在 loopback TCP 或本机 socket 上，执行端接一个 `Client` 拨过去【已有】。
-- 本机，harness 拨号：执行端监听 Unix domain socket（TypeScript 还支持 Windows named pipe），每次启动生成本机 token，本机脑用 `Harness.DialExecutor` / `dialExecutor` 连进来；连上后仍按 harness / executor 角色收发【Go 与 TypeScript SDK 已有；bmad 尚未监听】。见[本机连接与鉴权](local-connection.zh-CN.md)。
+- 本机，harness 拨号：执行端监听 Unix domain socket（Go 与 TypeScript 还支持 Windows named pipe），每次启动生成本机 token，本机脑用 `Harness.DialExecutor` / `dialExecutor` 连进来；连上后仍按 harness / executor 角色收发【Go 与 TypeScript SDK 已有；bmad 尚未监听】。见[本机连接与鉴权](local-connection.zh-CN.md)。
 
 ---
 
@@ -147,7 +147,8 @@ bma-sdks/executor（Go）
 | WebSocket over loopback TCP | 本机脑（`Harness`）↔ 本机手（`Client`+`Core`） | `StaticToken` + `HarnessOptions.Authenticate` | 【已有】 |
 | WebSocket over Unix domain socket（`unix://`），执行端拨号 | 脑监听、手拨号 | 0700 目录 + 0600 socket + 本机 token | 【已有】Go、TypeScript、Python |
 | WebSocket over Unix domain socket，harness 拨号 | 手监听（`ListenUnixSocket` / `listenExecutor`），脑拨号（`DialExecutor` / `dialExecutor`） | 0700 目录 + 0600 socket + 每次启动的 token | 【已有】Go、TypeScript |
-| Windows named pipe（`npipe://`） | 同上，Windows | 当前用户的 pipe + 本机 token | 【已有】TypeScript |
+| Windows named pipe（`npipe://`），执行端拨号 | 脑监听、手拨号 | 当前用户的 pipe + 本机 token | 【已有】Go、TypeScript、Python（Windows） |
+| Windows named pipe，harness 拨号 | 手监听（`ListenNamedPipe` / `listenExecutor`）、脑拨号 | 当前用户的 pipe + 每次启动 token | 【已有】Go、TypeScript |
 | 进程内 | 脑和手在同一进程 | 无 | 【已有】（`InProcessDialer`、`inProcessDialer`、`inprocess_dialer`） |
 
 协议消息在所有方式下不变。

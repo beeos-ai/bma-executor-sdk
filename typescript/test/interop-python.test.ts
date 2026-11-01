@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { describe, test } from 'node:test'
 
-import { bearerAuthenticator, Harness, staticToken, webSocketDialer } from '../src/index.js'
+import { bearerAuthenticator, Harness, localUrl, staticToken, webSocketDialer } from '../src/index.js'
 import { executorInfo, socketPath, testExecutor, waitFor } from './helpers.js'
 
 const pythonSdk = resolve(process.env.BMA_PYTHON_SDK ?? join(process.cwd(), '../python'))
@@ -36,7 +36,7 @@ describe('cross-language interop with the Python SDK (WebSocket over UDS)', { sk
     try {
       await waitFor(() => peer.lines.some((line) => line.startsWith('LISTEN ')), 15_000)
       const url = peer.lines.find((line) => line.startsWith('LISTEN '))!.slice('LISTEN '.length)
-      assert.equal(url, `unix://${path}`)
+      assert.equal(url, localUrl(path))
       const { client, runs } = testExecutor({
         dialer: webSocketDialer({ environmentId: 'env_interop', executor: executorInfo, tokenSource: staticToken(url, 'tok') }),
         reconnect: false,

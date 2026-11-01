@@ -9,7 +9,8 @@ A local brain and a local hand exchange the same Executor Protocol messages as t
 | WebSocket over loopback TCP | brain (`Harness`) | `http.Serve(ln, harness)` + `StaticToken("ws://…", token)` | `harness.listen()` | `await harness.serve(host, port)` |
 | WebSocket over a Unix domain socket (`unix://`) | brain (`Harness`) | serve `Harness` on a `unix` listener + `StaticToken("unix:///path.sock", token)` | `harness.listenLocal(path)` | `await harness.serve_unix(path)` |
 | WebSocket over a Unix domain socket | hand (executor) | `ListenUnixSocket(path, token)` + `Harness.DialExecutor(ctx, path, token)` | `listenExecutor({ path, token })` + `harness.dialExecutor(url, { token })` | not provided |
-| Windows named pipe (`npipe:////./pipe/<name>`) | either | not provided | as the two rows above | not provided |
+| Windows named pipe (`npipe:////./pipe/<name>`), brain listens | brain (`Harness`) | serve `Harness` on `NamedPipeListener(name)` + `StaticToken("npipe:////./pipe/<name>", token)` | `harness.listenLocal("\\\\.\\pipe\\<name>")` | `await harness.serve_npipe(name)` |
+| Windows named pipe, executor listens | hand (executor) | `ListenNamedPipe(name, token)` + `Harness.DialExecutor(ctx, "npipe:////./pipe/<name>", token)` | as the executor-listens row above, with a pipe path | not provided |
 | In process | — | `InProcessDialer(harness, principal)` | `harness.inProcessDialer()` | `harness.inprocess_dialer()` |
 
 ---
@@ -91,7 +92,7 @@ Lets a local brain attach to a hand that is already running (option A) without a
 | Item | Behavior |
 | --- | --- |
 | Direction | the executor listens, the brain connects; roles stay harness/executor (the executor still sends `executor.register` first) |
-| Location | a per-user runtime directory; the SDK creates the directory `0700` and the socket `0600`. Windows (TypeScript): a named pipe for the current user |
+| Location | a per-user runtime directory; the SDK creates the directory `0700` and the socket `0600`. Windows: a named pipe `\\.\pipe\<name>` (URL `npipe:////./pipe/<name>`) that refuses remote clients; Go restricts its ACL to the current user, TypeScript and Python use the platform's default pipe ACL, so the local token is the authentication |
 | Local token | generated per start (TypeScript `createLocalToken` writes a `0600` file, `readLocalToken` reads it); required as `Authorization: Bearer` on every connect |
 | Network | no listener on any network interface |
 | MCP | the dialing harness also dials the session MCP channels, again after a server restart |
@@ -114,6 +115,10 @@ executor, _ := harness.WaitExecutor(ctx)
 ```
 
 TypeScript: [`executor/typescript/examples/harness-loopback`](../../executor/typescript/examples/harness-loopback/main.mjs) (`listenExecutor` + `dialExecutor`, Unix socket or named pipe).
+
+Windows named pipe (Go): the same calls with `ListenNamedPipe(name, token)` instead of `ListenUnixSocket`, and `harness.DialExecutor(ctx, "npipe:////./pipe/"+name, localToken)` (a `\\.\pipe\<name>` path works too). A brain serves `Harness` on `NamedPipeListener(name)` and the executor dials `npipe:////./pipe/<name>` with the default dialer or `NamedPipeDialer(name)`. On other platforms these return `ErrNamedPipeUnsupported`. Python needs the Windows `ProactorEventLoop` (the asyncio default on Windows): `await harness.serve_npipe(name)` on the brain, `static_token("npipe:////./pipe/<name>", token)` on the executor.
+
+The named pipe transport of all three SDKs is tested on a Windows runner in CI (job `windows-named-pipe`): Go loopback in both directions, TypeScript local-socket tests, and Go ↔ TypeScript ↔ Python interop over a pipe.
 
 bmad does not listen on a local socket yet [Coming]. Once it does, a brain attaches with the same `DialExecutor` call; when the brain registers as an agent provider, bmad advertises `capabilities.agent` on its platform connection and forwards `turn.*`/events.
 

@@ -25,6 +25,12 @@ export async function socketPath(name: string): Promise<string> {
   return join(dir, `${name}.sock`)
 }
 
+/** The Go interop harness flag that listens on path: -npipe <name> on a Windows pipe, else -unix <path>. */
+export function goListenArgs(path: string): string[] {
+  const prefix = '\\\\.\\pipe\\'
+  return path.startsWith(prefix) ? ['-npipe', path.slice(prefix.length)] : ['-unix', path]
+}
+
 /** An executor that answers bash with "ts:<command>", blocks "block" until canceled and echoes MCP frames. */
 export function testExecutor(options: Partial<ExecutorClientOptions> & Pick<ExecutorClientOptions, 'dialer'>) {
   const client = new ExecutorClient({

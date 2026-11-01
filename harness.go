@@ -990,11 +990,12 @@ func randomID(bytes int) string {
 }
 
 // DialExecutor connects this harness to an executor that listens on the
-// local Unix socket at path (ListenUnixSocket) and serves the connection
+// local Unix socket at path (ListenUnixSocket) or Windows named pipe
+// (ListenNamedPipe; path is \\.\pipe\<name> or an npipe:// URL) and serves the connection
 // until it closes. A local brain uses it to drive the hand already running
 // on the machine instead of starting another one.
 func (h *Harness) DialExecutor(ctx context.Context, path, token string) error {
-	conn, err := dialWebSocket(ctx, nil, "unix://"+path, token, h.opts.Protocols[0], ChannelTarget{Channel: ChannelControl})
+	conn, err := dialWebSocket(ctx, nil, localURL(path), token, h.opts.Protocols[0], ChannelTarget{Channel: ChannelControl})
 	if err != nil {
 		return err
 	}

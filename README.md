@@ -118,11 +118,11 @@ _ = session.Stop(ctx, "done")
 
 ## Local socket and in-process transports
 
-`Options.Dial` defaults to WebSocket on `ws://`, `wss://` or `unix:///path.sock`.
+`Options.Dial` defaults to WebSocket on `ws://`, `wss://`, `unix:///path.sock` or `npipe:////./pipe/<name>` (Windows; `ListenNamedPipe`, `NamedPipeListener`, `NamedPipeDialer`).
 
 | Shape | Executor | Harness |
 | --- | --- | --- |
-| Executor dials a local harness | `StaticToken("ws://127.0.0.1:port", token)` or `StaticToken("unix:///path.sock", token)` (`UnixSocketDialer(path)`) | `http.Serve(listener, harness)` on a TCP or `unix` listener |
+| Executor dials a local harness | `StaticToken("ws://127.0.0.1:port", token)` or `StaticToken("unix:///path.sock", token)` (`UnixSocketDialer(path)`) or `StaticToken("npipe:////./pipe/<name>", token)` (`NamedPipeDialer(name)`) | `http.Serve(listener, harness)` on a TCP or `unix` listener |
 | Harness dials the executor (executor listens) | `dial, closeFn, _ := ListenUnixSocket(path, token)` → `Options.Dial: dial` (0700 directory, 0600 socket, bearer token) | `harness.DialExecutor(ctx, path, token)`; the harness also dials the sessions' MCP channels |
 | Same process | `Options.Dial: InProcessDialer(harness, principal)` | `Harness.ServeConn` (used by `InProcessDialer`) |
 
