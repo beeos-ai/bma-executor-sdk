@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixes (Go `Core`)
+
+- A stdio MCP server's bare `command` (for example `npx`) is now resolved on
+  the `PATH` the server is started with (`transport.env`, else the executor's
+  base env), not the executor's own `PATH`, which `exec.LookPath` used. A
+  relative path with a separator is refused; an absolute path is unchanged.
+
 ## bma-executor-sdk v0.4.7
 
 Released 2026-11-01 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.7) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.7) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.7).

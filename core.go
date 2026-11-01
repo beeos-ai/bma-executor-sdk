@@ -1153,9 +1153,80 @@ func mcpRetryDelay(failures int) time.Duration {
 	return delay/2 + rand.N(delay/2+1)
 }
 
+// envValue reads name from an env map; Windows names are case-insensitive.
+func envValue(values map[string]string, name string) string {
+	if runtime.GOOS != "windows" {
+		return values[name]
+	}
+	for key, value := range values {
+		if strings.EqualFold(key, name) {
+			return value
+		}
+	}
+	return ""
+}
+
+// resolveMCPCommand finds the executable for a stdio MCP server. exec.LookPath
+// would search the executor's own PATH, which can differ from the PATH the
+// server is started with, so a bare name is searched on searchPath instead.
+// An absolute path is used as given; any other path with a separator is
+// refused rather than resolved against the executor's working directory.
+func resolveMCPCommand(command, searchPath string) (string, error) {
+	if filepath.IsAbs(command) {
+		return exec.LookPath(command)
+	}
+	if strings.ContainsAny(command, `/\`) {
+		return "", fmt.Errorf("mcp command %q: use an absolute path or a bare command name", command)
+	}
+	exts := []string{""}
+	if runtime.GOOS == "windows" {
+		exts = filepath.SplitList(os.Getenv("PATHEXT"))
+		if len(exts) == 0 {
+			exts = []string{".COM", ".EXE", ".BAT", ".CMD"}
+		}
+		if filepath.Ext(command) != "" {
+			exts = append([]string{""}, exts...)
+		}
+	}
+	for _, dir := range filepath.SplitList(searchPath) {
+		if !filepath.IsAbs(dir) {
+			continue // "" or relative entries would mean the working directory
+		}
+		for _, ext := range exts {
+			// LookPath with a separator never consults PATH; it only checks
+			// that the file is executable.
+			if found, err := exec.LookPath(filepath.Join(dir, command+ext)); err == nil {
+				return found, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("mcp command %q not found on the server PATH", command)
+}
+
 func (c *Core) runMCPOnce(client *Client, session *CoreSession, server MCPServerConfig, opened func()) error {
 	transport := server.Transport
-	command, err := exec.LookPath(transport.Command)
+	// v1 §8.1: the host environment is not inherited beyond mcpBaseEnv
+	// (minus DenyEnv names, and functions as the MCP SDKs skip them); the
+	// configured env overlays it. session.assign already rejected denied
+	// names and secret: values. cmd.Env is never nil, which would inherit all.
+	values := map[string]string{}
+	for _, name := range mcpBaseEnv() {
+		if value, ok := os.LookupEnv(name); ok && !strings.HasPrefix(value, "()") && !c.opts.DenyEnv(name) {
+			values[name] = value
+		}
+	}
+	// Under RunAs the server's identity variables are the workload's, not
+	// the executor's (HOME stays uninherited, as without RunAs).
+	if runAs := c.opts.RunAs; runAs != nil {
+		setOrDrop(values, "USER", runAs.User)
+		setOrDrop(values, "LOGNAME", runAs.User)
+	}
+	for name, value := range transport.Env {
+		values[name] = value
+	}
+	// A bare command name is looked up on the PATH the server will run with,
+	// not the executor's own.
+	command, err := resolveMCPCommand(transport.Command, envValue(values, "PATH"))
 	if err != nil {
 		return err
 	}
@@ -1181,25 +1252,6 @@ func (c *Core) runMCPOnce(client *Client, session *CoreSession, server MCPServer
 	setProcessGroup(cmd)
 	setCredential(cmd, c.opts.RunAs)
 	cmd.Dir = dir
-	// v1 §8.1: the host environment is not inherited beyond mcpBaseEnv
-	// (minus DenyEnv names, and functions as the MCP SDKs skip them); the
-	// configured env overlays it. session.assign already rejected denied
-	// names and secret: values. cmd.Env is never nil, which would inherit all.
-	values := map[string]string{}
-	for _, name := range mcpBaseEnv() {
-		if value, ok := os.LookupEnv(name); ok && !strings.HasPrefix(value, "()") && !c.opts.DenyEnv(name) {
-			values[name] = value
-		}
-	}
-	// Under RunAs the server's identity variables are the workload's, not
-	// the executor's (HOME stays uninherited, as without RunAs).
-	if runAs := c.opts.RunAs; runAs != nil {
-		setOrDrop(values, "USER", runAs.User)
-		setOrDrop(values, "LOGNAME", runAs.User)
-	}
-	for name, value := range transport.Env {
-		values[name] = value
-	}
 	cmd.Env = make([]string, 0, len(values))
 	for name, value := range values {
 		cmd.Env = append(cmd.Env, name+"="+value)
