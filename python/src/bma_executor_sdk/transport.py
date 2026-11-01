@@ -21,10 +21,11 @@ from dataclasses import dataclass, field
 from typing import Protocol
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-# WebSocket close codes (executor.openrpc.yaml): 4001 token expired and 4005
-# drained reconnect with a fresh token; 4003 unsupported protocol and 4004
-# replaced by a newer connection stop the executor, as do 1008 policy
-# violation and 4002 forbidden.
+# WebSocket close codes (executor.openrpc.yaml): only 4003 unsupported protocol
+# and 4004 replaced by a newer connection stop the executor. Every other close,
+# including 4001 token expired, 4002 machine runtime refused or ended (for
+# example by a restarting server) and 4005 drained, reconnects with a fresh
+# token.
 CLOSE_NORMAL = 1000
 CLOSE_POLICY_VIOLATION = 1008
 CLOSE_INTERNAL_ERROR = 1011
@@ -33,7 +34,7 @@ CLOSE_FORBIDDEN = 4002
 CLOSE_UNSUPPORTED_PROTOCOL = 4003
 CLOSE_REPLACED = 4004
 CLOSE_DRAINED = 4005
-TERMINAL_CLOSE_CODES = frozenset({CLOSE_POLICY_VIOLATION, CLOSE_FORBIDDEN, CLOSE_UNSUPPORTED_PROTOCOL, CLOSE_REPLACED})
+TERMINAL_CLOSE_CODES = frozenset({CLOSE_UNSUPPORTED_PROTOCOL, CLOSE_REPLACED})
 
 MAX_FRAME_BYTES = 1 << 20
 

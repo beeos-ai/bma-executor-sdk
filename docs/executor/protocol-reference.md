@@ -97,6 +97,8 @@ Authorization: Bearer <jwt>
 
 bmad: any close other than `4004` reconnects with backoff from 1s doubling to about 30s, fetching a new token each time, and registers with `resume` (§8.1).
 
+The SDK clients (Go, TypeScript, Python, 0.4.6+) stop only on `4003` and `4004`; every other close, including `4002`, `4005`, `1001`, `1008`, `1012` and `1013` from a restarting server, reconnects the same way.
+
 ---
 
 ## 3. Capability bits

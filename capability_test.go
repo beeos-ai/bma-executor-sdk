@@ -357,6 +357,44 @@ func TestClientStopsOnReplacedAndReconnectsAfterDrain(t *testing.T) {
 	}
 }
 
+// A server restart closes with whatever its shutdown path sends: 4002 when
+// it ends the machine runtime, 1001/1012/1013 from a proxy or a graceful
+// shutdown, 4005 after a drain, 1008 from a policy layer. None of them is
+// 4003/4004, so the executor reconnects every time.
+func TestClientReconnectsOnServerRestartCloseCodes(t *testing.T) {
+	codes := []int{4002, 1001, 1008, 1011, 1012, 1013, 4001, 4005}
+	harnessEnds := make(chan Conn, len(codes)+1)
+	client, err := NewClient(Options{
+		Executor: ExecutorInfo{Name: "close-codes"}, TokenSource: StaticToken("pipe://", ""),
+		ReconnectBaseDelay: time.Millisecond, MaxReconnectAttempts: -1,
+		Dial: func(context.Context, ExecutorTokenResponse, string, ChannelTarget) (Conn, error) {
+			executorEnd, harnessEnd := Pipe(ProtocolV11)
+			harnessEnds <- harnessEnd
+			go answerRegister(harnessEnd)
+			return executorEnd, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := testContext(t)
+	if _, err := client.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Stop(context.Background(), "done") })
+	for _, code := range codes {
+		_ = (<-harnessEnds).Close(code, "server restarting")
+		select {
+		case <-client.Done():
+			t.Fatalf("client stopped after close code %d: %v", code, client.Err())
+		case <-ctx.Done():
+			t.Fatalf("no reconnect after close code %d", code)
+		case next := <-harnessEnds:
+			harnessEnds <- next
+		}
+	}
+}
+
 // answerRegister plays a minimal harness: it answers executor.register.
 func answerRegister(conn Conn) {
 	for {
