@@ -58,9 +58,14 @@ const MAX_RECONNECT_DELAY_MS = 30_000
 /** Fraction of a token's lifetime after which executor.token.refresh is sent. */
 const TOKEN_REFRESH_AT = 0.7
 
-/** Close codes after which the executor must not reconnect (1008 policy, 4002 revoked, 4003 protocol, 4004 replaced, 4005 drained). */
+/**
+ * Close codes after which the executor must not reconnect: the contract's
+ * 4003 (unsupported protocol) and 4004 (replaced). Every other close,
+ * including 4002 (machine runtime refused or ended, for example by a
+ * restarting server) and 4005 (drained), reconnects.
+ */
 export function isTerminalCloseCode(code: number): boolean {
-  return code === 1008 || code === 4002 || code === 4003 || code === 4004 || code === 4005
+  return code === 4003 || code === 4004
 }
 
 /** Which channel to open: the control channel, or one MCP channel of a session. */

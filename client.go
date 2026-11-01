@@ -1515,15 +1515,13 @@ func (c *Client) log(level LogLevel, message string, err error) {
 	}
 }
 
-// terminalCloseCode reports close codes after which the executor must not
-// reconnect. 4001 (token expired) and 4005 (drained) reconnect.
+// terminalCloseCode reports the contract's close codes after which the
+// executor must not reconnect: 4003 (unsupported protocol) and 4004 (replaced,
+// handled by the caller). Every other close, including 4002 (machine runtime
+// refused or ended, for example by a restarting server), reconnects; a
+// revoked credential then fails at the token endpoint.
 func terminalCloseCode(code int) bool {
-	switch code {
-	case 1008, 4002, 4003, 4004:
-		return true
-	default:
-		return false
-	}
+	return code == 4003 || code == 4004
 }
 
 func authHeader(token string) http.Header {
