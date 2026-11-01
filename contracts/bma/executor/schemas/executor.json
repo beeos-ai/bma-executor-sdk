@@ -80,6 +80,10 @@
         "max_servers": {
           "type": "integer",
           "x-go-type": "int"
+        },
+        "secret_env": {
+          "type": "boolean",
+          "description": "The executor accepts transport.secret_env on stdio servers: resolved secret values it injects only into the server process environment, never persisting, logging or echoing them. Without it the server keeps secret: references in env, which the executor rejects."
         }
       },
       "required": [],

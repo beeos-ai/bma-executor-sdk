@@ -539,6 +539,8 @@ export interface McpCapability {
   stdio?: boolean
   http?: boolean
   max_servers?: number
+  /** The executor accepts transport.secret_env on stdio servers: resolved secret values it injects only into the server process environment, never persisting, logging or echoing them. Without it the server keeps secret: references in env, which the executor rejects. */
+  secret_env?: boolean
 }
 
 /** Who connects the MCP server. environment means the executor starts/connects it; service means the harness connects. */
@@ -629,6 +631,8 @@ export interface McpServerTransport {
   /** stdio: working directory under the session workspace. */
   cwd?: string
   env?: Record<string, string>
+  /** stdio: sensitive variables the server resolved from env secret: references for this session, sent only to an executor that advertises capabilities.mcp.secret_env. The executor adds them to the server process environment only; it must not write them to disk, logs, argv or events, and drops them when the session ends. A name must not also appear in env. */
+  secret_env?: Record<string, string>
   timeout_ms?: number
   /** Pins the executable when supplied. */
   command_sha256?: string

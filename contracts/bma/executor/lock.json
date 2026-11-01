@@ -1,6 +1,6 @@
 {
   "source_repository": "beeos-ai/beeos-managed-agents",
-  "source_commit": "a12f2e00ccda2da78114e9a2b46b49e662eccbe9",
+  "source_commit": "43af1dd3d4dc2f74a3af4cff21f1ee08090af3b1",
   "protocols": [
     "bma.executor.v1",
     "bma.executor.v1.1"
@@ -12,8 +12,8 @@
     "contracts/bma/executor/executor.openrpc.yaml": "39141c29207106edd19f064bfe07cb8ffbaa23e6a20b52e4314a4639dd79a73a",
     "contracts/bma/executor/schemas/agent.json": "da2bb767cea63120fcab08460a49903904a213b36ef0e0f7a39cbcfb741d8d15",
     "contracts/bma/executor/schemas/common.json": "4401fd01f5d730035a726ce542814e4677e9081dfa886b8a2f6533dbde87e7a4",
-    "contracts/bma/executor/schemas/executor.json": "4f9b0908424c87db4dec1a65177a242991df6a42b5c34addfd23d1a2fbc6ba1e",
-    "contracts/bma/executor/schemas/mcp.json": "6445ed6a111e930dfeadea7e8493da5fc68357295d4998ea63fd44dce118a125",
+    "contracts/bma/executor/schemas/executor.json": "3751291b540e37dd3569adc06222c1814b502b5daa6e5b92cad2d56df7ec5cc4",
+    "contracts/bma/executor/schemas/mcp.json": "0fe0ef4b0c5e45cd2e1e00d2ef0f99dd313186a547bbd07f0ddfdf19bd814840",
     "contracts/bma/executor/schemas/process.json": "8c5bc389103d446330d3cd470ee0769db6b04696d6afc0e3adf4a0c2496ce196",
     "contracts/bma/executor/schemas/session.json": "3f5bb46b12f2cddc14c5d102b1d63c85bd68922f3fc448a9c0b7fc38f11744b3",
     "contracts/bma/executor/schemas/skill.json": "76ee971d664319d7a9add3bb2c5a2846c22bfac870b2dd975badbee2b2ffcf73",
@@ -22,8 +22,8 @@
     "contracts/bma/executor/schemas/workspace.json": "4e8d0ebbab963c9f7f179125a96cb2b89fa79c6a03e3899a1b94c14bed54f5c0"
   },
   "generated": {
-    "executor/generated.go": "16e178c9aa2aacb6b216355d76e59615d31972963a7bfd464e6c3dcd64bfb653",
-    "executor/python/src/bma_executor_sdk/generated.py": "43b2df761341420e2cc1b610af8f2420354535eed9cdae2388103bcbbd2657c4",
-    "executor/typescript/src/generated/executor.ts": "e247144a6c89f97a65c976c256b1e75f5ce3622a2c1c74bb13a2f75ca8882183"
+    "executor/generated.go": "1fc87f9ebf1b09ec04f8bce19d1cbbd03dc99a3160bf8c449a0d12b2b7b561f6",
+    "executor/python/src/bma_executor_sdk/generated.py": "e74e640e9c20545436c6b80887602dbb72c085cd4c695d1b47317ec6f2893415",
+    "executor/typescript/src/generated/executor.ts": "56bf38c806f5c4de102fdfc600446e17e641f0192f2dc024b8803a4b91ed0af7"
   }
 }

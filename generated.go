@@ -486,6 +486,8 @@ type MCPCapability struct {
 	Stdio      bool `json:"stdio,omitempty"`
 	HTTP       bool `json:"http,omitempty"`
 	MaxServers int  `json:"max_servers,omitempty"`
+	// The executor accepts transport.secret_env on stdio servers: resolved secret values it injects only into the server process environment, never persisting, logging or echoing them. Without it the server keeps secret: references in env, which the executor rejects.
+	SecretEnv bool `json:"secret_env,omitempty"`
 }
 
 // MCPConnectionOrigin values. Who connects the MCP server. environment means the executor starts/connects it; service means the harness connects.
@@ -580,8 +582,10 @@ type MCPServerTransport struct {
 	Command string   `json:"command,omitempty"`
 	Args    []string `json:"args,omitempty"`
 	// stdio: working directory under the session workspace.
-	Cwd       string            `json:"cwd,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
+	Cwd string            `json:"cwd,omitempty"`
+	Env map[string]string `json:"env,omitempty"`
+	// stdio: sensitive variables the server resolved from env secret: references for this session, sent only to an executor that advertises capabilities.mcp.secret_env. The executor adds them to the server process environment only; it must not write them to disk, logs, argv or events, and drops them when the session ends. A name must not also appear in env.
+	SecretEnv map[string]string `json:"secret_env,omitempty"`
 	TimeoutMS int64             `json:"timeout_ms,omitempty"`
 	// Pins the executable when supplied.
 	CommandSHA256 string `json:"command_sha256,omitempty"`

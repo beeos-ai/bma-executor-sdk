@@ -314,7 +314,7 @@ func (c *Core) Capabilities() Capabilities {
 	capabilities := Capabilities{
 		Shell: &ShellCapability{Enabled: true},
 		Files: &FilesCapability{Enabled: true, ReadRoots: []string{c.opts.WorkRoot}, WriteRoots: []string{c.opts.WorkRoot}},
-		MCP:   &MCPCapability{Stdio: true, MaxServers: c.opts.MaxMCPServersPerSession},
+		MCP:   &MCPCapability{Stdio: true, SecretEnv: true, MaxServers: c.opts.MaxMCPServersPerSession},
 	}
 	if c.opts.UploadArtifacts {
 		capabilities.Artifacts = &ArtifactCapability{Upload: true, MaxBytes: DefaultMaxArtifactBytes}
@@ -513,13 +513,15 @@ func (c *Core) createWorkspace(dir string) error {
 }
 
 // mcpSecretPrefix marks an env value that references a platform secret. The
-// executor has no store to resolve one from, so such a server is refused
-// rather than given the reference as its credential.
+// executor has no store to resolve one from: the server resolves references
+// into transport.secret_env (capabilities.mcp.secret_env). A reference left in
+// env is refused rather than given to the server as its credential.
 const mcpSecretPrefix = "secret:"
 
-// checkMCPEnv rejects an environment-origin server whose env the executor
-// will not pass: a secret: reference, a loader variable or a DenyEnv name.
-// Errors name the variable, never its value.
+// checkMCPEnv rejects an environment-origin server whose env or secret_env
+// the executor will not pass: a secret: reference, a loader variable, a
+// DenyEnv name, a secret_env name that shadows env, or secret_env on a
+// non-stdio server. Errors name the variable, never its value.
 func (c *Core) checkMCPEnv(server MCPServerConfig) error {
 	if server.ConnectionOrigin != MCPConnectionOriginEnvironment {
 		return nil
@@ -530,6 +532,20 @@ func (c *Core) checkMCPEnv(server MCPServerConfig) error {
 			return fmt.Errorf("mcp server %q: env %s is a secret: reference, which this executor cannot resolve", server.ServerKey, name)
 		case deniedEnv[strings.ToUpper(name)] || c.opts.DenyEnv(name):
 			return fmt.Errorf("mcp server %q: env %s is not allowed", server.ServerKey, name)
+		}
+	}
+	if len(server.Transport.SecretEnv) > 0 && server.Transport.Type != MCPTransportTypeStdio {
+		return fmt.Errorf("mcp server %q: secret_env is only supported for stdio servers", server.ServerKey)
+	}
+	for name := range server.Transport.SecretEnv {
+		_, shadows := server.Transport.Env[name]
+		switch {
+		case shadows:
+			return fmt.Errorf("mcp server %q: secret_env %s is also set in env", server.ServerKey, name)
+		case name == "" || strings.ContainsAny(name, "=\x00"):
+			return fmt.Errorf("mcp server %q: secret_env has an invalid name", server.ServerKey)
+		case deniedEnv[strings.ToUpper(name)] || c.opts.DenyEnv(name):
+			return fmt.Errorf("mcp server %q: secret_env %s is not allowed", server.ServerKey, name)
 		}
 	}
 	return nil
@@ -1176,6 +1192,11 @@ func (c *Core) runMCPOnce(client *Client, session *CoreSession, server MCPServer
 		setOrDrop(values, "LOGNAME", runAs.User)
 	}
 	for name, value := range transport.Env {
+		values[name] = value
+	}
+	// Resolved secrets live only in this server's environment (and the
+	// session's in-memory params, dropped when the session ends).
+	for name, value := range transport.SecretEnv {
 		values[name] = value
 	}
 	cmd.Env = make([]string, 0, len(values))

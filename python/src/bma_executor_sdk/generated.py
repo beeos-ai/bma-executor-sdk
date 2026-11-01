@@ -413,6 +413,7 @@ class McpCapability(TypedDict):
     stdio: NotRequired[bool]
     http: NotRequired[bool]
     max_servers: NotRequired[int]
+    secret_env: NotRequired[bool]
 
 class McpConnectionOrigin(str, Enum):
     """Who connects the MCP server. environment means the executor starts/connects it; service means the harness connects."""
@@ -484,6 +485,7 @@ class McpServerTransport(TypedDict):
     args: NotRequired[list[str]]
     cwd: NotRequired[str]
     env: NotRequired[dict[str, str]]
+    secret_env: NotRequired[dict[str, str]]
     timeout_ms: NotRequired[int]
     command_sha256: NotRequired[str]
     url: NotRequired[str]

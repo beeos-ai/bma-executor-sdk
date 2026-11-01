@@ -46,6 +46,13 @@
             "type": "string"
           }
         },
+        "secret_env": {
+          "type": "object",
+          "description": "stdio: sensitive variables the server resolved from env secret: references for this session, sent only to an executor that advertises capabilities.mcp.secret_env. The executor adds them to the server process environment only; it must not write them to disk, logs, argv or events, and drops them when the session ends. A name must not also appear in env.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "timeout_ms": {
           "type": "integer",
           "minimum": 1
