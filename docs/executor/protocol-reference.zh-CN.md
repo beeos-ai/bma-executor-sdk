@@ -451,7 +451,7 @@ JSON-RPC 错误：`{code, message, data?}`；`data` 可含 `retryable`、`detail
 - 每个 `(environment, session_id, server_key)` 至多一条通道；新连接替换旧连接（旧的以 1001 关闭）。`session_id` ≤256、`server_key` ≤128 字节。帧上限 1 MiB（超出以 1009 关闭）。
 - 每帧是一条 MCP JSON-RPC 消息；harness 做 `initialize`、`notifications/initialized`、`tools/list`、`tools/call`；executor 把 stdio server 的换行分隔 JSON-RPC 与通道帧双向桥接。MCP 错误原样透传；不得伪造空 `tools/list`。
 - 配置（契约 `schemas/mcp.json`）：`connection_origin:"service"` 由 harness 自己连，executor 不启动进程；`"environment"` 由 executor 启动/连接。stdio：不经 shell，`cwd` 在会话工作区内，`env` 显式（不继承宿主环境），给了 `command_sha256` 就校验。
-- 生命周期（SDK `Core` 行为）：每个 (brain, session, server_key) 一个进程；任一侧结束则带退避重启（通道上看到的是新 server，需要重新 initialize）；连续 5 次失败发 `session.status` `error`、`detail:"mcp_unavailable: <key>"`；会话结束关闭全部；不同会话的调用、取消、结果互不共享 stdio 管道。
+- 生命周期（SDK `Core` 行为）：每个 (brain, session, server_key) 一个进程；任一侧结束则带退避重启（通道上看到的是新 server，需要重新 initialize）；持续重试直到会话结束（0.4.7 起：200ms 起指数退避、上限 30s、带抖动，通道保持打开 1s 后退避清零）；连续 5 次失败时每次中断发一次 `session.status` `error`、`detail:"mcp_unavailable: <key>"`；会话结束关闭全部；不同会话的调用、取消、结果互不共享 stdio 管道。
 
 ### 7.1 Chrome MCP 与 computer-use（执行端要求）
 
