@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -127,6 +129,87 @@ func TestMCPRetryDelayIsCappedAndJittered(t *testing.T) {
 			if got := mcpRetryDelay(failures); got < ceiling/2 || got > ceiling {
 				t.Fatalf("delay(%d) = %s, want in [%s, %s]", failures, got, ceiling/2, ceiling)
 			}
+		}
+	}
+}
+
+// A bare command name is resolved with the PATH the server is started with
+// (transport.env), not the executor's own, so a server whose directory only
+// the MCP env PATH lists still starts.
+func TestCoreMCPBareCommandResolvesWithServerEnvPATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("copies the test binary under a bare name")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	const name = "bma-bare-mcp-server"
+	if err := os.WriteFile(filepath.Join(dir, name), raw, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.LookPath(name); err == nil {
+		t.Fatalf("%s must not be on the executor PATH", name)
+	}
+	server := fakeMCPServer(t, "a")
+	server.Transport.Command = name
+	server.Transport.Env["PATH"] = dir + string(os.PathListSeparator) + os.Getenv("PATH")
+
+	ctx := testContext(t)
+	core := newTestCore(t, CoreOptions{})
+	b, _ := startRejectingHarness(t, core, "local", 0)
+	session := readySession(t, b, SessionAssignParams{SessionID: "sess_mcp_bare", MCPServers: []MCPServerConfig{server}})
+	channel, err := session.MCP(ctx, "a")
+	if err != nil {
+		t.Fatalf("mcp: %v", err)
+	}
+	if err := channel.Write(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := channel.Read(ctx)
+	if err != nil || !strings.Contains(string(frame), `"serverInfo"`) {
+		t.Fatalf("initialize = %s err %v", frame, err)
+	}
+}
+
+func TestResolveMCPCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses unix executable bits")
+	}
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "tool")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plain"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	other := t.TempDir()
+	path := other + string(os.PathListSeparator) + dir
+
+	if got, err := resolveMCPCommand("tool", path); err != nil || got != tool {
+		t.Fatalf("bare = %q, %v; want %q", got, err, tool)
+	}
+	if got, err := resolveMCPCommand(tool, ""); err != nil || got != tool {
+		t.Fatalf("absolute = %q, %v; want %q", got, err, tool)
+	}
+	for _, tc := range []struct{ name, command, path string }{
+		{"not on PATH", "tool", other},
+		{"not executable", "plain", dir},
+		{"empty PATH", "tool", ""},
+		{"empty entry is not the working directory", "tool", ":"},
+		{"relative PATH entry", "tool", "."},
+		{"relative path", "./tool", dir},
+		{"relative subpath", "sub/tool", dir},
+		{"backslash path", `sub\tool`, dir},
+	} {
+		if got, err := resolveMCPCommand(tc.command, tc.path); err == nil {
+			t.Errorf("%s: resolved to %q, want an error", tc.name, got)
 		}
 	}
 }

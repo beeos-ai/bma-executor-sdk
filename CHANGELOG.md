@@ -30,6 +30,15 @@ Go tag `executor/v0.4.8`, npm `@beeos-ai/bma-executor-sdk@0.4.8`, PyPI
   only; violations fail `session.assign` with `invalid_params` naming the
   variable, never its value. A `secret:` reference left in `env` is still
   refused.
+- Windows named pipe (`npipe:////./pipe/<name>`) transport in Go, TypeScript
+  and Python, tested on a Windows runner.
+
+### Fixes (Go `Core`)
+
+- A stdio MCP server's bare `command` (for example `npx`) is now resolved on
+  the `PATH` the server is started with (`transport.env`, else the executor's
+  base env), not the executor's own `PATH`, which `exec.LookPath` used. A
+  relative path with a separator is refused; an absolute path is unchanged.
 
 ## bma-executor-sdk v0.4.7
 
