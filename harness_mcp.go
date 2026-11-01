@@ -156,7 +156,7 @@ func (s *Session) dialMCP(path, token, serverKey string) {
 		cancel()
 	}()
 	for {
-		if conn, err := dialWebSocket(ctx, nil, "unix://"+path, token, ProtocolV11, target); err == nil {
+		if conn, err := dialWebSocket(ctx, nil, localURL(path), token, ProtocolV11, target); err == nil {
 			channel := newHarnessMCPChannel(conn)
 			if s.attachMCP(serverKey, channel) == nil {
 				select {

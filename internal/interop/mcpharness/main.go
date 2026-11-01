@@ -1,6 +1,7 @@
 // Command mcpharness is the Go harness peer of the cross-language interop
 // tests (TypeScript and Python). It listens on TCP or, with -unix, a Unix
-// domain socket, prints "LISTEN <ws:// or unix:// URL>", negotiates v1.1
+// domain socket or, with -npipe, a Windows named pipe, prints
+// "LISTEN <ws://, unix:// or npipe:// URL>", negotiates v1.1
 // with one executor, calls bash "echo hi" (want "<lang>:echo hi"), sends
 // {"method":"ping"} on the session's MCP channel "echo" (want "pong"),
 // prints "PASS" and exits 0; any mismatch prints "FAIL <reason>" and exits 1.
@@ -22,15 +23,16 @@ import (
 
 func main() {
 	unixPath := flag.String("unix", "", "listen on this Unix domain socket instead of TCP")
+	pipeName := flag.String("npipe", "", "listen on this Windows named pipe (name after \\\\.\\pipe\\) instead of TCP")
 	flag.Parse()
-	if err := run(*unixPath); err != nil {
+	if err := run(*unixPath, *pipeName); err != nil {
 		fmt.Println("FAIL", err)
 		os.Exit(1)
 	}
 	fmt.Println("PASS")
 }
 
-func run(unixPath string) error {
+func run(unixPath, pipeName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	harness := bmaexecutor.NewHarness(bmaexecutor.HarnessOptions{RequestTimeout: 5 * time.Second})
@@ -38,7 +40,14 @@ func run(unixPath string) error {
 	if unixPath != "" {
 		network, address, url = "unix", unixPath, "unix://"+unixPath
 	}
-	listener, err := net.Listen(network, address)
+	var listener net.Listener
+	var err error
+	if pipeName != "" {
+		listener, err = bmaexecutor.NamedPipeListener(pipeName)
+		url = "npipe:////./pipe/" + pipeName
+	} else {
+		listener, err = net.Listen(network, address)
+	}
 	if err != nil {
 		return err
 	}

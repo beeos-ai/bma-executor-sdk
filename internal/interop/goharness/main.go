@@ -55,15 +55,16 @@ func (p *platform) InteractionCanceled(context.Context, *bmaexecutor.Executor, b
 
 func main() {
 	unixPath := flag.String("unix", "", "listen on this Unix domain socket instead of TCP")
+	pipeName := flag.String("npipe", "", "listen on this Windows named pipe (name after \\\\.\\pipe\\) instead of TCP")
 	flag.Parse()
-	if err := run(*unixPath); err != nil {
+	if err := run(*unixPath, *pipeName); err != nil {
 		fmt.Println("FAIL", err)
 		os.Exit(1)
 	}
 	fmt.Println("PASS")
 }
 
-func run(unixPath string) error {
+func run(unixPath, pipeName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	agent := &platform{acked: map[string]int64{}, idle: make(chan bmaexecutor.AgentEventRecord, 4)}
@@ -74,7 +75,10 @@ func run(unixPath string) error {
 		url      string
 		err      error
 	)
-	if unixPath != "" {
+	if pipeName != "" {
+		listener, err = bmaexecutor.NamedPipeListener(pipeName)
+		url = "npipe:////./pipe/" + pipeName
+	} else if unixPath != "" {
 		listener, err = net.Listen("unix", unixPath)
 		url = "unix://" + unixPath
 	} else {
