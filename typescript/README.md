@@ -155,7 +155,7 @@ executor and in-memory platform in one process).
 | `AgentPlatform` | `AgentPlatform` |
 | `*RPCError`, `ErrNotConnected`, `ErrClientStopped`, `ErrSessionEnded`, `ErrToolOutcomeUnknown`, `ErrAssignRejected` | `RpcError`, `NotConnectedError`, `ClientStoppedError`, `SessionEndedError`, `ToolOutcomeUnknownError`, `AssignRejectedError` |
 | `Core` (bash/files/stdio MCP) | not provided |
-| `StaticToken("unix://…")`, `ListenUnixSocket` + `Harness.DialExecutor`, `InProcessDialer` | `Harness.listenLocal` / `listenExecutor` + `Harness.dialExecutor` / `inProcessDialer` (named pipes only in TypeScript) |
+| `StaticToken("unix://…")`, `ListenUnixSocket` + `Harness.DialExecutor`, `InProcessDialer` | `Harness.listenLocal` / `listenExecutor` + `Harness.dialExecutor` / `inProcessDialer` (named pipes in Go: `ListenNamedPipe`, `NamedPipeListener`; Python: `serve_npipe`) |
 
 ### Tests
 

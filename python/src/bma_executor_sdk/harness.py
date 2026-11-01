@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import secrets
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -215,6 +215,25 @@ class Harness:
 
         return await unix_serve(self._ws_handler, path, **self._ws_options())
 
+    async def serve_npipe(self, name: str) -> Any:
+        """Listen for WebSocket channels on the Windows named pipe
+        ``\\\\.\\pipe\\<name>`` (ProactorEventLoop, the Windows default);
+        executors use ``npipe:////./pipe/<name>``. Returns a server with
+        ``close()`` and ``wait_closed()``."""
+        from . import _npipe
+
+        async def admit(offered: str, target: str, headers: Mapping[str, str]) -> Any:
+            connect, principal, refusal = await self._admit_upgrade(offered, target, headers)
+            if refusal is not None:
+                return refusal
+
+            async def handler(conn: Connection) -> None:
+                await self._serve_channel(conn, connect, principal)
+
+            return handler
+
+        return await _npipe.serve(name, admit, self.protocols, max_size=MAX_FRAME_BYTES)
+
     def inprocess_dialer(self) -> Dialer:
         """A Dialer that connects an ExecutorClient in the same event loop to
         this harness without a socket (use with static_token("inprocess://"))."""
@@ -246,15 +265,21 @@ class Harness:
 
     async def _process_request(self, connection: Any, request: Any) -> Any:
         offered = ",".join(request.headers.get_all("Sec-WebSocket-Protocol"))
-        if not any(value.strip() in self.protocols for value in offered.split(",")):
-            return connection.respond(HTTPStatus.BAD_REQUEST, "unsupported executor protocol\n")
-        parts = urlsplit(request.path)
-        connect = ConnectRequest(path=parts.path, query=dict(parse_qsl(parts.query)), headers=dict(request.headers.raw_items()))
-        principal, refusal = await self._admit(connect)
+        connect, principal, refusal = await self._admit_upgrade(offered, request.path, dict(request.headers.raw_items()))
         if refusal is not None:
             return connection.respond(refusal[0], refusal[1] + "\n")
         connection.bma_connect = (connect, principal)
         return None
+
+    async def _admit_upgrade(self, offered: str, target: str, headers: Mapping[str, str]) -> tuple[ConnectRequest, Principal, tuple[HTTPStatus, str] | None]:
+        """Admit a WebSocket upgrade (offered Sec-WebSocket-Protocol values,
+        request target with query, headers) on any listener."""
+        parts = urlsplit(target)
+        connect = ConnectRequest(path=parts.path, query=dict(parse_qsl(parts.query)), headers=headers)
+        if not any(value.strip() in self.protocols for value in offered.split(",")):
+            return connect, Principal(), (HTTPStatus.BAD_REQUEST, "unsupported executor protocol")
+        principal, refusal = await self._admit(connect)
+        return connect, principal, refusal
 
     async def _ws_handler(self, ws: Any) -> None:
         connect, principal = ws.bma_connect

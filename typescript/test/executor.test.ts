@@ -126,7 +126,7 @@ describe('executor end ↔ harness end', () => {
   test('local socket (WebSocket over UDS), executor dials the harness', async () => {
     const harness = new Harness({ authenticate: bearerAuthenticator('tok') })
     const server = await harness.listenLocal(await socketPath('h'))
-    assert.match(server.url, /^unix:\/\/\//)
+    assert.match(server.url, process.platform === 'win32' ? /^npipe:\/\/\/\/\.\/pipe\// : /^unix:\/\/\//)
     const dialer = (token: string): Dialer =>
       webSocketDialer({ environmentId: 'env_test', executor: executorInfo, tokenSource: staticToken(server.url, token) })
     try {
@@ -163,12 +163,16 @@ describe('local socket URLs', () => {
     assert.equal(localSocketPath('ws://127.0.0.1:1/v1/executors/channel'), undefined)
   })
 
-  // No Windows runner: the named pipe mapping is checked here; the transport is
-  // the same node:net connection a Unix socket uses.
+  // The named pipe transport itself is the same node:net connection a Unix
+  // socket uses; the local socket tests above run it on a pipe on Windows
+  // (the windows-named-pipe CI job).
   test('npipe:// maps to a Windows named pipe path', () => {
     assert.equal(localUrl('\\\\.\\pipe\\bma-executor-me'), 'npipe:////./pipe/bma-executor-me')
     assert.equal(localSocketPath('npipe:////./pipe/bma-executor-me'), '\\\\.\\pipe\\bma-executor-me')
     assert.equal(localSocketPath('npipe:////./pipe/bma-executor-me?channel=mcp'), '\\\\.\\pipe\\bma-executor-me')
+    const mcp = channelUrl('npipe:////./pipe/bma-executor-me', { channel: ChannelScope.Mcp, sessionId: 's', serverKey: 'k' })
+    assert.equal(localSocketPath(mcp), '\\\\.\\pipe\\bma-executor-me')
+    assert.match(mcp, /\?channel=mcp&session_id=s&server_key=k$/)
   })
 })
 

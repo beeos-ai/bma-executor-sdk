@@ -7,6 +7,7 @@ import asyncio
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,13 @@ def go_bin(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return out
 
 
+def _exe(go_bin: Path, name: str) -> str:
+    return str(go_bin / (name + ".exe" if sys.platform == "win32" else name))
+
+
+needs_windows = pytest.mark.skipif(sys.platform != "win32", reason="Windows named pipe")
+
+
 async def _read_line(stream: asyncio.StreamReader, prefix: str) -> str:
     while True:
         line = (await asyncio.wait_for(stream.readline(), 30)).decode().strip()
@@ -37,12 +45,14 @@ async def _read_line(stream: asyncio.StreamReader, prefix: str) -> str:
             return line[len(prefix):].strip()
 
 
-@pytest.mark.parametrize("transport", ["ws", "unix"])
+@pytest.mark.parametrize("transport", ["ws", "unix", pytest.param("npipe", marks=needs_windows)])
 async def test_python_executor_with_go_harness(go_bin: Path, transport: str) -> None:
-    args = [str(go_bin / "goharness")]
+    args = [_exe(go_bin, "goharness")]
     directory = tempfile.mkdtemp(prefix="bmaexec")
     if transport == "unix":
         args += ["-unix", os.path.join(directory, "h.sock")]
+    elif transport == "npipe":
+        args += ["-npipe", f"bma-py-go-{os.getpid()}"]
     proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE)
     assert proc.stdout is not None
     try:
@@ -83,13 +93,19 @@ async def test_python_executor_with_go_harness(go_bin: Path, transport: str) -> 
         shutil.rmtree(directory, ignore_errors=True)
 
 
-async def test_python_harness_with_go_executor(go_bin: Path) -> None:
+@pytest.mark.parametrize("transport", ["ws", pytest.param("npipe", marks=needs_windows)])
+async def test_python_harness_with_go_executor(go_bin: Path, transport: str) -> None:
     platform = RecordingPlatform()
     harness = bx.Harness(agent=platform, request_timeout=5)
-    server = await harness.serve("127.0.0.1", 0)
-    port = server.sockets[0].getsockname()[1]
+    if transport == "npipe":
+        name = f"bma-go-py-{os.getpid()}"
+        server = await harness.serve_npipe(name)
+        url = f"npipe:////./pipe/{name}"
+    else:
+        server = await harness.serve("127.0.0.1", 0)
+        url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/v1/executors/channel"
     proc = await asyncio.create_subprocess_exec(
-        str(go_bin / "goexecutor"), "-url", f"ws://127.0.0.1:{port}/v1/executors/channel",
+        _exe(go_bin, "goexecutor"), "-url", url,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
     )
     assert proc.stdout is not None and proc.stdin is not None

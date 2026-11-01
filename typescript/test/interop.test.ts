@@ -21,7 +21,7 @@ import { executorInfo, testExecutor, waitFor } from './helpers.js'
 
 const goDir = resolve(process.cwd(), '..')
 const binDir = mkdtempSync(join(tmpdir(), 'bma-interop-'))
-const bin = (name: string) => join(binDir, name)
+const bin = (name: string) => join(binDir, process.platform === 'win32' ? `${name}.exe` : name)
 
 before(() => {
   for (const name of ['harness', 'agentharness', 'executor']) {

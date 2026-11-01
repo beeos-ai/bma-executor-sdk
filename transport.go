@@ -59,8 +59,9 @@ type ChannelTarget struct {
 
 // Dialer opens an executor channel after the token source returned token.
 // The default dials token.WSURL over WebSocket: ws://, wss:// or
-// unix:///path/to.sock (the same WebSocket upgrade on a Unix domain socket,
-// as in the TypeScript and Python SDKs).
+// unix:///path/to.sock or npipe:////./pipe/<name> (the same WebSocket upgrade
+// on a Unix domain socket or a Windows named pipe, as in the TypeScript and
+// Python SDKs).
 type Dialer func(ctx context.Context, token ExecutorTokenResponse, protocol string, target ChannelTarget) (Conn, error)
 
 type wsConn struct{ ws *websocket.Conn }
@@ -92,7 +93,7 @@ func (c wsConn) Close(code int, reason string) error {
 
 func (c wsConn) Subprotocol() string { return c.ws.Subprotocol() }
 
-// WebSocketDialer dials token.WSURL (ws://, wss:// or unix://) with the
+// WebSocketDialer dials token.WSURL (ws://, wss://, unix:// or npipe://) with the
 // bearer token in the Authorization header. httpClient may carry a proxy or a
 // custom transport; nil uses http.DefaultClient. A unix:// URL always dials
 // its socket.
@@ -114,8 +115,15 @@ func channelURL(httpClient *http.Client, rawURL string, target ChannelTarget) (s
 	case "unix":
 		httpClient = unixHTTPClient(parsed.Path)
 		parsed = &url.URL{Scheme: "ws", Host: "local", Path: "/", RawQuery: parsed.RawQuery}
+	case "npipe":
+		path, err := pipePath(parsed.Path)
+		if err != nil {
+			return "", nil, err
+		}
+		httpClient = pipeHTTPClient(path)
+		parsed = &url.URL{Scheme: "ws", Host: "local", Path: "/", RawQuery: parsed.RawQuery}
 	default:
-		return "", nil, errors.New("bmaexecutor: channel URL must use ws, wss or unix")
+		return "", nil, errors.New("bmaexecutor: channel URL must use ws, wss, unix or npipe")
 	}
 	if target.Channel == ChannelMCP {
 		query := parsed.Query()
@@ -195,6 +203,14 @@ func ListenUnixSocket(path, token string) (Dialer, func() error, error) {
 		_ = listener.Close()
 		return nil, nil, err
 	}
+	dial, closer := serveLocal(listener, token)
+	return dial, closer, nil
+}
+
+// serveLocal accepts local harness connections on listener (WebSocket
+// upgrades carrying the bearer token) and returns the Dialer that hands them
+// to the executor, and the closer that stops listening.
+func serveLocal(listener net.Listener, token string) (Dialer, func() error) {
 	l := &unixListener{accepted: map[ChannelTarget]chan *websocket.Conn{}, done: make(chan struct{})}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bearer := r.Header.Get("Authorization")
@@ -238,7 +254,7 @@ func ListenUnixSocket(path, token string) (Dialer, func() error, error) {
 			return nil, ctx.Err()
 		}
 	}
-	return dial, closer, nil
+	return dial, closer
 }
 
 // unixListener hands accepted connections to dials of the same channel.

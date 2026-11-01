@@ -76,9 +76,10 @@ Chosen by the channel URL of the token source:
 | --- | --- | --- |
 | WebSocket (`ws://`, `wss://`) | default | `await harness.serve(host, port)` |
 | WebSocket over a Unix domain socket (`unix:///path.sock`) | `token_source=static_token("unix:///path.sock", token)` | `await harness.serve_unix(path)` |
+| Windows named pipe (`npipe:////./pipe/<name>`, Windows ProactorEventLoop) | `token_source=static_token("npipe:////./pipe/<name>", token)` | `await harness.serve_npipe(name)` |
 | In process | `dialer=harness.inprocess_dialer()` | — |
 
-The executor-listens local socket and Windows named pipes are not implemented in Python (use the Go or TypeScript SDK). See [local connection](../../docs/executor/local-connection.md).
+The executor-listens local socket is not implemented in Python (use the Go or TypeScript SDK); named pipes need the Windows `ProactorEventLoop` (the asyncio default there) and are tested on a Windows runner in CI. See [local connection](../../docs/executor/local-connection.md).
 
 ## Agent executors
 

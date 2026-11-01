@@ -87,3 +87,54 @@ jobs:
       - name: Python executor
         working-directory: executor/python
         run: uv run pytest -q
+
+  # The Windows named pipe transport (npipe://) of the three executor SDKs.
+  # Only the transport tests run here; the full suites run on ubuntu above.
+  windows-named-pipe:
+    name: Windows named pipe transport (Go, TypeScript, Python)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: executor/go.mod
+          cache-dependency-path: executor/go.sum
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: executor/typescript/package-lock.json
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Go executor (named pipe, both directions)
+        working-directory: executor
+        run: |
+          go vet ./...
+          go test -count=1 -v -run 'NamedPipe|ChannelURLAcceptsNamedPipes|ExecutorDialsAHarnessOnANamedPipe' .
+
+      - name: Python executor (named pipe, Go interop)
+        working-directory: executor/python
+        run: |
+          uv sync
+          uv run pytest -v tests/test_npipe.py
+          uv run pytest -v -k npipe tests/test_executor_runtime.py tests/test_executor_interop.py
+
+      - name: TypeScript executor (local socket tests on a pipe, Go and Python interop)
+        working-directory: executor/typescript
+        env:
+          BMA_PYTHON: ${{ github.workspace }}/executor/python/.venv/Scripts/python.exe
+        run: |
+          npm ci
+          npx tsc -p tsconfig.test.json
+          node --test --test-name-pattern='local socket|npipe' build-test/test/executor.test.js
+          node --test build-test/test/interop-go-unix.test.js build-test/test/interop-python.test.js
