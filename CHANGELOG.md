@@ -21,6 +21,15 @@ Go tag `executor/v0.4.8`, npm `@beeos-ai/bma-executor-sdk@0.4.8`, PyPI
   installer marks `Privileged` keeps the executor's identity; everything else
   runs as `CoreOptions.RunAs`. Without an installer the field is answered
   with `capability_unavailable` (`process.package_install`).
+- **stdio MCP `secret_env`.** The core advertises `capabilities.mcp.secret_env`
+  and accepts `session.assign.mcp_servers[].transport.secret_env`: values the
+  server resolved from `secret:` references. They are added to that server's
+  process environment only (not argv, not bash tools or processes, not logs)
+  and live in memory until the session ends. A `secret_env` name must not be
+  denied, a loader variable or also set in `env`, and `secret_env` is stdio
+  only; violations fail `session.assign` with `invalid_params` naming the
+  variable, never its value. A `secret:` reference left in `env` is still
+  refused.
 
 ## bma-executor-sdk v0.4.7
 
