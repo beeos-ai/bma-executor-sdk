@@ -18,6 +18,30 @@ Go tag `executor/v0.4.7`, npm `@beeos-ai/bma-executor-sdk@0.4.7`, PyPI
   failures, and each failure is logged with its cause. TypeScript and Python
   have no MCP supervisor and are unchanged apart from the version.
 
+## bma-sdk v0.4.1
+
+Tags `go/v0.4.1`, `ts/v0.4.1`, `python/v0.4.1` (`github.com/beeos-ai/bma-sdks/go`,
+`@beeos-ai/bma-sdk@0.4.1`, PyPI `bma-sdk` 0.4.1). Contract refreshed to
+beeos-ai/beeos-managed-agents@db2403f9.
+
+### Breaking changes (Go)
+
+- **Go nullable fields are now pointers (callers must dereference).** A
+  nullable `$ref` (`anyOf`/`oneOf` with `null`) was generated as a plain value
+  because OpenAPI 3.0 ignores keywords beside `$ref`, so `null` decoded to the
+  zero value and could not be told apart from a real one. `tools/downgrade_openapi.py`
+  now wraps it as `allOf: [$ref]` + `nullable: true`. For example
+  `File.Scope` is `*FileScope`, `AgentMachine.MachinePoolId` and
+  `Machine.MachinePoolId` are `*MachinePoolID`, and the nullable `Timestamp`
+  fields (`CronTrigger.LastFiredAt`, `PersonalAccessToken.RevokedAt`, ...) are
+  `*Timestamp`. Required nullable fields marshal `null` when nil. Optional
+  nullable fields keep `omitempty`. TypeScript and Python already modelled null.
+
+### Features
+
+- Contract: agent executor binding (`GetAgentExecutorBinding`,
+  `PutAgentExecutorBinding`) and MCP transport schemas, in all three SDKs.
+
 ## bma-executor-sdk v0.4.6
 
 Released 2026-11-01 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.6) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.6) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.6).
