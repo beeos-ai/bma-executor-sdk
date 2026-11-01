@@ -1,6 +1,37 @@
 # Changelog
 
-## Unreleased
+## bma-executor-sdk v0.4.8
+
+Released 2026-11-01 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.8) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.8) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.8).
+
+Go tag `executor/v0.4.8`, npm `@beeos-ai/bma-executor-sdk@0.4.8`, PyPI
+`bma-executor-sdk` 0.4.8 (tag `executor-python/v0.4.8`).
+
+### Features
+
+- Contract (additive): `process.start package_install {manager: apt|pip|npm,
+  packages[]}` and `capabilities.process.package_install`. Generated types in
+  Go, TypeScript and Python.
+- Go `Core`: `ProcessOptions.PackageInstaller` serves it. The core validates
+  the request (manager enum; 1-32 plain package names matching
+  `^[A-Za-z0-9][A-Za-z0-9.+-]{0,127}$`, so no option, version, path, URL or
+  shell syntax; excludes argv, io_mode, file_transfer and git_credentials) and
+  runs the installer's fixed command as a process with stdin closed: output,
+  read, timeout and terminate work as for any process. Only a command the
+  installer marks `Privileged` keeps the executor's identity; everything else
+  runs as `CoreOptions.RunAs`. Without an installer the field is answered
+  with `capability_unavailable` (`process.package_install`).
+- **stdio MCP `secret_env`.** The core advertises `capabilities.mcp.secret_env`
+  and accepts `session.assign.mcp_servers[].transport.secret_env`: values the
+  server resolved from `secret:` references. They are added to that server's
+  process environment only (not argv, not bash tools or processes, not logs)
+  and live in memory until the session ends. A `secret_env` name must not be
+  denied, a loader variable or also set in `env`, and `secret_env` is stdio
+  only; violations fail `session.assign` with `invalid_params` naming the
+  variable, never its value. A `secret:` reference left in `env` is still
+  refused.
+- Windows named pipe (`npipe:////./pipe/<name>`) transport in Go, TypeScript
+  and Python, tested on a Windows runner.
 
 ### Fixes (Go `Core`)
 

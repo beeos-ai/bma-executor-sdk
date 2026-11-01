@@ -486,6 +486,8 @@ type MCPCapability struct {
 	Stdio      bool `json:"stdio,omitempty"`
 	HTTP       bool `json:"http,omitempty"`
 	MaxServers int  `json:"max_servers,omitempty"`
+	// The executor accepts transport.secret_env on stdio servers: resolved secret values it injects only into the server process environment, never persisting, logging or echoing them. Without it the server keeps secret: references in env, which the executor rejects.
+	SecretEnv bool `json:"secret_env,omitempty"`
 }
 
 // MCPConnectionOrigin values. Who connects the MCP server. environment means the executor starts/connects it; service means the harness connects.
@@ -580,8 +582,10 @@ type MCPServerTransport struct {
 	Command string   `json:"command,omitempty"`
 	Args    []string `json:"args,omitempty"`
 	// stdio: working directory under the session workspace.
-	Cwd       string            `json:"cwd,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
+	Cwd string            `json:"cwd,omitempty"`
+	Env map[string]string `json:"env,omitempty"`
+	// stdio: sensitive variables the server resolved from env secret: references for this session, sent only to an executor that advertises capabilities.mcp.secret_env. The executor adds them to the server process environment only; it must not write them to disk, logs, argv or events, and drops them when the session ends. A name must not also appear in env.
+	SecretEnv map[string]string `json:"secret_env,omitempty"`
 	TimeoutMS int64             `json:"timeout_ms,omitempty"`
 	// Pins the executable when supplied.
 	CommandSHA256 string `json:"command_sha256,omitempty"`
@@ -626,13 +630,20 @@ const (
 	MCPTransportTypeHttp  = "http"
 )
 
+// PackageManager values. Package manager for process.start package_install.
+const (
+	PackageManagerApt = "apt"
+	PackageManagerPip = "pip"
+	PackageManagerNpm = "npm"
+)
+
 // PermissionMode values. Tool permission mode; always_ask means the harness already resolved approval.
 const (
 	PermissionModeAlwaysAllow = "always_allow"
 	PermissionModeAlwaysAsk   = "always_ask"
 )
 
-// ProcessCapability v1.1 process.* support. pty, file_transfer and git_credentials are additive: the harness only sends the matching process.start fields to an executor that set them, and fails the process explicitly otherwise.
+// ProcessCapability v1.1 process.* support. pty, file_transfer, package_install and git_credentials are additive: the harness only sends the matching process.start fields to an executor that set them, and fails the process explicitly otherwise.
 type ProcessCapability struct {
 	Enabled      bool `json:"enabled"`
 	MaxProcesses int  `json:"max_processes,omitempty"`
@@ -643,6 +654,8 @@ type ProcessCapability struct {
 	FileTransfer bool `json:"file_transfer,omitempty"`
 	// Accepts process.start git_credentials.
 	GitCredentials bool `json:"git_credentials,omitempty"`
+	// Accepts process.start package_install.
+	PackageInstall bool `json:"package_install,omitempty"`
 }
 
 // ProcessFileTransfer Replaces argv: the executor moves one file between the machine and the process BMA file endpoint and reports the outcome in ProcessState.file_transfer. Requires process.file_transfer.
@@ -654,6 +667,12 @@ type ProcessFileTransfer struct {
 // ProcessListResult process.list result.
 type ProcessListResult struct {
 	Processes []ProcessState `json:"processes"`
+}
+
+// ProcessPackageInstall Replaces argv: the executor installs packages with a fixed command it builds itself, streaming the package manager output as the process output. apt installs from the machine's configured (official) sources with the executor's own privileges; pip (--user) and npm (global under the workload user's ~/.local) run as the workload user. Package names are plain names only: no options, versions, paths or URLs. Requires process.package_install.
+type ProcessPackageInstall struct {
+	Manager  string   `json:"manager"`
+	Packages []string `json:"packages"`
 }
 
 // ProcessReadResult process.read result.
@@ -1194,7 +1213,7 @@ type ToolProgressParams struct {
 type ProcessStartParams struct {
 	SessionID string `json:"session_id"`
 	ProcessID string `json:"process_id"`
-	// Command and arguments (at most 256 entries, 4 KiB each, 16 KiB total). Must be empty when file_transfer is set.
+	// Command and arguments (at most 256 entries, 4 KiB each, 16 KiB total). Must be empty when file_transfer or package_install is set.
 	Argv  []string          `json:"argv"`
 	Cwd   string            `json:"cwd,omitempty"`
 	Env   map[string]string `json:"env,omitempty"`
@@ -1209,6 +1228,8 @@ type ProcessStartParams struct {
 	IOMode string `json:"io_mode,omitempty"`
 	// Requires capability process.file_transfer. Excludes argv entries, io_mode and git_credentials.
 	FileTransfer *ProcessFileTransfer `json:"file_transfer,omitempty"`
+	// Requires capability process.package_install. Excludes argv entries, io_mode, file_transfer and git_credentials.
+	PackageInstall *ProcessPackageInstall `json:"package_install,omitempty"`
 	// Installs a per-process Git credential helper for https://github.com that fetches short-lived tokens for this process while it runs. Requires capability process.git_credentials.
 	GitCredentials bool `json:"git_credentials,omitempty"`
 }
