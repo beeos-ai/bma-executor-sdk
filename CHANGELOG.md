@@ -1,5 +1,20 @@
 # Changelog
 
+## bma-executor-sdk v0.4.6
+
+Released 2026-11-01 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.6) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.6) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.6).
+
+Go tag `executor/v0.4.6`, npm `@beeos-ai/bma-executor-sdk@0.4.6`, PyPI
+`bma-executor-sdk` 0.4.6 (tag `executor-python/v0.4.6`).
+
+### Fixes (Go, TypeScript, Python clients)
+
+- Only the contract's stop codes end the client: `4003` (unsupported
+  protocol) and `4004` (replaced). `4002` (machine runtime refused or ended),
+  `1008` and, in TypeScript, `4005` used to stop it too, so an executor
+  exited when a restarting harness closed its connection with `4002`. They
+  now reconnect with backoff like any other close.
+
 ## bma-executor-sdk v0.4.5
 
 Released 2026-11-01 (UTC). GitHub Releases: [Go](https://github.com/beeos-ai/bma-sdks/releases/tag/executor%2Fv0.4.5) · [TypeScript](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-ts%2Fv0.4.5) · [Python](https://github.com/beeos-ai/bma-sdks/releases/tag/executor-python%2Fv0.4.5).
