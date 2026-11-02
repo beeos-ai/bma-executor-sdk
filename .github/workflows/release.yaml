@@ -6,6 +6,19 @@ on:
   push:
     tags:
       - 'v*'
+  # Re-release an existing tag with the workflow from the current main (a
+  # rerun would reuse the old commit's workflow). Never moves the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish, e.g. v0.4.2
+        required: true
+        type: string
+      publish:
+        description: Which registry to publish to
+        type: choice
+        options: [all, npm, pypi]
+        default: all
 
 permissions:
   contents: read
@@ -23,25 +36,28 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Verify release tag is on main
         run: |
           git fetch --no-tags origin main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          git merge-base --is-ancestor HEAD origin/main
 
       - name: Verify the tag matches the package versions
         run: |
-          tag_version="${GITHUB_REF_NAME#v}"
+          tag="${{ inputs.tag || github.ref_name }}"
+          tag_version="${tag#v}"
           ts_version="$(node -p "require('./typescript/package.json').version")"
           py_version="$(python3 -c 'import tomllib; print(tomllib.load(open("python/pyproject.toml", "rb"))["project"]["version"])')"
           for pair in "typescript/package.json:$ts_version" "python/pyproject.toml:$py_version"; do
             if [ "$tag_version" != "${pair#*:}" ]; then
-              printf 'tag %s does not match %s version %s\n' "$GITHUB_REF_NAME" "${pair%%:*}" "${pair#*:}" >&2
+              printf 'tag %s does not match %s version %s\n' "$tag" "${pair%%:*}" "${pair#*:}" >&2
               exit 1
             fi
           done
 
   npm:
+    if: github.event_name == 'push' || inputs.publish == 'all' || inputs.publish == 'npm'
     name: Publish @beeos-ai/bma-executor-sdk to npm
     needs: [checks, verify]
     runs-on: ubuntu-latest
@@ -50,8 +66,8 @@ jobs:
       url: https://www.npmjs.com/package/@beeos-ai/bma-executor-sdk
     permissions:
       contents: read
-      # npm Trusted Publishing exchanges this job's OIDC token for a publish
-      # token (and signs provenance), so no long-lived npm token is stored.
+      # The OIDC token signs the provenance statement; authentication to the
+      # registry uses the NPM_TOKEN secret of the releases environment.
       id-token: write
     defaults:
       run:
@@ -59,11 +75,12 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          # Trusted Publishing needs npm >= 11.5.1, bundled with Node 24.
           node-version: 24
           cache: npm
           cache-dependency-path: typescript/package-lock.json
@@ -76,9 +93,12 @@ jobs:
         run: npm run build
 
       - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance
 
   pypi:
+    if: github.event_name == 'push' || inputs.publish == 'all' || inputs.publish == 'pypi'
     name: Publish bma-executor-sdk to PyPI
     needs: [checks, verify]
     runs-on: ubuntu-latest
@@ -93,6 +113,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
