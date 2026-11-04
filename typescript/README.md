@@ -14,7 +14,7 @@ socket or Windows named pipe (`unix://`, `npipe://`), in-process.
 | --- | --- |
 | Version | 0.4.9 (tag `v0.4.9`), see [CHANGELOG](../CHANGELOG.md) |
 | Protocol | `bma.executor.v1.1` (contract 1.1.0, [`lock.json`](../contracts/bma/executor/lock.json)) |
-| Node.js | 20 or newer; ESM, depends on `ws` |
+| Node.js | 20 or newer; ESM, depends on `ws` and `@types/ws` (the declarations use `ws` types) |
 | Integration guide | [docs/executor](../docs/executor/README.md) ([中文](../docs/executor/README.zh-CN.md)) |
 
 ```sh
@@ -30,6 +30,7 @@ The REST / façade client is the separate package
 import { ExecutorClient } from "@beeos-ai/bma-executor-sdk";
 
 const client = new ExecutorClient({
+  baseUrl: process.env.BMA_BASE_URL, // required: see below
   environmentKey: process.env.BMA_ENVIRONMENT_KEY,
   environmentId: process.env.BMA_ENVIRONMENT_ID!,
   executor: { name: "my-executor", os: process.platform, arch: process.arch, version: "0.1.0" },
@@ -41,6 +42,12 @@ client.handleTool("bash", async (call, { signal, progress }) => {
 });
 await client.start();
 ```
+
+Set `baseUrl` to your BMA deployment: the hosted service is in early access and the default
+`DEFAULT_BASE_URL` (`https://api.bma.beeos.ai`) does not resolve yet. It is the API root
+without `/v1` (for example `https://bma.example.com/api` when the API is served under `/api`);
+the client posts the environment key to `{baseUrl}/v1/executors/token`. The SDK does not read
+`BMA_BASE_URL` itself. A `tokenSource` carries its own channel URL and ignores `baseUrl`.
 
 ### Executor lifecycle, cancellation, and results
 

@@ -2,7 +2,7 @@
 
 [中文](protocol-reference.zh-CN.md) · [Overview](README.md)
 
-The complete reference for `bma.executor.v1` and `bma.executor.v1.1` as served by the BMA platform and implemented by bma-executor-sdk 0.4.0. Where older documents disagree, this page and the contract win. Labels: **[Available]** shipped or live; **[Coming]** defined in the contract, capability-gated, not served yet; **[Design]** not implemented.
+The complete reference for `bma.executor.v1` and `bma.executor.v1.1` as served by the BMA platform and implemented by bma-executor-sdk 0.4.0. Where older documents disagree, this page and the contract win. Labels: **[Available]** shipped or live; **[Preview]** live on the platform with stated limits; **[Coming]** defined in the contract, capability-gated, not served yet; **[Design]** not implemented.
 
 The machine-readable contract is in this repository: [`executor.openrpc.yaml`](../../contracts/bma/executor/executor.openrpc.yaml) (method catalog, `x-bma-since`, `x-bma-capability`, idempotency keys, errors), [`executor.asyncapi.yaml`](../../contracts/bma/executor/executor.asyncapi.yaml) and [`schemas/`](../../contracts/bma/executor/schemas); the SDK protocol types are generated from it.
 
@@ -116,7 +116,7 @@ The SDK clients (Go, TypeScript, Python, 0.4.6+) stop only on `4003` and `4004`;
 | `artifacts.upload` | `{upload, max_bytes?}` | no (informational) | — | [Available] |
 | `shell`, `files`, `mcp`, `chrome`, `computer_use`, `display` | see contract `schemas/executor.json` | no | — | [Available] (`display` is the v1 bool or v1.1 `{rfb}`) |
 | `workspace.backup` | `{backup}` | yes | `workspace.backup`; restore before register | [Available] |
-| `agent` | `AgentCapability` | yes | `turn.*`, `session.close`, `interaction.response` | contract and SDK [Available]; platform [Coming], see [agent capability](agent-capability.md) |
+| `agent` | `AgentCapability` | yes | `turn.*`, `session.close`, `interaction.response` | contract and SDK [Available]; platform [Preview] (text input only), see [agent capability](agent-capability.md) |
 
 - Gating only applies on v1.1 connections.
 - A peer receiving a method for a bit it did not advertise answers `-32012 capability_unavailable`; an unserved tool in `tool.call` uses `data.capability = "tool:<name>"`.

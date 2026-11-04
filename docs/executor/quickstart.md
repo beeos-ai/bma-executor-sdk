@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | 1A: cloud brain → bmad (local hand) | platform agents run `run_command`/process tools/terminals/skills/file transfers on your computer | bmad ≥ 0.2.11, machine token | [Available] |
 | 1B: cloud brain → SDK hand (`Core`) | the platform dispatches bash/file tools via `tool.call`, plus stdio MCP | selfhost environment + key; Go SDK 0.4.0 | [Available] (the platform does not dispatch MCP servers yet [Coming]) |
-| 2: local brain → local hand → events to the platform | the brain drives the same core over loopback; agent events go to the platform | SDK 0.4.0 (Go, TypeScript, Python); platform agent capability | local part [Available]; platform part [Coming], use the simulated platform |
+| 2: local brain → local hand → events to the platform | the brain drives the same core over loopback; agent events go to the platform | SDK 0.4.0 (Go, TypeScript, Python); platform agent capability | local part [Available]; platform part [Preview] (text input only) |
 
 ---
 
@@ -101,7 +101,7 @@ go run ./examples/local-brain -mcp-command "go run ./examples/echo-mcp"
 
 Flow ([source](../../examples/local-brain/main.go)): the brain serves `Harness` on `127.0.0.1:0` with a per-run token; the executor's `Core` attaches a `Client` with `StaticToken`; the brain runs `WaitExecutor` → `AssignSession` (with a stdio MCP server) → `Ready` → `CallTool(bash)` ×2 → `session.MCP("echo")` raw MCP JSON-RPC → `Stop`. Replace the script with your model loop. Auth and sharing rules: [local connection](local-connection.md). TypeScript: [`harness-loopback`](../../typescript/examples/harness-loopback/main.mjs); Python: [`harness_loopback.py`](../../python/examples/harness_loopback.py).
 
-### 2.2 Agent events to the platform [SDK Available; platform Coming]
+### 2.2 Agent events to the platform [SDK Available; platform Preview]
 
 ```sh
 cd bma-executor-sdk
@@ -110,7 +110,7 @@ go run ./examples/agentexecutor
 
 A simulated platform walks the whole lifecycle: `turn.start` → streamed `session.event_delta` and durable `session.event` → `interaction.request` → `interaction.response` → result → `turn.input` → resend by sequence after a dropped connection → `turn.cancel` → `session.close`. You implement `AgentHandler`, see [agent capability](agent-capability.md#6-sdk-usage). TypeScript and Python equivalents: [`agent-minimal`](../../typescript/examples/agent-minimal/main.mjs), [`agent_minimal.py`](../../python/examples/agent_minimal.py).
 
-Once the platform implements the agent capability, the same program points its credentials at the platform (machine token); clients subscribe to the platform session event stream (SSE).
+Against the platform (preview), the same program connects with the machine token of a machine bound to the agent (`PUT /orgs/{orgID}/projects/{projectID}/agents/{agentID}/executor-binding`); clients send text input and subscribe to the platform session event stream (SSE). See [agent capability](agent-capability.md#7-platform-preview).
 
 ---
 

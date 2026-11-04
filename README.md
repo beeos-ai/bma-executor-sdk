@@ -50,6 +50,7 @@ import (
 
 func main() {
 	client, err := bmaexecutor.NewClient(bmaexecutor.Options{
+		BaseURL:        os.Getenv("BMA_BASE_URL"),
 		EnvironmentKey: os.Getenv("BMA_ENVIRONMENT_KEY"),
 		EnvironmentID:  os.Getenv("BMA_ENVIRONMENT_ID"),
 		Executor:       bmaexecutor.ExecutorInfo{Name: "my-executor", OS: "linux", Arch: "arm64", Version: "0.1.0"},
@@ -71,6 +72,8 @@ func main() {
 	select {}
 }
 ```
+
+Set `Options.BaseURL` to your BMA deployment: the hosted service is in early access and the default `DefaultBaseURL` (`https://api.bma.beeos.ai`) does not resolve yet. It is the API root without `/v1` (for example `https://bma.example.com/api` when the API is served under `/api`); the SDK posts the environment key to `{BaseURL}/v1/executors/token` and uploads artifacts below it. The SDK does not read `BMA_BASE_URL` itself; the example passes it through. A `TokenSource` (for example `StaticToken`) carries its own channel URL.
 
 A machine-scoped executor uses a machine token through `Options.TokenSource` and no environment id. Go clients negotiate `bma.executor.v1.1` by default (`Options.Protocol`).
 
@@ -157,7 +160,7 @@ client.ServeAgent(myAgent, bmaexecutor.AgentCapability{
 
 `myAgent` implements `AgentHandler`: `OpenTurn` reports the effective configuration, `RunTurn` does the work with `turn.Emit` (durable events), `turn.Delta` (streaming previews), `turn.Inputs()` (`turn.input`) and `turn.RequestInteraction` (approvals and questions), and `CloseSession` releases the local conversation. The SDK assigns event ids and sequences, resends unacknowledged events after a reconnect, and frames every turn with `session.status_running` and a final `session.status_idle` whose `turn_outcome` is `completed`, `canceled` or `failed`.
 
-The harness side is `HarnessOptions.Agent` (`AgentPlatform`) plus `Executor.StartTurn`, `SendTurnInput`, `CancelTurn`, `CloseAgentSession` and `RespondInteraction`. The BMA platform side of the agent capability is not available yet; see [agent capability](docs/executor/agent-capability.md).
+The harness side is `HarnessOptions.Agent` (`AgentPlatform`) plus `Executor.StartTurn`, `SendTurnInput`, `CancelTurn`, `CloseAgentSession` and `RespondInteraction`. The BMA platform side is in preview: bind an agent to the machine with `PUT /orgs/{orgID}/projects/{projectID}/agents/{agentID}/executor-binding`; its sessions accept text input only. See [agent capability](docs/executor/agent-capability.md#7-platform-preview).
 
 ## Examples
 

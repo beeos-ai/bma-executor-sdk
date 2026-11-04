@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- TypeScript: `@types/ws` is now a runtime dependency (was a dev dependency).
+  The published declarations import `ws` types (`webSocketConn(ws: WebSocket)`),
+  so consumers type-checking with `strict` (`noImplicitAny`) failed with TS7016
+  unless they installed `@types/ws` themselves.
+- Docs: the BMA platform side of the agent capability is in preview
+  (`PUT …/agents/{agentID}/executor-binding`, text input only); the READMEs
+  require an explicit base URL while the hosted service is in early access.
+
 ## bma-executor-sdk v0.4.9
 
 Repository migration; the Go import path changed. The code is identical to

@@ -27,11 +27,11 @@
     "test": "tsc -p tsconfig.test.json && node --test build-test/test/*.test.js"
   },
   "dependencies": {
+    "@types/ws": "8.18.2",
     "ws": "8.22.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@types/ws": "8.18.2",
     "typescript": "5.9.3"
   }
 }

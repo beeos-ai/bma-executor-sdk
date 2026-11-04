@@ -2,7 +2,7 @@
 
 [English](protocol-reference.md) · [总览](README.zh-CN.md)
 
-本文是 BMA 平台提供、bma-executor-sdk 0.4.0 实现的 `bma.executor.v1` 与 `bma.executor.v1.1` 的完整参考。凡与旧文档不一致处，以本文和契约为准。状态标注：**【已有】**已发布或已上线；**【即将提供】**契约已定义、能力位门控、尚未提供；**【设计中】**无实现。
+本文是 BMA 平台提供、bma-executor-sdk 0.4.0 实现的 `bma.executor.v1` 与 `bma.executor.v1.1` 的完整参考。凡与旧文档不一致处，以本文和契约为准。状态标注：**【已有】**已发布或已上线；**【预览】**平台已上线、限制另行注明；**【即将提供】**契约已定义、能力位门控、尚未提供；**【设计中】**无实现。
 
 机器可读契约在本仓库：[`executor.openrpc.yaml`](../../contracts/bma/executor/executor.openrpc.yaml)（方法目录、`x-bma-since`、`x-bma-capability`、幂等键、错误）、[`executor.asyncapi.yaml`](../../contracts/bma/executor/executor.asyncapi.yaml) 与 [`schemas/`](../../contracts/bma/executor/schemas)；SDK 的协议类型由它生成。
 
@@ -132,7 +132,7 @@ SDK 客户端（Go、TypeScript、Python，0.4.6 起）只在 `4003`、`4004` �
 | `artifacts.upload` | `{upload, max_bytes?}` | 否（信息） | — | 【已有】 |
 | `shell`、`files`、`mcp`、`chrome`、`computer_use`、`display` | 见契约 `schemas/executor.json` | 否（信息） | — | 【已有】（v1 字段；`display` 为 v1 bool 或 v1.1 `{rfb}`） |
 | `workspace.backup` | `{backup}` | 是 | `workspace.backup`；启动前恢复 | 【已有】 |
-| `agent` | `AgentCapability` | 是 | `turn.*`、`session.close`、`interaction.response` | 契约与 SDK【已有】；平台【即将提供】，见 [agent 能力](agent-capability.zh-CN.md) |
+| `agent` | `AgentCapability` | 是 | `turn.*`、`session.close`、`interaction.response` | 契约与 SDK【已有】；平台【预览】（仅文本输入），见 [agent 能力](agent-capability.zh-CN.md) |
 
 规则：
 
