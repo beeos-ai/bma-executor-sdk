@@ -28,7 +28,7 @@ async def main(path: str, token: str) -> None:
     session = await executor.assign_session({"session_id": "sess_py"})  # type: ignore[typeddict-item]
     await asyncio.wait_for(session.ready(), 5)
     for _ in range(2):
-        result = await session.call_tool({"tool_call_id": "call_1", "tool": "bash", "input": {"command": "hello"}})  # type: ignore[typeddict-item]
+        result = await session.tools.bash.call({"command": "hello"}, tool_call_id="call_1")
         assert result["content"][0]["text"] == "ts:hello", result
     channel = await asyncio.wait_for(session.mcp("echo"), 5)
     await channel.write('{"jsonrpc":"2.0","id":1,"method":"ping"}')

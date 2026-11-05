@@ -63,10 +63,10 @@ async def test_python_executor_with_go_harness(go_bin: Path, transport: str) -> 
             client._spawn(client.session_ready({"session_id": params["session_id"], "work_id": params["work_id"], "lease_token": params["lease"]["token"]}))  # noqa: SLF001
             return {"accepted": True, "session_id": params["session_id"]}
 
-        async def on_tool(call: dict[str, Any]) -> dict[str, Any]:
-            if call["input"].get("command") == "sleep":
+        async def on_tool(input: bx.BashInput, ctx: bx.ToolContext) -> str:
+            if input["command"] == "sleep":
                 await asyncio.sleep(60)
-            return {"session_id": call["session_id"], "tool_call_id": call["tool_call_id"], "outcome": "succeeded", "is_error": False, "content": [{"type": "text", "text": "py:" + call["input"]["command"]}]}
+            return "py:" + input["command"]
 
         class Agent:
             async def open_turn(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -79,7 +79,7 @@ async def test_python_executor_with_go_harness(go_bin: Path, transport: str) -> 
                 return None
 
         client.on_session_assign(on_assign)  # type: ignore[arg-type]
-        client.on_tool_call(on_tool)  # type: ignore[arg-type]
+        client.tools.bash.handler(on_tool)
         client.serve_agent(Agent(), {"models": [{"id": "py-model"}]})  # type: ignore[arg-type,typeddict-item]
         await client.start()
         verdict = await _read_line(proc.stdout, "")
@@ -117,10 +117,10 @@ async def test_python_harness_with_go_executor(go_bin: Path, transport: str) -> 
 
         session = await executor.assign_session({"session_id": "ses_py"})  # type: ignore[typeddict-item]
         await asyncio.wait_for(session.ready(), 5)
-        result = await session.call_tool({"tool_call_id": "c1", "tool": "bash", "input": {"command": "uname"}})  # type: ignore[typeddict-item]
+        result = await session.tools.bash.call({"command": "uname"}, tool_call_id="c1")
         assert result["outcome"] == "succeeded" and result["content"][0]["text"] == "go:uname"
 
-        slow = asyncio.ensure_future(session.call_tool({"tool_call_id": "c2", "tool": "bash", "input": {"command": "sleep"}}))  # type: ignore[typeddict-item]
+        slow = asyncio.ensure_future(session.tools.bash.call({"command": "sleep"}, tool_call_id="c2"))
         await asyncio.sleep(0.2)
         assert await session.cancel_tool("c2", "interop") is True
         assert (await asyncio.wait_for(slow, 5))["outcome"] == "canceled"

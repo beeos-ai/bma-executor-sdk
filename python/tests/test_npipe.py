@@ -40,14 +40,14 @@ async def test_a_large_frame_and_a_closing_harness_over_a_named_pipe() -> None:
     async with listen(harness, "npipe") as (url, _):
         client = make_client(url, None, request_timeout=5.0)
 
-        async def on_tool(call: dict[str, object]) -> dict[str, object]:
-            return {"session_id": call["session_id"], "tool_call_id": call["tool_call_id"], "outcome": "succeeded", "is_error": False, "content": [{"type": "text", "text": "x" * 700_000}]}
+        async def on_tool(input: bx.BashInput, ctx: bx.ToolContext) -> str:
+            return "x" * 700_000
 
-        client.on_tool_call(on_tool)  # type: ignore[arg-type]
+        client.tools.bash.handler(on_tool)
         await client.start()
         executor = await harness.wait_executor()
         session = await executor.assign_session({"session_id": "ses_big"})  # type: ignore[typeddict-item]
-        result = await session.call_tool({"tool_call_id": "call_big", "tool": "bash", "input": {"command": "big"}})  # type: ignore[typeddict-item]
+        result = await session.tools.bash.call({"command": "big"}, tool_call_id="call_big")
         assert len(result["content"][0]["text"]) == 700_000
         await client.stop()
         assert client.state == bx.generated.ConnectionState.Closed

@@ -50,9 +50,12 @@ jobs:
           npm run build
           npm test
 
-      - name: Python
+      - name: Python 3.10 and 3.12, pyright strict on the typed tool assertions
         working-directory: python
-        run: uv run pytest -q
+        run: |
+          uv run -p 3.10 pytest -q
+          uv run -p 3.12 pytest -q
+          uv run -p 3.12 pyright
 
   # The Windows named pipe transport (npipe://) of the three SDKs. Only the
   # transport tests run here; the full suites run on ubuntu above.

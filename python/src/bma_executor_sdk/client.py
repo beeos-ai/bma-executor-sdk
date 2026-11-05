@@ -28,6 +28,7 @@ from .generated import (
     METHOD_SESSION_STOP,
     METHOD_TOOL_CALL,
     METHOD_TOOL_CANCEL,
+    METHOD_TOOL_PROGRESS,
     METHOD_TOOL_RESULT,
     METHODS,
     Ack,
@@ -52,6 +53,7 @@ from .generated import (
     ToolOutcome,
     ToolResultParams,
 )
+from .tools import ExecutorTools, ToolContext, ToolError, render
 from .transport import CLOSE_NORMAL, MAX_FRAME_BYTES, TERMINAL_CLOSE_CODES, ChannelClosed, Connection, Dialer, channel_url, dial
 
 if TYPE_CHECKING:
@@ -74,7 +76,6 @@ _MAX_RECONNECT_DELAY = 30.0
 _TOKEN_REFRESH_AT = 0.7
 
 TokenSource = Callable[[], Awaitable[ExecutorTokenResponse]]
-ToolCallHandler = Callable[[ToolCallParams], Awaitable[ToolResultParams]]
 SessionAssignHandler = Callable[[SessionAssignParams], Awaitable[SessionAssignResult]]
 SessionStopHandler = Callable[[SessionStopParams], Awaitable[SessionStopResult]]
 DrainHandler = Callable[[ExecutorDrainParams], Awaitable[ExecutorDrainResult]]
@@ -176,7 +177,8 @@ class ExecutorClient:
         self._completed_tool_results: dict[str, None] = {}
         self._seen_tool_calls: dict[str, None] = {}
         self._running_tool_calls: dict[str, _RunningToolCall] = {}
-        self._tool_call_handler: ToolCallHandler | None = None
+        self.tools = ExecutorTools()
+        """Typed tool handlers; capabilities shell/files/computer_use follow what is registered."""
         self._session_assign_handler: SessionAssignHandler | None = None
         self._session_stop_handler: SessionStopHandler | None = None
         self._drain_handler: DrainHandler | None = None
@@ -248,11 +250,6 @@ class ExecutorClient:
         return list(self._sessions)
 
     # --- handlers ---
-
-    def on_tool_call(self, handler: ToolCallHandler) -> None:
-        """Register the tool.call handler. tool.cancel cancels the handler's
-        task; the client then reports outcome=canceled."""
-        self._tool_call_handler = handler
 
     def on_session_assign(self, handler: SessionAssignHandler) -> None:
         self._session_assign_handler = handler
@@ -388,6 +385,14 @@ class ExecutorClient:
         self._peer = peer
         self._spawn(self._read(peer))
         capabilities: dict[str, Any] = dict(self._capabilities)
+        # Tool capabilities are what has a handler, so nothing unimplemented is advertised.
+        tools = self.tools
+        capabilities["shell"] = {**capabilities.get("shell", {}), "enabled": tools.registered("bash")}
+        capabilities["files"] = {
+            **capabilities.get("files", {}),
+            "enabled": tools.registered("read", "write", "edit", "glob", "grep", "list_files"),
+        }
+        capabilities["computer_use"] = tools.registered("computer_observe", "computer_action")
         if self._agent is not None:
             capabilities["agent"] = self._agent.capability
         params: dict[str, Any] = {
@@ -604,14 +609,22 @@ class ExecutorClient:
 
     async def _run_tool_call(self, params: ToolCallParams, running: _RunningToolCall) -> None:
         call_id = params["tool_call_id"]
-        handler = self._tool_call_handler
+        handler = self.tools.get(params["tool"])
         result: ToolResultParams
+        loop = asyncio.get_running_loop()
+        started = loop.time()
         if running.canceled:
             result = _canceled_tool_result(params, running.reason)
         elif handler is None:
-            result = _failed_tool_result(params, "no tool handler registered")
+            result = _failed_tool_result(params, f"no handler registered for tool {params['tool']}")
         else:
-            inner = running.handler = asyncio.ensure_future(handler(params))
+            context = ToolContext(
+                session_id=params["session_id"],
+                tool_call_id=call_id,
+                progress=lambda message: self._progress(params, message),
+                permission=params.get("permission"),
+            )
+            inner = running.handler = asyncio.ensure_future(handler(params.get("input") or {}, context))
             deadline_ms = params.get("deadline_ms") or 0
             done, _ = await asyncio.wait({inner}, timeout=deadline_ms / 1000 if deadline_ms > 0 else None)
             if not done:
@@ -620,10 +633,14 @@ class ExecutorClient:
                 result = _failed_tool_result(params, "tool.call deadline_ms exceeded")
             elif inner.cancelled():
                 result = _failed_tool_result(params, "tool handler canceled")
+            elif isinstance(inner.exception(), ToolError):
+                error = inner.exception()
+                result = {"outcome": "succeeded", "is_error": True, "content": error.content}  # type: ignore[union-attr,typeddict-item]
             elif inner.exception() is not None:
                 result = _failed_tool_result(params, str(inner.exception()))
             else:
-                result = dict(inner.result())  # type: ignore[assignment]
+                result = render(inner.result())  # type: ignore[assignment]
+            result["duration_ms"] = int((loop.time() - started) * 1000)
         self._running_tool_calls.pop(call_id, None)
         if running.canceled:
             result = _canceled_tool_result(params, running.reason)
@@ -637,6 +654,13 @@ class ExecutorClient:
             self._log("error", f"failed to report tool result for {call_id}", error)
             if self._on_tool_result_lost is not None:
                 self._on_tool_result_lost(result, error)
+
+    def _progress(self, params: ToolCallParams, message: str) -> None:
+        peer = self._peer
+        if peer is None:
+            return
+        progress = {"session_id": params["session_id"], "tool_call_id": params["tool_call_id"], "message": message}
+        self._spawn(_best_effort(peer.notify(METHOD_TOOL_PROGRESS, progress)))
 
     def _tool_result_retry_delay(self, attempt: int) -> float:
         delay = min(self._tool_result_retry_base_delay * (2 ** (attempt - 1)), _MAX_TOOL_RESULT_RETRY_DELAY)
@@ -669,6 +693,13 @@ class MCPChannel:
 
     async def close(self) -> None:
         await self._conn.close(CLOSE_NORMAL, "mcp channel closed")
+
+
+async def _best_effort(coro: Awaitable[Any]) -> None:
+    try:
+        await coro
+    except Exception:  # tool.progress is best-effort by contract
+        pass
 
 
 def _remember(tracked: dict[str, None], key: str) -> None:

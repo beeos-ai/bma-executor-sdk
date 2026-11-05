@@ -28,16 +28,15 @@ async def main(url: str, token: str) -> None:
         client._spawn(echo(params["session_id"]))  # noqa: SLF001
         return {"accepted": True, "session_id": params["session_id"]}
 
-    async def on_tool(call: dict[str, Any]) -> dict[str, Any]:
-        text = "py:" + call["input"]["command"]
-        return {"session_id": call["session_id"], "tool_call_id": call["tool_call_id"], "outcome": "succeeded", "is_error": False, "content": [{"type": "text", "text": text}]}
+    async def on_tool(input: bx.BashInput, ctx: bx.ToolContext) -> str:
+        return "py:" + input["command"]
 
     async def on_stop(params: dict[str, Any]) -> dict[str, Any]:
         stopped.set()
         return {"stopped": True}
 
     client.on_session_assign(on_assign)  # type: ignore[arg-type]
-    client.on_tool_call(on_tool)  # type: ignore[arg-type]
+    client.tools.bash.handler(on_tool)
     client.on_session_stop(on_stop)  # type: ignore[arg-type]
     registered = await client.start()
     assert registered["protocol"] == bx.PROTOCOL_V11, registered

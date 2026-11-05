@@ -11,7 +11,7 @@ dependencies = ["httpx>=0.27,<1", "websockets>=14,<17"]
 Repository = "https://github.com/beeos-ai/bma-executor-sdk"
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "pyright==1.1.407"]
 
 [build-system]
 requires = ["hatchling>=1.26"]
@@ -24,3 +24,9 @@ packages = ["src/bma_executor_sdk"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.pyright]
+include = ["tests/typecheck", "examples/executor_minimal.py"]
+pythonVersion = "3.10"
+strict = ["tests/typecheck"]
+reportUnnecessaryTypeIgnoreComment = "error"

@@ -12,46 +12,39 @@ import asyncio
 import os
 import platform
 
-from bma_executor_sdk import ExecutorClient, static_token
-from bma_executor_sdk.generated import ToolCallParams, ToolResultParams
+from bma_executor_sdk import BashInput, BashResult, ExecutorClient, ToolContext, static_token
 
 
-async def run_bash(call: ToolCallParams) -> ToolResultParams:
+async def run_bash(input: BashInput, ctx: ToolContext) -> BashResult:
     proc = await asyncio.create_subprocess_shell(
-        call["input"].get("command", ""), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        input["command"], cwd=input.get("cwd"), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
     try:
-        output, _ = await proc.communicate()
+        stdout, stderr = await proc.communicate()
     except asyncio.CancelledError:  # tool.cancel or the deadline: stop the process
         proc.kill()
         raise
-    return {
-        "session_id": call["session_id"],
-        "tool_call_id": call["tool_call_id"],
-        "outcome": "succeeded" if proc.returncode == 0 else "failed",
-        "is_error": proc.returncode != 0,
-        "content": [{"type": "text", "text": output.decode(errors="replace")}],
-    }  # type: ignore[typeddict-item]
+    return BashResult(stdout=stdout.decode(errors="replace"), stderr=stderr.decode(errors="replace"), exit_code=proc.returncode or 0)
 
 
 def make_client() -> ExecutorClient:
     info = {"name": "py-executor", "os": platform.system().lower(), "arch": platform.machine(), "version": "0.1.0"}
-    capabilities = {"shell": {"enabled": True}}
     harness_url = os.environ.get("BMA_HARNESS_URL")
     if harness_url:
-        return ExecutorClient(environment_id="env_local", executor=info, capabilities=capabilities, token_source=static_token(harness_url))  # type: ignore[arg-type]
-    return ExecutorClient(
-        environment_id=os.environ["BMA_ENVIRONMENT_ID"],
-        environment_key=os.environ["BMA_ENVIRONMENT_KEY"],
-        base_url=os.environ.get("BMA_BASE_URL", "https://api.bma.beeos.ai"),
-        executor=info,  # type: ignore[arg-type]
-        capabilities=capabilities,  # type: ignore[arg-type]
-    )
+        client = ExecutorClient(environment_id="env_local", executor=info, token_source=static_token(harness_url))  # type: ignore[arg-type]
+    else:
+        client = ExecutorClient(
+            environment_id=os.environ["BMA_ENVIRONMENT_ID"],
+            environment_key=os.environ["BMA_ENVIRONMENT_KEY"],
+            base_url=os.environ.get("BMA_BASE_URL", "https://api.bma.beeos.ai"),
+            executor=info,  # type: ignore[arg-type]
+        )
+    client.tools.bash.handler(run_bash)  # advertises the shell capability
+    return client
 
 
 async def main() -> None:
     client = make_client()
-    client.on_tool_call(run_bash)
     registered = await client.start()
     print("registered as", registered["executor_id"])
     try:

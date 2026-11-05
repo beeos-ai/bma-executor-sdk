@@ -28,14 +28,14 @@ async def main(unix_path: str | None) -> None:
         return {"accepted": True, "session_id": params["session_id"]}
 
     client.on_session_assign(on_assign)
-    client.on_tool_call(run_bash)
+    client.tools.bash.handler(run_bash)
     await client.start()
     try:
         executor = await harness.wait_executor()
         session = await executor.assign_session({"session_id": "ses_local"})  # type: ignore[typeddict-item]
         await session.ready()
-        result = await session.call_tool({"tool": "bash", "input": {"command": "echo hello from the hand"}})  # type: ignore[typeddict-item]
-        print(result["outcome"], result["content"][0]["text"].strip())
+        result = await session.tools.bash.call({"command": "echo hello from the hand"})
+        print(result["outcome"], [block.get("text", "").strip() for block in result["content"]])
         await session.stop("done")
     finally:
         await client.stop("done")
