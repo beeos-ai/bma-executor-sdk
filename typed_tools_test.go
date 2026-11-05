@@ -116,7 +116,9 @@ func TestTypedTextToolErrorAndFailures(t *testing.T) {
 
 func TestTypedCapabilitiesFollowHandlers(t *testing.T) {
 	executor, _ := typedPair(t, func(c *Client) {
-		c.Tools.Read.Handle(func(ctx context.Context, in ReadInput, tc ToolContext) (ToolOutput, error) { return TextOutput("x"), nil })
+		c.Tools.Read.Handle(func(ctx context.Context, in ReadInput, tc ToolContext) (ToolOutput, error) {
+			return TextOutput("x"), nil
+		})
 	}, Capabilities{Shell: &ShellCapability{Enabled: true}, Files: &FilesCapability{ReadRoots: []string{"/w"}}})
 	var caps Capabilities
 	if err := executor.Capabilities(&caps); err != nil {

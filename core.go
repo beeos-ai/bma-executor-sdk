@@ -370,12 +370,24 @@ func (c *Core) Attach(brain string, client *Client) error {
 		}
 		return out
 	}
-	client.Tools.Bash.Handle(func(ctx context.Context, _ BashInput, tool ToolContext) (ToolOutput, error) { return run(ctx, tool), nil })
-	client.Tools.Read.Handle(func(ctx context.Context, _ ReadInput, tool ToolContext) (ToolOutput, error) { return run(ctx, tool), nil })
-	client.Tools.Write.Handle(func(ctx context.Context, _ WriteInput, tool ToolContext) (ToolOutput, error) { return run(ctx, tool), nil })
-	client.Tools.Edit.Handle(func(ctx context.Context, _ EditInput, tool ToolContext) (ToolOutput, error) { return run(ctx, tool), nil })
-	client.Tools.Glob.Handle(func(ctx context.Context, _ GlobInput, tool ToolContext) (ToolOutput, error) { return run(ctx, tool), nil })
-	client.Tools.Grep.Handle(func(ctx context.Context, _ GrepInput, tool ToolContext) (ToolOutput, error) { return run(ctx, tool), nil })
+	client.Tools.Bash.Handle(func(ctx context.Context, _ BashInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	client.Tools.Read.Handle(func(ctx context.Context, _ ReadInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	client.Tools.Write.Handle(func(ctx context.Context, _ WriteInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	client.Tools.Edit.Handle(func(ctx context.Context, _ EditInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	client.Tools.Glob.Handle(func(ctx context.Context, _ GlobInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	client.Tools.Grep.Handle(func(ctx context.Context, _ GrepInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
 	client.afterToolResult(func(params ToolCallParams) {
 		session := c.session(coreKey{brain, params.SessionID})
 		if session != nil && c.opts.EndAfterToolCall != nil && c.opts.EndAfterToolCall(session.params) {

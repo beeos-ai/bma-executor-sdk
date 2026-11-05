@@ -81,7 +81,6 @@ type LogEvent struct {
 	Err     error
 }
 
-
 // SessionAssignHandler handles an inbound session.assign.
 type SessionAssignHandler func(ctx context.Context, params SessionAssignParams) (SessionAssignResult, error)
 
