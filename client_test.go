@@ -69,13 +69,8 @@ func TestClientRegistersAndRunsToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	client.OnToolCall(func(_ context.Context, params ToolCallParams) (ToolResultParams, error) {
-		return ToolResultParams{
-			SessionID:  params.SessionID,
-			ToolCallID: params.ToolCallID,
-			Outcome:    ToolOutcomeSucceeded,
-			Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "ok"}},
-		}, nil
+	client.Tools.Bash.Handle(func(context.Context, BashInput, ToolContext) (ToolOutput, error) {
+		return TextOutput("ok"), nil
 	})
 
 	registered, err := client.Start(ctx)

@@ -88,7 +88,7 @@ registered, _ := client.Start(ctx)
 
 平台按工作项派发一次性会话：`session.assign` → `session.ready` → `tool.call`（`bash`/`read`/`write`/`list_files`）→ `tool.result` → `session.ended`。`Core` 会为 `session.assign.mcp_servers[]` 中 `connection_origin:"environment"` 的 stdio server 起进程并桥接到 MCP 通道（平台目前尚不发送 `mcp_servers`【即将提供】）。
 
-如果你不用 `Core`，而是自己实现执行：用 `client.OnToolCall(handler)`，在 handler 的 `ctx` 被取消时杀掉进程组；在准备好后调用 `SessionReady`、全部子进程退出后调用 `SessionEnded`（见 [Go executor README](../../README.md#executor-quick-start)）。
+如果你不用 `Core`，而是自己实现执行：用 `client.Tools.Bash.Handle(handler)`（每个内置工具一个槽位），在 handler 的 `ctx` 被取消时杀掉进程组；在准备好后调用 `SessionReady`、全部子进程退出后调用 `SessionEnded`（见 [Go executor README](../../README.md#executor-quick-start)）。
 
 ## 2. 本机脑 → 本机手 → 事件回平台
 

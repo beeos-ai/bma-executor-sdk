@@ -12,7 +12,16 @@
   `callTool(tool, input, { toolCallId, deadlineMs, permission, signal })`
   (fixes the `callTool` params type, which no longer compiled against the
   per-tool `ToolCallParams` union). Upgrade guide: [MIGRATION.md](MIGRATION.md).
-  Python and Go follow in the same release.
+- **Breaking (ADR 0012), Python:** `@client.tools.<name>.handler` with the
+  contract's `<Tool>Input` TypedDicts replaces `on_tool_call`; handlers return
+  `str`, content blocks, `ToolResult` or (bash) `BashResult`; `ToolError`
+  reports `is_error`. Harness: `session.tools.<name>.call(input, ...)` and
+  `call_tool(tool, input, ...)` replace `call_tool(params)`.
+- **Breaking (ADR 0012), Go:** `Client.Tools.<Name>.Handle(func(ctx, <Name>Input, ToolContext) (ToolOutput, error))`
+  replaces `OnToolCall` / `ToolCallHandler`; `BashResult.Output()` renders like
+  `Core`, `NewToolError` reports `is_error`; capabilities follow the handlers.
+  `Core.Attach` registers each tool it implements. Harness:
+  `session.Tools.<Name>.Call(ctx, input, CallToolOptions{...})`.
 - Conformance peers block on the bash command `block` instead of a tool named
   `block`, which is not a protocol tool name.
 - TypeScript: `@types/ws` is now a runtime dependency (was a dev dependency).

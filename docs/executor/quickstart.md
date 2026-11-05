@@ -88,7 +88,7 @@ registered, _ := client.Start(ctx)
 
 The platform dispatches one-shot sessions per work item: `session.assign` → `session.ready` → `tool.call` (`bash`/`read`/`write`/`list_files`) → `tool.result` → `session.ended`. `Core` starts stdio servers listed in `session.assign.mcp_servers[]` with `connection_origin:"environment"` and bridges them to MCP channels (the platform does not send `mcp_servers` yet [Coming]).
 
-Without `Core`, implement execution with `client.OnToolCall(handler)`, kill the process group when the handler's `ctx` is canceled, call `SessionReady` after setup and `SessionEnded` after every child exited (see the [Go executor README](../../README.md#executor-quick-start)).
+Without `Core`, implement execution with `client.Tools.Bash.Handle(handler)` (one slot per built-in tool), kill the process group when the handler's `ctx` is canceled, call `SessionReady` after setup and `SessionEnded` after every child exited (see the [Go executor README](../../README.md#executor-quick-start)).
 
 ## 2. Local brain → local hand → events to the platform
 

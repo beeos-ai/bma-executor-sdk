@@ -54,20 +54,12 @@ func run() error {
 		}()
 		return bmaexecutor.SessionAssignResult{Accepted: true, SessionID: params.SessionID}, nil
 	})
-	client.OnToolCall(func(callCtx context.Context, params bmaexecutor.ToolCallParams) (bmaexecutor.ToolResultParams, error) {
-		input, err := params.DecodeInput()
-		if err != nil {
-			return bmaexecutor.ToolResultParams{}, err
-		}
+	client.Tools.Bash.Handle(func(callCtx context.Context, input bmaexecutor.BashInput, _ bmaexecutor.ToolContext) (bmaexecutor.ToolOutput, error) {
 		if input.Command == "block" {
 			<-callCtx.Done()
-			return bmaexecutor.ToolResultParams{Outcome: bmaexecutor.ToolOutcomeSucceeded}, nil
+			return bmaexecutor.ToolOutput{}, nil
 		}
-		command := input.Command
-		return bmaexecutor.ToolResultParams{
-			Outcome: bmaexecutor.ToolOutcomeSucceeded,
-			Content: []bmaexecutor.ContentBlock{{Type: bmaexecutor.ContentBlockTypeText, Text: "go:" + command}},
-		}, nil
+		return bmaexecutor.TextOutput("go:" + input.Command), nil
 	})
 	client.ServeAgent(echoAgent{}, bmaexecutor.AgentCapability{Models: []bmaexecutor.AgentModel{{ID: "go-echo"}}})
 	if _, err := client.Start(ctx); err != nil {

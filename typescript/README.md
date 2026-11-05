@@ -158,7 +158,7 @@ executor and in-memory platform in one process).
 | --- | --- |
 | `NewClient(Options)` / `Start` / `Stop` | `new ExecutorClient(options)` / `start()` / `stop()` |
 | `Options.TokenSource`, `StaticToken` | `tokenSource`, `staticToken` (or `dialer`) |
-| `OnToolCall(ctx, call)` | `tools.<name>.handle(input, { signal, progress })` |
+| `Tools.<Name>.Handle(func(ctx, input, tool))` | `tools.<name>.handle(input, { signal, progress })` |
 | `OnSessionAssign` / `OnSessionStop` / `OnDrain` / `OnRequest` / `OnNotification` | `onSessionAssign` / `onSessionStop` / `onDrain` / `onRequest` / `onNotification` |
 | `SessionReady` / `SessionEnded` / `ReportToolResult` | `sessionReady` / `sessionEnded` / `reportToolResult` |
 | `SendSessionStatus` / `SendToolProgress` / `SendExecutorCapabilitiesUpdate` | `sessionStatus` / `toolProgress` / `updateCapabilities` |

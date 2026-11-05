@@ -81,8 +81,6 @@ type LogEvent struct {
 	Err     error
 }
 
-// ToolCallHandler handles an inbound tool.call and returns the result to report.
-type ToolCallHandler func(ctx context.Context, params ToolCallParams) (ToolResultParams, error)
 
 // SessionAssignHandler handles an inbound session.assign.
 type SessionAssignHandler func(ctx context.Context, params SessionAssignParams) (SessionAssignResult, error)
@@ -229,6 +227,10 @@ func RequestID(ctx context.Context) string {
 
 // Client is an outbound executor client.
 type Client struct {
+	// Tools has one typed slot per built-in tool: Tools.Bash.Handle(...).
+	// Capabilities shell, files and computer_use follow what is registered.
+	Tools Tools
+
 	options    Options
 	httpClient *http.Client
 
@@ -254,7 +256,7 @@ type Client struct {
 	completedToolResults map[string]struct{}
 	seenToolCalls        map[string]struct{}
 	runningToolCalls     map[string]*runningToolCall
-	toolCallHandler      ToolCallHandler
+	toolHandlers         map[string]toolHandler
 	toolCallAccept       func(ToolCallParams) error
 	afterToolResults     []func(ToolCallParams)
 	sessionsLost         []func([]string)
@@ -316,7 +318,7 @@ func NewClient(options Options) (*Client, error) {
 		options.ToolResultRetryBaseDelay = DefaultToolResultRetryBaseDelay
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Client{
+	client := &Client{
 		options:              options,
 		httpClient:           options.HTTPClient,
 		rootCtx:              ctx,
@@ -333,7 +335,10 @@ func NewClient(options Options) (*Client, error) {
 		requestHandlers:      make(map[string]func(context.Context, json.RawMessage) (any, error)),
 		notificationHandlers: make(map[string]func(json.RawMessage)),
 		registered:           make(chan struct{}),
-	}, nil
+		toolHandlers:         make(map[string]toolHandler),
+	}
+	client.Tools = newTools(client)
+	return client, nil
 }
 
 // Start fetches an executor token, connects, registers, and starts heartbeats.
@@ -457,11 +462,40 @@ func (c *Client) ActiveSessions() []string {
 	return c.sessionIDsLocked()
 }
 
-// OnToolCall registers the tool.call handler.
-func (c *Client) OnToolCall(handler ToolCallHandler) {
+func (c *Client) setToolHandler(name string, handler toolHandler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.toolCallHandler = handler
+	c.toolHandlers[name] = handler
+}
+
+// registeredCapabilities is Options.Capabilities with shell, files and
+// computer_use set from the registered tool handlers, so nothing
+// unimplemented is advertised.
+func (c *Client) registeredCapabilities() Capabilities {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	has := func(names ...string) bool {
+		for _, name := range names {
+			if c.toolHandlers[name] != nil {
+				return true
+			}
+		}
+		return false
+	}
+	capabilities := c.options.Capabilities
+	shell := ShellCapability{}
+	if capabilities.Shell != nil {
+		shell = *capabilities.Shell
+	}
+	shell.Enabled = has(ToolNameBash)
+	files := FilesCapability{}
+	if capabilities.Files != nil {
+		files = *capabilities.Files
+	}
+	files.Enabled = has(ToolNameRead, ToolNameWrite, ToolNameEdit, ToolNameGlob, ToolNameGrep, ToolNameListFiles)
+	capabilities.Shell, capabilities.Files = &shell, &files
+	capabilities.ComputerUse = has(ToolNameComputerObserve, ToolNameComputerAction)
+	return capabilities
 }
 
 // OnToolCallAccept registers a check run before a tool.call is acknowledged.
@@ -792,7 +826,7 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 		Protocol:      c.options.Protocol,
 		EnvironmentID: c.options.EnvironmentID,
 		Executor:      c.options.Executor,
-		Capabilities:  c.options.Capabilities,
+		Capabilities:  c.registeredCapabilities(),
 		Resume:        c.resumeState(),
 	}
 	if c.agent != nil {
@@ -1210,15 +1244,19 @@ func (c *Client) cancelToolCall(params ToolCancelParams) ToolCancelResult {
 
 func (c *Client) runToolCall(ctx context.Context, params ToolCallParams) {
 	c.mu.Lock()
-	handler := c.toolCallHandler
+	handler := c.toolHandlers[params.Tool]
 	c.mu.Unlock()
 
 	var result ToolResultParams
 	if handler == nil {
-		result = failedToolResult(params, "no tool handler registered")
+		result = failedToolResult(params, "no handler registered for tool "+params.Tool)
 	} else {
 		var err error
-		result, err = handler(ctx, params)
+		result, err = handler(ctx, params, func(message string) {
+			if err := c.Notify(c.rootCtx, MethodToolProgress, ToolProgressParams{SessionID: params.SessionID, ToolCallID: params.ToolCallID, Message: message}); err != nil {
+				c.log(LogDebug, "tool.progress not sent", err)
+			}
+		})
 		if err != nil {
 			result = failedToolResult(params, err.Error())
 		}

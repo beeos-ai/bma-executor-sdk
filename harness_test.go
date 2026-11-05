@@ -62,18 +62,16 @@ func TestHarnessDrivesExecutorClient(t *testing.T) {
 
 	var runs atomic.Int32
 	release := make(chan struct{})
-	client.OnToolCall(func(ctx context.Context, call ToolCallParams) (ToolResultParams, error) {
+	client.Tools.Bash.Handle(func(ctx context.Context, input BashInput, _ ToolContext) (ToolOutput, error) {
 		runs.Add(1)
-		if call.Tool == "block" {
+		if input.Command == "block" {
 			select {
 			case <-ctx.Done():
 			case <-release:
 			}
-			return ToolResultParams{Outcome: ToolOutcomeSucceeded}, nil
+			return ToolOutput{}, nil
 		}
-		var input ToolInput
-		_ = json.Unmarshal(call.Input, &input)
-		return ToolResultParams{Outcome: ToolOutcomeSucceeded, Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "ran " + input.Command}}}, nil
+		return TextOutput("ran " + input.Command), nil
 	})
 	client.OnSessionAssign(func(ctx context.Context, assign SessionAssignParams) (SessionAssignResult, error) {
 		go func() {
@@ -121,7 +119,7 @@ func TestHarnessDrivesExecutorClient(t *testing.T) {
 	// tool.cancel aborts a running call and the result reports canceled.
 	blocked := make(chan ToolResultParams, 1)
 	go func() {
-		result, _ := session.CallTool(ctx, ToolCallParams{ToolCallID: "call_block", Tool: "block"})
+		result, _ := session.Tools.Bash.Call(ctx, BashInput{Command: "block"}, CallToolOptions{ToolCallID: "call_block"})
 		blocked <- result
 	}()
 	waitFor(t, func() bool { return runs.Load() == 2 })

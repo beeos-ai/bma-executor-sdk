@@ -8,7 +8,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -59,15 +58,12 @@ func run(url, token string) error {
 		}()
 		return bmaexecutor.SessionAssignResult{Accepted: true, SessionID: params.SessionID}, nil
 	})
-	client.OnToolCall(func(callCtx context.Context, params bmaexecutor.ToolCallParams) (bmaexecutor.ToolResultParams, error) {
-		var input bmaexecutor.ToolInput
-		_ = json.Unmarshal(params.Input, &input)
+	client.Tools.Bash.Handle(func(callCtx context.Context, input bmaexecutor.BashInput, _ bmaexecutor.ToolContext) (bmaexecutor.ToolOutput, error) {
 		if input.Command == "block" {
 			<-callCtx.Done()
-			return bmaexecutor.ToolResultParams{Outcome: bmaexecutor.ToolOutcomeSucceeded}, nil
+			return bmaexecutor.ToolOutput{}, nil
 		}
-		return bmaexecutor.ToolResultParams{Outcome: bmaexecutor.ToolOutcomeSucceeded,
-			Content: []bmaexecutor.ContentBlock{{Type: bmaexecutor.ContentBlockTypeText, Text: "go:" + input.Command}}}, nil
+		return bmaexecutor.TextOutput("go:" + input.Command), nil
 	})
 	if _, err := client.Start(ctx); err != nil {
 		return err

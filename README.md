@@ -42,8 +42,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
+	"os/exec"
 
 	bmaexecutor "github.com/beeos-ai/bma-executor-sdk"
 )
@@ -58,13 +60,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	client.OnToolCall(func(ctx context.Context, call bmaexecutor.ToolCallParams) (bmaexecutor.ToolResultParams, error) {
-		return bmaexecutor.ToolResultParams{
-			SessionID:  call.SessionID,
-			ToolCallID: call.ToolCallID,
-			Outcome:    bmaexecutor.ToolOutcomeSucceeded,
-			Content:    []bmaexecutor.ContentBlock{{Type: bmaexecutor.ContentBlockTypeText, Text: "ok"}},
-		}, nil
+	// One typed slot per built-in tool; only registered tools are advertised.
+	client.Tools.Bash.Handle(func(ctx context.Context, in bmaexecutor.BashInput, tool bmaexecutor.ToolContext) (bmaexecutor.ToolOutput, error) {
+		out, err := exec.CommandContext(ctx, "bash", "-lc", in.Command).Output()
+		code := 0
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			code = exitErr.ExitCode()
+		} else if err != nil {
+			return bmaexecutor.ToolOutput{}, err // outcome failed
+		}
+		return bmaexecutor.BashResult{Stdout: string(out), ExitCode: code}.Output(), nil
 	})
 	if _, err := client.Start(context.Background()); err != nil {
 		log.Fatal(err)
@@ -77,11 +83,11 @@ Set `Options.BaseURL` to your BMA deployment: the hosted service is in early acc
 
 A machine-scoped executor uses a machine token through `Options.TokenSource` and no environment id. Go clients negotiate `bma.executor.v1.1` by default (`Options.Protocol`).
 
-Executor types follow one mapping: required members are values, optional members are values with `omitempty` (named structs and nullable members are pointers), enums are untyped constants (`Code*` error codes on `RPCError.Code`), and opaque payloads such as `ToolCallParams.Input` stay `json.RawMessage` (`call.DecodeInput()` decodes the built-in `ToolInput`; `NewToolInput(ToolInput{...})` builds it).
+Executor types follow one mapping: required members are values, optional members are values with `omitempty` (named structs and nullable members are pointers), enums are untyped constants (`Code*` error codes on `RPCError.Code`), and opaque payloads such as `ToolCallParams.Input` stay `json.RawMessage`. Tool handlers receive the decoded per-tool input (`BashInput`, `ReadInput`, ...) through `client.Tools.<Name>.Handle`; return `TextOutput`, `BashResult{...}.Output()` (rendered like `Core`: stdout, stderr, `exit_code: N`) or a `ToolOutput`, `NewToolError(text)` for a tool-level error the model sees (`is_error: true`), any other error for `outcome: "failed"`. The harness calls them as `session.Tools.Bash.Call(ctx, BashInput{Command: "ls"}, CallToolOptions{})`.
 
 ### Lifecycle, cancellation, and results
 
-- `tool.cancel` from the harness cancels the `context.Context` passed to the `OnToolCall` handler. The client responds `{"canceled":true}` and reports the result with `outcome: "canceled"`; handlers must stop their process group when the context is done.
+- `tool.cancel` from the harness cancels the `context.Context` passed to the tool handler. The client responds `{"canceled":true}` and reports the result with `outcome: "canceled"`; handlers must stop their process group when the context is done.
 - A repeated `tool.call` with the same `tool_call_id` is acknowledged but not executed twice.
 - Call `SessionReady` after workspace and MCP setup, and `SessionEnded` after every child process and MCP server has stopped. The SDK does not infer these transitions because only the adapter knows when setup and cleanup finished.
 - `tool.result` is retried with exponential backoff on `-32009` (`executor_busy`), `-32004` (`timeout`), or `data.retryable: true`. Results are idempotent by `tool_call_id`. When every attempt fails, `OnToolResultLost` is called with the original result so the adapter can persist and replay it; the client never drops a result silently.

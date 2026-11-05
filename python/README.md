@@ -21,7 +21,7 @@ The REST / façade client is the separate package [`bma-sdk`](https://github.com
 
 ```python
 import asyncio, os
-from bma_executor_sdk import ExecutorClient
+from bma_executor_sdk import BashInput, BashResult, ExecutorClient, ToolContext
 
 async def main() -> None:
     client = ExecutorClient(
@@ -31,11 +31,13 @@ async def main() -> None:
         executor={"name": "my-executor", "os": "linux", "arch": "arm64", "version": "0.1.0"},
     )
 
-    async def on_tool_call(call):
-        return {"session_id": call["session_id"], "tool_call_id": call["tool_call_id"],
-                "outcome": "succeeded", "is_error": False, "content": [{"type": "text", "text": "ok"}]}
+    @client.tools.bash.handler  # one typed slot per built-in tool; only registered tools are advertised
+    async def bash(input: BashInput, ctx: ToolContext) -> BashResult:
+        proc = await asyncio.create_subprocess_shell(
+            input["command"], stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        out, err = await proc.communicate()
+        return BashResult(stdout=out.decode(), stderr=err.decode(), exit_code=proc.returncode or 0)
 
-    client.on_tool_call(on_tool_call)
     await client.start()
     await asyncio.Event().wait()
 
@@ -48,6 +50,7 @@ A complete version that runs bash and stops the process on cancellation is [`exa
 
 Behavior matches the Go SDK:
 
+- A handler returns a string, content blocks, `ToolResult(content, is_error, artifacts)` or (bash) `BashResult`, rendered like the Go `Core`; `raise ToolError(text)` reports a tool-level error (`is_error: true`), any other exception is `outcome: "failed"`. The harness calls tools as `await session.tools.bash.call({"command": "ls"})`.
 - `tool.cancel` cancels the handler's task and reports `outcome: "canceled"`; duplicate `tool.call` ids run once.
 - `tool.result` retries `-32009` / `-32004` / `retryable` errors and hands a lost result to `on_tool_result_lost`.
 - Reconnect resumes with `resume.executor_id` / `active_sessions`; close codes 1008, 4002, 4003 and 4004 stop the client (4001 and 4005 reconnect).
@@ -95,7 +98,8 @@ The executor-listens local socket is not implemented in Python (use the Go or Ty
 | `NewClient(Options{...})` | `ExecutorClient(environment_id=..., executor=..., ...)` |
 | `Options.TokenSource`, `StaticToken(url, token)` | `token_source=`, `static_token(url, token)` |
 | `Client.Start` / `Stop` / `State` / `ExecutorID` / `ConnectionID` / `ActiveSessions` | `start()` / `stop(reason)` / `state` / `executor_id` / `connection_id` / `active_sessions` |
-| `OnToolCall` / `OnSessionAssign` / `OnSessionStop` / `OnDrain` / `OnRequest` / `OnNotification` | `on_tool_call` / `on_session_assign` / `on_session_stop` / `on_drain` / `on_request` / `on_notification` |
+| `Tools.Bash.Handle(fn)` | `@client.tools.bash.handler` |
+| `OnSessionAssign` / `OnSessionStop` / `OnDrain` / `OnRequest` / `OnNotification` | `on_session_assign` / `on_session_stop` / `on_drain` / `on_request` / `on_notification` |
 | `Call` / `Notify` / `ReportToolResult` / `SessionReady` / `SessionEnded` / `OpenMCPChannel` | `call` / `notify` / `report_tool_result` / `session_ready` / `session_ended` / `open_mcp_channel` |
 | `ServeAgent(handler, AgentCapability)` | `serve_agent(handler, capability)` |
 | `AgentHandler.OpenTurn` / `RunTurn` / `CloseSession` | `open_turn` / `run_turn` / `close_session` |
