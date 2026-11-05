@@ -15,6 +15,7 @@ The entry point for integrators who build an executor (a "hand"), drive one (a "
 Status labels used across these documents:
 
 - **[Available]**: shipped in bma-executor-sdk 0.4.0 or live on the BMA platform.
+- **[Preview]**: live on the BMA platform with the limits stated where it is used; may change before general availability.
 - **[Coming]**: defined in the contract but not served yet; capability-gated, so a peer that does not advertise the capability bit never receives those methods.
 - **[Design]**: designed, not implemented.
 
@@ -41,7 +42,7 @@ Status labels used across these documents:
 | --- | --- | --- |
 | harness | sends `session.assign`, `tool.call`, `process.*`, `terminal.*`; receives `tool.result`, `session.event` | the BMA platform, your local brain (SDK `Harness`) |
 | executor | registers, heartbeats, executes, reports | `bmad executor`, the selfhost worker, a process built on SDK `Client`/`Core` |
-| agent provider | an executor advertising the `agent` capability: takes natural-language turns, streams full agent events | your local agent behind an executor (SDK [Available]; platform [Coming]) |
+| agent provider | an executor advertising the `agent` capability: takes natural-language turns, streams full agent events | your local agent behind an executor (SDK [Available]; platform [Preview]) |
 
 **Whoever directs is the harness.** The same local brain is an agent provider towards the platform and a harness towards the local hand.
 
@@ -93,7 +94,7 @@ bmad (the only executor on this computer)
           ▼
 your local brain
    ├─ as harness: drives bmad's tools locally, no cloud round trip ...................... [Coming in bmad]
-   └─ as agent provider: takes platform turns, produces agent events ................... [Coming on the platform]
+   └─ as agent provider: takes platform turns, produces agent events ................... [Preview on the platform]
 ```
 
 Today bmad holds only its outbound platform connection; it does not accept local brains or forward the agent capability yet. The SDK pieces this needs (`ListenUnixSocket`, `Harness.DialExecutor`, the agent capability) ship in 0.4.0.
@@ -165,7 +166,7 @@ Protocol messages are the same on every transport.
 | MCP channel (`channel=mcp`) | v1 | server channel available (environment path); the platform harness does not dispatch MCP servers to executors in production yet | no | `OpenMCPChannel` and the `Core` stdio supervisor |
 | session files (`/mnt/session/uploads\|outputs`) | machine-token HTTP routes | available | available | — |
 | `workspace.backup` | v1.1 additive | available | available | — |
-| agent (`turn.*`, interactions) | v1.1 + `agent` | coming (contract defined, platform side not implemented) | no | available (both sides) |
+| agent (`turn.*`, interactions) | v1.1 + `agent` | preview (machine executors, bound with `PUT …/agents/{agentID}/executor-binding`; text input only) | no | available (both sides) |
 | local socket | — | — | coming | available |
 
 ---

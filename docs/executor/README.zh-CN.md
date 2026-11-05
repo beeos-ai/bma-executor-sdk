@@ -15,6 +15,7 @@
 状态标注（全套文档统一）：
 
 - **【已有】**：bma-executor-sdk 0.4.0 已发布，或 BMA 平台已上线。
+- **【预览】**：BMA 平台已上线，限制在使用处注明；正式可用（GA）前可能调整。
 - **【即将提供】**：契约中已定义、尚未提供服务；按能力位（capability-gated）发布，未声明对应能力位的一方不会收到这些方法。
 - **【设计中】**：只有设计，没有实现。
 
@@ -43,7 +44,7 @@ Executor Protocol 定义“指挥方”和“执行方”之间的通信：
 | --- | --- | --- |
 | harness | 发 `session.assign`、`tool.call`、`process.*`、`terminal.*`；收 `tool.result`、`session.event` | BMA 平台、你的本机脑（用 SDK `Harness`） |
 | executor | 注册、心跳、执行、回结果 | `bmad executor`、selfhost worker、用 SDK `Client`/`Core` 写的进程 |
-| agent 提供方 | executor 声明 `agent` 能力，接收自然语言任务、回传完整 Agent 事件 | 你的本机 Agent 经 executor 接入（SDK【已有】；平台【即将提供】） |
+| agent 提供方 | executor 声明 `agent` 能力，接收自然语言任务、回传完整 Agent 事件 | 你的本机 Agent 经 executor 接入（SDK【已有】；平台【预览】） |
 
 **谁指挥谁就是 harness**。同一个本机脑，对平台而言是“agent 提供方”（经 executor 接收任务），对本机手而言是“harness”（驱动它执行工具）。
 
@@ -97,7 +98,7 @@ bmad（这台电脑唯一的执行端）
           ▼
 你的本机脑
    ├─ 作为 harness：驱动 bmad 执行工具（不经云端）…………………………………… 【bmad 即将提供】
-   └─ 作为 agent 提供方：接收平台任务、产生 Agent 事件 ………………………… 【平台即将提供】
+   └─ 作为 agent 提供方：接收平台任务、产生 Agent 事件 ………………………… 【平台预览】
 ```
 
 现状：bmad 目前只有到平台的一条出站连接，还不能接受本机脑连入，也不能转发 agent 能力。所需的 SDK 部件（`ListenUnixSocket`、`Harness.DialExecutor`、agent 能力）已在 0.4.0 发布。
@@ -169,7 +170,7 @@ bma-executor-sdk（Go）
 | MCP 通道（`channel=mcp`） | v1 | 服务端通道已有（environment 路径）；平台 harness 尚未在生产路径向 executor 派发 MCP server | 未实现 | `OpenMCPChannel` 与 `Core` stdio supervisor |
 | session files（`/mnt/session/uploads\|outputs`） | 机器 token HTTP 路由 | 已有 | 已有 | — |
 | `workspace.backup` | v1.1 附加 | 已有 | 已有 | — |
-| agent 能力（`turn.*`、interaction） | v1.1 + `agent` | 即将提供（契约已定义，平台侧未实现） | 未实现 | 已有（两侧） |
+| agent 能力（`turn.*`、interaction） | v1.1 + `agent` | 预览（machine 执行端，经 `PUT …/agents/{agentID}/executor-binding` 绑定；仅文本输入） | 未实现 | 已有（两侧） |
 | 本机 socket | — | — | 即将提供 | 已有 |
 
 ---

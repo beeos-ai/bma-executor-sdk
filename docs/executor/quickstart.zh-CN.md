@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | 1A：云端脑 → bmad（本机手） | 平台 agent 在你的电脑上跑 `run_command`/进程工具/终端/技能/文件传输 | bmad ≥ 0.2.11、机器 token | 【已有】 |
 | 1B：云端脑 → SDK 手（`Core`） | 平台按 `tool.call` 派发 bash/文件工具与 stdio MCP | selfhost environment + environment key；Go SDK 0.4.0 | 【已有】（平台派发 MCP server【即将提供】） |
-| 2：本机脑 → 本机手 → 事件回平台 | 本机脑经 loopback 驱动同一执行核心；agent 事件回传平台 | SDK 0.4.0（Go、TypeScript、Python）；平台 agent 能力 | 本机部分【已有】；回平台部分【即将提供】，可用模拟平台联调 |
+| 2：本机脑 → 本机手 → 事件回平台 | 本机脑经 loopback 驱动同一执行核心；agent 事件回传平台 | SDK 0.4.0（Go、TypeScript、Python）；平台 agent 能力 | 本机部分【已有】；回平台部分【预览】（仅文本输入） |
 
 ---
 
@@ -101,7 +101,7 @@ go run ./examples/local-brain -mcp-command "go run ./examples/echo-mcp"
 
 流程（[源码](../../examples/local-brain/main.go)）：本机脑在 `127.0.0.1:0` 起 `Harness`（每次运行随机 token）；执行端 `Core` 接一个 `Client`，用 `StaticToken` 连过去；本机脑 `WaitExecutor` → `AssignSession`（带 stdio MCP server）→ `Ready` → `CallTool(bash)` ×2 → `session.MCP("echo")` 收发原始 MCP JSON-RPC → `Stop`。把脚本换成你的模型循环，就是一个本机 Agent 的“手”部分。鉴权与并存规则见[本机连接](local-connection.zh-CN.md)。TypeScript：[`harness-loopback`](../../typescript/examples/harness-loopback/main.mjs)；Python：[`harness_loopback.py`](../../python/examples/harness_loopback.py)。
 
-### 2.2 Agent 事件回平台【SDK 已有；平台即将提供】
+### 2.2 Agent 事件回平台【SDK 已有；平台预览】
 
 ```sh
 cd bma-executor-sdk
@@ -110,7 +110,7 @@ go run ./examples/agentexecutor
 
 示例用模拟平台演示完整生命周期：`turn.start` → 流式 `session.event_delta` 与持久 `session.event` → `interaction.request` 审批 → `interaction.response` → 结果 → `turn.input` 追加 → 断线（TCP 代理断开）后按 sequence 补报 → `turn.cancel` → `session.close`。你的实现只需提供 `AgentHandler`，见 [agent 能力](agent-capability.zh-CN.md#6-sdk-用法)。TypeScript 与 Python 对应示例：[`agent-minimal`](../../typescript/examples/agent-minimal/main.mjs)、[`agent_minimal.py`](../../python/examples/agent_minimal.py)。
 
-平台实现 agent 能力后，同一个程序把 `TokenSource`/凭据换成机器 token 指向平台即可；客户端从平台会话事件流（SSE）订阅事件。
+对接平台（预览）时，同一个程序用已绑定到该 agent 的 machine 的机器 token 连接（`PUT /orgs/{orgID}/projects/{projectID}/agents/{agentID}/executor-binding`）；客户端发送文本输入，并从平台会话事件流（SSE）订阅事件。见 [agent 能力](agent-capability.zh-CN.md#7-平台预览)。
 
 ---
 

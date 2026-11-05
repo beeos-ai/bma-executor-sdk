@@ -2,13 +2,13 @@
 
 [中文](agent-capability.zh-CN.md) · [Overview](README.md) · [Protocol reference](protocol-reference.md)
 
-Status: contract and SDK **[Available]**, platform **[Coming]**.
+Status: contract and SDK **[Available]**, platform **[Preview]** (text input only).
 
 | Part | Where | Status |
 | --- | --- | --- |
 | Contract (methods, [`schemas/agent.json`](../../contracts/bma/executor/schemas/agent.json), conformance examples) | [`contracts/bma/executor`](../../contracts/bma/executor) (`bma.executor.v1.1`, contract 1.1.0) | [Available] |
 | SDK: executor side `ServeAgent` / `AgentHandler`, harness side `AgentPlatform` | bma-executor-sdk 0.4.0 (Go, TypeScript, Python) | [Available] |
-| Platform side (dispatch from the BMA API, event storage and SSE, interactions) | BMA platform | [Coming] |
+| Platform side (binding, dispatch from the BMA API, event storage and SSE, interactions) | BMA platform | [Preview] |
 
 This chapter is the wire contract an integrator implements or relies on. Names and fields follow the contract in [`contracts/bma/executor`](../../contracts/bma/executor).
 
@@ -149,6 +149,10 @@ Harness side (the platform, or a simulated one in tests): `HarnessOptions.Agent`
 
 Full flow: `go run ./examples/agentexecutor` ([source](../../examples/agentexecutor/main.go)) (scripted local agent + simulated platform + a TCP proxy that drops the connection: turn → streamed events → approval → result → follow-up → added input → resend after disconnect → cancel → close).
 
-## 7. Needed on the platform before end to end
+## 7. Platform preview
 
-Selecting a "local executor" in the agent config, turning inputs into `turn.start`/`turn.input`, storing events and publishing them over SSE/the facade, interaction mapping and expiry are not implemented yet. Until then, integrate the executor side against the SDK example's simulated platform.
+- Bind an agent to a machine whose executor serves the `agent` capability: `PUT /orgs/{orgID}/projects/{projectID}/agents/{agentID}/executor-binding` with `{"machine_id": "..."}` (the machine must be granted to the project; `GET` on the same path reads the binding and the executor's latest `capabilities.agent`). The BMA harness then no longer runs that agent's sessions.
+- Session input becomes `turn.start` / `turn.input`, session cancel `turn.cancel`, and archiving `session.close`; input queues while the executor is offline.
+- Events the executor reports are stored and published on the native event stream and through the facade; approvals and questions go through the interactions API.
+- Limit: input to these sessions accepts `text` content blocks only; other block types (files, images) are rejected with `invalid_request`.
+- The SDK example's simulated platform remains the quickest way to develop the executor side offline.

@@ -25,6 +25,7 @@ from bma_executor_sdk import ExecutorClient
 
 async def main() -> None:
     client = ExecutorClient(
+        base_url=os.environ["BMA_BASE_URL"],  # required: see below
         environment_key=os.environ["BMA_ENVIRONMENT_KEY"],
         environment_id=os.environ["BMA_ENVIRONMENT_ID"],
         executor={"name": "my-executor", "os": "linux", "arch": "arm64", "version": "0.1.0"},
@@ -40,6 +41,8 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
+Set `base_url` to your BMA deployment: the hosted service is in early access and the default `DEFAULT_BASE_URL` (`https://api.bma.beeos.ai`) does not resolve yet. It is the API root without `/v1` (for example `https://bma.example.com/api` when the API is served under `/api`); the client posts the environment key to `{base_url}/v1/executors/token`. The SDK does not read `BMA_BASE_URL` itself. A `token_source` carries its own channel URL.
 
 A complete version that runs bash and stops the process on cancellation is [`examples/executor_minimal.py`](examples/executor_minimal.py); set `BMA_HARNESS_URL` (`ws://…` or `unix:///path.sock`) to connect it to a local harness instead of BMA.
 

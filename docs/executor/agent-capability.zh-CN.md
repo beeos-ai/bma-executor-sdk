@@ -2,13 +2,13 @@
 
 [English](agent-capability.md) · [总览](README.zh-CN.md) · [协议参考](protocol-reference.zh-CN.md)
 
-状态：契约与 SDK **【已有】**，平台 **【即将提供】**。
+状态：契约与 SDK **【已有】**，平台 **【预览】**（仅文本输入）。
 
 | 部分 | 位置 | 状态 |
 | --- | --- | --- |
 | 契约（方法、[`schemas/agent.json`](../../contracts/bma/executor/schemas/agent.json)、一致性示例） | [`contracts/bma/executor`](../../contracts/bma/executor)（`bma.executor.v1.1`，契约 1.1.0） | 【已有】 |
 | SDK：executor 侧 `ServeAgent` / `AgentHandler`，harness 侧 `AgentPlatform` | bma-executor-sdk 0.4.0（Go、TypeScript、Python） | 【已有】 |
-| 平台侧（BMA API 下发任务、事件入库与 SSE、interactions 映射） | BMA 平台 | 【即将提供】 |
+| 平台侧（绑定、BMA API 下发任务、事件入库与 SSE、interactions 映射） | BMA 平台 | 【预览】 |
 
 本章描述外部接入方需要实现/依赖的线上契约。方法名、字段以 [`contracts/bma/executor`](../../contracts/bma/executor) 中的契约为准。
 
@@ -154,7 +154,10 @@ harness 侧（平台或测试用的模拟平台）：`HarnessOptions.Agent`（`A
 
 完整流程示例：`go run ./examples/agentexecutor`（[源码](../../examples/agentexecutor/main.go)）（脚本化本机 agent + 模拟平台 + 可断网 TCP 代理：任务 → 流式事件 → 审批 → 结果 → 追问 → 追加输入 → 断线补报 → 取消 → 关闭）。
 
-## 7. 待平台实现后才能端到端
+## 7. 平台预览
 
-- agent 配置选择“本机执行端”、平台把输入转成 `turn.start`/`turn.input`、事件入库并经 SSE/facade 发布、interactions 映射与过期——尚未实现。
-- 在此之前，用 SDK 示例的模拟平台联调 executor 侧实现。
+- 把 agent 绑定到其执行端提供 `agent` 能力的 machine：`PUT /orgs/{orgID}/projects/{projectID}/agents/{agentID}/executor-binding`，请求体 `{"machine_id": "..."}`（machine 须已授予该 project；同一路径 `GET` 读取绑定及执行端最近一次上报的 `capabilities.agent`）。绑定后该 agent 的会话不再由 BMA harness 运行。
+- 会话输入转为 `turn.start` / `turn.input`，取消转为 `turn.cancel`，归档转为 `session.close`；执行端离线时输入排队。
+- 执行端上报的事件入库，并经原生事件流与 facade 发布；审批与问答走 interactions API。
+- 限制：这类会话的输入只接受 `text` content block，其他类型（文件、图片）返回 `invalid_request`。
+- 离线开发 executor 侧时，SDK 示例的模拟平台仍是最快的联调方式。
