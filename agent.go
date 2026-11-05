@@ -47,11 +47,11 @@ func (c *Client) ServeAgent(handler AgentHandler, capability AgentCapability) {
 	c.mu.Lock()
 	c.agent = runtime
 	c.mu.Unlock()
-	c.OnRequest(MethodTurnStart, decodeThen(runtime.turnStart))
-	c.OnRequest(MethodTurnInput, decodeThen(runtime.turnInput))
-	c.OnRequest(MethodTurnCancel, decodeThen(runtime.turnCancel))
-	c.OnRequest(MethodSessionClose, decodeThen(runtime.sessionClose))
-	c.OnRequest(MethodInteractionResponse, decodeThen(runtime.interactionResponse))
+	c.onRequest(MethodTurnStart, decodeThen(runtime.turnStart))
+	c.onRequest(MethodTurnInput, decodeThen(runtime.turnInput))
+	c.onRequest(MethodTurnCancel, decodeThen(runtime.turnCancel))
+	c.onRequest(MethodSessionClose, decodeThen(runtime.sessionClose))
+	c.onRequest(MethodInteractionResponse, decodeThen(runtime.interactionResponse))
 }
 
 func decodeThen[P any, R any](handle func(context.Context, P) (R, error)) func(context.Context, json.RawMessage) (any, error) {
@@ -160,7 +160,7 @@ func (t *AgentTurn) EmitWithID(eventID string, event any) (string, error) {
 func (t *AgentTurn) Delta(eventID, eventType string, index int64, text string) {
 	c := t.session.runtime.client
 	params := SessionEventDeltaParams{SessionID: t.session.id, TurnID: t.params.TurnID, EventID: eventID, EventType: eventType, Index: index, Text: text}
-	if err := SendSessionEventDelta(c.rootCtx, c, params); err != nil {
+	if err := Notifications.SessionEventDelta.Notify(c.rootCtx, c, params); err != nil {
 		c.log(LogDebug, "session.event_delta dropped", err)
 	}
 }
@@ -193,7 +193,7 @@ func (t *AgentTurn) RequestInteraction(ctx context.Context, params InteractionRe
 		return InteractionResponseParams{}, err
 	}
 	if err := s.callUntilConnected(ctx, func(ctx context.Context) error {
-		_, err := SendInteractionRequest(ctx, s.runtime.client, params)
+		_, err := Calls.InteractionRequest.Call(ctx, s.runtime.client, params)
 		return err
 	}); err != nil {
 		return InteractionResponseParams{}, err
@@ -235,7 +235,7 @@ func (s *agentSession) withdraw(interactionID, reason string) {
 	ctx, cancel := context.WithTimeout(c.rootCtx, agentCloseFlushWait)
 	defer cancel()
 	err := s.callUntilConnected(ctx, func(ctx context.Context) error {
-		_, err := SendInteractionCancel(ctx, c, InteractionCancelParams{SessionID: s.id, InteractionID: interactionID, Reason: reason})
+		_, err := Calls.InteractionCancel.Call(ctx, c, InteractionCancelParams{SessionID: s.id, InteractionID: interactionID, Reason: reason})
 		return err
 	})
 	if err != nil {
@@ -512,7 +512,7 @@ func (s *agentSession) sendLoop() {
 
 		err := s.callUntilConnected(c.rootCtx, func(ctx context.Context) error {
 			var result agentSessionEventResult
-			return c.Call(ctx, MethodSessionEvent, head.params, &result)
+			return c.callInto(ctx, MethodSessionEvent, head.params, &result)
 		})
 		if err != nil && c.rootCtx.Err() != nil {
 			return

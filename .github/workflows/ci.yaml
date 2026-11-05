@@ -37,6 +37,9 @@ jobs:
       - name: Contract lock check
         run: python3 tools/check_contract.py
 
+      - name: Typed method tables are up to date
+        run: python3 tools/gen_methods.py --check
+
       - name: Go
         run: |
           go vet ./...

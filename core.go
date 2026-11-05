@@ -404,7 +404,7 @@ func (c *Core) Attach(brain string, client *Client) error {
 	for method, registered := range methods {
 		registered := registered
 		method := method
-		client.OnRequest(method, func(ctx context.Context, params json.RawMessage) (any, error) {
+		client.onRequest(method, func(ctx context.Context, params json.RawMessage) (any, error) {
 			return c.serve(ctx, brain, client, method, registered, params)
 		})
 	}
@@ -610,7 +610,7 @@ func (c *Core) prepare(client *Client, session *CoreSession, params SessionAssig
 }
 
 func (c *Core) status(client *Client, session *CoreSession, status string, detail string) {
-	_ = client.Notify(session.ctx, MethodSessionStatus, SessionStatusParams{SessionID: session.key.session, Status: status, Detail: detail})
+	_ = client.notify(session.ctx, MethodSessionStatus, SessionStatusParams{SessionID: session.key.session, Status: status, Detail: detail})
 }
 
 // end stops the session and reports session.ended with reason. It reports

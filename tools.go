@@ -52,10 +52,17 @@ type BashResult struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
+	// Truncated reports that the handler already cut the output short.
+	Truncated bool
 }
 
-// Output renders stdout and stderr (when not empty) and `exit_code: N`.
+// Output renders stdout and stderr (when not empty) and `exit_code: N`, as
+// Core does. Output larger than DefaultCoreInlineResultBytes, or marked
+// Truncated, is cut to Core's preview: half the limit of stdout, a quarter
+// of stderr, and `exit_code: N (output truncated to fit the result; M bytes
+// total)`.
 func (r BashResult) Output() ToolOutput {
+	exit := ContentBlock{Type: ContentBlockTypeText, Text: fmt.Sprintf("exit_code: %d", r.ExitCode)}
 	var out ToolOutput
 	if r.Stdout != "" {
 		out.Content = append(out.Content, ContentBlock{Type: ContentBlockTypeText, Text: r.Stdout})
@@ -63,8 +70,17 @@ func (r BashResult) Output() ToolOutput {
 	if r.Stderr != "" {
 		out.Content = append(out.Content, ContentBlock{Type: ContentBlockTypeText, Text: r.Stderr})
 	}
-	out.Content = append(out.Content, ContentBlock{Type: ContentBlockTypeText, Text: fmt.Sprintf("exit_code: %d", r.ExitCode)})
-	return out
+	inline := DefaultCoreInlineResultBytes
+	if !r.Truncated && len(r.Stdout)+len(r.Stderr)+len(exit.Text) <= inline {
+		out.Content = append(out.Content, exit)
+		return out
+	}
+	return ToolOutput{Content: []ContentBlock{
+		{Type: ContentBlockTypeText, Text: truncate(r.Stdout, inline/2)},
+		{Type: ContentBlockTypeText, Text: truncate(r.Stderr, inline/4)},
+		{Type: ContentBlockTypeText, Text: fmt.Sprintf("exit_code: %d (output truncated to fit the result; %d bytes total)",
+			r.ExitCode, len(r.Stdout)+len(r.Stderr))},
+	}}
 }
 
 // ToolError is a tool-level error reported to the model (outcome
@@ -96,10 +112,16 @@ type ToolSlot[In any] struct {
 	client *Client
 }
 
-// Handle registers the handler of this tool, replacing an earlier one.
-// Register before Start: capabilities are derived from the handlers.
+// Handle registers the handler of this tool, replacing an earlier one. The
+// shell and files capabilities follow the registered handlers; registering
+// after Start sends executor.capabilities.update, as MCP servers announce
+// tools registered after connecting (tools/list_changed). Input missing a
+// member the contract requires fails the call before the handler runs.
 func (s ToolSlot[In]) Handle(handler func(ctx context.Context, input In, tool ToolContext) (ToolOutput, error)) {
 	s.client.setToolHandler(s.name, func(ctx context.Context, params ToolCallParams, progress func(string)) (ToolResultParams, error) {
+		if missing := missingRequired(s.name, params.Input); missing != "" {
+			return failedToolResult(params, s.name+" requires "+missing), nil
+		}
 		var input In
 		if len(params.Input) > 0 {
 			if err := json.Unmarshal(params.Input, &input); err != nil {
@@ -129,17 +151,39 @@ func (s ToolSlot[In]) Handle(handler func(ctx context.Context, input In, tool To
 	})
 }
 
+// requiredInput is the required members of each tool input
+// (schemas/tool.json <Tool>Input.required); review_test checks it against the
+// contract snapshot.
+var requiredInput = map[string][]string{
+	ToolNameBash: {"command"}, ToolNameRead: {"path"}, ToolNameWrite: {"path", "content"},
+	ToolNameEdit: {"path", "old_string", "new_string"}, ToolNameGlob: {"pattern"}, ToolNameGrep: {"pattern"},
+}
+
+// missingRequired returns the first required member input lacks (absent,
+// null, or an empty command, which Core also rejects), or "".
+func missingRequired(tool string, input json.RawMessage) string {
+	var members map[string]json.RawMessage
+	_ = json.Unmarshal(input, &members)
+	for _, name := range requiredInput[tool] {
+		value, ok := members[name]
+		if !ok || string(value) == "null" || (name == "command" && string(value) == `""`) {
+			return name
+		}
+	}
+	return ""
+}
+
 // Tools has one typed slot per built-in tool: client.Tools.Bash.Handle(...).
+// computer_observe and computer_action have no slot until the contract
+// defines their input members.
 type Tools struct {
-	Bash            ToolSlot[BashInput]
-	Read            ToolSlot[ReadInput]
-	Write           ToolSlot[WriteInput]
-	Edit            ToolSlot[EditInput]
-	Glob            ToolSlot[GlobInput]
-	Grep            ToolSlot[GrepInput]
-	ListFiles       ToolSlot[ListFilesInput]
-	ComputerObserve ToolSlot[ComputerObserveInput]
-	ComputerAction  ToolSlot[ComputerActionInput]
+	Bash      ToolSlot[BashInput]
+	Read      ToolSlot[ReadInput]
+	Write     ToolSlot[WriteInput]
+	Edit      ToolSlot[EditInput]
+	Glob      ToolSlot[GlobInput]
+	Grep      ToolSlot[GrepInput]
+	ListFiles ToolSlot[ListFilesInput]
 }
 
 func newTools(c *Client) Tools {
@@ -147,9 +191,7 @@ func newTools(c *Client) Tools {
 		Bash: ToolSlot[BashInput]{ToolNameBash, c}, Read: ToolSlot[ReadInput]{ToolNameRead, c},
 		Write: ToolSlot[WriteInput]{ToolNameWrite, c}, Edit: ToolSlot[EditInput]{ToolNameEdit, c},
 		Glob: ToolSlot[GlobInput]{ToolNameGlob, c}, Grep: ToolSlot[GrepInput]{ToolNameGrep, c},
-		ListFiles:       ToolSlot[ListFilesInput]{ToolNameListFiles, c},
-		ComputerObserve: ToolSlot[ComputerObserveInput]{ToolNameComputerObserve, c},
-		ComputerAction:  ToolSlot[ComputerActionInput]{ToolNameComputerAction, c},
+		ListFiles: ToolSlot[ListFilesInput]{ToolNameListFiles, c},
 	}
 }
 
@@ -180,16 +222,16 @@ func (s HarnessToolSlot[In]) Call(ctx context.Context, input In, options CallToo
 }
 
 // HarnessTools has one typed entry per built-in tool: session.Tools.Bash.Call(...).
+// computer_observe and computer_action have none until the contract defines
+// their input members.
 type HarnessTools struct {
-	Bash            HarnessToolSlot[BashInput]
-	Read            HarnessToolSlot[ReadInput]
-	Write           HarnessToolSlot[WriteInput]
-	Edit            HarnessToolSlot[EditInput]
-	Glob            HarnessToolSlot[GlobInput]
-	Grep            HarnessToolSlot[GrepInput]
-	ListFiles       HarnessToolSlot[ListFilesInput]
-	ComputerObserve HarnessToolSlot[ComputerObserveInput]
-	ComputerAction  HarnessToolSlot[ComputerActionInput]
+	Bash      HarnessToolSlot[BashInput]
+	Read      HarnessToolSlot[ReadInput]
+	Write     HarnessToolSlot[WriteInput]
+	Edit      HarnessToolSlot[EditInput]
+	Glob      HarnessToolSlot[GlobInput]
+	Grep      HarnessToolSlot[GrepInput]
+	ListFiles HarnessToolSlot[ListFilesInput]
 }
 
 func newHarnessTools(s *Session) HarnessTools {
@@ -197,8 +239,6 @@ func newHarnessTools(s *Session) HarnessTools {
 		Bash: HarnessToolSlot[BashInput]{ToolNameBash, s}, Read: HarnessToolSlot[ReadInput]{ToolNameRead, s},
 		Write: HarnessToolSlot[WriteInput]{ToolNameWrite, s}, Edit: HarnessToolSlot[EditInput]{ToolNameEdit, s},
 		Glob: HarnessToolSlot[GlobInput]{ToolNameGlob, s}, Grep: HarnessToolSlot[GrepInput]{ToolNameGrep, s},
-		ListFiles:       HarnessToolSlot[ListFilesInput]{ToolNameListFiles, s},
-		ComputerObserve: HarnessToolSlot[ComputerObserveInput]{ToolNameComputerObserve, s},
-		ComputerAction:  HarnessToolSlot[ComputerActionInput]{ToolNameComputerAction, s},
+		ListFiles: HarnessToolSlot[ListFilesInput]{ToolNameListFiles, s},
 	}
 }

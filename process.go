@@ -743,7 +743,7 @@ func (p *processes) watch(session *CoreSession, table *processTable, proc *proce
 	table.mu.Lock()
 	table.retainEndedLocked()
 	table.mu.Unlock()
-	_ = session.client.Notify(context.Background(), MethodProcessStatus, status)
+	_ = session.client.notify(context.Background(), MethodProcessStatus, status)
 }
 
 func waitState(p *process, waitMS int64) ProcessState {

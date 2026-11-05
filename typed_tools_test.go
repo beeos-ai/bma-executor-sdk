@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -108,9 +107,11 @@ func TestTypedTextToolErrorAndFailures(t *testing.T) {
 	if boom.Outcome != ToolOutcomeFailed || !boom.IsError || textOf(boom) != "disk on fire" {
 		t.Fatalf("boom = %+v", boom)
 	}
-	unhandled, _ := session.Tools.Write.Call(ctx, WriteInput{Path: "x", Content: "y"}, CallToolOptions{})
-	if unhandled.Outcome != ToolOutcomeFailed || !strings.Contains(textOf(unhandled), "no handler registered for tool write") {
-		t.Fatalf("unhandled = %+v", unhandled)
+	// A tool without a handler is refused before the ack, as Core refuses it.
+	_, err = session.Tools.Write.Call(ctx, WriteInput{Path: "x", Content: "y"}, CallToolOptions{})
+	var rpcErr *RPCError
+	if !errors.As(err, &rpcErr) || rpcErr.Code != CodeCapabilityUnavailable {
+		t.Fatalf("unhandled err = %v", err)
 	}
 }
 
@@ -119,7 +120,7 @@ func TestTypedCapabilitiesFollowHandlers(t *testing.T) {
 		c.Tools.Read.Handle(func(ctx context.Context, in ReadInput, tc ToolContext) (ToolOutput, error) {
 			return TextOutput("x"), nil
 		})
-	}, Capabilities{Shell: &ShellCapability{Enabled: true}, Files: &FilesCapability{ReadRoots: []string{"/w"}}})
+	}, Capabilities{Shell: &ShellCapability{Enabled: true}, Files: &FilesCapability{Enabled: true, ReadRoots: []string{"/w"}}})
 	var caps Capabilities
 	if err := executor.Capabilities(&caps); err != nil {
 		t.Fatal(err)
