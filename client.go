@@ -284,7 +284,9 @@ func NewClient(options Options) (*Client, error) {
 	if options.BaseURL == "" {
 		options.BaseURL = DefaultBaseURL
 	}
-	options.BaseURL = strings.TrimRight(options.BaseURL, "/")
+	// BaseURL is the deployment origin (as BMA_BASE_URL in bma-sdk); a
+	// trailing /api/v1 is dropped so the /v1/executors paths are not nested.
+	options.BaseURL = strings.TrimSuffix(strings.TrimRight(options.BaseURL, "/"), "/api/v1")
 	if options.HTTPClient == nil {
 		options.HTTPClient = http.DefaultClient
 	}

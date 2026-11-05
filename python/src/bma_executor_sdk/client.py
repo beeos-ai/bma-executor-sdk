@@ -150,7 +150,9 @@ class ExecutorClient:
         self._executor = executor
         self._capabilities: Capabilities = capabilities or {}
         self._environment_key = environment_key
-        self._base_url = base_url.rstrip("/")
+        # The deployment origin (as BMA_BASE_URL in bma-sdk); a trailing
+        # /api/v1 is dropped so the /v1/executors paths are not nested.
+        self._base_url = base_url.rstrip("/").removesuffix("/api/v1")
         self._ws_url = ws_url
         self._token_source = token_source
         self._dialer: Dialer = dialer or dial

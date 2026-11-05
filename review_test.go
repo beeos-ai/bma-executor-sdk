@@ -31,7 +31,9 @@ func bashOK(ctx context.Context, in BashInput, tc ToolContext) (ToolOutput, erro
 func TestExplicitlyDisabledCapabilityWinsOverAHandler(t *testing.T) {
 	executor, _ := typedPair(t, func(c *Client) {
 		c.Tools.Bash.Handle(bashOK)
-		c.Tools.Read.Handle(func(ctx context.Context, in ReadInput, tc ToolContext) (ToolOutput, error) { return TextOutput("x"), nil })
+		c.Tools.Read.Handle(func(ctx context.Context, in ReadInput, tc ToolContext) (ToolOutput, error) {
+			return TextOutput("x"), nil
+		})
 	}, Capabilities{Shell: &ShellCapability{Enabled: false}, Files: &FilesCapability{Enabled: false, ReadRoots: []string{"/w"}}})
 	caps := capabilitiesOf(t, executor)
 	if caps.Shell == nil || caps.Shell.Enabled || caps.Files == nil || caps.Files.Enabled || caps.Files.ReadRoots[0] != "/w" {

@@ -19,6 +19,16 @@
   (`BashResult.truncated` added); the `computer_*` slots are hidden and
   `computer_use` is off until the contract defines their input.
 - `AgentCapability.turn_resume` from the BMA contract (`make contract-sdk`).
+- All languages: the base URL is the deployment origin, the same value as
+  `BMA_BASE_URL` in bma-sdk 1.0 (like `ANTHROPIC_BASE_URL`); a trailing
+  `/api/v1` is dropped instead of producing `/api/v1/v1/executors/token`.
+
+### Known limitations and roadmap
+
+- Go harness: `Executor.Call(ctx, method string, params, out any)` stays the
+  low-level, string-named call for harness-to-executor requests in 1.0
+  (TypeScript and Python harness calls are typed). Typed Go harness wrappers
+  will be added in 1.1 alongside it, without removing `Executor.Call`.
 
 - **Breaking (ADR 0012), TypeScript:** typed tool handlers
   `client.tools.<name>.handle((input: <Tool>Input, ctx) => output)` replace

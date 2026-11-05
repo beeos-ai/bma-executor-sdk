@@ -46,6 +46,16 @@ contract, in TypeScript, Python and Go (one release, **1.0.0**).
 | Go `client.Call(ctx, method, params, &out)` / `client.Notify(ctx, method, params)` | `bmaexecutor.Calls.SessionEvent.Call(ctx, client, params)` / `bmaexecutor.Notifications.ExecutorCapabilitiesUpdate.Notify(ctx, client, params)` |
 | `onNotification` / `on_notification` / `OnNotification` | removed: `executor.close` is the only harness-to-executor notification and the client handles it |
 
+The Go harness keeps `Executor.Call(ctx, method, params, &out)` unchanged in
+1.0 as the low-level call for harness-to-executor requests; typed wrappers
+come in 1.1 next to it, so code written against it keeps compiling.
+
+- **Base URL.** `baseUrl` / `base_url` / `Options.BaseURL` is the deployment
+  origin, the same value as `BMA_BASE_URL` in bma-sdk 1.0 (for example
+  `https://api.staging.bma.beeos.ai`). A value ending in `/api/v1` (bma-sdk
+  0.x API root) is accepted: the suffix is dropped before
+  `/v1/executors/token` is added.
+
 ## Executor end
 
 ```ts

@@ -45,9 +45,9 @@ await client.start();
 ```
 
 Set `baseUrl` to your BMA deployment: the hosted service is in early access and the default
-`DEFAULT_BASE_URL` (`https://api.bma.beeos.ai`) does not resolve yet. It is the API root
-without `/v1` (for example `https://bma.example.com/api` when the API is served under `/api`);
-the client posts the environment key to `{baseUrl}/v1/executors/token`. The SDK does not read
+`DEFAULT_BASE_URL` (`https://api.bma.beeos.ai`) does not resolve yet. It is the deployment
+origin, the same value as `BMA_BASE_URL` in bma-sdk (for example `https://api.staging.bma.beeos.ai`);
+the client posts the environment key to `{baseUrl}/v1/executors/token` and drops a trailing `/api/v1`. The SDK does not read
 `BMA_BASE_URL` itself. A `tokenSource` carries its own channel URL and ignores `baseUrl`.
 
 ### Executor lifecycle, cancellation, and results
