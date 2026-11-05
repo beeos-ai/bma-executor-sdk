@@ -43,18 +43,8 @@ jobs:
           git fetch --no-tags origin main
           git merge-base --is-ancestor HEAD origin/main
 
-      - name: Verify the tag matches the package versions
-        run: |
-          tag="${{ inputs.tag || github.ref_name }}"
-          tag_version="${tag#v}"
-          ts_version="$(node -p "require('./typescript/package.json').version")"
-          py_version="$(python3 -c 'import tomllib; print(tomllib.load(open("python/pyproject.toml", "rb"))["project"]["version"])')"
-          for pair in "typescript/package.json:$ts_version" "python/pyproject.toml:$py_version"; do
-            if [ "$tag_version" != "${pair#*:}" ]; then
-              printf 'tag %s does not match %s version %s\n' "$tag" "${pair%%:*}" "${pair#*:}" >&2
-              exit 1
-            fi
-          done
+      - name: Verify the tag matches every package version
+        run: ./tools/check_versions.sh "${{ inputs.tag || github.ref_name }}"
 
   npm:
     if: github.event_name == 'push' || inputs.publish == 'all' || inputs.publish == 'npm'
