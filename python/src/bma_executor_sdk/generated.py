@@ -23,6 +23,7 @@ class AgentCapability(TypedDict):
     interaction_kinds: NotRequired[list[InteractionKind]]
     file_inputs: NotRequired[bool]
     max_sessions: NotRequired[int]
+    harness: NotRequired[AgentHarnessCapability]
 
 class AgentErrorInfo(TypedDict):
     """Typed session error."""
@@ -40,6 +41,21 @@ class AgentEventType(str, Enum):
     SessionStatusRunning = "session.status_running"
     SessionStatusIdle = "session.status_idle"
     SessionError = "session.error"
+
+class AgentHarnessCapability(TypedDict):
+    """What the third-party agent the executor hosts (for example an ACP agent) supports; an omitted boolean is false. Sent with executor.capabilities.update once the agent has started; absent until then and after a reconnect until the next turn. Informational: the platform records it and reflects it in the session harness capabilities."""
+    id: str
+    version: str
+    protocol: NotRequired[str]
+    agent_name: NotRequired[str]
+    agent_version: NotRequired[str]
+    streaming: NotRequired[Literal["token", "committed"]]
+    session_resume: NotRequired[bool]
+    session_load: NotRequired[bool]
+    image_inputs: NotRequired[bool]
+    permission_relay: NotRequired[Literal["full", "escalation_only", "none"]]
+    structured_errors: NotRequired[bool]
+    usage: NotRequired[Literal["tokens", "context_only"]]
 
 class AgentInputBlock(TypedDict):
     """One block of user input. A file block references a platform session file by file_id; the executor downloads it through the executor files API. File bytes never travel on the control channel."""
@@ -123,6 +139,13 @@ class ArtifactRef(TypedDict):
     digest: str
     created_at: NotRequired[str]
 
+class BashInput(TypedDict):
+    """bash input: run command with a login shell."""
+    command: str
+    cwd: NotRequired[str]
+    timeout_ms: NotRequired[int]
+    env: NotRequired[dict[str, str]]
+
 class Capabilities(TypedDict):
     """Executor capability object. The server only sends a method to an executor that advertised its capability; otherwise the executor answers -32012 capability_unavailable."""
     shell: NotRequired[ShellCapability]
@@ -150,6 +173,15 @@ class ComputerAction(str, Enum):
     Key = "key"
     Scroll = "scroll"
     Drag = "drag"
+
+class ComputerActionInput(TypedDict):
+    """computer_action input."""
+    action: ComputerAction
+    display: NotRequired[str]
+
+class ComputerObserveInput(TypedDict):
+    """computer_observe input."""
+    display: NotRequired[str]
 
 class ConnectionState(str, Enum):
     """Executor control channel state machine."""
@@ -185,6 +217,12 @@ class DisplayCapability(TypedDict):
     """v1.1 display object. v1 sent a boolean; the server accepts both."""
     rfb: NotRequired[bool]
     desktop: NotRequired[bool]
+
+class EditInput(TypedDict):
+    """edit input: replace the single occurrence of old_string."""
+    path: str
+    old_string: str
+    new_string: str
 
 class EvaluatedPermission(TypedDict):
     """Permission decision the executor applied to a tool use. ask means the executor opened an interaction.request for it."""
@@ -276,6 +314,17 @@ class FilesCapability(TypedDict):
     enabled: bool
     read_roots: NotRequired[list[str]]
     write_roots: NotRequired[list[str]]
+
+class GlobInput(TypedDict):
+    """glob input: list paths matching pattern."""
+    pattern: str
+    path: NotRequired[str]
+
+class GrepInput(TypedDict):
+    """grep input: search file lines with a regular expression."""
+    pattern: str
+    path: NotRequired[str]
+    glob: NotRequired[str]
 
 class IOMode(str, Enum):
     """process.start io_mode. "pty" runs the command on a 24x80 pseudo-terminal: stdout is the PTY output, stdin writes go to the PTY and close_stdin is rejected. Requires process.pty."""
@@ -407,6 +456,10 @@ class Limits(TypedDict):
     max_process_write_bytes: int
     max_processes_per_session: int
     max_artifact_bytes: int
+
+class ListFilesInput(TypedDict):
+    """list_files input."""
+    path: NotRequired[str]
 
 class McpCapability(TypedDict):
     """Environment-origin MCP servers."""
@@ -604,6 +657,12 @@ class ProtocolVersion(str, Enum):
     BmaExecutorV1 = "bma.executor.v1"
     BmaExecutorV11 = "bma.executor.v1.1"
 
+class ReadInput(TypedDict):
+    """read input: return lines of a text file."""
+    path: str
+    offset: NotRequired[int]
+    limit: NotRequired[int]
+
 class SessionAssignResult(TypedDict):
     """session.assign result."""
     accepted: bool
@@ -745,7 +804,7 @@ class ToolCancelResult(TypedDict):
     canceled: bool
 
 class ToolInput(TypedDict):
-    """Built-in tool input. The selected tool decides which members are meaningful; unknown members are ignored."""
+    """Superset of every built-in tool input, decoded by executors that read input generically. tool.call selects the exact per-tool schema through x-bma-params-discriminator; unknown members are ignored."""
     command: NotRequired[str]
     cwd: NotRequired[str]
     timeout_ms: NotRequired[int]
@@ -814,6 +873,11 @@ class WorkspaceBackupResult(TypedDict):
 class WorkspaceCapability(TypedDict):
     """workspace.backup support and the startup restore of a pending backup. Machine-scoped executors only."""
     backup: bool
+
+class WriteInput(TypedDict):
+    """write input: create or replace a file."""
+    path: str
+    content: str
 
 AgentEvent = AgentMessageEvent | AgentThinkingEvent | AgentToolUseEvent | AgentToolResultEvent | AgentMcpToolUseEvent | AgentMcpToolResultEvent | SessionStatusRunningEvent | SessionStatusIdleEvent | SessionErrorEvent
 

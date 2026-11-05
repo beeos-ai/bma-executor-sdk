@@ -40,10 +40,85 @@
           "type": "integer",
           "minimum": 1,
           "description": "Concurrent agent sessions. turn.start for a new session beyond it answers -32009 executor_busy."
+        },
+        "harness": {
+          "$ref": "agent.json#/$defs/AgentHarnessCapability"
         }
       },
       "required": [
         "enabled"
+      ],
+      "additionalProperties": true
+    },
+    "AgentHarnessCapability": {
+      "type": "object",
+      "description": "What the third-party agent the executor hosts (for example an ACP agent) supports; an omitted boolean is false. Sent with executor.capabilities.update once the agent has started; absent until then and after a reconnect until the next turn. Informational: the platform records it and reflects it in the session harness capabilities.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Agent profile id, for example dsh."
+        },
+        "version": {
+          "type": "string",
+          "description": "Installed agent package version."
+        },
+        "protocol": {
+          "type": "string",
+          "description": "Protocol the executor speaks to the agent, for example acp/1."
+        },
+        "agent_name": {
+          "type": "string",
+          "description": "Name the agent reported about itself (ACP initialize agentInfo.name)."
+        },
+        "agent_version": {
+          "type": "string",
+          "description": "Version the agent reported about itself (ACP initialize agentInfo.version); may differ from version."
+        },
+        "streaming": {
+          "type": "string",
+          "enum": [
+            "token",
+            "committed"
+          ],
+          "description": "token: agent.message and agent.thinking stream as deltas. committed: each message arrives whole once the agent committed it."
+        },
+        "session_resume": {
+          "type": "boolean",
+          "description": "A conversation continues in a new agent process (ACP session/resume)."
+        },
+        "session_load": {
+          "type": "boolean",
+          "description": "A conversation can be reloaded with its history replayed (ACP session/load)."
+        },
+        "image_inputs": {
+          "type": "boolean",
+          "description": "The agent accepts image input."
+        },
+        "permission_relay": {
+          "type": "string",
+          "enum": [
+            "full",
+            "escalation_only",
+            "none"
+          ],
+          "description": "Which tool calls reach interaction.request. full: every call the agent's policy asks about. escalation_only: only calls that leave the agent's own sandbox; calls inside it (including workspace writes) are never asked. none: the agent never asks, so platform approval covers no tool call."
+        },
+        "structured_errors": {
+          "type": "boolean",
+          "description": "The agent reports typed errors; false means session.error carries agent_error with the agent's text."
+        },
+        "usage": {
+          "type": "string",
+          "enum": [
+            "tokens",
+            "context_only"
+          ],
+          "description": "tokens: the agent reports token usage. context_only: it reports context window occupancy only; usage is metered by the model proxy."
+        }
+      },
+      "required": [
+        "id",
+        "version"
       ],
       "additionalProperties": true
     },
