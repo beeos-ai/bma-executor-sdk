@@ -13,7 +13,6 @@ const client = new ExecutorClient({
   environmentKey: process.env.BMA_ENVIRONMENT_KEY,
   environmentId: process.env.BMA_ENVIRONMENT_ID ?? '',
   executor: { name: 'executor-minimal', os: process.platform, arch: process.arch, version: '0.1.0' },
-  capabilities: { shell: { enabled: true } },
   onLog: ({ level, message }) => console.error(`[${level}] ${message}`),
 })
 
@@ -23,14 +22,11 @@ client.onSessionAssign(async (assign) => {
   return { accepted: true, session_id: assign.session_id }
 })
 
-client.handleTool('bash', (call, { signal }) =>
+// input is BashInput; the SDK renders { stdout, stderr, exitCode } like Go Core.
+client.tools.bash.handle((input, { signal }) =>
   new Promise((resolve) => {
-    exec(call.input.command ?? '', { cwd: call.input.cwd ?? os.tmpdir(), signal }, (error, stdout, stderr) => {
-      resolve({
-        outcome: error ? 'failed' : 'succeeded',
-        is_error: Boolean(error),
-        content: [{ type: 'text', text: stdout + stderr }],
-      })
+    exec(input.command, { cwd: input.cwd ?? os.tmpdir(), env: { ...process.env, ...input.env }, signal }, (error, stdout, stderr) => {
+      resolve({ stdout, stderr, exitCode: typeof error?.code === 'number' ? error.code : error ? 1 : 0 })
     })
   }),
 )

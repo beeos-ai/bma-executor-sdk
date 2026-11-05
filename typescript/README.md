@@ -18,7 +18,7 @@ socket or Windows named pipe (`unix://`, `npipe://`), in-process.
 | Integration guide | [docs/executor](../docs/executor/README.md) ([中文](../docs/executor/README.zh-CN.md)) |
 
 ```sh
-npm install @beeos-ai/bma-executor-sdk@0.4.9
+npm install @beeos-ai/bma-executor-sdk
 ```
 
 The REST / façade client is the separate package
@@ -34,12 +34,13 @@ const client = new ExecutorClient({
   environmentKey: process.env.BMA_ENVIRONMENT_KEY,
   environmentId: process.env.BMA_ENVIRONMENT_ID!,
   executor: { name: "my-executor", os: process.platform, arch: process.arch, version: "0.1.0" },
-  capabilities: { shell: { enabled: true } },
 });
-client.handleTool("bash", async (call, { signal, progress }) => {
+client.tools.bash.handle(async (input, { signal, progress }) => {   // input: BashInput
   progress("running");
-  return { outcome: "succeeded", is_error: false, content: [{ type: "text", text: "ok" }] };
+  const r = await run(input.command, { cwd: input.cwd, env: input.env, signal });
+  return { stdout: r.stdout, stderr: r.stderr, exitCode: r.code };    // rendered like Go Core
 });
+client.tools.read.handle(async ({ path, offset, limit }) => readText(path, offset, limit)); // string or content blocks
 await client.start();
 ```
 
@@ -54,7 +55,16 @@ the client posts the environment key to `{baseUrl}/v1/executors/token`. The SDK 
 - `tool.cancel` aborts the handler's `signal` (so do `deadline_ms` and
   `stop()`); the client answers `{"canceled":true}` and reports
   `outcome: "canceled"`. A repeated `tool.call` id is acknowledged, not run
-  twice. `handleTool(name, …)` routes one tool, `onToolCall` the rest.
+  twice. Each built-in tool has a typed slot `client.tools.<name>.handle(fn)`
+  (`bash`, `read`, `write`, `edit`, `glob`, `grep`, `list_files`,
+  `computer_observe`, `computer_action`) whose input is the contract's
+  `<Tool>Input`. A handler returns a string, content blocks or
+  `{ content, isError, artifacts }`; bash may return
+  `{ stdout, stderr, exitCode }`, rendered as Go Core does (stdout, stderr,
+  `exit_code: N`). `throw new ToolError(msg)` reports a tool-level error
+  (`is_error: true`); any other exception is `outcome: "failed"`. The
+  `shell`, `files` and `computer_use` capabilities follow the registered
+  handlers, so nothing unimplemented is advertised.
 - Call `sessionReady` after workspace/MCP setup and `sessionEnded` after
   cleanup. `tool.result` is retried on `-32009`, `-32004` or
   `data.retryable: true`, idempotent by `tool_call_id`; when every attempt
@@ -80,12 +90,12 @@ const { url } = await harness.listen(); // or harness.attach(httpServer)
 const executor = await harness.waitExecutor();
 const session = await executor.assignSession({ session_id: "sess_1" });
 await session.ready();
-const result = await session.callTool({ tool: "bash", input: { command: "ls" } });
+const result = await session.tools.bash.call({ command: "ls" }); // or callTool("bash", { command: "ls" }, { toolCallId })
 const mcp = await session.mcp("echo"); // raw MCP JSON-RPC
 await session.stop("done");
 ```
 
-Semantics match the Go `Harness`: `callTool` is idempotent by `tool_call_id`;
+Semantics match the Go `Harness`: `callTool` is idempotent by `toolCallId`;
 an unknown call's `tool.result` is `-32002`, a foreign session `-32007`;
 sessions and pending calls survive a reconnect within `leaseTtlMs`; a newer
 connection replaces the old one with 4004; lease expiry or `executor.close`
@@ -148,7 +158,7 @@ executor and in-memory platform in one process).
 | --- | --- |
 | `NewClient(Options)` / `Start` / `Stop` | `new ExecutorClient(options)` / `start()` / `stop()` |
 | `Options.TokenSource`, `StaticToken` | `tokenSource`, `staticToken` (or `dialer`) |
-| `OnToolCall(ctx, call)` | `onToolCall(call, { signal, progress })`, `handleTool(name, …)` |
+| `OnToolCall(ctx, call)` | `tools.<name>.handle(input, { signal, progress })` |
 | `OnSessionAssign` / `OnSessionStop` / `OnDrain` / `OnRequest` / `OnNotification` | `onSessionAssign` / `onSessionStop` / `onDrain` / `onRequest` / `onNotification` |
 | `SessionReady` / `SessionEnded` / `ReportToolResult` | `sessionReady` / `sessionEnded` / `reportToolResult` |
 | `SendSessionStatus` / `SendToolProgress` / `SendExecutorCapabilitiesUpdate` | `sessionStatus` / `toolProgress` / `updateCapabilities` |

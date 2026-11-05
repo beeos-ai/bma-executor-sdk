@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Breaking (ADR 0012), TypeScript:** typed tool handlers
+  `client.tools.<name>.handle((input: <Tool>Input, ctx) => output)` replace
+  `handleTool` / `onToolCall`; outputs are a string, content blocks,
+  `{ content, isError, artifacts }`, or for bash `{ stdout, stderr, exitCode }`
+  rendered as Go Core does; `ToolError` reports `is_error: true`. The `shell`,
+  `files` and `computer_use` capabilities follow the registered handlers.
+  Harness: `session.tools.<name>.call(input, options)` and
+  `callTool(tool, input, { toolCallId, deadlineMs, permission, signal })`
+  (fixes the `callTool` params type, which no longer compiled against the
+  per-tool `ToolCallParams` union). Upgrade guide: [MIGRATION.md](MIGRATION.md).
+  Python and Go follow in the same release.
+- Conformance peers block on the bash command `block` instead of a tool named
+  `block`, which is not a protocol tool name.
 - TypeScript: `@types/ws` is now a runtime dependency (was a dev dependency).
   The published declarations import `ws` types (`webSocketConn(ws: WebSocket)`),
   so consumers type-checking with `strict` (`noImplicitAny`) failed with TS7016
