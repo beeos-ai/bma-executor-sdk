@@ -56,15 +56,23 @@ the client posts the environment key to `{baseUrl}/v1/executors/token`. The SDK 
   `stop()`); the client answers `{"canceled":true}` and reports
   `outcome: "canceled"`. A repeated `tool.call` id is acknowledged, not run
   twice. Each built-in tool has a typed slot `client.tools.<name>.handle(fn)`
-  (`bash`, `read`, `write`, `edit`, `glob`, `grep`, `list_files`,
-  `computer_observe`, `computer_action`) whose input is the contract's
-  `<Tool>Input`. A handler returns a string, content blocks or
-  `{ content, isError, artifacts }`; bash may return
-  `{ stdout, stderr, exitCode }`, rendered as Go Core does (stdout, stderr,
-  `exit_code: N`). `throw new ToolError(msg)` reports a tool-level error
-  (`is_error: true`); any other exception is `outcome: "failed"`. The
-  `shell`, `files` and `computer_use` capabilities follow the registered
-  handlers, so nothing unimplemented is advertised.
+  (`bash`, `read`, `write`, `edit`, `glob`, `grep`, `list_files`; the
+  `computer_*` tools get slots once the contract defines their input) whose
+  input is the contract's `<Tool>Input`. Input missing a required member
+  fails the call (`bash requires command`) before the handler runs. A
+  handler returns a string, content blocks or `{ content, isError,
+  artifacts }`; bash may return `{ stdout, stderr, exitCode, truncated? }`,
+  rendered as Go Core does (stdout, stderr, `exit_code: N`, cut to Core's
+  preview beyond `INLINE_RESULT_BYTES`). `throw new ToolError(msg)` reports
+  a tool-level error (`is_error: true`); any other exception is
+  `outcome: "failed"`. A `tool.call` for a tool without a handler is refused
+  before the ack with `-32012` (`data.capability: "tool:<name>"`), as Go
+  Core refuses it.
+- The `shell` and `files` capabilities are enabled while a handler of the
+  group is registered, unless you set `enabled: false` (which wins, like
+  MCP's `RegisteredTool.enabled`); a handler registered after `start()`
+  sends `executor.capabilities.update`, as an MCP server sends
+  `tools/list_changed`.
 - Call `sessionReady` after workspace/MCP setup and `sessionEnded` after
   cleanup. `tool.result` is retried on `-32009`, `-32004` or
   `data.retryable: true`, idempotent by `tool_call_id`; when every attempt
@@ -77,7 +85,11 @@ the client posts the environment key to `{baseUrl}/v1/executors/token`. The SDK 
   (`?channel=mcp&session_id=&server_key=`); `read()`/`write()` carry MCP
   JSON-RPC frames unchanged.
 - A handler that throws `RpcError` keeps its code and data on the wire.
-  `onRequest(method, …)` serves `process.*`, `terminal.*` and `skill.install`.
+  `onRequest('process.start', (params) => …)` serves `process.*`,
+  `terminal.*`, `skill.install` and `workspace.backup` with the contract's
+  params and result types; `call(method, params)` and
+  `notify(method, params)` send executor-to-harness methods typed the same
+  way (`MethodParamsMap` / `MethodResultMap`).
 
 ### Harness quick start
 
@@ -159,7 +171,8 @@ executor and in-memory platform in one process).
 | `NewClient(Options)` / `Start` / `Stop` | `new ExecutorClient(options)` / `start()` / `stop()` |
 | `Options.TokenSource`, `StaticToken` | `tokenSource`, `staticToken` (or `dialer`) |
 | `Tools.<Name>.Handle(func(ctx, input, tool))` | `tools.<name>.handle(input, { signal, progress })` |
-| `OnSessionAssign` / `OnSessionStop` / `OnDrain` / `OnRequest` / `OnNotification` | `onSessionAssign` / `onSessionStop` / `onDrain` / `onRequest` / `onNotification` |
+| `OnSessionAssign` / `OnSessionStop` / `OnDrain` | `onSessionAssign` / `onSessionStop` / `onDrain` |
+| `Requests.ProcessStart.Handle(client, fn)` / `Calls.X.Call(ctx, client, p)` / `Notifications.X.Notify(ctx, client, p)` | `onRequest('process.start', fn)` / `call('x', p)` / `notify('x', p)` |
 | `SessionReady` / `SessionEnded` / `ReportToolResult` | `sessionReady` / `sessionEnded` / `reportToolResult` |
 | `SendSessionStatus` / `SendToolProgress` / `SendExecutorCapabilitiesUpdate` | `sessionStatus` / `toolProgress` / `updateCapabilities` |
 | `OpenMCPChannel` → `MCPChannel` | `openMcpChannel` → `FrameChannel` |

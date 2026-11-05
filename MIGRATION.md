@@ -1,7 +1,50 @@
 # Migrating to typed tool handlers
 
 ADR 0012 replaces string-dispatched tool handlers with one typed slot per
-built-in tool, in TypeScript, Python and Go (one release, 1.0.0).
+built-in tool, and string-named protocol calls with methods typed by the
+contract, in TypeScript, Python and Go (one release, **1.0.0**).
+
+## All languages
+
+- **Register tool handlers before `start()`** if the first registration
+  should already advertise them; a handler registered later is announced
+  with `executor.capabilities.update`.
+- **Capabilities.** `shell` and `files` are enabled while a handler of the
+  group is registered; an explicit `enabled: false` wins (Go: pass the
+  `ShellCapability` / `FilesCapability` with `Enabled: false`; a struct you
+  pass is used as given, so set `Enabled: true` when you pass one to set
+  other fields). `updateCapabilities` replaces the configured capabilities
+  and the same derivation applies. `computer_use` is off and the
+  `computer_observe` / `computer_action` slots are gone until the contract
+  defines their input members.
+- **Unregistered tools** are refused before the ack with JSON-RPC `-32012`
+  (`data.capability: "tool:<name>"`), as Go Core refuses them, instead of an
+  acknowledged call that fails.
+- **Inputs** missing a required member (`bash` without `command`, ...)
+  fail the call (`outcome: "failed"`, `<tool> requires <member>`) before the
+  handler runs.
+- **bash output** larger than 48 KiB, or marked truncated by the handler, is
+  cut to Go Core's preview (`exit_code: N (output truncated to fit the
+  result; M bytes total)`).
+- **Two `ToolError`s.** The executor SDK's `ToolError` is a tool-level error
+  the model sees as `outcome: "succeeded"` with `is_error: true` (the
+  executor protocol has `is_error`). The bma-sdk custom-tool `ToolError`
+  submits `outcome: "failed"`, because the REST contract's tool result has no
+  `is_error`.
+- **Protocol methods are typed.** `onRequest` / `on_request` / Go `OnRequest`
+  with a method string and untyped params, `onNotification` /
+  `on_notification` / `OnNotification`, and untyped `call` / `notify` /
+  `Call` / `Notify` are replaced:
+
+| before | now |
+| --- | --- |
+| TS `client.onRequest("process.list", (params: unknown) => ...)` | `client.onRequest('process.list', (params: ProcessListParams) => ProcessListResult)` |
+| TS `client.call<T>(method, params)` / `notify(method, params)` / harness `executor.call<T>(method, params)` | the same names, typed by `MethodParamsMap` / `MethodResultMap`; only contract methods of the right direction compile |
+| Python `client.on_request("process.list", handler)` | `client.on_request(methods.PROCESS_LIST, handler)` (`from bma_executor_sdk import methods`) |
+| Python `await client.call(method, params)` / `notify(method, params)` | `await client.call(methods.SESSION_EVENT, params)` / `await client.notify(methods.TOOL_PROGRESS, params)` |
+| Go `client.OnRequest(method, func(ctx, json.RawMessage) (any, error))` | `bmaexecutor.Requests.ProcessList.Handle(client, func(ctx, ProcessListParams) (ProcessListResult, error))` |
+| Go `client.Call(ctx, method, params, &out)` / `client.Notify(ctx, method, params)` | `bmaexecutor.Calls.SessionEvent.Call(ctx, client, params)` / `bmaexecutor.Notifications.ExecutorCapabilitiesUpdate.Notify(ctx, client, params)` |
+| `onNotification` / `on_notification` / `OnNotification` | removed: `executor.close` is the only harness-to-executor notification and the client handles it |
 
 ## Executor end
 
@@ -24,11 +67,11 @@ client.tools.read.handle(async ({ path, offset, limit }) => readText(path, offse
 | before | now |
 | --- | --- |
 | `handleTool(name, (call, ctx) => …)` | `tools.<name>.handle((input, ctx) => …)`; `ctx` adds `sessionId`, `toolCallId`, `permission` |
-| `onToolCall(handler)` (catch-all) | removed: register each tool; an unregistered tool answers `outcome: "failed"` |
+| `onToolCall(handler)` (catch-all) | removed: register each tool; an unregistered tool is refused with `-32012` |
 | `call.input: ToolInput` (every field optional) | `input: BashInput / ReadInput / …` (required fields per tool) |
 | return `{ outcome, is_error, content }` | return a string, `ContentBlock[]`, `{ content, isError?, artifacts? }`, or (bash) `{ stdout, stderr, exitCode }` |
 | return `is_error: true` for a tool-level error | `throw new ToolError(message)` or return `{ content, isError: true }` |
-| `capabilities.shell / files / computer_use` set by hand | derived from the registered handlers (other capability fields are kept) |
+| `capabilities.shell / files / computer_use` set by hand | derived from the registered handlers; `enabled: false` wins (other capability fields are kept) |
 | `ToolCallHandler` type | `ToolHandler<N>` |
 
 `reportToolResult(params)` stays for results produced outside a handler.
@@ -87,7 +130,7 @@ result, err := session.Tools.Bash.Call(ctx, bmaexecutor.BashInput{Command: "ls"}
 
 | before | now |
 | --- | --- |
-| `Client.OnToolCall(ToolCallHandler)` | `Client.Tools.<Name>.Handle(func(ctx, <Name>Input, ToolContext) (ToolOutput, error))`; an unregistered tool answers `outcome: "failed"` |
+| `Client.OnToolCall(ToolCallHandler)` | `Client.Tools.<Name>.Handle(func(ctx, <Name>Input, ToolContext) (ToolOutput, error))`; an unregistered tool is refused with `-32012` |
 | return `ToolResultParams` | return `TextOutput(s)`, `BashResult{...}.Output()` or `ToolOutput{Content, IsError, Artifacts}`; ids and `duration_ms` are filled in |
 | `IsError: true` | `return ToolOutput{}, bmaexecutor.NewToolError(text)` |
 | capabilities `Shell` / `Files` / `ComputerUse` by hand | derived from the registered handlers (other fields kept) |

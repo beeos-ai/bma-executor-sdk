@@ -54,7 +54,8 @@ Behavior matches the Go SDK:
 - `tool.cancel` cancels the handler's task and reports `outcome: "canceled"`; duplicate `tool.call` ids run once.
 - `tool.result` retries `-32009` / `-32004` / `retryable` errors and hands a lost result to `on_tool_result_lost`.
 - Reconnect resumes with `resume.executor_id` / `active_sessions`; close codes 1008, 4002, 4003 and 4004 stop the client (4001 and 4005 reconnect).
-- Call `session_ready` after setup and `session_ended` after cleanup. `on_request(method, handler)` serves `process.*`, `terminal.*` or `skill.install` yourself; there is no execution `Core` in Python.
+- Call `session_ready` after setup and `session_ended` after cleanup. `client.on_request(methods.PROCESS_START, handler)` serves `process.*`, `terminal.*`, `skill.install` or `workspace.backup` yourself with the contract's TypedDicts; `await client.call(methods.SESSION_EVENT, params)` / `await client.notify(methods.TOOL_PROGRESS, params)` send typed methods (`bma_executor_sdk.methods`). There is no execution `Core` in Python.
+- Input missing a required member fails the call before the handler runs; a `tool.call` for a tool without a handler is refused with `-32012` before the ack; `shell` / `files` are enabled while a handler of the group is registered unless set `enabled: False`, and a handler registered after `start()` sends `executor.capabilities.update`. `BashResult` beyond `INLINE_RESULT_BYTES` (or `truncated=True`) is cut to Go Core's preview. The `computer_*` tools get slots once the contract defines their input.
 
 ## Harness quick start
 
@@ -99,8 +100,9 @@ The executor-listens local socket is not implemented in Python (use the Go or Ty
 | `Options.TokenSource`, `StaticToken(url, token)` | `token_source=`, `static_token(url, token)` |
 | `Client.Start` / `Stop` / `State` / `ExecutorID` / `ConnectionID` / `ActiveSessions` | `start()` / `stop(reason)` / `state` / `executor_id` / `connection_id` / `active_sessions` |
 | `Tools.Bash.Handle(fn)` | `@client.tools.bash.handler` |
-| `OnSessionAssign` / `OnSessionStop` / `OnDrain` / `OnRequest` / `OnNotification` | `on_session_assign` / `on_session_stop` / `on_drain` / `on_request` / `on_notification` |
-| `Call` / `Notify` / `ReportToolResult` / `SessionReady` / `SessionEnded` / `OpenMCPChannel` | `call` / `notify` / `report_tool_result` / `session_ready` / `session_ended` / `open_mcp_channel` |
+| `OnSessionAssign` / `OnSessionStop` / `OnDrain` | `on_session_assign` / `on_session_stop` / `on_drain` |
+| `Requests.X.Handle(client, fn)` / `Calls.X.Call(ctx, client, p)` / `Notifications.X.Notify(ctx, client, p)` | `on_request(methods.X, fn)` / `await call(methods.X, p)` / `await notify(methods.X, p)` |
+| `ReportToolResult` / `SessionReady` / `SessionEnded` / `OpenMCPChannel` | `report_tool_result` / `session_ready` / `session_ended` / `open_mcp_channel` |
 | `ServeAgent(handler, AgentCapability)` | `serve_agent(handler, capability)` |
 | `AgentHandler.OpenTurn` / `RunTurn` / `CloseSession` | `open_turn` / `run_turn` / `close_session` |
 | `AgentTurn.Emit` / `EmitWithID` / `NewEventID` / `Delta` / `Flush` / `Inputs()` / `RequestInteraction` / `CancelInteraction` | `emit` / `emit_with_id` / `new_event_id` / `await delta` / `await flush` / `inputs` / `request_interaction` / `cancel_interaction` |
