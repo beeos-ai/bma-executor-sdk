@@ -23,6 +23,7 @@ class AgentCapability(TypedDict):
     interaction_kinds: NotRequired[list[InteractionKind]]
     file_inputs: NotRequired[bool]
     max_sessions: NotRequired[int]
+    turn_resume: NotRequired[bool]
     harness: NotRequired[AgentHarnessCapability]
 
 class AgentErrorInfo(TypedDict):

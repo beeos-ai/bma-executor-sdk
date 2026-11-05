@@ -24,8 +24,10 @@ type AgentCapability struct {
 	// The executor resolves file input blocks (session file ids) itself.
 	FileInputs bool `json:"file_inputs,omitempty"`
 	// Concurrent agent sessions. turn.start for a new session beyond it answers -32009 executor_busy.
-	MaxSessions int64                   `json:"max_sessions,omitempty"`
-	Harness     *AgentHarnessCapability `json:"harness,omitempty"`
+	MaxSessions int64 `json:"max_sessions,omitempty"`
+	// The executor keeps the state of its turns across a process restart. When it registers again without a session whose turn was running, the platform starts the same turn again in a new event epoch (turn.start with the same turn_id, input_id and executor_session_ref, then the turn.input the turn already received) and the executor continues the turn from its own state. Without it such a turn ends failed (session.error, session.status_idle retries_exhausted) and is not sent again: an executor without that state would run the turn again from its opening input and repeat tool calls whose effects already happened.
+	TurnResume bool                    `json:"turn_resume,omitempty"`
+	Harness    *AgentHarnessCapability `json:"harness,omitempty"`
 }
 
 // AgentErrorInfo Typed session error.
