@@ -24,8 +24,6 @@ from typing import Any, Generic, Optional, TypeVar, Union
 from .generated import (
     ArtifactRef,
     BashInput,
-    ComputerActionInput,
-    ComputerObserveInput,
     ContentBlock,
     EditInput,
     GlobInput,
@@ -39,7 +37,34 @@ from .generated import (
 I = TypeVar("I")
 O = TypeVar("O")
 
+INLINE_RESULT_BYTES = 48 * 1024
+"""Largest bash output returned inline, as Go Core's DefaultCoreInlineResultBytes."""
+
+REQUIRED_TOOL_INPUT: dict[str, tuple[str, ...]] = {
+    "bash": ("command",),
+    "read": ("path",),
+    "write": ("path", "content"),
+    "edit": ("path", "old_string", "new_string"),
+    "glob": ("pattern",),
+    "grep": ("pattern",),
+    "list_files": (),
+}
+"""Required members of each tool input (schemas/tool.json <Tool>Input.required)."""
+
+
+def missing_required(tool: str, input: Any) -> Optional[str]:
+    """The first required member that is absent or null (or an empty bash
+    command, as Go Core rejects), else None."""
+    members: dict[str, Any] = input if isinstance(input, dict) else {}
+    for name in REQUIRED_TOOL_INPUT.get(tool, ()):
+        value = members.get(name)
+        if value is None or (name == "command" and value == ""):
+            return name
+    return None
+
 __all__ = [
+    "INLINE_RESULT_BYTES",
+    "REQUIRED_TOOL_INPUT",
     "BashResult",
     "ExecutorTools",
     "ToolContext",
@@ -81,11 +106,15 @@ class ToolResult:
 
 @dataclass(frozen=True)
 class BashResult:
-    """bash output, rendered as Go Core renders it: stdout, stderr, ``exit_code: N``."""
+    """bash output, rendered as Go Core renders it: stdout, stderr, ``exit_code: N``.
+    Output beyond INLINE_RESULT_BYTES, or marked ``truncated`` by the handler,
+    is cut to Core's preview (half the limit of stdout, a quarter of stderr)."""
 
     stdout: str
     stderr: str
     exit_code: int
+    truncated: bool = False
+    """The handler already cut the output short."""
 
 
 ToolOutput = Union[str, list[ContentBlock], ToolResult]
@@ -97,17 +126,21 @@ class ToolSlot(Generic[I, O]):
     """One built-in tool of the executor."""
 
     name: str
-    _handlers: dict[str, Any] = field(repr=False)
+    _tools: "ExecutorTools" = field(repr=False)
 
     def handler(self, fn: ToolHandler[I, O]) -> ToolHandler[I, O]:
         """Serves tool.call for this tool (replacing an earlier handler);
-        usable as a decorator."""
-        self._handlers[self.name] = fn
+        usable as a decorator. After ``start()`` the changed capabilities are
+        sent with executor.capabilities.update."""
+        self._tools._handlers[self.name] = fn
+        self._tools._changed()
         return fn
 
 
 class ExecutorTools:
-    """``client.tools.<name>``: one typed slot per built-in tool."""
+    """``client.tools.<name>``: one typed slot per built-in tool.
+    computer_observe and computer_action get one once the contract defines
+    their input members."""
 
     bash: ToolSlot[BashInput, Union[ToolOutput, BashResult]]
     read: ToolSlot[ReadInput, ToolOutput]
@@ -116,13 +149,12 @@ class ExecutorTools:
     glob: ToolSlot[GlobInput, ToolOutput]
     grep: ToolSlot[GrepInput, ToolOutput]
     list_files: ToolSlot[ListFilesInput, ToolOutput]
-    computer_observe: ToolSlot[ComputerObserveInput, ToolOutput]
-    computer_action: ToolSlot[ComputerActionInput, ToolOutput]
 
-    def __init__(self) -> None:
+    def __init__(self, on_change: Callable[[], None] = lambda: None) -> None:
         self._handlers: dict[str, Any] = {}
-        for name in self.__class__.__annotations__:
-            setattr(self, name, ToolSlot(name, self._handlers))
+        self._changed = on_change
+        for name in ExecutorTools.__annotations__:
+            setattr(self, name, ToolSlot(name, self))
 
     def get(self, name: str) -> Optional[ToolHandler[Any, Any]]:
         return self._handlers.get(name)
@@ -136,13 +168,21 @@ def render(output: Union[ToolOutput, BashResult]) -> dict[str, Any]:
     if isinstance(output, str):
         return {"outcome": "succeeded", "is_error": False, "content": [{"type": "text", "text": output}]}
     if isinstance(output, BashResult):
-        content: list[dict[str, Any]] = []
-        if output.stdout:
-            content.append({"type": "text", "text": output.stdout})
-        if output.stderr:
-            content.append({"type": "text", "text": output.stderr})
-        content.append({"type": "text", "text": f"exit_code: {output.exit_code}"})
-        return {"outcome": "succeeded", "is_error": False, "content": content}
+        exit = f"exit_code: {output.exit_code}"
+        out, err = output.stdout.encode(), output.stderr.encode()
+        if not output.truncated and len(out) + len(err) + len(exit) <= INLINE_RESULT_BYTES:
+            content: list[dict[str, Any]] = []
+            if output.stdout:
+                content.append({"type": "text", "text": output.stdout})
+            if output.stderr:
+                content.append({"type": "text", "text": output.stderr})
+            content.append({"type": "text", "text": exit})
+            return {"outcome": "succeeded", "is_error": False, "content": content}
+        return {"outcome": "succeeded", "is_error": False, "content": [
+            {"type": "text", "text": out[: INLINE_RESULT_BYTES // 2].decode(errors="ignore")},
+            {"type": "text", "text": err[: INLINE_RESULT_BYTES // 4].decode(errors="ignore")},
+            {"type": "text", "text": f"{exit} (output truncated to fit the result; {len(out) + len(err)} bytes total)"},
+        ]}
     if isinstance(output, ToolResult):
         result: dict[str, Any] = {"outcome": "succeeded", "is_error": output.is_error, "content": list(output.content)}
         if output.artifacts is not None:

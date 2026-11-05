@@ -43,7 +43,9 @@ from .harness import (
     ToolOutcomeUnknownError,
     Unauthorized,
 )
-from .tools import BashResult, ExecutorTools, ToolContext, ToolError, ToolHandler, ToolOutput, ToolResult, ToolSlot
+from . import methods
+from ._methods import Call, Notification, Request
+from .tools import INLINE_RESULT_BYTES, BashResult, ExecutorTools, ToolContext, ToolError, ToolHandler, ToolOutput, ToolResult, ToolSlot
 from .transport import (
     TERMINAL_CLOSE_CODES,
     ChannelClosed,
@@ -54,6 +56,11 @@ from .transport import (
 )
 
 __all__ = [
+    "INLINE_RESULT_BYTES",
+    "Call",
+    "Notification",
+    "Request",
+    "methods",
     "DEFAULT_BASE_URL",
     "PROTOCOL_V1",
     "PROTOCOL_V11",

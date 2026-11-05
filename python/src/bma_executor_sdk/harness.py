@@ -45,8 +45,6 @@ from .generated import (
     Ack,
     AgentCapability,
     BashInput,
-    ComputerActionInput,
-    ComputerObserveInput,
     EditInput,
     ExecutorDrainResult,
     ExecutorInfo,
@@ -482,7 +480,9 @@ class HarnessToolSlot(Generic[_I]):
 
 
 class HarnessTools:
-    """``session.tools.<name>.call(input)``: one typed entry per built-in tool."""
+    """``session.tools.<name>.call(input)``: one typed entry per built-in tool;
+    computer_observe and computer_action get one once the contract defines
+    their input members."""
 
     bash: HarnessToolSlot[BashInput]
     read: HarnessToolSlot[ReadInput]
@@ -491,8 +491,6 @@ class HarnessTools:
     glob: HarnessToolSlot[GlobInput]
     grep: HarnessToolSlot[GrepInput]
     list_files: HarnessToolSlot[ListFilesInput]
-    computer_observe: HarnessToolSlot[ComputerObserveInput]
-    computer_action: HarnessToolSlot[ComputerActionInput]
 
     def __init__(self, session: Session) -> None:
         for name in HarnessTools.__annotations__:

@@ -13,7 +13,7 @@ import pytest
 
 import bma_executor_sdk as bx
 from bma_executor_sdk import BashInput, BashResult, ReadInput, ToolContext, ToolError
-from bma_executor_sdk.generated import ToolName
+from bma_executor_sdk.generated import JsonRpcErrorCode, ToolName
 
 EXECUTOR = {"name": "py-typed", "os": "linux", "arch": "arm64", "version": "0.1.0"}
 
@@ -45,9 +45,11 @@ async def pair(register: Callable[[bx.ExecutorClient], None], capabilities: dict
         await client.stop()
 
 
-def test_every_built_in_tool_has_a_slot() -> None:
+def test_every_built_in_tool_but_computer_has_a_slot() -> None:
     client = bx.ExecutorClient(environment_id="e", executor=EXECUTOR, environment_key="k")  # type: ignore[arg-type]
-    assert {getattr(client.tools, t.value).name for t in ToolName} == {t.value for t in ToolName}
+    slots = {t.value for t in ToolName} - {"computer_observe", "computer_action"}
+    assert {getattr(client.tools, name).name for name in slots} == slots
+    assert not hasattr(client.tools, "computer_action") and not hasattr(client.tools, "computer_observe")
 
 
 async def test_bash_result_renders_like_go_core() -> None:
@@ -101,9 +103,11 @@ async def test_string_blocks_tool_error_and_exceptions() -> None:
         boom = await session.tools.read.call({"path": "boom"})
         assert (boom["outcome"], boom["is_error"], boom["content"][0].get("text")) == ("failed", True, "disk on fire")
 
-        unhandled = await session.tools.write.call({"path": "x", "content": "y"})
-        assert unhandled["outcome"] == "failed"
-        assert "no handler registered for tool write" in (unhandled["content"][0].get("text") or "")
+        # A tool without a handler is refused before the ack, as Go Core refuses it.
+        with pytest.raises(bx.RPCError) as excinfo:
+            await session.tools.write.call({"path": "x", "content": "y"})
+        assert excinfo.value.code == JsonRpcErrorCode.CapabilityUnavailable
+        assert excinfo.value.data == {"capability": "tool:write"}
 
 
 async def test_tool_result_with_is_error_and_artifacts() -> None:
@@ -123,7 +127,12 @@ async def test_capabilities_advertise_only_registered_tools() -> None:
         async def read(input: ReadInput, ctx: ToolContext) -> str:
             return "x"
 
-    async with pair(register, {"shell": {"enabled": True}, "files": {"enabled": False, "read_roots": ["/w"]}}) as (executor, _):
+        @client.tools.bash.handler
+        async def bash(input: BashInput, ctx: ToolContext) -> str:
+            return "x"
+
+    # An explicit enabled: False wins over a registered handler.
+    async with pair(register, {"shell": {"enabled": False}, "files": {"read_roots": ["/w"]}}) as (executor, _):
         assert executor.capabilities["shell"] == {"enabled": False}
         assert executor.capabilities["files"] == {"enabled": True, "read_roots": ["/w"]}
         assert executor.capabilities["computer_use"] is False
