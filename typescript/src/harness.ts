@@ -10,6 +10,9 @@ import type { Duplex } from 'node:stream'
 import { WebSocketServer } from 'ws'
 
 import {
+  type HarnessToExecutorRequestMethod,
+  type MethodParamsMap,
+  type MethodResultMap,
   ChannelScope,
   JsonRpcErrorCode,
   ProtocolVersion,
@@ -384,16 +387,20 @@ export class HarnessExecutor {
     return [...this.sessionsById.values()]
   }
 
-  /** @internal */
-  call<T>(method: string, params: unknown): Promise<T> {
+  /**
+   * Sends a harness-to-executor request (process.*, terminal.*, skill.install,
+   * workspace.backup, ...), typed by the contract. A JSON-RPC error answer
+   * rejects with RpcError.
+   */
+  call<M extends HarnessToExecutorRequestMethod>(method: M, params: MethodParamsMap[M]): Promise<MethodResultMap[M]> {
     if (!this.conn) return Promise.reject(new NotConnectedError())
-    return this.conn.peer.call<T>(method, params)
+    return this.conn.peer.call<MethodResultMap[M]>(method, params)
   }
 
   /** Asks the executor to stop accepting sessions; heartbeats report drain=true from now on. */
   drain(reason: string): Promise<ExecutorDrainResult> {
     this.draining = true
-    return this.call<ExecutorDrainResult>('executor.drain', { reason })
+    return this.call('executor.drain', { reason })
   }
 
   /**
@@ -417,7 +424,7 @@ export class HarnessExecutor {
     this.harness.sessionsById.set(session.id, session)
     this.sessionsById.set(session.id, session)
     try {
-      const result = await this.call<SessionAssignResult>('session.assign', full)
+      const result = await this.call('session.assign', full)
       if (!result.accepted) throw new AssignRejectedError()
     } catch (error) {
       session.end('assign_failed', () => new SessionEndedError())
@@ -449,26 +456,26 @@ export class HarnessExecutor {
   /** turn.start; safe to repeat with the same turn_id after a timeout or reconnect. */
   async startTurn(params: TurnStartParams): Promise<TurnStartResult> {
     this.requireAgent()
-    return this.call<TurnStartResult>('turn.start', params)
+    return this.call('turn.start', params)
   }
 
   /** turn.input; a conflict means the turn is over and the input belongs in a new turn.start. */
   sendTurnInput(params: TurnInputParams): Promise<Ack> {
-    return this.call<Ack>('turn.input', params)
+    return this.call('turn.input', params)
   }
 
   /** turn.cancel; the turn's end is still reported by its session.status_idle event. */
   cancelTurn(params: TurnCancelParams): Promise<TurnCancelResult> {
-    return this.call<TurnCancelResult>('turn.cancel', params)
+    return this.call('turn.cancel', params)
   }
 
   closeAgentSession(params: SessionCloseParams): Promise<SessionCloseResult> {
-    return this.call<SessionCloseResult>('session.close', params)
+    return this.call('session.close', params)
   }
 
   /** Delivers the platform's answer; accepted=false means the executor no longer waits for it. */
   respondInteraction(params: InteractionResponseParams): Promise<InteractionResponseResult> {
-    return this.call<InteractionResponseResult>('interaction.response', params)
+    return this.call('interaction.response', params)
   }
 }
 
@@ -564,7 +571,7 @@ export class HarnessSession {
       record = created
       this.calls.set(call.tool_call_id, created)
       try {
-        const ack = await this.executor.call<Ack>('tool.call', call)
+        const ack = await this.executor.call('tool.call', call)
         if (!ack.accepted) throw new Error('executor did not accept tool.call')
       } catch (error) {
         // Not dispatched: forget the call so the same id can be retried.
@@ -580,7 +587,7 @@ export class HarnessSession {
 
   /** Sends tool.cancel; the waiting callTool still receives the executor's tool.result. */
   async cancelTool(toolCallId: string, reason: string): Promise<boolean> {
-    const result = await this.executor.call<ToolCancelResult>('tool.cancel', {
+    const result = await this.executor.call('tool.cancel', {
       session_id: this.id,
       tool_call_id: toolCallId,
       reason,
@@ -590,7 +597,7 @@ export class HarnessSession {
 
   /** Sends session.stop; the session ends locally on success. */
   async stop(reason: string): Promise<void> {
-    await this.executor.call<SessionStopResult>('session.stop', { session_id: this.id, reason })
+    await this.executor.call('session.stop', { session_id: this.id, reason })
     this.end(reason, () => new ToolOutcomeUnknownError())
   }
 

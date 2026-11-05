@@ -7,7 +7,12 @@ import { expectTypeOf } from 'expect-type'
 import {
   ExecutorClient,
   Harness,
+  INLINE_RESULT_BYTES,
+  JsonRpcErrorCode,
+  REQUIRED_TOOL_INPUT,
+  RpcError,
   ToolError,
+  type Ack,
   type BashInput,
   type ReadInput,
   type ToolContext,
@@ -87,23 +92,103 @@ test('string, blocks, ToolError and exceptions', async () => {
     const boom = await session.tools.read.call({ path: 'boom' })
     assert.deepEqual([boom.outcome, boom.is_error, boom.content[0]?.text], ['failed', true, 'disk on fire'])
 
-    const unhandled: ToolResultParams = await session.tools.write.call({ path: 'x', content: 'y' })
-    assert.equal(unhandled.outcome, 'failed')
-    assert.match(unhandled.content[0]?.text ?? '', /no handler registered for tool write/)
+    // A tool without a handler is refused before the ack, as Go Core refuses it.
+    await assert.rejects(
+      session.tools.write.call({ path: 'x', content: 'y' }),
+      (error: unknown) => error instanceof RpcError && error.code === JsonRpcErrorCode.CapabilityUnavailable && error.data?.capability === 'tool:write',
+    )
   } finally {
     close()
   }
 })
 
-test('capabilities advertise only registered tools', async () => {
+test('capabilities advertise registered tools; an explicit enabled:false wins', async () => {
   const { executor, close } = await pair((client) => {
     client.tools.read.handle(async () => 'x')
-  }, { shell: { enabled: true }, files: { enabled: false, read_roots: ['/w'] } })
+    client.tools.bash.handle(async () => 'x')
+  }, { shell: { enabled: false }, files: { read_roots: ['/w'] } })
   try {
     assert.deepEqual(executor.capabilities.shell, { enabled: false })
     assert.deepEqual(executor.capabilities.files, { enabled: true, read_roots: ['/w'] })
+    assert.equal(executor.capabilities.computer_use, false)
   } finally {
     close()
+  }
+})
+
+test('a handler registered after start sends executor.capabilities.update', async () => {
+  let registered!: ExecutorClient
+  const { executor, close } = await pair((client) => void (registered = client))
+  try {
+    assert.equal(executor.capabilities.shell?.enabled, false)
+    registered.tools.bash.handle(async () => 'x')
+    for (let i = 0; i < 200 && !executor.capabilities.shell?.enabled; i++) await new Promise((r) => setTimeout(r, 10))
+    assert.equal(executor.capabilities.shell?.enabled, true)
+  } finally {
+    close()
+  }
+})
+
+test('a missing required input member fails the call before the handler runs', async () => {
+  let called = false
+  const { session, close } = await pair((client) => {
+    client.tools.bash.handle(async () => {
+      called = true
+      return 'ran'
+    })
+  })
+  try {
+    const result = await session.callTool('bash', { cwd: 'x' } as never)
+    assert.deepEqual([result.outcome, result.content[0]?.text, called], ['failed', 'bash requires command', false])
+  } finally {
+    close()
+  }
+})
+
+test('large bash output is truncated like Go Core', async () => {
+  const { session, close } = await pair((client) => {
+    client.tools.bash.handle(async ({ command }) =>
+      command === 'big'
+        ? { stdout: 'o'.repeat(100_000), stderr: 'e'.repeat(30_000), exitCode: 1 }
+        : { stdout: 'head', stderr: '', exitCode: 0, truncated: true },
+    )
+  })
+  try {
+    const big = await session.tools.bash.call({ command: 'big' })
+    assert.deepEqual(
+      big.content.map((b) => (b.text ?? '').length),
+      [INLINE_RESULT_BYTES / 2, INLINE_RESULT_BYTES / 4, 'exit_code: 1 (output truncated to fit the result; 130000 bytes total)'.length],
+    )
+    assert.equal(big.content[2]?.text, 'exit_code: 1 (output truncated to fit the result; 130000 bytes total)')
+    const marked = await session.tools.bash.call({ command: 'small' })
+    assert.equal(marked.content.at(-1)?.text, 'exit_code: 0 (output truncated to fit the result; 4 bytes total)')
+  } finally {
+    close()
+  }
+})
+
+test('typed onRequest, call and notify', async () => {
+  const harness = new Harness()
+  const client = new ExecutorClient({ environmentId: 'env_test', executor: executorInfo, dialer: harness.inProcessDialer() })
+  client.onRequest('process.list', async ({ session_id }) => ({ processes: [{ process_id: `p_${session_id}` } as never] }))
+  await client.start()
+  try {
+    const executor = await harness.waitExecutor(AbortSignal.timeout(5000))
+    const listed = await executor.call('process.list', { session_id: 's1' })
+    assert.equal(listed.processes[0]?.process_id, 'p_s1')
+  } finally {
+    client.stop()
+  }
+})
+
+test('required input table matches the contract', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const schema = JSON.parse(await readFile(new URL('../../../contracts/bma/executor/schemas/tool.json', import.meta.url), 'utf8')) as {
+    $defs: Record<string, { required?: string[] }>
+  }
+  const defs: Record<string, string> = { bash: 'BashInput', read: 'ReadInput', write: 'WriteInput', edit: 'EditInput', glob: 'GlobInput', grep: 'GrepInput', list_files: 'ListFilesInput' }
+  for (const [tool, def] of Object.entries(defs)) {
+    assert.deepEqual(REQUIRED_TOOL_INPUT[tool as keyof typeof REQUIRED_TOOL_INPUT], schema.$defs[def]?.required ?? [], tool)
   }
 })
 
@@ -121,6 +206,22 @@ test('type-level: inputs are per tool', () => {
   client.tools.read.handle(async () => ({ stdout: '', stderr: '', exitCode: 0 }))
   // @ts-expect-error unknown tool
   void client.tools.nope
+  // @ts-expect-error computer_* have no slot until the contract defines their input
+  void client.tools.computer_action
+  // @ts-expect-error onRequest only takes contract methods the client does not serve itself
+  client.onRequest('tool.call', () => ({ accepted: true }))
+  client.onRequest('process.list', (params) => {
+    expectTypeOf(params.session_id).toEqualTypeOf<string>()
+    return { processes: [] }
+  })
+  // @ts-expect-error the result must match the method
+  client.onRequest('process.list', () => ({ accepted: true }))
+  expectTypeOf(client.call('session.ready', { session_id: 's', work_id: 'w', lease_token: 't' })).resolves.toEqualTypeOf<Ack>()
+  // @ts-expect-error params must match the method
+  void client.call('session.ready', { nope: 1 })
+  // @ts-expect-error session.status is a notification
+  void client.call('session.status', { session_id: 's', status: 'running' })
+  client.notify('tool.progress', { session_id: 's', tool_call_id: 't', message: 'm' })
   const session = null as unknown as Awaited<ReturnType<typeof pair>>['session']
   // @ts-expect-error read requires path
   void session.tools.read.call({})

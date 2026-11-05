@@ -228,7 +228,7 @@ describe('agent capability', () => {
         ['turn.start', 'agent'],
       ] as const) {
         await assert.rejects(
-          executor.call(method, {}),
+          executor.call(method, {} as never),
           (error: unknown) =>
             error instanceof RpcError &&
             error.code === JsonRpcErrorCode.CapabilityUnavailable &&
@@ -237,7 +237,8 @@ describe('agent capability', () => {
         )
       }
       await assert.rejects(
-        executor.call('vendor.unknown', {}),
+        // A method outside the contract cannot be typed; the cast sends it anyway.
+        executor.call('vendor.unknown' as never, {} as never),
         (error: unknown) => error instanceof RpcError && error.code === JsonRpcErrorCode.MethodNotFound,
       )
     } finally {

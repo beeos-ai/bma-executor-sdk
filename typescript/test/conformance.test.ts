@@ -20,6 +20,7 @@ import {
   type ToolCallParams,
   type TurnStartResult,
 } from '../src/index.js'
+import type { ExecutorRequestMethod } from '../src/client.js'
 import { RpcPeer } from '../src/rpc.js'
 import { executorInfo, waitFor } from './helpers.js'
 
@@ -180,7 +181,7 @@ test('harness-to-executor examples against the TypeScript executor', async () =>
     if (/^(process|terminal|skill)\./.test(example.method) && example.kind === 'request' && example.message?.id) {
       const answer = resultOf(example.method, `${example.name.replace(/ request$/, '')} result`) ?? resultOf(example.method)
       answers.set(JSON.stringify(example.message.params), answer)
-      client.onRequest(example.method, (params) => answers.get(JSON.stringify(params)))
+      client.onRequest(example.method as ExecutorRequestMethod, (params) => answers.get(JSON.stringify(params)) as never)
     }
   }
   await client.start()
