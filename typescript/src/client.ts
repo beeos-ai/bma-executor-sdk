@@ -38,9 +38,14 @@ import {
   type ToolProgressParams,
   type ToolResultParams,
   type AgentCapability,
+  type ArtifactRef,
+  type ContentBlock,
+  type ToolCallInputMap,
+  type ToolPermission,
+  ToolName,
 } from './generated/executor.js'
 import { AgentRuntime, type AgentHandler, type AgentHost } from './agent.js'
-import { ClientStoppedError, deferred, NotConnectedError, RequestTimeoutError, RpcError } from './errors.js'
+import { ClientStoppedError, deferred, NotConnectedError, RequestTimeoutError, RpcError, ToolError } from './errors.js'
 import { DEFAULT_PROTOCOLS } from './local.js'
 import { RpcPeer, type LogLevel, type Logger } from './rpc.js'
 import { dialWebSocket, FrameChannel, type Conn } from './transport.js'
@@ -149,7 +154,7 @@ function dialWithToken(options: WebSocketDialerOptions, token: Awaited<ReturnTyp
   return dialWebSocket(channelUrl(wsUrl, target), { protocols: options.protocols ?? DEFAULT_PROTOCOLS, token: token.token })
 }
 
-/** What a tool handler returns; the client fills in session_id and tool_call_id. */
+/** A complete tool result without the ids the client fills in. */
 export type ToolResult = Omit<ToolResultParams, 'session_id' | 'tool_call_id'>
 
 export interface ToolContext {
@@ -157,9 +162,37 @@ export interface ToolContext {
   signal: AbortSignal
   /** Sends tool.progress for this call (best-effort). */
   progress(message: string): void
+  sessionId: string
+  toolCallId: string
+  permission?: ToolPermission
 }
 
-export type ToolCallHandler = (call: ToolCallParams, context: ToolContext) => Promise<ToolResult>
+/**
+ * What a tool handler returns. A string is one text block; `isError` reports
+ * a tool-level error to the model (outcome succeeded, is_error true), like
+ * throwing ToolError. Any other exception is outcome failed.
+ */
+export type ToolOutput = string | ContentBlock[] | { content: ContentBlock[]; isError?: boolean; artifacts?: ArtifactRef[] }
+
+/** bash output, rendered as Go Core renders it: stdout, stderr, `exit_code: N`. */
+export interface BashResult {
+  stdout: string
+  stderr: string
+  exitCode: number
+}
+
+export type ToolOutputOf<N extends ToolName> = N extends 'bash' ? ToolOutput | BashResult : ToolOutput
+export type ToolHandler<N extends ToolName> = (input: ToolCallInputMap[N], context: ToolContext) => Promise<ToolOutputOf<N>>
+
+/** One built-in tool of the executor. */
+export interface ToolSlot<N extends ToolName> {
+  /** Serves tool.call for this tool; replaces an earlier handler. */
+  handle(handler: ToolHandler<N>): void
+}
+
+/** `client.tools.<name>`: one typed slot per built-in tool. */
+export type ExecutorTools = { readonly [N in ToolName]: ToolSlot<N> }
+
 export type SessionAssignHandler = (params: SessionAssignParams) => Promise<SessionAssignResult>
 export type SessionStopHandler = (params: SessionStopParams) => Promise<SessionStopResult>
 export type DrainHandler = (params: ExecutorDrainParams) => Promise<ExecutorDrainResult>
@@ -252,8 +285,9 @@ export class ExecutorClient {
   private readonly completedToolResults = new BoundedSet()
   private readonly seenToolCalls = new BoundedSet()
   private readonly running = new Map<string, RunningToolCall>()
-  private readonly tools = new Map<string, ToolCallHandler>()
-  private toolCallHandler?: ToolCallHandler
+  private readonly handlers = new Map<ToolName, ToolHandler<ToolName>>()
+  /** Typed tool handlers; capabilities shell/files/computer_use follow what is registered. */
+  readonly tools: ExecutorTools
   private sessionAssignHandler?: SessionAssignHandler
   private sessionStopHandler?: SessionStopHandler
   private drainHandler?: DrainHandler
@@ -269,6 +303,11 @@ export class ExecutorClient {
     this.dialer = options.dialer ?? webSocketDialer(options)
     if (!options.dialer) this.tokenSource = executorTokenSource(options)
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS
+    const tools = {} as Record<ToolName, ToolSlot<ToolName>>
+    for (const name of Object.values(ToolName)) {
+      tools[name] = { handle: (handler) => void this.handlers.set(name, handler as ToolHandler<ToolName>) }
+    }
+    this.tools = tools as unknown as ExecutorTools
   }
 
   get state(): ConnectionState {
@@ -288,14 +327,6 @@ export class ExecutorClient {
     return [...this.sessions]
   }
 
-  /** Registers the handler for every tool without a handleTool handler. */
-  onToolCall(handler: ToolCallHandler): void {
-    this.toolCallHandler = handler
-  }
-  /** Registers the handler for one tool name (bash, read, ..., or a custom name). */
-  handleTool(name: string, handler: ToolCallHandler): void {
-    this.tools.set(name, handler)
-  }
   onSessionAssign(handler: SessionAssignHandler): void {
     this.sessionAssignHandler = handler
   }
@@ -437,6 +468,11 @@ export class ExecutorClient {
 
   private registeredCapabilities(): Capabilities {
     const capabilities = { ...(this.options.capabilities ?? {}) }
+    // Tool capabilities are what has a handler, so nothing unimplemented is advertised.
+    const has = (...names: ToolName[]) => names.some((n) => this.handlers.has(n))
+    capabilities.shell = { ...capabilities.shell, enabled: has('bash') }
+    capabilities.files = { ...capabilities.files, enabled: has('read', 'write', 'edit', 'glob', 'grep', 'list_files') }
+    capabilities.computer_use = has('computer_observe', 'computer_action')
     if (this.agent) capabilities.agent = this.agent.capability
     return capabilities
   }
@@ -676,18 +712,22 @@ export class ExecutorClient {
   }
 
   private async runToolCall(call: ToolCallParams, running: RunningToolCall): Promise<void> {
-    const handler = this.tools.get(call.tool) ?? this.toolCallHandler
+    const handler = this.handlers.get(call.tool)
     const onStop = () => running.abort.abort(new ClientStoppedError())
     this.stopController.signal.addEventListener('abort', onStop, { once: true })
     const deadline =
       call.deadline_ms && call.deadline_ms > 0
         ? setTimeout(() => running.abort.abort(new RequestTimeoutError('tool.call')), call.deadline_ms)
         : undefined
+    const started = Date.now()
     let result: ToolResult
     try {
-      if (!handler) throw new Error(`no tool handler registered for ${call.tool}`)
-      result = await handler(call, {
+      if (!handler) throw new Error(`no handler registered for tool ${call.tool}`)
+      const output = await handler(call.input, {
         signal: running.abort.signal,
+        sessionId: call.session_id,
+        toolCallId: call.tool_call_id,
+        ...(call.permission ? { permission: call.permission } : {}),
         progress: (message) => {
           try {
             this.toolProgress({ session_id: call.session_id, tool_call_id: call.tool_call_id, message })
@@ -696,8 +736,12 @@ export class ExecutorClient {
           }
         },
       })
+      result = { ...renderToolOutput(output), duration_ms: Date.now() - started }
     } catch (error) {
-      result = failedToolResult(error instanceof Error ? error.message : String(error))
+      result =
+        error instanceof ToolError
+          ? { outcome: 'succeeded', is_error: true, content: error.content, duration_ms: Date.now() - started }
+          : failedToolResult(error instanceof Error ? error.message : String(error))
     } finally {
       clearTimeout(deadline)
       this.stopController.signal.removeEventListener('abort', onStop)
@@ -749,6 +793,25 @@ export function retryableToolResultError(error: unknown): boolean {
     return error.code === JsonRpcErrorCode.ExecutorBusy || error.code === JsonRpcErrorCode.Timeout
   }
   return error instanceof NotConnectedError || error instanceof RequestTimeoutError
+}
+
+/** Renders a handler's output as tool.result content (bash as Go Core's bashResult). */
+function renderToolOutput(output: ToolOutputOf<ToolName>): ToolResult {
+  if (typeof output === 'string') return { outcome: 'succeeded', is_error: false, content: [{ type: 'text', text: output }] }
+  if (Array.isArray(output)) return { outcome: 'succeeded', is_error: false, content: output }
+  if ('exitCode' in output) {
+    const content: ContentBlock[] = []
+    if (output.stdout) content.push({ type: 'text', text: output.stdout })
+    if (output.stderr) content.push({ type: 'text', text: output.stderr })
+    content.push({ type: 'text', text: `exit_code: ${output.exitCode}` })
+    return { outcome: 'succeeded', is_error: false, content }
+  }
+  return {
+    outcome: 'succeeded',
+    is_error: output.isError ?? false,
+    content: output.content,
+    ...(output.artifacts ? { artifacts: output.artifacts } : {}),
+  }
 }
 
 function failedToolResult(message: string): ToolResult {

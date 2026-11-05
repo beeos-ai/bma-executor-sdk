@@ -69,7 +69,7 @@ describe('cross-language interop with the Python SDK (WebSocket over UDS)', { sk
       const session = await executor.assignSession({ session_id: 'sess_ts' })
       await session.ready(AbortSignal.timeout(5000))
       for (let i = 0; i < 2; i++) {
-        const result = await session.callTool({ tool_call_id: 'call_1', tool: 'bash', input: { command: 'hello' } })
+        const result = await session.callTool('bash', { command: 'hello' }, { toolCallId: 'call_1' })
         assert.equal(result.content[0]?.text, 'py:hello')
       }
       const channel = await session.mcp('echo', AbortSignal.timeout(5000))

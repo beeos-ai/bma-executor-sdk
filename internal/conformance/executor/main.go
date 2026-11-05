@@ -1,6 +1,6 @@
 // Command executor is the Go executor peer of the cross-language tests: a Go
 // SDK Client that dials the harness at os.Args[1] (bearer "conformance"),
-// answers bash with "go:<command>", blocks on tool "block" until canceled,
+// answers bash with "go:<command>", blocks on the bash command "block" until canceled,
 // echoes MCP frames on server key "echo", and serves an agent that asks for
 // permission, then emits agent.message "go:<first input text>". It prints
 // READY after registering and exits when the harness closes it.
@@ -55,13 +55,13 @@ func run() error {
 		return bmaexecutor.SessionAssignResult{Accepted: true, SessionID: params.SessionID}, nil
 	})
 	client.OnToolCall(func(callCtx context.Context, params bmaexecutor.ToolCallParams) (bmaexecutor.ToolResultParams, error) {
-		if params.Tool == "block" {
-			<-callCtx.Done()
-			return bmaexecutor.ToolResultParams{Outcome: bmaexecutor.ToolOutcomeSucceeded}, nil
-		}
 		input, err := params.DecodeInput()
 		if err != nil {
 			return bmaexecutor.ToolResultParams{}, err
+		}
+		if input.Command == "block" {
+			<-callCtx.Done()
+			return bmaexecutor.ToolResultParams{Outcome: bmaexecutor.ToolOutcomeSucceeded}, nil
 		}
 		command := input.Command
 		return bmaexecutor.ToolResultParams{

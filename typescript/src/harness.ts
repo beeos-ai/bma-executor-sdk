@@ -38,6 +38,9 @@ import {
   type SessionStatusParams,
   type SessionStopResult,
   type ToolCallParams,
+  type ToolCallInputMap,
+  type ToolPermission,
+  ToolName,
   type ToolCancelResult,
   type ToolProgressParams,
   type ToolResultParams,
@@ -477,7 +480,23 @@ interface ToolCallRecord {
 }
 
 /** One session bound to an executor. */
+export interface CallToolOptions {
+  /** Idempotency id of the call; generated when empty. */
+  toolCallId?: string
+  deadlineMs?: number
+  permission?: ToolPermission
+  /** Stops waiting; does not cancel the tool (use cancelTool). */
+  signal?: AbortSignal
+}
+
+/** `session.tools.<name>.call(input)`: one typed entry per built-in tool. */
+export type HarnessTools = {
+  readonly [N in ToolName]: { call(input: ToolCallInputMap[N], options?: CallToolOptions): Promise<ToolResultParams> }
+}
+
 export class HarnessSession {
+  /** Typed tool calls; same as callTool(name, input, options). */
+  readonly tools: HarnessTools
   private readonly readyDeferred = deferred()
   private readonly doneDeferred = deferred()
   private isReady = false
@@ -493,7 +512,13 @@ export class HarnessSession {
     readonly id: string,
     readonly workId: string,
     /** @internal */ readonly leaseToken: string,
-  ) {}
+  ) {
+    const tools = {} as Record<ToolName, HarnessTools[ToolName]>
+    for (const name of Object.values(ToolName)) {
+      tools[name] = { call: (input: never, options?: CallToolOptions) => this.callTool(name, input, options) }
+    }
+    this.tools = tools as HarnessTools
+  }
 
   /** Resolves when the session ended. */
   get done(): Promise<void> {
@@ -517,16 +542,21 @@ export class HarnessSession {
   }
 
   /**
-   * Sends tool.call and waits for its tool.result. Idempotent by tool_call_id
+   * Sends tool.call and waits for its tool.result. Idempotent by toolCallId
    * (generated when empty): a repeat joins the in-flight call or returns the
    * recorded result without re-dispatching. Aborting signal stops waiting
    * only; use cancelTool to abort the tool.
    */
-  async callTool(
-    params: Omit<ToolCallParams, 'session_id' | 'tool_call_id'> & { tool_call_id?: string },
-    signal?: AbortSignal,
-  ): Promise<ToolResultParams> {
-    const call: ToolCallParams = { ...params, session_id: this.id, tool_call_id: params.tool_call_id || `call_${randomId(8)}` }
+  async callTool<N extends ToolName>(tool: N, input: ToolCallInputMap[N], options: CallToolOptions = {}): Promise<ToolResultParams> {
+    const call = {
+      session_id: this.id,
+      tool_call_id: options.toolCallId || `call_${randomId(8)}`,
+      tool,
+      input,
+      ...(options.deadlineMs !== undefined ? { deadline_ms: options.deadlineMs } : {}),
+      ...(options.permission ? { permission: options.permission } : {}),
+    } as ToolCallParams
+    const signal = options.signal
     let record = this.calls.get(call.tool_call_id)
     if (!record) {
       if (this.endReason) throw new SessionEndedError()

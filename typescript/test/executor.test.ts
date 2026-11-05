@@ -42,7 +42,7 @@ async function scenario(harness: Harness, start: () => Promise<TestExecutor>, mc
 
     // tool.call is idempotent by tool_call_id on both ends.
     for (let i = 0; i < 2; i++) {
-      const result = await session.callTool({ tool_call_id: 'call_1', tool: 'bash', input: { command: 'hello' } })
+      const result = await session.callTool('bash', { command: 'hello' }, { toolCallId: 'call_1' })
       assert.equal(result.outcome, 'succeeded')
       assert.equal(result.content[0]?.text, 'ts:hello')
     }
@@ -51,7 +51,7 @@ async function scenario(harness: Harness, start: () => Promise<TestExecutor>, mc
     assert.equal(progress[0]?.tool_call_id, 'call_1')
 
     // tool.cancel aborts the handler and the result reports canceled.
-    const blocked = session.callTool({ tool_call_id: 'call_block', tool: 'block' as 'bash', input: {} })
+    const blocked = session.callTool('bash', { command: 'block' }, { toolCallId: 'call_block' })
     await waitFor(() => runs.includes('call_block'))
     assert.equal(await session.cancelTool('call_block', 'test'), true)
     const canceled = await blocked
@@ -192,7 +192,7 @@ describe('reconnect and lease', () => {
       const executor = await harness.waitExecutor()
       const session = await executor.assignSession({ session_id: 'sess_r' })
       await session.ready()
-      const blocked = session.callTool({ tool_call_id: 'call_r', tool: 'block' as 'bash', input: {} })
+      const blocked = session.callTool('bash', { command: 'block' }, { toolCallId: 'call_r' })
       await waitFor(() => runs.includes('call_r'))
 
       dropConnection(executor, 1001)
@@ -216,7 +216,7 @@ describe('reconnect and lease', () => {
       const executor = await harness.waitExecutor()
       const session = await executor.assignSession({ session_id: 'sess_l' })
       await session.ready()
-      const blocked = session.callTool({ tool_call_id: 'call_l', tool: 'block' as 'bash', input: {} })
+      const blocked = session.callTool('bash', { command: 'block' }, { toolCallId: 'call_l' })
       await waitFor(() => made.runs.includes('call_l'))
       dropConnection(executor, 4004)
       const outcome = blocked.then(() => undefined, (error: unknown) => error)

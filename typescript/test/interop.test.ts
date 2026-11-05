@@ -141,10 +141,10 @@ describe('cross-language interop with the Go SDK', { timeout: 120_000 }, () => {
       const session = await executor.assignSession({ session_id: 'sess_go' })
       await session.ready(AbortSignal.timeout(10_000))
       for (let i = 0; i < 2; i++) {
-        const result = await session.callTool({ tool_call_id: 'call_go', tool: 'bash', input: { command: 'hello' } })
+        const result = await session.callTool('bash', { command: 'hello' }, { toolCallId: 'call_go' })
         assert.equal(result.content[0]?.text, 'go:hello')
       }
-      const blocked = session.callTool({ tool_call_id: 'call_block', tool: 'block' as 'bash', input: {} })
+      const blocked = session.callTool('bash', { command: 'block' }, { toolCallId: 'call_block' })
       let canceled = false
       for (let i = 0; i < 100 && !canceled; i++) {
         canceled = await session.cancelTool('call_block', 'interop')

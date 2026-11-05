@@ -26,9 +26,14 @@ export {
   type SessionAssignHandler,
   type SessionStopHandler,
   type TokenSource,
-  type ToolCallHandler,
+  type BashResult,
+  type ExecutorTools,
   type ToolContext,
+  type ToolHandler,
+  type ToolOutput,
+  type ToolOutputOf,
   type ToolResult,
+  type ToolSlot,
   type WebSocketDialerOptions,
 } from './client.js'
 export { AgentTurn, type AgentHandler } from './agent.js'
@@ -42,7 +47,9 @@ export {
   type AcceptOptions,
   type AgentEventRecord,
   type AgentPlatform,
+  type CallToolOptions,
   type HarnessOptions,
+  type HarnessTools,
   type Principal,
 } from './harness.js'
 export {

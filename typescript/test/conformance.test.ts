@@ -17,6 +17,7 @@ import {
   RpcError,
   type AgentPlatform,
   type MethodName,
+  type ToolCallParams,
   type TurnStartResult,
 } from '../src/index.js'
 import { RpcPeer } from '../src/rpc.js'
@@ -134,8 +135,12 @@ test('executor-to-harness examples against the TypeScript harness', async () => 
   assertShape('session.ready', await call('session.ready request'))
   assertShape('session.event', await call('session.event request'))
   notify('session.status notification')
-  const toolCall = request('tool.call request').params
-  const pending = session.callTool(toolCall as never)
+  const toolCall = request('tool.call request').params as ToolCallParams
+  const pending = session.callTool(toolCall.tool, toolCall.input as never, {
+    toolCallId: toolCall.tool_call_id,
+    ...(toolCall.deadline_ms !== undefined ? { deadlineMs: toolCall.deadline_ms } : {}),
+    ...(toolCall.permission ? { permission: toolCall.permission } : {}),
+  })
   await waitFor(() => received.includes('tool.call'))
   notify('tool.progress notification')
   assertShape('tool.result', await call('tool.result request'))
@@ -163,7 +168,7 @@ test('harness-to-executor examples against the TypeScript executor', async () =>
   const [executorEnd, harnessEnd] = inProcessPair('bma.executor.v1.1')
   const { peer, received } = examplePeer(harnessEnd, 'h_')
   const client = new ExecutorClient({ environmentId: '', executor: executorInfo, dialer: async () => executorEnd, reconnect: false })
-  client.handleTool('bash', async () => ({ outcome: 'succeeded', is_error: false, content: [{ type: 'text', text: 'hi\n' }] }))
+  client.tools.bash.handle(async () => 'hi\n')
   client.serveAgent({
     openTurn: async () => resultOf('turn.start') as unknown as TurnStartResult,
     runTurn: (_turn, signal) => new Promise((resolve) => signal.addEventListener('abort', () => resolve(), { once: true })),
