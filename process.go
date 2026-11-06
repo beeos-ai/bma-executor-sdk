@@ -508,16 +508,18 @@ func (p *processes) start(ctx context.Context, req Request) (any, error) {
 }
 
 // existing answers a replayed start, or a start the process limit refuses.
+// It waits for a replayed process outside the table lock.
 func (p *processes) existing(table *processTable, params ProcessStartParams, hash string) (any, bool, error) {
 	table.mu.Lock()
-	defer table.mu.Unlock()
-	if existing, ok := table.processes[params.ProcessID]; ok {
-		if existing.specHash != hash {
-			return nil, true, conflict(ReasonProcessIDSpecMismatch)
-		}
+	existing, ok := table.processes[params.ProcessID]
+	full := !ok && table.runningLocked() >= MaxProcessesPerSession
+	table.mu.Unlock()
+	switch {
+	case ok && existing.specHash != hash:
+		return nil, true, conflict(ReasonProcessIDSpecMismatch)
+	case ok:
 		return waitState(existing, params.WaitMS), true, nil
-	}
-	if table.runningLocked() >= MaxProcessesPerSession {
+	case full:
 		return nil, true, busy("process limit reached")
 	}
 	return nil, false, nil
