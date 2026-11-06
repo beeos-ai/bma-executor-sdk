@@ -92,9 +92,10 @@ type DrainHandler func(ctx context.Context, params ExecutorDrainParams) (Executo
 
 // Options configures a Client.
 type Options struct {
-	// EnvironmentKey is the bearer of POST /v1/executors/token: an environment
-	// key, or a machine daemon token for a machine-scoped executor (empty
-	// EnvironmentID).
+	// EnvironmentKey is the bearer of the token exchange: an environment key
+	// (POST /v1/executors/token), or a machine daemon token for a
+	// machine-scoped executor (empty EnvironmentID; POST
+	// /api/v1/executors/token).
 	EnvironmentKey string
 	// EnvironmentID is the selfhost environment; empty registers a
 	// machine-scoped executor.
@@ -769,6 +770,16 @@ func StaticToken(wsURL, token string) func(context.Context) (ExecutorTokenRespon
 	}
 }
 
+// tokenPath is the token exchange of the credential (protocol reference
+// §2.1): a machine daemon token (no environment id) is exchanged by bma-api,
+// an environment key by managed-agents.
+func tokenPath(environmentID string) string {
+	if environmentID == "" {
+		return "/api/v1/executors/token"
+	}
+	return "/v1/executors/token"
+}
+
 func (c *Client) fetchToken(ctx context.Context) (ExecutorTokenResponse, error) {
 	if c.options.TokenSource != nil {
 		token, err := c.options.TokenSource(ctx)
@@ -784,7 +795,7 @@ func (c *Client) fetchToken(ctx context.Context) (ExecutorTokenResponse, error) 
 	if err != nil {
 		return ExecutorTokenResponse{}, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.options.BaseURL+"/v1/executors/token", bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.options.BaseURL+tokenPath(c.options.EnvironmentID), bytes.NewReader(body))
 	if err != nil {
 		return ExecutorTokenResponse{}, err
 	}
