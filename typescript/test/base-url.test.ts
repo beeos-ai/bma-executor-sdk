@@ -19,3 +19,14 @@ test('baseUrl is the origin; a trailing /api/v1 is not repeated', async () => {
     assert.deepEqual(urls, ['https://bma.test/v1/executors/token'], baseUrl)
   }
 })
+
+test('a machine token (no environmentId) is exchanged by bma-api at /api/v1/executors/token', async () => {
+  const urls: string[] = []
+  const fetch = (async (url: string) => {
+    urls.push(String(url))
+    return new Response('nope', { status: 500 })
+  }) as typeof globalThis.fetch
+  const dial = webSocketDialer({ environmentId: '', executor: executorInfo, baseUrl: 'https://bma.test', environmentKey: 'mtok', fetch })
+  await assert.rejects(dial({ channel: ChannelScope.Control }))
+  assert.deepEqual(urls, ['https://bma.test/api/v1/executors/token'])
+})

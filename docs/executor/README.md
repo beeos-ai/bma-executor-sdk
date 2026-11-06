@@ -2,6 +2,8 @@
 
 [中文](README.zh-CN.md) · [Repository README](../../README.md)
 
+Connect your machine (hands) or your own agent (brain) to BMA — the executor, harness and agent ends of the `bma.executor` protocol. [`bma-sdk`](https://github.com/beeos-ai/bma-sdk) drives and uses agents (REST / façade client); `bma-executor-sdk` connects hands or brains to BMA.
+
 The entry point for integrators who build an executor (a "hand"), drive one (a "brain" / harness), or connect a complete local agent to BMA: what the Executor Protocol is, the deployment shapes, how the SDK is split, how to connect, and what works today.
 
 | Document | Content |
@@ -134,7 +136,7 @@ bma-executor-sdk (Go)
 
 - The SDK does not contain the agent loop; bring your own. The agent module is glue: event ids/ACK/resend, running/idle framing, interaction waits.
 - Protocol types in all three languages are generated from [`contracts/bma/executor`](../../contracts/bma/executor); [`lock.json`](../../contracts/bma/executor/lock.json) records the contract version and hashes.
-- bmad uses its own executor implementation generated from the same contract, not the SDK package. The guarantee is one contract plus cross-implementation conformance tests.
+- bmad is built on the Go SDK: the BMA backend's `internal/machineexecutor` imports `github.com/beeos-ai/bma-executor-sdk` and adds the machine-specific parts (machine token, file transfers, Git credentials, skill installs, `terminal.*`); it reaches `bmad` through `internal/bmad` and `cmd/daemon`. Other implementations (the BMA server, the selfhost worker) are held to the same contract by cross-implementation conformance tests.
 
 ### 4.1 Transports
 

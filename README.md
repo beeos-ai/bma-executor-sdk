@@ -1,15 +1,17 @@
 # bma-executor-sdk
 
+Connect your machine (hands) or your own agent (brain) to BMA — the executor, harness and agent ends of the `bma.executor` protocol.
+
+[`bma-sdk`](https://github.com/beeos-ai/bma-sdk) drives and uses agents (REST / façade client); `bma-executor-sdk` connects hands or brains to BMA.
+
 Go, TypeScript and Python SDKs for the BMA (BeeOS Managed Agents) Executor
-Protocol `bma.executor.v1.1`: the executor, harness and agent ends, with
-protocol types generated from the contract in
+Protocol `bma.executor.v1.1`, with protocol types generated from the contract in
 [`contracts/bma/executor`](contracts/bma/executor) and handwritten runtimes.
-bmad's execution model and the BMA server speak the same contract.
+bmad is built on the Go SDK, and the BMA server speaks the same contract.
 
 > Moved from [`beeos-ai/bma-sdks`](https://github.com/beeos-ai/bma-sdks) (archived) in 0.4.9.
-> The Go import path changed from `github.com/beeos-ai/bma-executor-sdk` to
+> The Go import path changed from `github.com/beeos-ai/bma-sdks/executor` to
 > `github.com/beeos-ai/bma-executor-sdk`; the npm and PyPI package names are unchanged.
-> The REST / façade client is [`beeos-ai/bma-sdk`](https://github.com/beeos-ai/bma-sdk).
 
 | Language | Package | Install |
 | --- | --- | --- |
@@ -79,7 +81,7 @@ func main() {
 }
 ```
 
-Set `Options.BaseURL` to your BMA deployment: the hosted service is in early access and the default `DefaultBaseURL` (`https://api.bma.beeos.ai`) does not resolve yet. It is the deployment origin, the same value as `BMA_BASE_URL` in bma-sdk (for example `https://api.staging.bma.beeos.ai`); the SDK posts the environment key to `{BaseURL}/v1/executors/token` and uploads artifacts below it, and drops a trailing `/api/v1` (the 0.x bma-sdk API-root form) instead of nesting the paths. The SDK does not read `BMA_BASE_URL` itself; the example passes it through. A `TokenSource` (for example `StaticToken`) carries its own channel URL.
+Set `Options.BaseURL` to your BMA deployment: the hosted service is in early access and the default `DefaultBaseURL` (`https://api.bma.beeos.ai`) does not resolve yet. It is the deployment origin, the same value as `BMA_BASE_URL` in bma-sdk (for example `https://api.staging.bma.beeos.ai`); the SDK posts an environment key to `{BaseURL}/v1/executors/token` (managed-agents) and a machine daemon token (no environment id) to `{BaseURL}/api/v1/executors/token` (bma-api), and uploads artifacts below `/v1/executors`, and drops a trailing `/api/v1` (the 0.x bma-sdk API-root form) instead of nesting the paths. The SDK does not read `BMA_BASE_URL` itself; the example passes it through. A `TokenSource` (for example `StaticToken`) carries its own channel URL.
 
 A machine-scoped executor uses a machine token through `Options.TokenSource` and no environment id. Go clients negotiate `bma.executor.v1.1` by default (`Options.Protocol`).
 
