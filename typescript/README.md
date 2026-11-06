@@ -2,6 +2,9 @@
 
 [![npm](https://img.shields.io/npm/v/@beeos-ai/bma-executor-sdk.svg)](https://www.npmjs.com/package/@beeos-ai/bma-executor-sdk)
 
+Connect your machine (hands) or your own agent (brain) to BMA — the executor, harness and agent ends of the `bma.executor` protocol.
+[`@beeos-ai/bma-sdk`](https://github.com/beeos-ai/bma-sdk) drives and uses agents (REST / façade client); `bma-executor-sdk` connects hands or brains to BMA.
+
 Executor (`ExecutorClient`), harness (`Harness`) and agent ends of the BMA
 Executor Protocol `bma.executor.v1.1` (and `v1`), with the same three parts and
 behavior as the [Go `executor` module](../README.md). Protocol types are

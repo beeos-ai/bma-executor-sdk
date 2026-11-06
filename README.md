@@ -1,15 +1,17 @@
 # bma-executor-sdk
 
+Connect your machine (hands) or your own agent (brain) to BMA — the executor, harness and agent ends of the `bma.executor` protocol.
+
+[`bma-sdk`](https://github.com/beeos-ai/bma-sdk) drives and uses agents (REST / façade client); `bma-executor-sdk` connects hands or brains to BMA.
+
 Go, TypeScript and Python SDKs for the BMA (BeeOS Managed Agents) Executor
-Protocol `bma.executor.v1.1`: the executor, harness and agent ends, with
-protocol types generated from the contract in
+Protocol `bma.executor.v1.1`, with protocol types generated from the contract in
 [`contracts/bma/executor`](contracts/bma/executor) and handwritten runtimes.
-bmad's execution model and the BMA server speak the same contract.
+bmad is built on the Go SDK, and the BMA server speaks the same contract.
 
 > Moved from [`beeos-ai/bma-sdks`](https://github.com/beeos-ai/bma-sdks) (archived) in 0.4.9.
-> The Go import path changed from `github.com/beeos-ai/bma-executor-sdk` to
+> The Go import path changed from `github.com/beeos-ai/bma-sdks/executor` to
 > `github.com/beeos-ai/bma-executor-sdk`; the npm and PyPI package names are unchanged.
-> The REST / façade client is [`beeos-ai/bma-sdk`](https://github.com/beeos-ai/bma-sdk).
 
 | Language | Package | Install |
 | --- | --- | --- |
