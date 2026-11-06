@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.1
+
+### Fixed
+
+- **All languages:** a machine-scoped executor (machine daemon token, empty
+  environment id) exchanges its token at bma-api
+  `{BaseURL}/api/v1/executors/token` (protocol reference §2.1). 1.0.0 posted
+  it to the managed-agents `/v1/executors/token`, which answers a machine
+  token `404`, so the machine path could not connect without a custom
+  `TokenSource`. An environment key keeps `/v1/executors/token`.
+
 ## 1.0.0 (unreleased)
 
 - **Breaking (ADR 0012 §4.3), all languages:** protocol methods are typed by

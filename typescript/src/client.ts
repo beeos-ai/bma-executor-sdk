@@ -137,7 +137,9 @@ function executorTokenSource(options: WebSocketDialerOptions): TokenSource {
     (async () => {
       // The deployment origin (as BMA_BASE_URL in bma-sdk); a trailing /api/v1 is dropped.
       const base = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '').replace(/\/api\/v1$/, '')
-      const response = await (options.fetch ?? fetch)(`${base}/v1/executors/token`, {
+      // A machine daemon token (no environmentId) is exchanged by bma-api, an environment key by managed-agents.
+      const path = options.environmentId ? '/v1/executors/token' : '/api/v1/executors/token'
+      const response = await (options.fetch ?? fetch)(`${base}${path}`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${options.environmentKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ environment_id: options.environmentId, executor: options.executor }),

@@ -21,7 +21,7 @@ socket or Windows named pipe (`unix://`, `npipe://`), in-process.
 | Integration guide | [docs/executor](../docs/executor/README.md) ([中文](../docs/executor/README.zh-CN.md)) |
 
 ```sh
-npm install @beeos-ai/bma-executor-sdk@1.0.0
+npm install @beeos-ai/bma-executor-sdk@1.0.1
 ```
 
 The REST / façade client is the separate package
