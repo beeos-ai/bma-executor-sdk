@@ -2,7 +2,7 @@
 
 [English](protocol-reference.md) · [总览](README.zh-CN.md)
 
-本文是 BMA 平台提供、bma-executor-sdk 0.4.0 实现的 `bma.executor.v1` 与 `bma.executor.v1.1` 的完整参考。凡与旧文档不一致处，以本文和契约为准。状态标注：**【已有】**已发布或已上线；**【预览】**平台已上线、限制另行注明；**【即将提供】**契约已定义、能力位门控、尚未提供；**【设计中】**无实现。
+本文是 BMA 平台提供、bma-executor-sdk 1.0.0 实现的 `bma.executor.v1` 与 `bma.executor.v1.1` 的完整参考。凡与旧文档不一致处，以本文和契约为准。状态标注：**【已有】**已发布或已上线；**【预览】**平台已上线、限制另行注明；**【即将提供】**契约已定义、能力位门控、尚未提供；**【设计中】**无实现。
 
 机器可读契约在本仓库：[`executor.openrpc.yaml`](../../contracts/bma/executor/executor.openrpc.yaml)（方法目录、`x-bma-since`、`x-bma-capability`、幂等键、错误）、[`executor.asyncapi.yaml`](../../contracts/bma/executor/executor.asyncapi.yaml) 与 [`schemas/`](../../contracts/bma/executor/schemas)；SDK 的协议类型由它生成。
 
@@ -113,7 +113,7 @@ Authorization: Bearer <jwt>
 
 bmad 的参考行为：任何非 `4004` 的断开都以 1s 起、翻倍、上限约 30s 的退避重连；每次重连都重新换 token。重连时 `executor.register` 带 `resume`（§8.1）。
 
-SDK 客户端（Go、TypeScript、Python，0.4.6 起）只在 `4003`、`4004` 时停止；其他关闭（含服务端重启时的 `4002`、`4005`、`1001`、`1008`、`1012`、`1013`）同样退避重连。
+SDK 客户端（Go、TypeScript、Python）只在 `4003`、`4004` 时停止；其他关闭（含服务端重启时的 `4002`、`4005`、`1001`、`1008`、`1012`、`1013`）同样退避重连。
 
 ---
 
@@ -451,7 +451,7 @@ JSON-RPC 错误：`{code, message, data?}`；`data` 可含 `retryable`、`detail
 - 每个 `(environment, session_id, server_key)` 至多一条通道；新连接替换旧连接（旧的以 1001 关闭）。`session_id` ≤256、`server_key` ≤128 字节。帧上限 1 MiB（超出以 1009 关闭）。
 - 每帧是一条 MCP JSON-RPC 消息；harness 做 `initialize`、`notifications/initialized`、`tools/list`、`tools/call`；executor 把 stdio server 的换行分隔 JSON-RPC 与通道帧双向桥接。MCP 错误原样透传；不得伪造空 `tools/list`。
 - 配置（契约 `schemas/mcp.json`）：`connection_origin:"service"` 由 harness 自己连，executor 不启动进程；`"environment"` 由 executor 启动/连接。stdio：不经 shell，`cwd` 在会话工作区内，`env` 显式（不继承宿主环境），给了 `command_sha256` 就校验。
-- 生命周期（SDK `Core` 行为）：每个 (brain, session, server_key) 一个进程；任一侧结束则带退避重启（通道上看到的是新 server，需要重新 initialize）；持续重试直到会话结束（0.4.7 起：200ms 起指数退避、上限 30s、带抖动，通道保持打开 1s 后退避清零）；连续 5 次失败时每次中断发一次 `session.status` `error`、`detail:"mcp_unavailable: <key>"`；会话结束关闭全部；不同会话的调用、取消、结果互不共享 stdio 管道。
+- 生命周期（SDK `Core` 行为）：每个 (brain, session, server_key) 一个进程；任一侧结束则带退避重启（通道上看到的是新 server，需要重新 initialize）；持续重试直到会话结束（200ms 起指数退避、上限 30s、带抖动，通道保持打开 1s 后退避清零）；连续 5 次失败时每次中断发一次 `session.status` `error`、`detail:"mcp_unavailable: <key>"`；会话结束关闭全部；不同会话的调用、取消、结果互不共享 stdio 管道。
 
 ### 7.1 Chrome MCP 与 computer-use（执行端要求）
 

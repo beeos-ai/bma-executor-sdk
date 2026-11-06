@@ -7,7 +7,7 @@ Status: contract and SDK **[Available]**, platform **[Preview]** (text input onl
 | Part | Where | Status |
 | --- | --- | --- |
 | Contract (methods, [`schemas/agent.json`](../../contracts/bma/executor/schemas/agent.json), conformance examples) | [`contracts/bma/executor`](../../contracts/bma/executor) (`bma.executor.v1.1`, contract 1.1.0) | [Available] |
-| SDK: executor side `ServeAgent` / `AgentHandler`, harness side `AgentPlatform` | bma-executor-sdk 0.4.0 (Go, TypeScript, Python) | [Available] |
+| SDK: executor side `ServeAgent` / `AgentHandler`, harness side `AgentPlatform` | bma-executor-sdk 1.0.0 (Go, TypeScript, Python) | [Available] |
 | Platform side (binding, dispatch from the BMA API, event storage and SSE, interactions) | BMA platform | [Preview] |
 
 This chapter is the wire contract an integrator implements or relies on. Names and fields follow the contract in [`contracts/bma/executor`](../../contracts/bma/executor).

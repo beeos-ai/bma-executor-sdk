@@ -14,12 +14,12 @@ The entry point for integrators who build an executor (a "hand"), drive one (a "
 
 Status labels used across these documents:
 
-- **[Available]**: shipped in bma-executor-sdk 0.4.0 or live on the BMA platform.
+- **[Available]**: shipped in bma-executor-sdk 1.0.0 or live on the BMA platform.
 - **[Preview]**: live on the BMA platform with the limits stated where it is used; may change before general availability.
 - **[Coming]**: defined in the contract but not served yet; capability-gated, so a peer that does not advertise the capability bit never receives those methods.
 - **[Design]**: designed, not implemented.
 
-> Baseline: bma-executor-sdk **0.4.9** (features available since 0.4.0), protocol `bma.executor.v1.1` (contract 1.1.0, [`contracts/bma/executor`](../../contracts/bma/executor)).
+> Baseline: bma-executor-sdk **1.0.0**, protocol `bma.executor.v1.1` (contract 1.1.0, [`contracts/bma/executor`](../../contracts/bma/executor)).
 
 ---
 
@@ -97,7 +97,7 @@ your local brain
    └─ as agent provider: takes platform turns, produces agent events ................... [Preview on the platform]
 ```
 
-Today bmad holds only its outbound platform connection; it does not accept local brains or forward the agent capability yet. The SDK pieces this needs (`ListenUnixSocket`, `Harness.DialExecutor`, the agent capability) ship in 0.4.0.
+Today bmad holds only its outbound platform connection; it does not accept local brains or forward the agent capability yet. The SDK pieces this needs (`ListenUnixSocket`, `Harness.DialExecutor`, the agent capability) ship in 1.0.0.
 
 ### Option B: the desktop app embeds the hand
 
@@ -154,7 +154,7 @@ Protocol messages are the same on every transport.
 
 ## 5. Capability status
 
-| Capability | Protocol | Platform | bmad | Go SDK 0.4.x |
+| Capability | Protocol | Platform | bmad | Go SDK 1.0.0 |
 | --- | --- | --- | --- | --- |
 | register/heartbeat/reconnect/drain/4004 | v1 | available | available | available (both ends) |
 | `tool.call` (bash, file tools) | v1 | environment path; the machine path does not use `tool.call` | `bash` only | `Core`: bash/read/write/edit/glob/grep |

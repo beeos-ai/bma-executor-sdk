@@ -2,7 +2,7 @@
 
 [中文](protocol-reference.zh-CN.md) · [Overview](README.md)
 
-The complete reference for `bma.executor.v1` and `bma.executor.v1.1` as served by the BMA platform and implemented by bma-executor-sdk 0.4.0. Where older documents disagree, this page and the contract win. Labels: **[Available]** shipped or live; **[Preview]** live on the platform with stated limits; **[Coming]** defined in the contract, capability-gated, not served yet; **[Design]** not implemented.
+The complete reference for `bma.executor.v1` and `bma.executor.v1.1` as served by the BMA platform and implemented by bma-executor-sdk 1.0.0. Where older documents disagree, this page and the contract win. Labels: **[Available]** shipped or live; **[Preview]** live on the platform with stated limits; **[Coming]** defined in the contract, capability-gated, not served yet; **[Design]** not implemented.
 
 The machine-readable contract is in this repository: [`executor.openrpc.yaml`](../../contracts/bma/executor/executor.openrpc.yaml) (method catalog, `x-bma-since`, `x-bma-capability`, idempotency keys, errors), [`executor.asyncapi.yaml`](../../contracts/bma/executor/executor.asyncapi.yaml) and [`schemas/`](../../contracts/bma/executor/schemas); the SDK protocol types are generated from it.
 
@@ -97,7 +97,7 @@ Authorization: Bearer <jwt>
 
 bmad: any close other than `4004` reconnects with backoff from 1s doubling to about 30s, fetching a new token each time, and registers with `resume` (§8.1).
 
-The SDK clients (Go, TypeScript, Python, 0.4.6+) stop only on `4003` and `4004`; every other close, including `4002`, `4005`, `1001`, `1008`, `1012` and `1013` from a restarting server, reconnects the same way.
+The SDK clients (Go, TypeScript, Python) stop only on `4003` and `4004`; every other close, including `4002`, `4005`, `1001`, `1008`, `1012` and `1013` from a restarting server, reconnects the same way.
 
 ---
 
@@ -373,7 +373,7 @@ See §4.17.
 - At most one channel per `(environment, session_id, server_key)`; a newer one replaces the older (closed with 1001). `session_id` ≤256, `server_key` ≤128 bytes. Frames ≤1 MiB (else 1009).
 - Each frame is one MCP JSON-RPC message; the harness does `initialize`, `notifications/initialized`, `tools/list`, `tools/call`; the executor bridges newline-delimited stdio JSON-RPC. MCP errors pass through unchanged; never fake an empty `tools/list`.
 - Config (`schemas/mcp.json`): `connection_origin:"service"` = the harness connects itself; `"environment"` = the executor starts/connects. stdio: no shell, `cwd` inside the session workspace, explicit `env`, verify `command_sha256` when given.
-- Lifecycle (SDK `Core`): one process per (brain, session, server_key); restart with backoff when either side ends (the channel sees a fresh server: re-initialize); retries continue until the session ends (0.4.7+: exponential backoff from 200ms capped at 30s with jitter, reset once a channel stays open for 1s); after 5 consecutive failures `session.status` `error` / `mcp_unavailable: <key>` once per outage; all closed when the session ends; sessions never share stdio pipes.
+- Lifecycle (SDK `Core`): one process per (brain, session, server_key); restart with backoff when either side ends (the channel sees a fresh server: re-initialize); retries continue until the session ends (exponential backoff from 200ms capped at 30s with jitter, reset once a channel stays open for 1s); after 5 consecutive failures `session.status` `error` / `mcp_unavailable: <key>` once per outage; all closed when the session ends; sessions never share stdio pipes.
 
 ### 7.1 Chrome MCP and computer-use (executor requirements)
 

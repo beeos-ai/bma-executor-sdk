@@ -5,8 +5,8 @@
 | Example | What it does | Needs | Status |
 | --- | --- | --- | --- |
 | 1A: cloud brain → bmad (local hand) | platform agents run `run_command`/process tools/terminals/skills/file transfers on your computer | bmad ≥ 0.2.11, machine token | [Available] |
-| 1B: cloud brain → SDK hand (`Core`) | the platform dispatches bash/file tools via `tool.call`, plus stdio MCP | selfhost environment + key; Go SDK 0.4.0 | [Available] (the platform does not dispatch MCP servers yet [Coming]) |
-| 2: local brain → local hand → events to the platform | the brain drives the same core over loopback; agent events go to the platform | SDK 0.4.0 (Go, TypeScript, Python); platform agent capability | local part [Available]; platform part [Preview] (text input only) |
+| 1B: cloud brain → SDK hand (`Core`) | the platform dispatches bash/file tools via `tool.call`, plus stdio MCP | selfhost environment + key; Go SDK 1.0.0 | [Available] (the platform does not dispatch MCP servers yet [Coming]) |
+| 2: local brain → local hand → events to the platform | the brain drives the same core over loopback; agent events go to the platform | SDK 1.0.0 (Go, TypeScript, Python); platform agent capability | local part [Available]; platform part [Preview] (text input only) |
 
 ---
 
