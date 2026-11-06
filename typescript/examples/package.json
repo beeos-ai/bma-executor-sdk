@@ -5,7 +5,8 @@
   "scripts": {
     "executor-minimal": "node executor-minimal/main.mjs",
     "harness-loopback": "node harness-loopback/main.mjs",
-    "agent-minimal": "node agent-minimal/main.mjs"
+    "agent-minimal": "node agent-minimal/main.mjs",
+    "session-context": "node session-context/main.mjs"
   },
   "dependencies": {
     "@beeos-ai/bma-executor-sdk": "file:.."

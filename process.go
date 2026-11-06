@@ -11,7 +11,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -51,6 +53,62 @@ const (
 type FileTransferer interface {
 	TransferFile(ctx context.Context, processID string, transfer ProcessFileTransfer) (FileTransferResult, error)
 }
+
+// SessionFileTransferer is a FileTransferer that also learns which session
+// the transfer runs for (for example to check the path against the folder
+// that session may use). When ProcessOptions.FileTransfer implements it,
+// TransferSessionFile is called instead of TransferFile.
+type SessionFileTransferer interface {
+	FileTransferer
+	TransferSessionFile(ctx context.Context, process ProcessContext, transfer ProcessFileTransfer) (FileTransferResult, error)
+}
+
+// ProcessContext identifies the process a hook runs for.
+type ProcessContext struct {
+	// SessionID is the executor session (session.assign) of the process.
+	SessionID string
+	ProcessID string
+	// AgentSessionID is process.start metadata agent_session_id: the agent
+	// session the process runs for ("" when the harness named none). Pass it
+	// to Client.SessionContextByID, or the process id to
+	// Client.SessionContext, to read the session's metadata.
+	AgentSessionID string
+	Metadata       map[string]string
+}
+
+// LaunchRequest is one command process about to start.
+type LaunchRequest struct {
+	ProcessContext
+	Argv []string
+	// Cwd is the requested cwd as sent (not resolved or confined).
+	Cwd string
+	// DefaultCwd is the session workspace, the cwd used when the hook
+	// returns no Dir and the request names none.
+	DefaultCwd string
+	// Env is the complete environment the process would get.
+	Env []string
+}
+
+// LaunchSpec is how the process starts. An empty field keeps the request's
+// value: no Dir resolves the requested cwd inside the session workspace as
+// without a hook, no Argv runs the requested command, a nil Env keeps the
+// computed environment.
+type LaunchSpec struct {
+	// Dir is an absolute directory; it is not confined to the workspace.
+	Dir  string
+	Argv []string
+	// Env is the complete environment.
+	Env []string
+}
+
+// LaunchFunc is called once per new command process (not for replays, file
+// transfers or package installs), after the session's files are synced and
+// before it is spawned. It may choose the directory (for example from the
+// session's metadata), wrap argv in a sandbox command (sandbox-exec, bwrap)
+// and change the environment. Returning an error refuses the start: an
+// *RPCError (NewReasonError) is answered as is, so the harness sees its
+// data.reason; any other error is answered as spawn_failed.
+type LaunchFunc func(ctx context.Context, req LaunchRequest) (LaunchSpec, error)
 
 // GitCredentialGranter backs process.start git_credentials: Grant returns the
 // environment that lets processID fetch Git credentials while it runs, and a
@@ -95,6 +153,11 @@ type ProcessOptions struct {
 	GitCredentials GitCredentialGranter
 	// PackageInstaller serves process.start package_install.
 	PackageInstaller PackageInstaller
+	// Launch runs before each new command process starts; see LaunchFunc.
+	Launch LaunchFunc
+	// SessionFiles syncs each agent session's files below its root, which
+	// is advertised as capabilities.session_files.root; see SessionFiles.
+	SessionFiles *SessionFiles
 }
 
 // NewProcessCapability serves process.start/read/write/interrupt/terminate/list
@@ -110,6 +173,9 @@ func NewProcessCapability(core *Core, opts ProcessOptions) Capability {
 				Enabled: true, MaxProcesses: MaxProcessesPerSession, BufferBytes: ProcessBufferBytes,
 				PTY: ptySupported, FileTransfer: opts.FileTransfer != nil, GitCredentials: opts.GitCredentials != nil,
 				PackageInstall: opts.PackageInstaller != nil,
+			}
+			if opts.SessionFiles != nil {
+				capabilities.SessionFiles = &SessionFilesCapability{Root: opts.SessionFiles.Root()}
 			}
 		},
 		SessionScoped: true,
@@ -155,7 +221,7 @@ func conflict(reason string) *RPCError {
 }
 
 func spawnFailed(err error) *RPCError {
-	return &RPCError{Code: CodeInternalError, Message: err.Error(), Data: &JSONRPCErrorData{Reason: "spawn_failed"}}
+	return NewReasonError(CodeInternalError, ReasonSpawnFailed, err.Error())
 }
 
 // stream is a bounded byte buffer addressed by absolute cursors. When it
@@ -214,6 +280,9 @@ type process struct {
 	fileTransfer *FileTransferResult
 	// onEnd releases per-process resources (Git credential grant).
 	onEnd func()
+	// filesSession is the agent session whose outputs the read reporting
+	// this process's end uploads ("" for none).
+	filesSession string
 }
 
 // signal delivers sig to the process group, or stops a file transfer.
@@ -404,11 +473,20 @@ func (p *processes) start(ctx context.Context, req Request) (any, error) {
 	session := req.Session
 	table := p.table(session)
 	hash := startSpecHash(params)
+	// A replay answers from the table; a new process is prepared (session
+	// files, Launch) outside the table lock, then checked again.
+	if state, done, err := p.existing(table, params, hash); done {
+		return state, err
+	}
+	plan, err := p.prepare(ctx, req, params)
+	if err != nil {
+		return nil, err
+	}
 	table.mu.Lock()
 	if existing, ok := table.processes[params.ProcessID]; ok {
 		table.mu.Unlock()
 		if existing.specHash != hash {
-			return nil, conflict("process_id_spec_mismatch")
+			return nil, conflict(ReasonProcessIDSpecMismatch)
 		}
 		return waitState(existing, params.WaitMS), nil
 	}
@@ -416,43 +494,134 @@ func (p *processes) start(ctx context.Context, req Request) (any, error) {
 		table.mu.Unlock()
 		return nil, busy("process limit reached")
 	}
-	proc, err := p.create(session, params)
+	proc, err := p.create(plan, params)
 	if err != nil {
 		table.mu.Unlock()
 		return nil, err
 	}
 	proc.specHash = hash
+	proc.filesSession = plan.filesSession
 	table.processes[params.ProcessID] = proc
 	table.mu.Unlock()
 	go p.watch(session, table, proc, time.Duration(params.TimeoutMS)*time.Millisecond)
 	return waitState(proc, params.WaitMS), nil
 }
 
-// create starts the process for a validated start request. Callers hold the
+// existing answers a replayed start, or a start the process limit refuses.
+func (p *processes) existing(table *processTable, params ProcessStartParams, hash string) (any, bool, error) {
+	table.mu.Lock()
+	defer table.mu.Unlock()
+	if existing, ok := table.processes[params.ProcessID]; ok {
+		if existing.specHash != hash {
+			return nil, true, conflict(ReasonProcessIDSpecMismatch)
+		}
+		return waitState(existing, params.WaitMS), true, nil
+	}
+	if table.runningLocked() >= MaxProcessesPerSession {
+		return nil, true, busy("process limit reached")
+	}
+	return nil, false, nil
+}
+
+// launchPlan is a prepared start: the process context and, for a command,
+// where and how it runs.
+type launchPlan struct {
+	process      ProcessContext
+	cwd          string
+	argv, env    []string
+	filesSession string
+}
+
+// prepare validates the command's cwd and env, syncs the agent session's
+// files and runs the Launch hook.
+func (p *processes) prepare(ctx context.Context, req Request, params ProcessStartParams) (launchPlan, error) {
+	session := req.Session
+	plan := launchPlan{process: ProcessContext{
+		SessionID: session.ID(), ProcessID: params.ProcessID,
+		AgentSessionID: params.Metadata[MetadataAgentSessionID], Metadata: params.Metadata,
+	}}
+	command := params.FileTransfer == nil && params.PackageInstall == nil
+	if command {
+		env, err := p.core.Env(params.Env)
+		if err != nil {
+			return launchPlan{}, invalidParams("%v", err)
+		}
+		plan.env, plan.argv = withEnv(env, p.opts.Env), params.Argv
+		if p.opts.Launch == nil {
+			if plan.cwd, err = session.ResolveCwd(params.Cwd); err != nil {
+				return launchPlan{}, invalidParams("%v", err)
+			}
+		}
+	}
+	download := params.FileTransfer != nil && params.FileTransfer.Direction == FileTransferDownload
+	if files := p.opts.SessionFiles; files != nil && plan.process.AgentSessionID != "" && (command || download) {
+		if err := files.prepare(ctx, req.Client, plan.process.AgentSessionID, params.ProcessID); err != nil {
+			if !download {
+				return launchPlan{}, spawnFailed(fmt.Errorf("session files: %w", err))
+			}
+			// A download writes its own path; only a target inside the
+			// session's files depends on them.
+			p.core.log(LogWarn, "session files not shown before a download", err)
+		}
+		plan.filesSession = plan.process.AgentSessionID
+	}
+	if !command || p.opts.Launch == nil {
+		return plan, nil
+	}
+	defaultCwd, err := session.ResolveCwd("")
+	if err != nil {
+		return launchPlan{}, spawnFailed(err)
+	}
+	spec, err := p.opts.Launch(ctx, LaunchRequest{
+		ProcessContext: plan.process, Argv: slices.Clone(plan.argv), Cwd: params.Cwd,
+		DefaultCwd: defaultCwd, Env: slices.Clone(plan.env),
+	})
+	if err != nil {
+		var rpcErr *RPCError
+		if errors.As(err, &rpcErr) {
+			return launchPlan{}, rpcErr
+		}
+		return launchPlan{}, spawnFailed(fmt.Errorf("launch: %w", err))
+	}
+	if len(spec.Argv) > 0 {
+		plan.argv = spec.Argv
+	}
+	if spec.Env != nil {
+		plan.env = spec.Env
+	}
+	switch {
+	case spec.Dir != "" && !filepath.IsAbs(spec.Dir):
+		return launchPlan{}, spawnFailed(fmt.Errorf("launch: dir %q is not absolute", spec.Dir))
+	case spec.Dir != "":
+		plan.cwd = spec.Dir
+	default:
+		if plan.cwd, err = session.ResolveCwd(params.Cwd); err != nil {
+			return launchPlan{}, invalidParams("%v", err)
+		}
+	}
+	return plan, nil
+}
+
+// create starts the process for a prepared start request. Callers hold the
 // table lock.
-func (p *processes) create(session *CoreSession, params ProcessStartParams) (*process, error) {
+func (p *processes) create(plan launchPlan, params ProcessStartParams) (*process, error) {
 	if params.FileTransfer != nil {
-		return p.startTransfer(params), nil
+		return p.startTransfer(plan.process, params), nil
 	}
 	if params.PackageInstall != nil {
 		return p.startPackageInstall(params)
 	}
-	cwd, err := session.ResolveCwd(params.Cwd)
-	if err != nil {
-		return nil, invalidParams("%v", err)
-	}
-	env, err := p.core.Env(params.Env)
-	if err != nil {
-		return nil, invalidParams("%v", err)
-	}
-	env = withEnv(env, p.opts.Env)
+	env := plan.env
 	var release func()
 	if params.GitCredentials {
+		var err error
 		if env, release, err = p.opts.GitCredentials.Grant(params.ProcessID, env); err != nil {
 			return nil, spawnFailed(err)
 		}
 	}
-	proc, err := spawn(params, cwd, env, p.core.opts.RunAs)
+	spawnParams := params
+	spawnParams.Argv = plan.argv
+	proc, err := spawn(spawnParams, plan.cwd, env, p.core.opts.RunAs)
 	if err != nil {
 		if release != nil {
 			release()
@@ -490,7 +659,7 @@ func (p *processes) startPackageInstall(params ProcessStartParams) (*process, er
 // is listed, read, timed out and terminated like any other, its errors are
 // its output and it exits 0 or 1 with the outcome in FileTransfer. A stop
 // reports the signal and no outcome.
-func (p *processes) startTransfer(params ProcessStartParams) *process {
+func (p *processes) startTransfer(processContext ProcessContext, params ProcessStartParams) *process {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	proc := &process{
@@ -511,7 +680,13 @@ func (p *processes) startTransfer(params ProcessStartParams) *process {
 	go func() {
 		defer close(done)
 		defer cancel()
-		result, err := p.opts.FileTransfer.TransferFile(ctx, params.ProcessID, *params.FileTransfer)
+		var result FileTransferResult
+		var err error
+		if transferer, ok := p.opts.FileTransfer.(SessionFileTransferer); ok {
+			result, err = transferer.TransferSessionFile(ctx, processContext, *params.FileTransfer)
+		} else {
+			result, err = p.opts.FileTransfer.TransferFile(ctx, params.ProcessID, *params.FileTransfer)
+		}
 		proc.mu.Lock()
 		defer proc.mu.Unlock()
 		if err != nil {
@@ -790,7 +965,18 @@ func (p *processes) read(ctx context.Context, req Request) (any, error) {
 		}
 		defer reads.Add(-1)
 	}
-	return proc.read(params, ctx.Done())
+	result, err := proc.read(params, ctx.Done())
+	if err == nil && proc.filesSession != "" && endedProcessState(result.State) {
+		// process.read is the authoritative end-of-process signal and the
+		// turn may go idle after the tool result it produces, so the
+		// session's outputs are uploaded before answering.
+		p.opts.SessionFiles.flush(ctx, proc.filesSession)
+	}
+	return result, err
+}
+
+func endedProcessState(state string) bool {
+	return state == ProcessExited || state == ProcessFailed || state == ProcessKilled
 }
 
 func (p *process) read(params ProcessReadParams, cancel <-chan struct{}) (ProcessReadResult, error) {

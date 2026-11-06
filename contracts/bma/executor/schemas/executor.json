@@ -206,6 +206,20 @@
       ],
       "additionalProperties": true
     },
+    "SessionFilesCapability": {
+      "type": "object",
+      "description": "Executor-owned per-session file layout. The harness derives <root>/<session_id>/uploads (read-only) and <root>/<session_id>/outputs and uses these real paths in prompts, tool descriptions and write rules. Absent: the harness keeps /mnt/session.",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "Absolute, already-expanded path on the executor host (no ~)."
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "additionalProperties": true
+    },
     "Capabilities": {
       "type": "object",
       "description": "Executor capability object. The server only sends a method to an executor that advertised its capability; otherwise the executor answers -32012 capability_unavailable.",
@@ -254,6 +268,9 @@
         },
         "agent": {
           "$ref": "agent.json#/$defs/AgentCapability"
+        },
+        "session_files": {
+          "$ref": "executor.json#/$defs/SessionFilesCapability"
         }
       },
       "required": [],

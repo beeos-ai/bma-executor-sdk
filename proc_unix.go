@@ -16,6 +16,10 @@ import (
 
 type processSignal = syscall.Signal
 
+// noFollow opens a session output without following a final symlink (and
+// without blocking on a FIFO).
+const noFollow = syscall.O_NOFOLLOW | syscall.O_NONBLOCK
+
 const (
 	signalInterrupt = syscall.SIGINT
 	signalTerminate = syscall.SIGTERM

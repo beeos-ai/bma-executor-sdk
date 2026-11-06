@@ -17,6 +17,7 @@ import httpx
 
 from ._methods import Call, Notification, Request
 from ._rpc import ClientStoppedError, NotConnectedError, Peer, RPCError
+from .session_context import SessionContext, SessionContexts
 from .generated import (
     METHOD_EXECUTOR_CAPABILITIES_UPDATE,
     METHOD_EXECUTOR_CLOSE,
@@ -192,6 +193,10 @@ class ExecutorClient:
         # outboxes resend after a reconnect.
         self._registered = asyncio.Event()
         self._agent: _AgentRuntime | None = None
+        self._session_contexts = SessionContexts(
+            base_url=self._base_url, environment_id=environment_id, environment_key=environment_key,
+            http_client=http_client, timeout=request_timeout,
+        )
 
     # --- lifecycle ---
 
@@ -262,6 +267,22 @@ class ExecutorClient:
 
     def on_drain(self, handler: DrainHandler) -> None:
         self._drain_handler = handler
+
+    async def session_context(self, process_id: str) -> SessionContext:
+        """The context of the agent session ``process_id`` runs for
+        (process.start metadata agent_session_id): its environment and the
+        metadata its creator set. Read it in a process.start handler to
+        resolve a metadata reference or check an owner before spawning, and
+        refuse with ``RPCError.with_reason(...)``. Needs a machine-scoped
+        executor (``MachineTokenRequiredError``); cached per session, failures
+        are not. Raises ``SessionContextNotFoundError`` for a process not on
+        this machine."""
+        return await self._session_contexts.by_process(process_id)
+
+    async def session_context_by_id(self, session_id: str) -> SessionContext:
+        """The context of an agent session bound to this machine (for an agent
+        capability without a process); cached like ``session_context``."""
+        return await self._session_contexts.by_id(session_id)
 
     def on_request(self, method: Request[P, R], handler: Callable[[P], Awaitable[R]]) -> None:
         """Serve a harness-to-executor request (process.*, terminal.*,

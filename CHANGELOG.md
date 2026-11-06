@@ -1,6 +1,39 @@
 # Changelog
 
-## 1.0.0 (unreleased)
+## 1.1.0 (unreleased)
+
+Additive; no breaking change ([MIGRATION](MIGRATION.md#110)). Guide:
+[docs/executor/session-context.md](docs/executor/session-context.md).
+
+- **Contract:** `Capabilities.session_files` (`SessionFilesCapability{root}`,
+  `make contract-sdk`): an executor-declared session files root; the
+  harness derives `<root>/<session_id>/{uploads,outputs}`.
+- **All languages:** session context over the machine token —
+  Go `Client.SessionContext(ctx, processID)` / `SessionContextByID`,
+  TypeScript `sessionContext` / `sessionContextById`, Python
+  `session_context` / `session_context_by_id` (cached per session;
+  not-found and machine-token-required errors). Recommended refusal reasons
+  with the same names in every language (Go `Reason*`, TypeScript and Python
+  `ErrorReason`) and constructors for a JSON-RPC error with `data.reason`
+  (Go `NewReasonError`, TypeScript `RpcError.withReason`, Python
+  `RPCError.with_reason`); `MetadataAgentSessionID` /
+  `MetadataAgentSessionId` / `METADATA_AGENT_SESSION_ID`.
+- **Go:** `ProcessOptions.Launch` — a per-process start hook that may set
+  the directory, wrap argv (sandbox-exec, bwrap), change the environment or
+  refuse with a reason; `SessionFileTransferer` gives file transfers the
+  session; `ProcessOptions.SessionFiles` / `NewSessionFiles` — the
+  per-session session files reference implementation (bmad's `os.Root` and
+  no-follow guards, concurrent sessions) that advertises
+  `session_files.root`. Example `examples/sandboxed-folder`.
+- **Go:** the module needs Go 1.25 (`os.Root.MkdirAll` / `Rename`).
+- TypeScript and Python have no process runtime and get no Launch hook: the
+  executor's `process.start` handler is the equivalent (example
+  `typescript/examples/session-context`).
+- Platform dependencies (beeos-managed-agents #411): the session context
+  routes (F1), `session_files` handling (F2) and `data.reason` propagation
+  (F3). Without them the calls answer 404 and the declaration is ignored.
+
+## 1.0.0
 
 - **Breaking (ADR 0012 §4.3), all languages:** protocol methods are typed by
   the contract: TypeScript `onRequest` / `call` / `notify` and harness `call`

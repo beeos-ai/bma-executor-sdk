@@ -5,6 +5,7 @@
 
 export * from './generated/executor.js'
 export * from './errors.js'
+export type { SessionContext } from './session-context.js'
 export {
   ExecutorClient,
   channelUrl,

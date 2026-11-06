@@ -161,6 +161,7 @@ class Capabilities(TypedDict):
     skills: NotRequired[SkillsCapability]
     workspace: NotRequired[WorkspaceCapability]
     agent: NotRequired[AgentCapability]
+    session_files: NotRequired[SessionFilesCapability]
 
 class ChannelScope(str, Enum):
     """Channels a short-lived executor JWT may open."""
@@ -702,6 +703,10 @@ class SessionEventType(str, Enum):
     SessionStatusRunning = "session.status_running"
     SessionStatusIdle = "session.status_idle"
     SessionError = "session.error"
+
+class SessionFilesCapability(TypedDict):
+    """Executor-owned per-session file layout. The harness derives <root>/<session_id>/uploads (read-only) and <root>/<session_id>/outputs and uses these real paths in prompts, tool descriptions and write rules. Absent: the harness keeps /mnt/session."""
+    root: str
 
 class SessionMemoryResource(TypedDict):
     """A memory store mounted into the session workspace."""

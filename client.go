@@ -268,6 +268,8 @@ type Client struct {
 	// every successful executor.register so agent outboxes resend.
 	agent      *agentRuntime
 	registered chan struct{}
+	// sessionContexts caches SessionContext reads.
+	sessionContexts sessionContextCache
 }
 
 // NewClient validates options and returns a disconnected client.

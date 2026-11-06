@@ -219,6 +219,7 @@ export interface Capabilities {
   skills?: SkillsCapability
   workspace?: WorkspaceCapability
   agent?: AgentCapability
+  session_files?: SessionFilesCapability
 }
 
 /** Channels a short-lived executor JWT may open. */
@@ -938,6 +939,12 @@ export const SessionEventType = {
   SessionStatusIdle: 'session.status_idle',
   SessionError: 'session.error',
 } as const
+
+/** Executor-owned per-session file layout. The harness derives <root>/<session_id>/uploads (read-only) and <root>/<session_id>/outputs and uses these real paths in prompts, tool descriptions and write rules. Absent: the harness keeps /mnt/session. */
+export interface SessionFilesCapability {
+  /** Absolute, already-expanded path on the executor host (no ~). */
+  root: string
+}
 
 /** A memory store mounted into the session workspace. */
 export interface SessionMemoryResource {

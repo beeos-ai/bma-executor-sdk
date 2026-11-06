@@ -1,6 +1,6 @@
 {
   "source_repository": "beeos-ai/beeos-managed-agents",
-  "source_commit": "48a947b3ed6ff978bdc76b19a6c8e16248c09319",
+  "source_commit": "2fe67757a72b5d83ab7845847bb1f1ffda265b19",
   "protocols": [
     "bma.executor.v1",
     "bma.executor.v1.1"
@@ -12,7 +12,7 @@
     "contracts/bma/executor/executor.openrpc.yaml": "05ce2b2832dbee3d48f79c72f7a350ea213aa28f7383de94b363ebb8f60118d3",
     "contracts/bma/executor/schemas/agent.json": "16c07842e5f2cb76b29dad008ba07eb0d676c3dd43ee05caf5476601bb31efcb",
     "contracts/bma/executor/schemas/common.json": "4401fd01f5d730035a726ce542814e4677e9081dfa886b8a2f6533dbde87e7a4",
-    "contracts/bma/executor/schemas/executor.json": "bf1922ea69293da4e73ba915c14ec2544446f48a84965ef0e3f4cec6d8047d30",
+    "contracts/bma/executor/schemas/executor.json": "dc663522e24fc68c1fc3d7510904f5b568132b5e2b664ee40960ec61e80761a9",
     "contracts/bma/executor/schemas/mcp.json": "0fe0ef4b0c5e45cd2e1e00d2ef0f99dd313186a547bbd07f0ddfdf19bd814840",
     "contracts/bma/executor/schemas/process.json": "c04e10d9bf6fb333b77333630e534c62b78a4bd90b1a6141a2efbd9e7191ca54",
     "contracts/bma/executor/schemas/session.json": "3f5bb46b12f2cddc14c5d102b1d63c85bd68922f3fc448a9c0b7fc38f11744b3",
@@ -22,8 +22,8 @@
     "contracts/bma/executor/schemas/workspace.json": "4e8d0ebbab963c9f7f179125a96cb2b89fa79c6a03e3899a1b94c14bed54f5c0"
   },
   "generated": {
-    "generated.go": "15089120041b66881bb400ac9182f5b6af9025f6b11bf61d9b132571b5296340",
-    "python/src/bma_executor_sdk/generated.py": "7770a5bf107f4d2f6bbfeb935895cbc58edc7750feba23e3220688a5723f4165",
-    "typescript/src/generated/executor.ts": "1c3ad60d467b9e6cf1f1a9b9ba7b806d4a66c41f1736bdcdd133d5012eb2a14f"
+    "generated.go": "7431cf3f533e42c000c6a07107dae4ec3f0499fdb25d7b22af8048f96b8d4ca3",
+    "python/src/bma_executor_sdk/generated.py": "96591f1ca2aa42e49535e78f63db9656913b2487eed676192dd0d06e642bbbfc",
+    "typescript/src/generated/executor.ts": "01c8a2b8a726797f1befd889aab5336cce91ee58ad65dbc4b8a37c996157205e"
   }
 }

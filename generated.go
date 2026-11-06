@@ -195,13 +195,14 @@ type Capabilities struct {
 	Chrome      bool             `json:"chrome,omitempty"`
 	ComputerUse bool             `json:"computer_use,omitempty"`
 	// v1 boolean or v1.1 DisplayCapability object.
-	Display   json.RawMessage      `json:"display,omitempty"`
-	Process   *ProcessCapability   `json:"process,omitempty"`
-	Artifacts *ArtifactCapability  `json:"artifacts,omitempty"`
-	Terminal  *TerminalCapability  `json:"terminal,omitempty"`
-	Skills    *SkillsCapability    `json:"skills,omitempty"`
-	Workspace *WorkspaceCapability `json:"workspace,omitempty"`
-	Agent     *AgentCapability     `json:"agent,omitempty"`
+	Display      json.RawMessage         `json:"display,omitempty"`
+	Process      *ProcessCapability      `json:"process,omitempty"`
+	Artifacts    *ArtifactCapability     `json:"artifacts,omitempty"`
+	Terminal     *TerminalCapability     `json:"terminal,omitempty"`
+	Skills       *SkillsCapability       `json:"skills,omitempty"`
+	Workspace    *WorkspaceCapability    `json:"workspace,omitempty"`
+	Agent        *AgentCapability        `json:"agent,omitempty"`
+	SessionFiles *SessionFilesCapability `json:"session_files,omitempty"`
 }
 
 // ChannelScope values. Channels a short-lived executor JWT may open.
@@ -881,6 +882,12 @@ const (
 	SessionEventTypeSessionStatusIdle    = "session.status_idle"
 	SessionEventTypeSessionError         = "session.error"
 )
+
+// SessionFilesCapability Executor-owned per-session file layout. The harness derives <root>/<session_id>/uploads (read-only) and <root>/<session_id>/outputs and uses these real paths in prompts, tool descriptions and write rules. Absent: the harness keeps /mnt/session.
+type SessionFilesCapability struct {
+	// Absolute, already-expanded path on the executor host (no ~).
+	Root string `json:"root"`
+}
 
 // SessionMemoryResource A memory store mounted into the session workspace.
 type SessionMemoryResource struct {
