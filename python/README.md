@@ -2,6 +2,9 @@
 
 [![PyPI](https://img.shields.io/pypi/v/bma-executor-sdk.svg)](https://pypi.org/project/bma-executor-sdk/)
 
+Connect your machine (hands) or your own agent (brain) to BMA — the executor, harness and agent ends of the `bma.executor` protocol.
+[`bma-sdk`](https://github.com/beeos-ai/bma-sdk) drives and uses agents (REST / façade client); `bma-executor-sdk` connects hands or brains to BMA.
+
 asyncio executor (`ExecutorClient`), harness (`Harness`) and agent ends of the BMA Executor Protocol `bma.executor.v1.1`, the counterpart of the [Go `executor` module](../README.md). Protocol types are TypedDicts generated into `bma_executor_sdk/generated.py` from the contract in [`contracts/bma/executor`](../contracts/bma/executor), so messages are plain JSON dicts.
 
 | | |

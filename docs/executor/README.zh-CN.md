@@ -2,6 +2,8 @@
 
 [English](README.md) · [仓库 README](../../README.md)
 
+把你的机器（手）或你自己的 Agent（脑）接入 BMA——`bma.executor` 协议的 executor / harness / agent 三端。[`bma-sdk`](https://github.com/beeos-ai/bma-sdk) 用来驱动和使用 agent（REST / 门面客户端）；`bma-executor-sdk` 用来把手或脑接入 BMA。
+
 本文给要实现执行端（“手”）、驱动执行端（“脑” / harness）或把完整本机 Agent 接入 BMA 的接入方一个完整入口：Executor Protocol 是什么、有哪些部署形态、SDK 怎么分模块、怎么连、现在能用什么。
 
 | 文档 | 内容 |
@@ -138,7 +140,7 @@ bma-executor-sdk（Go）
 
 - SDK 不包含 agent 循环本身（模型调用、规划），那部分用你自己的实现；agent 模块是薄胶水：事件编号/ACK/补报、running/idle 框架、interaction 等待。
 - 三种语言的协议类型都由 [`contracts/bma/executor`](../../contracts/bma/executor) 生成；[`lock.json`](../../contracts/bma/executor/lock.json) 记录契约版本与哈希。
-- bmad 使用由同一份契约生成的自有执行端实现，没有直接依赖 SDK 包；保证来自同一契约 + 跨实现的一致性测试。
+- bmad 基于 Go SDK：BMA 后端的 `internal/machineexecutor` 引用 `github.com/beeos-ai/bma-executor-sdk`，只补机器特有的部分（机器 token、文件传输、Git 凭据、skill 安装、`terminal.*`），经 `internal/bmad` 进入 `cmd/daemon`（即 `bmad`）。其他实现（BMA 服务端、selfhost worker）由同一契约 + 跨实现的一致性测试保证一致。
 
 ### 4.1 连接方式
 
