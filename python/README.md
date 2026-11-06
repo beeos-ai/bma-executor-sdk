@@ -15,7 +15,7 @@ asyncio executor (`ExecutorClient`), harness (`Harness`) and agent ends of the B
 | Integration guide | [docs/executor](../docs/executor/README.md) ([中文](../docs/executor/README.zh-CN.md)) |
 
 ```sh
-pip install bma-executor-sdk==1.0.0
+pip install bma-executor-sdk==1.0.1
 ```
 
 The REST / façade client is the separate package [`bma-sdk`](https://github.com/beeos-ai/bma-sdk/tree/main/python).

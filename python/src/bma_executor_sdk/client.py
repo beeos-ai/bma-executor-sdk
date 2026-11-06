@@ -398,7 +398,9 @@ class ExecutorClient:
         client = self._http_client or httpx.AsyncClient()
         try:
             response = await client.post(
-                f"{self._base_url}/v1/executors/token",
+                # A machine daemon token (no environment id) is exchanged by
+                # bma-api, an environment key by managed-agents.
+                f"{self._base_url}{'/v1' if self._environment_id else '/api/v1'}/executors/token",
                 json={"environment_id": self._environment_id, "executor": self._executor},
                 headers={"Authorization": f"Bearer {self._environment_key}"},
                 timeout=self._request_timeout,
