@@ -103,7 +103,7 @@ func TestCoreRunAsRefusesInProcessFileTools(t *testing.T) {
 	b := attachBrain(t, core, "local")
 	session := readySession(t, b, SessionAssignParams{SessionID: "sess_files", Lease: Lease{Token: "lease"}})
 	for _, tool := range []string{ToolNameRead, ToolNameWrite, ToolNameEdit, ToolNameGlob, ToolNameGrep} {
-		result, err := session.CallTool(ctx, ToolCallParams{Tool: tool, Input: NewToolInput(ToolInput{Path: "x", Content: "y", Pattern: "*"})})
+		result, err := session.CallTool(ctx, ToolCallParams{Tool: tool, Input: NewToolInput(ToolInput{Path: "x", Content: "y", Pattern: "*", OldString: "a", NewString: "b"})})
 		if err != nil || result.Outcome != ToolOutcomeFailed || !strings.Contains(textOf(result), "another OS user") {
 			t.Fatalf("%s with RunAs = %+v err %v, want refused", tool, textOf(result), err)
 		}

@@ -317,10 +317,10 @@ func TestToolCancelCancelsHandlerAndReportsCanceled(t *testing.T) {
 	})
 
 	client := newTestClient(t, ts.server.URL, nil)
-	client.OnToolCall(func(ctx context.Context, _ ToolCallParams) (ToolResultParams, error) {
+	client.Tools.Bash.Handle(func(ctx context.Context, _ BashInput, _ ToolContext) (ToolOutput, error) {
 		atomic.AddInt32(&calls, 1)
 		<-ctx.Done()
-		return ToolResultParams{}, ctx.Err()
+		return ToolOutput{}, ctx.Err()
 	})
 	startTestClient(t, client)
 	ts.wait(t)
@@ -381,13 +381,8 @@ func TestToolResultRetriesOnBusy(t *testing.T) {
 		options.ToolResultRetryBaseDelay = time.Millisecond
 		options.OnToolResultLost = func(_ ToolResultParams, err error) { lost <- err }
 	})
-	client.OnToolCall(func(_ context.Context, params ToolCallParams) (ToolResultParams, error) {
-		return ToolResultParams{
-			SessionID:  params.SessionID,
-			ToolCallID: params.ToolCallID,
-			Outcome:    ToolOutcomeSucceeded,
-			Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "ok"}},
-		}, nil
+	client.Tools.Bash.Handle(func(context.Context, BashInput, ToolContext) (ToolOutput, error) {
+		return TextOutput("ok"), nil
 	})
 	startTestClient(t, client)
 	ts.wait(t)
@@ -442,13 +437,8 @@ func TestToolResultReportsLostAfterRetries(t *testing.T) {
 			lost <- lostResult{params: params, err: err}
 		}
 	})
-	client.OnToolCall(func(_ context.Context, params ToolCallParams) (ToolResultParams, error) {
-		return ToolResultParams{
-			SessionID:  params.SessionID,
-			ToolCallID: params.ToolCallID,
-			Outcome:    ToolOutcomeSucceeded,
-			Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "ok"}},
-		}, nil
+	client.Tools.Bash.Handle(func(context.Context, BashInput, ToolContext) (ToolOutput, error) {
+		return TextOutput("ok"), nil
 	})
 	startTestClient(t, client)
 
@@ -588,14 +578,9 @@ func TestDuplicateToolCallRunsOnce(t *testing.T) {
 	})
 
 	client := newTestClient(t, ts.server.URL, nil)
-	client.OnToolCall(func(_ context.Context, params ToolCallParams) (ToolResultParams, error) {
+	client.Tools.Bash.Handle(func(context.Context, BashInput, ToolContext) (ToolOutput, error) {
 		atomic.AddInt32(&calls, 1)
-		return ToolResultParams{
-			SessionID:  params.SessionID,
-			ToolCallID: params.ToolCallID,
-			Outcome:    ToolOutcomeSucceeded,
-			Content:    []ContentBlock{{Type: ContentBlockTypeText, Text: "ok"}},
-		}, nil
+		return TextOutput("ok"), nil
 	})
 	startTestClient(t, client)
 	ts.wait(t)

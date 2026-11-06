@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import parse_qsl, urlsplit
 
 from ._rpc import ExecutorError, NotConnectedError, Peer, RPCError, rpc_error
@@ -27,7 +27,9 @@ from .generated import (
     METHOD_EXECUTOR_DRAIN,
     METHOD_EXECUTOR_HEARTBEAT,
     METHOD_EXECUTOR_REGISTER,
+    METHOD_INTERACTION_RESPONSE,
     METHOD_SESSION_ASSIGN,
+    METHOD_SESSION_CLOSE,
     METHOD_SESSION_ENDED,
     METHOD_SESSION_EVENT,
     METHOD_SESSION_READY,
@@ -37,32 +39,39 @@ from .generated import (
     METHOD_TOOL_CANCEL,
     METHOD_TOOL_PROGRESS,
     METHOD_TOOL_RESULT,
-    METHOD_INTERACTION_RESPONSE,
-    METHOD_SESSION_CLOSE,
     METHOD_TURN_CANCEL,
     METHOD_TURN_INPUT,
     METHOD_TURN_START,
     Ack,
     AgentCapability,
+    BashInput,
+    EditInput,
     ExecutorDrainResult,
+    ExecutorInfo,
+    GlobInput,
+    GrepInput,
     InteractionResponseParams,
     InteractionResponseResult,
+    JsonRpcErrorCode,
+    ListFilesInput,
+    ReadInput,
+    SessionAssignParams,
     SessionCloseParams,
     SessionCloseResult,
+    SessionEventParams,
+    SessionEventResult,
+    SessionStatusParams,
+    ToolCallParams,
+    ToolName,
+    ToolPermission,
+    ToolProgressParams,
+    ToolResultParams,
     TurnCancelParams,
     TurnCancelResult,
     TurnInputParams,
     TurnStartParams,
     TurnStartResult,
-    ExecutorInfo,
-    JsonRpcErrorCode,
-    SessionAssignParams,
-    SessionEventParams,
-    SessionEventResult,
-    SessionStatusParams,
-    ToolCallParams,
-    ToolProgressParams,
-    ToolResultParams,
+    WriteInput,
 )
 from .transport import (
     CLOSE_NORMAL,
@@ -83,6 +92,8 @@ if TYPE_CHECKING:
 DEFAULT_HARNESS_HEARTBEAT_INTERVAL = 15.0
 DEFAULT_HARNESS_LEASE_TTL = 60.0
 _MAX_REMEMBERED_EVENT_IDS = 1024
+
+_I = TypeVar("_I")
 
 
 class SessionEndedError(ExecutorError):
@@ -453,6 +464,39 @@ class Executor:
         return await self._call(METHOD_INTERACTION_RESPONSE, params)
 
 
+class HarnessToolSlot(Generic[_I]):
+    """``session.tools.<name>``: one built-in tool."""
+
+    def __init__(self, session: Session, name: str) -> None:
+        self._session = session
+        self.name = name
+
+    async def call(
+        self, input: _I, *, tool_call_id: str = "", deadline_ms: int | None = None, permission: ToolPermission | None = None
+    ) -> ToolResultParams:
+        return await self._session.call_tool(
+            self.name, input, tool_call_id=tool_call_id, deadline_ms=deadline_ms, permission=permission  # type: ignore[arg-type]
+        )
+
+
+class HarnessTools:
+    """``session.tools.<name>.call(input)``: one typed entry per built-in tool;
+    computer_observe and computer_action get one once the contract defines
+    their input members."""
+
+    bash: HarnessToolSlot[BashInput]
+    read: HarnessToolSlot[ReadInput]
+    write: HarnessToolSlot[WriteInput]
+    edit: HarnessToolSlot[EditInput]
+    glob: HarnessToolSlot[GlobInput]
+    grep: HarnessToolSlot[GrepInput]
+    list_files: HarnessToolSlot[ListFilesInput]
+
+    def __init__(self, session: Session) -> None:
+        for name in HarnessTools.__annotations__:
+            setattr(self, name, HarnessToolSlot(session, name))
+
+
 class Session:
     """One session bound to an executor."""
 
@@ -467,6 +511,8 @@ class Session:
         self._calls: dict[str, asyncio.Future[ToolResultParams]] = {}
         self._mcp: dict[str, HarnessMCPChannel] = {}
         self._mcp_changed = asyncio.Event()
+        self.tools = HarnessTools(self)
+        """Typed tool calls: ``session.tools.bash.call({"command": "ls"})``."""
 
     @property
     def ended(self) -> bool:
@@ -488,15 +534,31 @@ class Session:
         if not self._ready.is_set():
             raise SessionEndedError()
 
-    async def call_tool(self, params: ToolCallParams) -> ToolResultParams:
+    async def call_tool(
+        self,
+        tool: ToolName | str,
+        input: Mapping[str, Any],
+        *,
+        tool_call_id: str = "",
+        deadline_ms: int | None = None,
+        permission: ToolPermission | None = None,
+    ) -> ToolResultParams:
         """Send tool.call and wait for its tool.result. Idempotent by
         tool_call_id (generated when empty): repeating an id joins the in-flight
         call or returns the recorded result. Canceling the awaiting task stops
-        waiting only; use cancel_tool to abort the tool."""
-        params = dict(params, session_id=self.id)  # type: ignore[assignment]
-        if not params.get("tool_call_id"):
-            params["tool_call_id"] = f"call_{_random_id(8)}"
-        call_id = params["tool_call_id"]
+        waiting only; use cancel_tool to abort the tool. ``session.tools.<name>.call``
+        is the typed form."""
+        call_id = tool_call_id or f"call_{_random_id(8)}"
+        params: dict[str, Any] = {
+            "session_id": self.id,
+            "tool_call_id": call_id,
+            "tool": tool.value if isinstance(tool, ToolName) else tool,
+            "input": dict(input),
+        }
+        if deadline_ms is not None:
+            params["deadline_ms"] = deadline_ms
+        if permission is not None:
+            params["permission"] = permission
         future = self._calls.get(call_id)
         if future is None:
             if self.end_reason:

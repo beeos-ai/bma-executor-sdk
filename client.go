@@ -81,9 +81,6 @@ type LogEvent struct {
 	Err     error
 }
 
-// ToolCallHandler handles an inbound tool.call and returns the result to report.
-type ToolCallHandler func(ctx context.Context, params ToolCallParams) (ToolResultParams, error)
-
 // SessionAssignHandler handles an inbound session.assign.
 type SessionAssignHandler func(ctx context.Context, params SessionAssignParams) (SessionAssignResult, error)
 
@@ -229,6 +226,10 @@ func RequestID(ctx context.Context) string {
 
 // Client is an outbound executor client.
 type Client struct {
+	// Tools has one typed slot per built-in tool: Tools.Bash.Handle(...).
+	// Capabilities shell, files and computer_use follow what is registered.
+	Tools Tools
+
 	options    Options
 	httpClient *http.Client
 
@@ -254,7 +255,7 @@ type Client struct {
 	completedToolResults map[string]struct{}
 	seenToolCalls        map[string]struct{}
 	runningToolCalls     map[string]*runningToolCall
-	toolCallHandler      ToolCallHandler
+	toolHandlers         map[string]toolHandler
 	toolCallAccept       func(ToolCallParams) error
 	afterToolResults     []func(ToolCallParams)
 	sessionsLost         []func([]string)
@@ -262,7 +263,6 @@ type Client struct {
 	sessionStopHandler   SessionStopHandler
 	drainHandler         DrainHandler
 	requestHandlers      map[string]func(context.Context, json.RawMessage) (any, error)
-	notificationHandlers map[string]func(json.RawMessage)
 	nextID               uint64
 	// agent is set by ServeAgent; registered is closed and replaced after
 	// every successful executor.register so agent outboxes resend.
@@ -284,7 +284,9 @@ func NewClient(options Options) (*Client, error) {
 	if options.BaseURL == "" {
 		options.BaseURL = DefaultBaseURL
 	}
-	options.BaseURL = strings.TrimRight(options.BaseURL, "/")
+	// BaseURL is the deployment origin (as BMA_BASE_URL in bma-sdk); a
+	// trailing /api/v1 is dropped so the /v1/executors paths are not nested.
+	options.BaseURL = strings.TrimSuffix(strings.TrimRight(options.BaseURL, "/"), "/api/v1")
 	if options.HTTPClient == nil {
 		options.HTTPClient = http.DefaultClient
 	}
@@ -316,7 +318,7 @@ func NewClient(options Options) (*Client, error) {
 		options.ToolResultRetryBaseDelay = DefaultToolResultRetryBaseDelay
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Client{
+	client := &Client{
 		options:              options,
 		httpClient:           options.HTTPClient,
 		rootCtx:              ctx,
@@ -331,9 +333,11 @@ func NewClient(options Options) (*Client, error) {
 		seenToolCalls:        make(map[string]struct{}),
 		runningToolCalls:     make(map[string]*runningToolCall),
 		requestHandlers:      make(map[string]func(context.Context, json.RawMessage) (any, error)),
-		notificationHandlers: make(map[string]func(json.RawMessage)),
 		registered:           make(chan struct{}),
-	}, nil
+		toolHandlers:         make(map[string]toolHandler),
+	}
+	client.Tools = newTools(client)
+	return client, nil
 }
 
 // Start fetches an executor token, connects, registers, and starts heartbeats.
@@ -457,11 +461,51 @@ func (c *Client) ActiveSessions() []string {
 	return c.sessionIDsLocked()
 }
 
-// OnToolCall registers the tool.call handler.
-func (c *Client) OnToolCall(handler ToolCallHandler) {
+// setToolHandler registers a tool handler; on a registered connection the
+// changed capabilities are announced with executor.capabilities.update.
+func (c *Client) setToolHandler(name string, handler toolHandler) {
+	c.mu.Lock()
+	c.toolHandlers[name] = handler
+	registered := c.state == ConnectionStateReady || c.state == ConnectionStateDraining
+	c.mu.Unlock()
+	if registered {
+		params := ExecutorCapabilitiesUpdateParams{Capabilities: c.registeredCapabilities()}
+		if err := Notifications.ExecutorCapabilitiesUpdate.Notify(c.rootCtx, c, params); err != nil {
+			c.log(LogWarn, "executor.capabilities.update not sent; the next registration carries it", err)
+		}
+	}
+}
+
+// registeredCapabilities is Options.Capabilities with shell and files
+// enabled when a handler of the group is registered and the option does not
+// turn the group off (a ShellCapability / FilesCapability passed with
+// Enabled false; MCP's RegisteredTool.enabled), so nothing unimplemented is
+// advertised. computer_use stays off: its tools have no slot yet.
+func (c *Client) registeredCapabilities() Capabilities {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.toolCallHandler = handler
+	has := func(names ...string) bool {
+		for _, name := range names {
+			if c.toolHandlers[name] != nil {
+				return true
+			}
+		}
+		return false
+	}
+	capabilities := c.options.Capabilities
+	shell := ShellCapability{Enabled: true}
+	if capabilities.Shell != nil {
+		shell = *capabilities.Shell
+	}
+	shell.Enabled = shell.Enabled && has(ToolNameBash)
+	files := FilesCapability{Enabled: true}
+	if capabilities.Files != nil {
+		files = *capabilities.Files
+	}
+	files.Enabled = files.Enabled && has(ToolNameRead, ToolNameWrite, ToolNameEdit, ToolNameGlob, ToolNameGrep, ToolNameListFiles)
+	capabilities.Shell, capabilities.Files = &shell, &files
+	capabilities.ComputerUse = false
+	return capabilities
 }
 
 // OnToolCallAccept registers a check run before a tool.call is acknowledged.
@@ -511,23 +555,18 @@ func (c *Client) OnDrain(handler DrainHandler) {
 	c.drainHandler = handler
 }
 
-// OnRequest registers a handler for a harness-to-executor request method.
-// RequestID(ctx) is the request's JSON-RPC id.
-func (c *Client) OnRequest(method string, handler func(context.Context, json.RawMessage) (any, error)) {
+// onRequest registers the raw handler of a harness-to-executor request;
+// users register typed handlers with Requests.<Method>.Handle. RequestID(ctx)
+// is the request's JSON-RPC id.
+func (c *Client) onRequest(method string, handler func(context.Context, json.RawMessage) (any, error)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.requestHandlers[method] = handler
 }
 
-// OnNotification registers a handler for a control-channel notification.
-func (c *Client) OnNotification(method string, handler func(json.RawMessage)) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.notificationHandlers[method] = handler
-}
-
-// Call implements generated RPC: it sends a JSON-RPC request and decodes the result.
-func (c *Client) Call(ctx context.Context, method string, params any, result any) error {
+// callInto sends a JSON-RPC request and decodes the result; users call
+// typed methods with Calls.<Method>.Call.
+func (c *Client) callInto(ctx context.Context, method string, params any, result any) error {
 	raw, err := c.call(ctx, method, params)
 	if err != nil {
 		return err
@@ -544,8 +583,9 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 	return nil
 }
 
-// Notify implements generated RPC: it sends a JSON-RPC notification.
-func (c *Client) Notify(ctx context.Context, method string, params any) error {
+// notify sends a JSON-RPC notification; users send typed notifications with
+// Notifications.<Method>.Notify.
+func (c *Client) notify(ctx context.Context, method string, params any) error {
 	conn := c.currentConn()
 	if conn == nil {
 		return ErrNotConnected
@@ -612,7 +652,7 @@ func (c *Client) SessionEnded(ctx context.Context, params SessionEndedParams) (A
 func (c *Client) callRetrying(ctx context.Context, method string, params, out any) error {
 	var lastErr error
 	for attempt := 1; attempt <= c.options.ToolResultRetryAttempts; attempt++ {
-		err := c.Call(ctx, method, params, out)
+		err := c.callInto(ctx, method, params, out)
 		if err == nil {
 			return nil
 		}
@@ -792,14 +832,14 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 		Protocol:      c.options.Protocol,
 		EnvironmentID: c.options.EnvironmentID,
 		Executor:      c.options.Executor,
-		Capabilities:  c.options.Capabilities,
+		Capabilities:  c.registeredCapabilities(),
 		Resume:        c.resumeState(),
 	}
 	if c.agent != nil {
 		params.Capabilities.Agent = &c.agent.capability
 	}
 	var result ExecutorRegisterResult
-	if err := c.Call(ctx, MethodExecutorRegister, params, &result); err != nil {
+	if err := c.callInto(ctx, MethodExecutorRegister, params, &result); err != nil {
 		c.dropConnection(conn)
 		return err
 	}
@@ -856,7 +896,7 @@ func (c *Client) refreshTokenLoop(conn *connection, token ExecutorTokenResponse)
 		fresh, err := c.fetchToken(c.rootCtx)
 		if err == nil {
 			var result ExecutorTokenRefreshResult
-			err = c.Call(c.rootCtx, MethodExecutorTokenRefresh, ExecutorTokenRefreshParams{Token: fresh.Token}, &result)
+			err = c.callInto(c.rootCtx, MethodExecutorTokenRefresh, ExecutorTokenRefreshParams{Token: fresh.Token}, &result)
 			if err == nil {
 				c.mu.Lock()
 				if c.conn == conn {
@@ -1011,7 +1051,14 @@ func (c *Client) dispatchRequest(conn *connection, id string, method string, par
 		}
 		c.mu.Lock()
 		accept := c.toolCallAccept
+		_, handled := c.toolHandlers[call.Tool]
 		c.mu.Unlock()
+		if accept == nil && !handled {
+			// As Core: a tool without a handler is refused before the ack.
+			c.respondHandlerError(conn, id, &RPCError{Code: CodeCapabilityUnavailable, Message: "capability_unavailable",
+				Data: &JSONRPCErrorData{Capability: "tool:" + call.Tool}})
+			return
+		}
 		if accept != nil {
 			if err := accept(call); err != nil {
 				c.respondHandlerError(conn, id, err)
@@ -1098,16 +1145,11 @@ func unregisteredMethodError(method string) *RPCError {
 		Data: &JSONRPCErrorData{Capability: spec.Capability}}
 }
 
+// dispatchNotification handles executor.close, the only harness-to-executor
+// notification of the contract.
 func (c *Client) dispatchNotification(method string, params json.RawMessage) {
 	if method == MethodExecutorClose {
 		c.finish(nil, 1000, "executor.close")
-		return
-	}
-	c.mu.Lock()
-	handler, ok := c.notificationHandlers[method]
-	c.mu.Unlock()
-	if ok {
-		handler(params)
 	}
 }
 
@@ -1210,15 +1252,19 @@ func (c *Client) cancelToolCall(params ToolCancelParams) ToolCancelResult {
 
 func (c *Client) runToolCall(ctx context.Context, params ToolCallParams) {
 	c.mu.Lock()
-	handler := c.toolCallHandler
+	handler := c.toolHandlers[params.Tool]
 	c.mu.Unlock()
 
 	var result ToolResultParams
-	if handler == nil {
-		result = failedToolResult(params, "no tool handler registered")
+	if handler == nil { // Core's OnToolCallAccept admitted a tool it serves differently
+		result = failedToolResult(params, "no handler registered for tool "+params.Tool)
 	} else {
 		var err error
-		result, err = handler(ctx, params)
+		result, err = handler(ctx, params, func(message string) {
+			if err := c.notify(c.rootCtx, MethodToolProgress, ToolProgressParams{SessionID: params.SessionID, ToolCallID: params.ToolCallID, Message: message}); err != nil {
+				c.log(LogDebug, "tool.progress not sent", err)
+			}
+		})
 		if err != nil {
 			result = failedToolResult(params, err.Error())
 		}
@@ -1357,7 +1403,7 @@ func (c *Client) heartbeat() {
 		params.Load = c.options.HeartbeatLoad()
 	}
 	var result ExecutorHeartbeatResult
-	if err := c.Call(c.rootCtx, MethodExecutorHeartbeat, params, &result); err != nil {
+	if err := c.callInto(c.rootCtx, MethodExecutorHeartbeat, params, &result); err != nil {
 		c.log(LogWarn, "executor heartbeat failed", err)
 		return
 	}

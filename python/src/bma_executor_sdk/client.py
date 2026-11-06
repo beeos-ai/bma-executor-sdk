@@ -11,12 +11,14 @@ import asyncio
 import random as _random
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import httpx
 
+from ._methods import Call, Notification, Request
 from ._rpc import ClientStoppedError, NotConnectedError, Peer, RPCError
 from .generated import (
+    METHOD_EXECUTOR_CAPABILITIES_UPDATE,
     METHOD_EXECUTOR_CLOSE,
     METHOD_EXECUTOR_DRAIN,
     METHOD_EXECUTOR_HEARTBEAT,
@@ -28,6 +30,7 @@ from .generated import (
     METHOD_SESSION_STOP,
     METHOD_TOOL_CALL,
     METHOD_TOOL_CANCEL,
+    METHOD_TOOL_PROGRESS,
     METHOD_TOOL_RESULT,
     METHODS,
     Ack,
@@ -52,6 +55,7 @@ from .generated import (
     ToolOutcome,
     ToolResultParams,
 )
+from .tools import ExecutorTools, ToolContext, ToolError, missing_required, render
 from .transport import CLOSE_NORMAL, MAX_FRAME_BYTES, TERMINAL_CLOSE_CODES, ChannelClosed, Connection, Dialer, channel_url, dial
 
 if TYPE_CHECKING:
@@ -74,12 +78,11 @@ _MAX_RECONNECT_DELAY = 30.0
 _TOKEN_REFRESH_AT = 0.7
 
 TokenSource = Callable[[], Awaitable[ExecutorTokenResponse]]
-ToolCallHandler = Callable[[ToolCallParams], Awaitable[ToolResultParams]]
 SessionAssignHandler = Callable[[SessionAssignParams], Awaitable[SessionAssignResult]]
 SessionStopHandler = Callable[[SessionStopParams], Awaitable[SessionStopResult]]
 DrainHandler = Callable[[ExecutorDrainParams], Awaitable[ExecutorDrainResult]]
-RawRequestHandler = Callable[[Any], Awaitable[Any]]
-RawNotificationHandler = Callable[[Any], None]
+P = TypeVar("P")
+R = TypeVar("R")
 
 
 @dataclass(frozen=True)
@@ -147,7 +150,9 @@ class ExecutorClient:
         self._executor = executor
         self._capabilities: Capabilities = capabilities or {}
         self._environment_key = environment_key
-        self._base_url = base_url.rstrip("/")
+        # The deployment origin (as BMA_BASE_URL in bma-sdk); a trailing
+        # /api/v1 is dropped so the /v1/executors paths are not nested.
+        self._base_url = base_url.rstrip("/").removesuffix("/api/v1")
         self._ws_url = ws_url
         self._token_source = token_source
         self._dialer: Dialer = dialer or dial
@@ -176,12 +181,12 @@ class ExecutorClient:
         self._completed_tool_results: dict[str, None] = {}
         self._seen_tool_calls: dict[str, None] = {}
         self._running_tool_calls: dict[str, _RunningToolCall] = {}
-        self._tool_call_handler: ToolCallHandler | None = None
+        self.tools = ExecutorTools(self._tools_changed)
+        """Typed tool handlers; the shell and files capabilities follow what is registered."""
         self._session_assign_handler: SessionAssignHandler | None = None
         self._session_stop_handler: SessionStopHandler | None = None
         self._drain_handler: DrainHandler | None = None
-        self._request_handlers: dict[str, RawRequestHandler] = {}
-        self._notification_handlers: dict[str, RawNotificationHandler] = {}
+        self._request_handlers: dict[str, Callable[[Any], Awaitable[Any]]] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
         # Set after every successful executor.register, then replaced, so agent
         # outboxes resend after a reconnect.
@@ -249,11 +254,6 @@ class ExecutorClient:
 
     # --- handlers ---
 
-    def on_tool_call(self, handler: ToolCallHandler) -> None:
-        """Register the tool.call handler. tool.cancel cancels the handler's
-        task; the client then reports outcome=canceled."""
-        self._tool_call_handler = handler
-
     def on_session_assign(self, handler: SessionAssignHandler) -> None:
         self._session_assign_handler = handler
 
@@ -263,12 +263,12 @@ class ExecutorClient:
     def on_drain(self, handler: DrainHandler) -> None:
         self._drain_handler = handler
 
-    def on_request(self, method: str, handler: RawRequestHandler) -> None:
-        """Register a handler for another harness-to-executor request method."""
-        self._request_handlers[method] = handler
-
-    def on_notification(self, method: str, handler: RawNotificationHandler) -> None:
-        self._notification_handlers[method] = handler
+    def on_request(self, method: Request[P, R], handler: Callable[[P], Awaitable[R]]) -> None:
+        """Serve a harness-to-executor request (process.*, terminal.*,
+        skill.install, workspace.backup) with the contract's params and result
+        types: ``client.on_request(methods.PROCESS_LIST, handler)``. Raise
+        RPCError to answer with a JSON-RPC error."""
+        self._request_handlers[method.method] = handler
 
     def serve_agent(self, handler: AgentHandler, capability: AgentCapability | None = None) -> None:
         """Advertise the agent capability and route the agent methods to
@@ -279,18 +279,53 @@ class ExecutorClient:
 
     # --- RPC ---
 
-    async def call(self, method: str, params: Any) -> Any:
-        """Send a JSON-RPC request and return its result."""
+    async def call(self, method: Call[P, R], params: P) -> R:
+        """Send an executor-to-harness request typed by the contract:
+        ``await client.call(methods.SESSION_EVENT, params)``."""
+        result: R = await self._call(method.method, params)
+        return result
+
+    async def notify(self, method: Notification[P], params: P) -> None:
+        """Send an executor-to-harness notification typed by the contract."""
+        await self._notify(method.method, params)
+
+    async def _call(self, method: str, params: Any) -> Any:
         peer = self._peer
         if peer is None:
             raise NotConnectedError()
         return await peer.call(method, params, self._request_timeout)
 
-    async def notify(self, method: str, params: Any) -> None:
+    async def _notify(self, method: str, params: Any) -> None:
         peer = self._peer
         if peer is None:
             raise NotConnectedError()
         await peer.notify(method, params)
+
+    def _registered_capabilities(self) -> dict[str, Any]:
+        """The configured capabilities with shell and files enabled while a
+        handler of the group is registered and the option does not turn the
+        group off (``enabled: False`` wins, as MCP's RegisteredTool.enabled),
+        so nothing unimplemented is advertised. computer_use stays off: its
+        tools have no slot yet."""
+        capabilities: dict[str, Any] = dict(self._capabilities)
+        tools = self.tools
+        shell = dict(capabilities.get("shell") or {})
+        shell["enabled"] = bool(shell.get("enabled", True)) and tools.registered("bash")
+        files = dict(capabilities.get("files") or {})
+        files["enabled"] = bool(files.get("enabled", True)) and tools.registered("read", "write", "edit", "glob", "grep", "list_files")
+        capabilities["shell"], capabilities["files"], capabilities["computer_use"] = shell, files, False
+        if self._agent is not None:
+            capabilities["agent"] = self._agent.capability
+        return capabilities
+
+    def _tools_changed(self) -> None:
+        """A handler registered on a registered connection is announced with
+        executor.capabilities.update (as an MCP server sends
+        tools/list_changed for a tool registered after connecting)."""
+        if self._peer is None or self._state not in (ConnectionState.Ready, ConnectionState.Draining):
+            return
+        params = {"capabilities": self._registered_capabilities()}
+        self._spawn(_best_effort(self._notify(METHOD_EXECUTOR_CAPABILITIES_UPDATE, params)))
 
     async def report_tool_result(self, params: ToolResultParams) -> Ack:
         """Send tool.result once per tool_call_id, retrying retryable failures
@@ -303,7 +338,7 @@ class ExecutorClient:
         last_error: BaseException | None = None
         for attempt in range(1, self._tool_result_retry_attempts + 1):
             try:
-                return await self.call(METHOD_TOOL_RESULT, params)
+                return await self._call(METHOD_TOOL_RESULT, params)
             except (RPCError, NotConnectedError, TimeoutError) as error:
                 last_error = error
                 if attempt == self._tool_result_retry_attempts or not _retryable_tool_result_error(error):
@@ -319,11 +354,11 @@ class ExecutorClient:
 
     async def session_ready(self, params: SessionReadyParams) -> Ack:
         """Report that the session is prepared (after workspace and MCP setup)."""
-        return await self.call(METHOD_SESSION_READY, params)
+        return await self._call(METHOD_SESSION_READY, params)
 
     async def session_ended(self, params: SessionEndedParams) -> Ack:
         """Report that every process and MCP server of the session stopped."""
-        result: Ack = await self.call(METHOD_SESSION_ENDED, params)
+        result: Ack = await self._call(METHOD_SESSION_ENDED, params)
         self._sessions.discard(params["session_id"])
         return result
 
@@ -387,9 +422,7 @@ class ExecutorClient:
         peer = Peer(conn, id_prefix="req", on_request=self._dispatch_request, on_notification=self._dispatch_notification, on_log=self._log)
         self._peer = peer
         self._spawn(self._read(peer))
-        capabilities: dict[str, Any] = dict(self._capabilities)
-        if self._agent is not None:
-            capabilities["agent"] = self._agent.capability
+        capabilities = self._registered_capabilities()
         params: dict[str, Any] = {
             "protocol": PROTOCOL_V11,
             "environment_id": self._environment_id,
@@ -433,7 +466,7 @@ class ExecutorClient:
                 return
             try:
                 fresh = await self._fetch_token()
-                await self.call(METHOD_EXECUTOR_TOKEN_REFRESH, {"token": fresh["token"]})
+                await self._call(METHOD_EXECUTOR_TOKEN_REFRESH, {"token": fresh["token"]})
             except RPCError as error:
                 if error.code in (-32601, -32012):
                     self._log("info", "harness does not refresh executor tokens; reconnecting at expiry")
@@ -518,7 +551,7 @@ class ExecutorClient:
                 if load is not None:
                     params["load"] = load
             try:
-                result = await self.call(METHOD_EXECUTOR_HEARTBEAT, params)
+                result = await self._call(METHOD_EXECUTOR_HEARTBEAT, params)
             except (RPCError, NotConnectedError, TimeoutError) as error:
                 self._log("warn", "executor heartbeat failed", error)
                 continue
@@ -531,6 +564,9 @@ class ExecutorClient:
         if method == METHOD_TOOL_CALL:
             if not params.get("tool_call_id") or not params.get("session_id"):
                 raise RPCError(JsonRpcErrorCode.InvalidParams, "invalid tool.call params")
+            if self.tools.get(params.get("tool", "")) is None:
+                # As Go Core: a tool without a handler is refused before the ack.
+                raise RPCError(JsonRpcErrorCode.CapabilityUnavailable, "capability_unavailable", {"capability": f"tool:{params.get('tool')}"})
             if self._begin_tool_call(params):  # type: ignore[arg-type]
                 return {"accepted": True}
             self._log("debug", f"duplicate tool.call for {params['tool_call_id']} ignored")
@@ -567,9 +603,7 @@ class ExecutorClient:
                 peer.fail_pending(ClientStoppedError())
                 self._spawn(peer.conn.close(CLOSE_NORMAL, "executor.close"))
             return
-        handler = self._notification_handlers.get(method)
-        if handler is not None:
-            handler(params)
+        # executor.close is the only harness-to-executor notification.
 
     async def _assign_session(self, params: SessionAssignParams) -> SessionAssignResult:
         if self._state == ConnectionState.Draining:
@@ -604,14 +638,24 @@ class ExecutorClient:
 
     async def _run_tool_call(self, params: ToolCallParams, running: _RunningToolCall) -> None:
         call_id = params["tool_call_id"]
-        handler = self._tool_call_handler
+        handler = self.tools.get(params["tool"])
         result: ToolResultParams
+        loop = asyncio.get_running_loop()
+        started = loop.time()
         if running.canceled:
             result = _canceled_tool_result(params, running.reason)
         elif handler is None:
-            result = _failed_tool_result(params, "no tool handler registered")
+            result = _failed_tool_result(params, f"no handler registered for tool {params['tool']}")
+        elif (missing := missing_required(params["tool"], params.get("input"))) is not None:
+            result = _failed_tool_result(params, f"{params['tool']} requires {missing}")
         else:
-            inner = running.handler = asyncio.ensure_future(handler(params))
+            context = ToolContext(
+                session_id=params["session_id"],
+                tool_call_id=call_id,
+                progress=lambda message: self._progress(params, message),
+                permission=params.get("permission"),
+            )
+            inner = running.handler = asyncio.ensure_future(handler(params.get("input") or {}, context))
             deadline_ms = params.get("deadline_ms") or 0
             done, _ = await asyncio.wait({inner}, timeout=deadline_ms / 1000 if deadline_ms > 0 else None)
             if not done:
@@ -620,10 +664,14 @@ class ExecutorClient:
                 result = _failed_tool_result(params, "tool.call deadline_ms exceeded")
             elif inner.cancelled():
                 result = _failed_tool_result(params, "tool handler canceled")
+            elif isinstance(inner.exception(), ToolError):
+                error = inner.exception()
+                result = {"outcome": "succeeded", "is_error": True, "content": error.content}  # type: ignore[union-attr,typeddict-item]
             elif inner.exception() is not None:
                 result = _failed_tool_result(params, str(inner.exception()))
             else:
-                result = dict(inner.result())  # type: ignore[assignment]
+                result = render(inner.result())  # type: ignore[assignment]
+            result["duration_ms"] = int((loop.time() - started) * 1000)
         self._running_tool_calls.pop(call_id, None)
         if running.canceled:
             result = _canceled_tool_result(params, running.reason)
@@ -637,6 +685,13 @@ class ExecutorClient:
             self._log("error", f"failed to report tool result for {call_id}", error)
             if self._on_tool_result_lost is not None:
                 self._on_tool_result_lost(result, error)
+
+    def _progress(self, params: ToolCallParams, message: str) -> None:
+        peer = self._peer
+        if peer is None:
+            return
+        progress = {"session_id": params["session_id"], "tool_call_id": params["tool_call_id"], "message": message}
+        self._spawn(_best_effort(peer.notify(METHOD_TOOL_PROGRESS, progress)))
 
     def _tool_result_retry_delay(self, attempt: int) -> float:
         delay = min(self._tool_result_retry_base_delay * (2 ** (attempt - 1)), _MAX_TOOL_RESULT_RETRY_DELAY)
@@ -669,6 +724,13 @@ class MCPChannel:
 
     async def close(self) -> None:
         await self._conn.close(CLOSE_NORMAL, "mcp channel closed")
+
+
+async def _best_effort(coro: Awaitable[Any]) -> None:
+    try:
+        await coro
+    except Exception:  # tool.progress is best-effort by contract
+        pass
 
 
 def _remember(tracked: dict[str, None], key: str) -> None:

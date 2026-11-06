@@ -19,6 +19,9 @@ export interface AgentCapability {
   file_inputs?: boolean
   /** Concurrent agent sessions. turn.start for a new session beyond it answers -32009 executor_busy. */
   max_sessions?: number
+  /** The executor keeps the state of its turns across a process restart. When it registers again without a session whose turn was running, the platform starts the same turn again in a new event epoch (turn.start with the same turn_id, input_id and executor_session_ref, then the turn.input the turn already received) and the executor continues the turn from its own state. Without it such a turn ends failed (session.error, session.status_idle retries_exhausted) and is not sent again: an executor without that state would run the turn again from its opening input and repeat tool calls whose effects already happened. */
+  turn_resume?: boolean
+  harness?: AgentHarnessCapability
 }
 
 /** Typed session error. */
@@ -61,6 +64,34 @@ export const AgentEventType = {
   SessionStatusIdle: 'session.status_idle',
   SessionError: 'session.error',
 } as const
+
+/** What the third-party agent the executor hosts (for example an ACP agent) supports; an omitted boolean is false. Sent with executor.capabilities.update once the agent has started; absent until then and after a reconnect until the next turn. Informational: the platform records it and reflects it in the session harness capabilities. */
+export interface AgentHarnessCapability {
+  /** Agent profile id, for example dsh. */
+  id: string
+  /** Installed agent package version. */
+  version: string
+  /** Protocol the executor speaks to the agent, for example acp/1. */
+  protocol?: string
+  /** Name the agent reported about itself (ACP initialize agentInfo.name). */
+  agent_name?: string
+  /** Version the agent reported about itself (ACP initialize agentInfo.version); may differ from version. */
+  agent_version?: string
+  /** token: agent.message and agent.thinking stream as deltas. committed: each message arrives whole once the agent committed it. */
+  streaming?: 'token' | 'committed'
+  /** A conversation continues in a new agent process (ACP session/resume). */
+  session_resume?: boolean
+  /** A conversation can be reloaded with its history replayed (ACP session/load). */
+  session_load?: boolean
+  /** The agent accepts image input. */
+  image_inputs?: boolean
+  /** Which tool calls reach interaction.request. full: every call the agent's policy asks about. escalation_only: only calls that leave the agent's own sandbox; calls inside it (including workspace writes) are never asked. none: the agent never asks, so platform approval covers no tool call. */
+  permission_relay?: 'full' | 'escalation_only' | 'none'
+  /** The agent reports typed errors; false means session.error carries agent_error with the agent's text. */
+  structured_errors?: boolean
+  /** tokens: the agent reports token usage. context_only: it reports context window occupancy only; usage is metered by the model proxy. */
+  usage?: 'tokens' | 'context_only'
+}
 
 /** One block of user input. A file block references a platform session file by file_id; the executor downloads it through the executor files API. File bytes never travel on the control channel. */
 export interface AgentInputBlock {
@@ -161,6 +192,18 @@ export interface ArtifactRef {
   created_at?: string
 }
 
+/** bash input: run command with a login shell. */
+export interface BashInput {
+  /** Shell command line. */
+  command: string
+  /** Working directory, relative to the session workspace. */
+  cwd?: string
+  /** Per-call timeout; the executor default applies when absent. */
+  timeout_ms?: number
+  /** Extra environment variables. */
+  env?: Record<string, string>
+}
+
 /** Executor capability object. The server only sends a method to an executor that advertised its capability; otherwise the executor answers -32012 capability_unavailable. */
 export interface Capabilities {
   shell?: ShellCapability
@@ -194,6 +237,19 @@ export const ComputerAction = {
   Scroll: 'scroll',
   Drag: 'drag',
 } as const
+
+/** computer_action input. */
+export interface ComputerActionInput {
+  action: ComputerAction
+  /** Display to act on. */
+  display?: string
+}
+
+/** computer_observe input. */
+export interface ComputerObserveInput {
+  /** Display to observe. */
+  display?: string
+}
 
 /** Executor control channel state machine. */
 export type ConnectionState =
@@ -237,6 +293,16 @@ export interface DisplayCapability {
   rfb?: boolean
   /** The machine can host its own desktop for a desktop session (it carries bma-desktop-session, started through process.start). Absent means unknown (an executor that predates the field). */
   desktop?: boolean
+}
+
+/** edit input: replace the single occurrence of old_string. */
+export interface EditInput {
+  /** File path, relative to the session workspace. */
+  path: string
+  /** Text that must occur exactly once. */
+  old_string: string
+  /** Replacement text. */
+  new_string: string
 }
 
 /** Permission decision the executor applied to a tool use. ask means the executor opened an interaction.request for it. */
@@ -348,6 +414,24 @@ export interface FilesCapability {
   enabled: boolean
   read_roots?: Array<string>
   write_roots?: Array<string>
+}
+
+/** glob input: list paths matching pattern. */
+export interface GlobInput {
+  /** Glob pattern. */
+  pattern: string
+  /** Base directory, relative to the session workspace. */
+  path?: string
+}
+
+/** grep input: search file lines with a regular expression. */
+export interface GrepInput {
+  /** Regular expression. */
+  pattern: string
+  /** Directory to search, relative to the session workspace. */
+  path?: string
+  /** File name filter. */
+  glob?: string
 }
 
 /** process.start io_mode. "pty" runs the command on a 24x80 pseudo-terminal: stdout is the PTY output, stdin writes go to the PTY and close_stdin is rejected. Requires process.pty. */
@@ -532,6 +616,12 @@ export interface Limits {
   max_process_write_bytes: number
   max_processes_per_session: number
   max_artifact_bytes: number
+}
+
+/** list_files input. */
+export interface ListFilesInput {
+  /** Directory, relative to the session workspace. */
+  path?: string
 }
 
 /** Environment-origin MCP servers. */
@@ -783,6 +873,16 @@ export const ProtocolVersion = {
   BmaExecutorV11: 'bma.executor.v1.1',
 } as const
 
+/** read input: return lines of a text file. */
+export interface ReadInput {
+  /** File path, relative to the session workspace. */
+  path: string
+  /** First line to return, 1-based. */
+  offset?: number
+  /** Maximum number of lines. */
+  limit?: number
+}
+
 /** session.assign result. */
 export interface SessionAssignResult {
   accepted: boolean
@@ -963,7 +1063,7 @@ export interface ToolCancelResult {
   canceled: boolean
 }
 
-/** Built-in tool input. The selected tool decides which members are meaningful; unknown members are ignored. */
+/** Superset of every built-in tool input, decoded by executors that read input generically. tool.call selects the exact per-tool schema through x-bma-params-discriminator; unknown members are ignored. */
 export interface ToolInput {
   command?: string
   cwd?: string
@@ -1057,6 +1157,14 @@ export interface WorkspaceCapability {
   backup: boolean
 }
 
+/** write input: create or replace a file. */
+export interface WriteInput {
+  /** File path, relative to the session workspace. */
+  path: string
+  /** Full file content. */
+  content: string
+}
+
 /** Params object of executor.register. */
 export interface ExecutorRegisterParams {
   protocol: ProtocolVersion
@@ -1147,15 +1255,30 @@ export interface SessionEndedParams {
   reason: string
 }
 
-/** Params object of tool.call. */
-export interface ToolCallParams {
-  session_id: string
-  tool_call_id: string
-  tool: ToolName
-  input: ToolInput
-  deadline_ms?: number
-  permission?: ToolPermission
+/** input schema of tool.call selected by tool. */
+export interface ToolCallInputMap {
+  bash: BashInput
+  read: ReadInput
+  write: WriteInput
+  edit: EditInput
+  glob: GlobInput
+  grep: GrepInput
+  list_files: ListFilesInput
+  computer_observe: ComputerObserveInput
+  computer_action: ComputerActionInput
 }
+
+/** Params object of tool.call, discriminated by tool. */
+export type ToolCallParams = {
+  [K in keyof ToolCallInputMap]: {
+    session_id: string
+    tool_call_id: string
+    tool: K
+    input: ToolCallInputMap[K]
+    deadline_ms?: number
+    permission?: ToolPermission
+  }
+}[keyof ToolCallInputMap]
 
 /** Params object of tool.result. */
 export interface ToolResultParams {

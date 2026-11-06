@@ -1,4 +1,4 @@
-import { JsonRpcErrorCode, type JsonRpcError, type JsonRpcErrorData } from './generated/executor.js'
+import { JsonRpcErrorCode, type ContentBlock, type JsonRpcError, type JsonRpcErrorData } from './generated/executor.js'
 
 /**
  * A JSON-RPC error from the peer, or one a handler throws to choose the wire
@@ -65,6 +65,20 @@ export class ToolOutcomeUnknownError extends Error {
   constructor() {
     super('tool outcome unknown: executor lost before tool.result')
     this.name = 'ToolOutcomeUnknownError'
+  }
+}
+
+/**
+ * Thrown from a tool handler: a tool-level error reported to the model
+ * (outcome succeeded, is_error true), as Go Core reports a missing file.
+ * Any other exception is outcome failed. Same role as @anthropic-ai/sdk ToolError.
+ */
+export class ToolError extends Error {
+  readonly content: ContentBlock[]
+  constructor(content: string | ContentBlock[]) {
+    super(typeof content === 'string' ? content : 'tool error')
+    this.name = 'ToolError'
+    this.content = typeof content === 'string' ? [{ type: 'text', text: content }] : content
   }
 }
 

@@ -360,8 +360,33 @@ func (c *Core) Attach(brain string, client *Client) error {
 	client.OnToolCallAccept(func(params ToolCallParams) error {
 		return c.acceptToolCall(brain, params)
 	})
-	client.OnToolCall(func(ctx context.Context, params ToolCallParams) (ToolResultParams, error) {
-		return c.toolCall(ctx, brain, params), nil
+	// One handler per tool the core implements; the client advertises
+	// shell and files from them.
+	run := func(ctx context.Context, tool ToolContext) ToolOutput {
+		result := c.toolCall(ctx, brain, tool.params)
+		out := ToolOutput{Content: result.Content, IsError: result.IsError, Artifacts: result.Artifacts}
+		if result.Outcome != ToolOutcomeSucceeded {
+			out.Outcome = result.Outcome
+		}
+		return out
+	}
+	client.Tools.Bash.Handle(func(ctx context.Context, _ BashInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	client.Tools.Read.Handle(func(ctx context.Context, _ ReadInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	client.Tools.Write.Handle(func(ctx context.Context, _ WriteInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	client.Tools.Edit.Handle(func(ctx context.Context, _ EditInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	client.Tools.Glob.Handle(func(ctx context.Context, _ GlobInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	client.Tools.Grep.Handle(func(ctx context.Context, _ GrepInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
 	})
 	client.afterToolResult(func(params ToolCallParams) {
 		session := c.session(coreKey{brain, params.SessionID})
@@ -379,7 +404,7 @@ func (c *Core) Attach(brain string, client *Client) error {
 	for method, registered := range methods {
 		registered := registered
 		method := method
-		client.OnRequest(method, func(ctx context.Context, params json.RawMessage) (any, error) {
+		client.onRequest(method, func(ctx context.Context, params json.RawMessage) (any, error) {
 			return c.serve(ctx, brain, client, method, registered, params)
 		})
 	}
@@ -585,7 +610,7 @@ func (c *Core) prepare(client *Client, session *CoreSession, params SessionAssig
 }
 
 func (c *Core) status(client *Client, session *CoreSession, status string, detail string) {
-	_ = client.Notify(session.ctx, MethodSessionStatus, SessionStatusParams{SessionID: session.key.session, Status: status, Detail: detail})
+	_ = client.notify(session.ctx, MethodSessionStatus, SessionStatusParams{SessionID: session.key.session, Status: status, Detail: detail})
 }
 
 // end stops the session and reports session.ended with reason. It reports

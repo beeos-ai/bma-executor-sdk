@@ -67,8 +67,6 @@ def make_client(url: str, dialer: bx.Dialer | None, token: str = "", **options: 
     return bx.ExecutorClient(environment_id="env_local", executor=EXECUTOR, token_source=bx.static_token(url, token), dialer=dialer, **options)
 
 
-def text_result(call: dict[str, Any], text: str) -> dict[str, Any]:
-    return {"session_id": call["session_id"], "tool_call_id": call["tool_call_id"], "outcome": "succeeded", "is_error": False, "content": [{"type": "text", "text": text}]}
 
 
 @pytest.mark.parametrize("transport", ["inprocess", "ws", "unix", "npipe"])
@@ -77,16 +75,16 @@ async def test_harness_drives_executor_client(transport: str) -> None:
     runs: list[str] = []
     started = asyncio.Event()
 
-    async def on_tool(call: dict[str, Any]) -> dict[str, Any]:
-        runs.append(call["tool_call_id"])
-        if call["tool"] == "sleep":
+    async def on_tool(input: bx.BashInput, ctx: bx.ToolContext) -> str:
+        runs.append(ctx.tool_call_id)
+        if input["command"] == "sleep":
             started.set()
             await asyncio.sleep(30)
-        return text_result(call, f"ran {call['input']['command']}")
+        return f"ran {input['command']}"
 
     async with listen(harness, transport) as (url, dialer):
         client = make_client(url, dialer)
-        client.on_tool_call(on_tool)
+        client.tools.bash.handler(on_tool)
         registered = await client.start()
         assert registered["protocol"] == bx.PROTOCOL_V11
         executor = await harness.wait_executor()
@@ -98,13 +96,13 @@ async def test_harness_drives_executor_client(transport: str) -> None:
         await client.session_ready({"session_id": "ses_1", "work_id": session.work_id, "lease_token": session._lease_token})  # noqa: SLF001
         await asyncio.wait_for(session.ready(), 2)
 
-        result = await session.call_tool({"tool_call_id": "call_1", "tool": "bash", "input": {"command": "ls"}})  # type: ignore[typeddict-item]
+        result = await session.tools.bash.call({"command": "ls"}, tool_call_id="call_1")
         assert result["outcome"] == "succeeded" and result["content"][0]["text"] == "ran ls"
         # Idempotent by tool_call_id: the recorded result, no second run.
-        again = await session.call_tool({"tool_call_id": "call_1", "tool": "bash", "input": {"command": "ls"}})  # type: ignore[typeddict-item]
+        again = await session.tools.bash.call({"command": "ls"}, tool_call_id="call_1")
         assert again == result and runs == ["call_1"]
 
-        slow = asyncio.ensure_future(session.call_tool({"tool_call_id": "call_2", "tool": "sleep", "input": {}}))  # type: ignore[typeddict-item]
+        slow = asyncio.ensure_future(session.tools.bash.call({"command": "sleep"}, tool_call_id="call_2"))
         await asyncio.wait_for(started.wait(), 2)
         assert await session.cancel_tool("call_2", "user") is True
         canceled = await asyncio.wait_for(slow, 2)
@@ -155,7 +153,7 @@ async def test_tool_result_semantics_and_lost_results() -> None:
         assert foreign.value.code == JsonRpcErrorCode.SessionNotActive
 
         # A result the harness cannot accept is handed to on_tool_result_lost.
-        client.on_tool_call(lambda call: asyncio.sleep(0, text_result(call, "late")))
+        client.tools.bash.handler(lambda input, ctx: asyncio.sleep(0, "late"))
         await client._dispatch_request("r1", "tool.call", {"session_id": "ses_gone", "tool_call_id": "c9", "tool": "bash", "input": {}})  # noqa: SLF001
         for _ in range(100):
             if lost:
@@ -169,17 +167,17 @@ async def test_resume_delivers_pending_result_and_lease_expiry_is_unknown() -> N
     harness = bx.Harness(lease_ttl=0.3, request_timeout=2.0)
     release = asyncio.Event()
 
-    async def on_tool(call: dict[str, Any]) -> dict[str, Any]:
+    async def on_tool(input: bx.BashInput, ctx: bx.ToolContext) -> str:
         await release.wait()
-        return text_result(call, "after reconnect")
+        return "after reconnect"
 
     async with listen(harness, "ws") as (url, _):
         client = make_client(url, None)
-        client.on_tool_call(on_tool)
+        client.tools.bash.handler(on_tool)
         await client.start()
         executor = await harness.wait_executor()
         session = await executor.assign_session({"session_id": "ses_1"})  # type: ignore[typeddict-item]
-        pending = asyncio.ensure_future(session.call_tool({"tool_call_id": "call_1", "tool": "bash", "input": {}}))  # type: ignore[typeddict-item]
+        pending = asyncio.ensure_future(session.tools.bash.call({"command": "x"}, tool_call_id="call_1"))
         await asyncio.sleep(0.05)
         first_connection = client.connection_id
 
@@ -196,7 +194,7 @@ async def test_resume_delivers_pending_result_and_lease_expiry_is_unknown() -> N
 
         # Lease expiry: the executor is gone for good, pending calls are unknown.
         release.clear()
-        pending = asyncio.ensure_future(session.call_tool({"tool_call_id": "call_2", "tool": "bash", "input": {}}))  # type: ignore[typeddict-item]
+        pending = asyncio.ensure_future(session.tools.bash.call({"command": "x"}, tool_call_id="call_2"))
         await asyncio.sleep(0.05)
         await client.stop()  # sends executor.close: no reconnect grace
         with pytest.raises(bx.ToolOutcomeUnknownError):
@@ -208,11 +206,11 @@ async def test_lease_expiry_after_disconnect() -> None:
     harness = bx.Harness(lease_ttl=0.1)
     async with listen(harness, "inprocess") as (url, dialer):
         client = make_client(url, dialer, max_reconnect_attempts=1, reconnect_base_delay=5)
-        client.on_tool_call(lambda call: asyncio.sleep(30))
+        client.tools.bash.handler(lambda input, ctx: asyncio.sleep(30, ""))
         await client.start()
         executor = await harness.wait_executor()
         session = await executor.assign_session({"session_id": "ses_1"})  # type: ignore[typeddict-item]
-        pending = asyncio.ensure_future(session.call_tool({"tool_call_id": "c", "tool": "bash", "input": {}}))  # type: ignore[typeddict-item]
+        pending = asyncio.ensure_future(session.tools.bash.call({"command": "x"}, tool_call_id="c"))
         await asyncio.sleep(0.02)
         await client._peer.conn.close(1011, "drop")  # noqa: SLF001
         with pytest.raises(bx.ToolOutcomeUnknownError):

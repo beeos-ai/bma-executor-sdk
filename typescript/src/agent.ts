@@ -7,6 +7,10 @@
 import {
   JsonRpcErrorCode,
   type Ack,
+  type ExecutorToHarnessNotificationMethod,
+  type ExecutorToHarnessRequestMethod,
+  type MethodParamsMap,
+  type MethodResultMap,
   type AgentCapability,
   type AgentEvent,
   type ConnectionState,
@@ -59,8 +63,8 @@ export interface AgentHandler {
 
 /** What the agent runtime needs from the executor client. */
 export interface AgentHost {
-  call<T>(method: string, params: unknown): Promise<T>
-  notify(method: string, params: unknown): void
+  call<M extends ExecutorToHarnessRequestMethod>(method: M, params: MethodParamsMap[M]): Promise<MethodResultMap[M]>
+  notify<M extends ExecutorToHarnessNotificationMethod>(method: M, params: MethodParamsMap[M]): void
   readonly stopSignal: AbortSignal
   connected(): boolean
   /** Resolves after the next successful executor.register. */
@@ -211,7 +215,7 @@ export class AgentTurn {
     session.pending.set(params.interaction_id, answer)
     try {
       await this.flush(signal)
-      await session.callUntilConnected(() => session.host.call<InteractionRequestResult>('interaction.request', params), signal)
+      await session.callUntilConnected(() => session.host.call('interaction.request', params), signal)
       const waits: Array<Promise<InteractionResponseParams>> = [answer.promise]
       let timer: ReturnType<typeof setTimeout> | undefined
       if (params.expires_at) {
@@ -327,7 +331,7 @@ class AgentSession {
         continue
       }
       try {
-        await this.callUntilConnected(() => this.host.call<SessionEventResult>('session.event', head.params))
+        await this.callUntilConnected(() => this.host.call('session.event', head.params))
       } catch (error) {
         if (this.host.stopSignal.aborted) return
         // A permanent rejection cannot be fixed by resending; surface it instead of blocking the session.
@@ -370,7 +374,7 @@ class AgentSession {
     const params: InteractionCancelParams = { session_id: this.id, interaction_id: interactionId, reason }
     try {
       await this.callUntilConnected(
-        () => this.host.call<Ack>('interaction.cancel', params),
+        () => this.host.call('interaction.cancel', params),
         AbortSignal.timeout(CLOSE_FLUSH_WAIT_MS),
       )
     } catch (error) {

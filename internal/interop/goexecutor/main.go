@@ -58,21 +58,12 @@ func main() {
 		}()
 		return bmaexecutor.SessionAssignResult{Accepted: true, SessionID: params.SessionID}, nil
 	})
-	client.OnToolCall(func(ctx context.Context, call bmaexecutor.ToolCallParams) (bmaexecutor.ToolResultParams, error) {
-		input, err := call.DecodeInput()
-		if err != nil {
-			return bmaexecutor.ToolResultParams{}, err
-		}
-		command := input.Command
-		if command == "sleep" {
+	client.Tools.Bash.Handle(func(ctx context.Context, input bmaexecutor.BashInput, _ bmaexecutor.ToolContext) (bmaexecutor.ToolOutput, error) {
+		if input.Command == "sleep" {
 			<-ctx.Done()
-			return bmaexecutor.ToolResultParams{}, ctx.Err()
+			return bmaexecutor.ToolOutput{}, ctx.Err()
 		}
-		text := "go:" + command
-		return bmaexecutor.ToolResultParams{
-			Outcome: bmaexecutor.ToolOutcomeSucceeded,
-			Content: []bmaexecutor.ContentBlock{{Type: bmaexecutor.ContentBlockTypeText, Text: text}},
-		}, nil
+		return bmaexecutor.TextOutput("go:" + input.Command), nil
 	})
 	client.ServeAgent(agent{}, bmaexecutor.AgentCapability{Models: []bmaexecutor.AgentModel{{ID: "go-model"}}})
 	if _, err := client.Start(context.Background()); err != nil {

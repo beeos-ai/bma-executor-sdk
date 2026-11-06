@@ -2,7 +2,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { ExecutorClient, type ExecutorClientOptions, type ToolCallParams } from '../src/index.js'
+import { ExecutorClient, type ExecutorClientOptions } from '../src/index.js'
 
 export const executorInfo = { name: 'ts-test', os: process.platform, arch: process.arch, version: '0' }
 
@@ -31,7 +31,7 @@ export function goListenArgs(path: string): string[] {
   return path.startsWith(prefix) ? ['-npipe', path.slice(prefix.length)] : ['-unix', path]
 }
 
-/** An executor that answers bash with "ts:<command>", blocks "block" until canceled and echoes MCP frames. */
+/** An executor that answers bash with "ts:<command>" and blocks the command "block" until canceled. */
 export function testExecutor(options: Partial<ExecutorClientOptions> & Pick<ExecutorClientOptions, 'dialer'>) {
   const client = new ExecutorClient({
     environmentId: 'env_test',
@@ -45,15 +45,14 @@ export function testExecutor(options: Partial<ExecutorClientOptions> & Pick<Exec
     setImmediate(() => void client.sessionReady({ session_id: assign.session_id, work_id: assign.work_id, lease_token: assign.lease.token }))
     return { accepted: true, session_id: assign.session_id }
   })
-  client.handleTool('bash', async (call: ToolCallParams, { progress }) => {
-    runs.push(call.tool_call_id)
+  client.tools.bash.handle(async ({ command }, { progress, signal, toolCallId }) => {
+    runs.push(toolCallId)
+    if (command === 'block') {
+      await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }))
+      return []
+    }
     progress('running')
-    return { outcome: 'succeeded', is_error: false, content: [{ type: 'text', text: `ts:${call.input.command}` }] }
-  })
-  client.onToolCall(async (call, { signal }) => {
-    runs.push(call.tool_call_id)
-    await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }))
-    return { outcome: 'succeeded', is_error: false, content: [] }
+    return `ts:${command}`
   })
   return { client, runs }
 }

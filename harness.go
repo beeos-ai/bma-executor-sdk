@@ -343,6 +343,7 @@ func (e *Executor) AssignSession(ctx context.Context, params SessionAssignParams
 		ready: make(chan struct{}), done: make(chan struct{}),
 		calls: map[string]*toolCall{}, mcp: map[string]*HarnessMCPChannel{}, mcpChanged: make(chan struct{}),
 	}
+	session.Tools = newHarnessTools(session)
 	if err := e.h.bind(e, session); err != nil {
 		return nil, err
 	}
@@ -430,6 +431,9 @@ func (e *Executor) forget(reason string) {
 
 // Session is one session bound to an executor.
 type Session struct {
+	// Tools has one typed entry per built-in tool: Tools.Bash.Call(...).
+	Tools HarnessTools
+
 	executor   *Executor
 	id         string
 	workID     string

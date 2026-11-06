@@ -42,8 +42,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
+	"os/exec"
 
 	bmaexecutor "github.com/beeos-ai/bma-executor-sdk"
 )
@@ -58,13 +60,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	client.OnToolCall(func(ctx context.Context, call bmaexecutor.ToolCallParams) (bmaexecutor.ToolResultParams, error) {
-		return bmaexecutor.ToolResultParams{
-			SessionID:  call.SessionID,
-			ToolCallID: call.ToolCallID,
-			Outcome:    bmaexecutor.ToolOutcomeSucceeded,
-			Content:    []bmaexecutor.ContentBlock{{Type: bmaexecutor.ContentBlockTypeText, Text: "ok"}},
-		}, nil
+	// One typed slot per built-in tool; only registered tools are advertised.
+	client.Tools.Bash.Handle(func(ctx context.Context, in bmaexecutor.BashInput, tool bmaexecutor.ToolContext) (bmaexecutor.ToolOutput, error) {
+		out, err := exec.CommandContext(ctx, "bash", "-lc", in.Command).Output()
+		code := 0
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			code = exitErr.ExitCode()
+		} else if err != nil {
+			return bmaexecutor.ToolOutput{}, err // outcome failed
+		}
+		return bmaexecutor.BashResult{Stdout: string(out), ExitCode: code}.Output(), nil
 	})
 	if _, err := client.Start(context.Background()); err != nil {
 		log.Fatal(err)
@@ -73,15 +79,15 @@ func main() {
 }
 ```
 
-Set `Options.BaseURL` to your BMA deployment: the hosted service is in early access and the default `DefaultBaseURL` (`https://api.bma.beeos.ai`) does not resolve yet. It is the API root without `/v1` (for example `https://bma.example.com/api` when the API is served under `/api`); the SDK posts the environment key to `{BaseURL}/v1/executors/token` and uploads artifacts below it. The SDK does not read `BMA_BASE_URL` itself; the example passes it through. A `TokenSource` (for example `StaticToken`) carries its own channel URL.
+Set `Options.BaseURL` to your BMA deployment: the hosted service is in early access and the default `DefaultBaseURL` (`https://api.bma.beeos.ai`) does not resolve yet. It is the deployment origin, the same value as `BMA_BASE_URL` in bma-sdk (for example `https://api.staging.bma.beeos.ai`); the SDK posts the environment key to `{BaseURL}/v1/executors/token` and uploads artifacts below it, and drops a trailing `/api/v1` (the 0.x bma-sdk API-root form) instead of nesting the paths. The SDK does not read `BMA_BASE_URL` itself; the example passes it through. A `TokenSource` (for example `StaticToken`) carries its own channel URL.
 
 A machine-scoped executor uses a machine token through `Options.TokenSource` and no environment id. Go clients negotiate `bma.executor.v1.1` by default (`Options.Protocol`).
 
-Executor types follow one mapping: required members are values, optional members are values with `omitempty` (named structs and nullable members are pointers), enums are untyped constants (`Code*` error codes on `RPCError.Code`), and opaque payloads such as `ToolCallParams.Input` stay `json.RawMessage` (`call.DecodeInput()` decodes the built-in `ToolInput`; `NewToolInput(ToolInput{...})` builds it).
+Executor types follow one mapping: required members are values, optional members are values with `omitempty` (named structs and nullable members are pointers), enums are untyped constants (`Code*` error codes on `RPCError.Code`), and opaque payloads such as `ToolCallParams.Input` stay `json.RawMessage`. Tool handlers receive the decoded per-tool input (`BashInput`, `ReadInput`, ...) through `client.Tools.<Name>.Handle`; return `TextOutput`, `BashResult{...}.Output()` (rendered like `Core`: stdout, stderr, `exit_code: N`) or a `ToolOutput`, `NewToolError(text)` for a tool-level error the model sees (`is_error: true`), any other error for `outcome: "failed"`. The harness calls them as `session.Tools.Bash.Call(ctx, BashInput{Command: "ls"}, CallToolOptions{})`. Other protocol methods are typed too: `Requests.ProcessStart.Handle(client, fn)`, `Calls.SessionEvent.Call(ctx, client, params)`, `Notifications.ToolProgress.Notify(ctx, client, params)` (tables generated from the contract by `tools/gen_methods.py`).
 
 ### Lifecycle, cancellation, and results
 
-- `tool.cancel` from the harness cancels the `context.Context` passed to the `OnToolCall` handler. The client responds `{"canceled":true}` and reports the result with `outcome: "canceled"`; handlers must stop their process group when the context is done.
+- `tool.cancel` from the harness cancels the `context.Context` passed to the tool handler. The client responds `{"canceled":true}` and reports the result with `outcome: "canceled"`; handlers must stop their process group when the context is done.
 - A repeated `tool.call` with the same `tool_call_id` is acknowledged but not executed twice.
 - Call `SessionReady` after workspace and MCP setup, and `SessionEnded` after every child process and MCP server has stopped. The SDK does not infer these transitions because only the adapter knows when setup and cleanup finished.
 - `tool.result` is retried with exponential backoff on `-32009` (`executor_busy`), `-32004` (`timeout`), or `data.retryable: true`. Results are idempotent by `tool_call_id`. When every attempt fails, `OnToolResultLost` is called with the original result so the adapter can persist and replay it; the client never drops a result silently.

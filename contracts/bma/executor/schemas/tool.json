@@ -53,7 +53,7 @@
     },
     "ToolInput": {
       "type": "object",
-      "description": "Built-in tool input. The selected tool decides which members are meaningful; unknown members are ignored.",
+      "description": "Superset of every built-in tool input, decoded by executors that read input generically. tool.call selects the exact per-tool schema through x-bma-params-discriminator; unknown members are ignored.",
       "properties": {
         "command": {
           "type": "string"
@@ -102,6 +102,181 @@
         }
       },
       "required": [],
+      "additionalProperties": true
+    },
+    "BashInput": {
+      "type": "object",
+      "description": "bash input: run command with a login shell.",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Shell command line."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Working directory, relative to the session workspace."
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "description": "Per-call timeout; the executor default applies when absent."
+        },
+        "env": {
+          "type": "object",
+          "description": "Extra environment variables.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "additionalProperties": true
+    },
+    "ReadInput": {
+      "type": "object",
+      "description": "read input: return lines of a text file.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File path, relative to the session workspace."
+        },
+        "offset": {
+          "type": "integer",
+          "description": "First line to return, 1-based."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of lines."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": true
+    },
+    "WriteInput": {
+      "type": "object",
+      "description": "write input: create or replace a file.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File path, relative to the session workspace."
+        },
+        "content": {
+          "type": "string",
+          "description": "Full file content."
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "additionalProperties": true
+    },
+    "EditInput": {
+      "type": "object",
+      "description": "edit input: replace the single occurrence of old_string.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File path, relative to the session workspace."
+        },
+        "old_string": {
+          "type": "string",
+          "description": "Text that must occur exactly once."
+        },
+        "new_string": {
+          "type": "string",
+          "description": "Replacement text."
+        }
+      },
+      "required": [
+        "path",
+        "old_string",
+        "new_string"
+      ],
+      "additionalProperties": true
+    },
+    "GlobInput": {
+      "type": "object",
+      "description": "glob input: list paths matching pattern.",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Glob pattern."
+        },
+        "path": {
+          "type": "string",
+          "description": "Base directory, relative to the session workspace."
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "additionalProperties": true
+    },
+    "GrepInput": {
+      "type": "object",
+      "description": "grep input: search file lines with a regular expression.",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Regular expression."
+        },
+        "path": {
+          "type": "string",
+          "description": "Directory to search, relative to the session workspace."
+        },
+        "glob": {
+          "type": "string",
+          "description": "File name filter."
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "additionalProperties": true
+    },
+    "ListFilesInput": {
+      "type": "object",
+      "description": "list_files input.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Directory, relative to the session workspace."
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "ComputerObserveInput": {
+      "type": "object",
+      "description": "computer_observe input.",
+      "properties": {
+        "display": {
+          "type": "string",
+          "description": "Display to observe."
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "ComputerActionInput": {
+      "type": "object",
+      "description": "computer_action input.",
+      "properties": {
+        "action": {
+          "$ref": "tool.json#/$defs/ComputerAction"
+        },
+        "display": {
+          "type": "string",
+          "description": "Display to act on."
+        }
+      },
+      "required": [
+        "action"
+      ],
       "additionalProperties": true
     },
     "ContentBlockType": {

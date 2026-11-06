@@ -68,7 +68,7 @@ describe('cross-language interop with the Go SDK (WebSocket over UDS or a Window
       assert.equal(executor.info.name, 'go-interop')
       const session = await executor.assignSession({ session_id: 'sess_ts' })
       await session.ready(AbortSignal.timeout(5000))
-      const result = await session.callTool({ tool_call_id: 'call_1', tool: 'bash', input: { command: 'hello' } })
+      const result = await session.callTool('bash', { command: 'hello' }, { toolCallId: 'call_1' })
       assert.equal(result.content[0]?.text, 'go:hello')
       const channel = await session.mcp('echo', AbortSignal.timeout(5000))
       channel.write('{"jsonrpc":"2.0","id":1,"method":"ping"}')

@@ -453,6 +453,21 @@ methods:
     x-bma-kind: request
     x-bma-channel: control
     x-bma-since: bma.executor.v1
+    # The tool param selects the input schema, in the shape of the OpenAPI
+    # Discriminator Object (propertyName + mapping) applied to the params.
+    x-bma-params-discriminator:
+      propertyName: tool
+      param: input
+      mapping:
+        bash: schemas/tool.json#/$defs/BashInput
+        read: schemas/tool.json#/$defs/ReadInput
+        write: schemas/tool.json#/$defs/WriteInput
+        edit: schemas/tool.json#/$defs/EditInput
+        glob: schemas/tool.json#/$defs/GlobInput
+        grep: schemas/tool.json#/$defs/GrepInput
+        list_files: schemas/tool.json#/$defs/ListFilesInput
+        computer_observe: schemas/tool.json#/$defs/ComputerObserveInput
+        computer_action: schemas/tool.json#/$defs/ComputerActionInput
     params:
       - name: session_id
         required: true

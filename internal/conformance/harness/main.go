@@ -1,7 +1,7 @@
 // Command harness is the cross-language conformance peer: a Go SDK Harness
 // that prints "LISTEN <ws-url>", waits for one executor and drives the
 // standard scenario. It exits 0 after printing PASS. The executor under test
-// must answer bash with "<language>:<command>" and block on tool "block"
+// must answer bash with "<language>:<command>" and block on the bash command "block"
 // until canceled (see typescript/test/executor.test.ts).
 package main
 
@@ -69,7 +69,7 @@ func run() error {
 	}
 	blocked := make(chan bmaexecutor.ToolResultParams, 1)
 	go func() {
-		result, _ := session.CallTool(ctx, bmaexecutor.ToolCallParams{ToolCallID: "call_block", Tool: "block"})
+		result, _ := session.CallTool(ctx, bmaexecutor.ToolCallParams{ToolCallID: "call_block", Tool: bmaexecutor.ToolNameBash, Input: bmaexecutor.NewToolInput(bmaexecutor.ToolInput{Command: "block"})})
 		blocked <- result
 	}()
 	for {

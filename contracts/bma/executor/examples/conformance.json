@@ -195,6 +195,34 @@
       }
     },
     {
+      "name": "executor.capabilities.update notification (hosted agent)",
+      "method": "executor.capabilities.update",
+      "kind": "notification",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "executor.capabilities.update",
+        "params": {
+          "capabilities": {
+            "agent": {
+              "enabled": true,
+              "max_sessions": 8,
+              "harness": {
+                "id": "dsh",
+                "version": "0.2.1-rc.5",
+                "protocol": "acp/1",
+                "agent_name": "deepseek-harness-acp",
+                "agent_version": "0.0.1",
+                "streaming": "committed",
+                "session_resume": true,
+                "permission_relay": "escalation_only",
+                "usage": "context_only"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "executor.drain request",
       "method": "executor.drain",
       "kind": "request",

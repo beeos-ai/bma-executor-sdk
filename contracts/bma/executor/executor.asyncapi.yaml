@@ -889,6 +889,52 @@ components:
               - tool_call_id
               - tool
               - input
+            oneOf:
+              - properties:
+                  tool:
+                    const: bash
+                  input:
+                    $ref: schemas/tool.json#/$defs/BashInput
+              - properties:
+                  tool:
+                    const: read
+                  input:
+                    $ref: schemas/tool.json#/$defs/ReadInput
+              - properties:
+                  tool:
+                    const: write
+                  input:
+                    $ref: schemas/tool.json#/$defs/WriteInput
+              - properties:
+                  tool:
+                    const: edit
+                  input:
+                    $ref: schemas/tool.json#/$defs/EditInput
+              - properties:
+                  tool:
+                    const: glob
+                  input:
+                    $ref: schemas/tool.json#/$defs/GlobInput
+              - properties:
+                  tool:
+                    const: grep
+                  input:
+                    $ref: schemas/tool.json#/$defs/GrepInput
+              - properties:
+                  tool:
+                    const: list_files
+                  input:
+                    $ref: schemas/tool.json#/$defs/ListFilesInput
+              - properties:
+                  tool:
+                    const: computer_observe
+                  input:
+                    $ref: schemas/tool.json#/$defs/ComputerObserveInput
+              - properties:
+                  tool:
+                    const: computer_action
+                  input:
+                    $ref: schemas/tool.json#/$defs/ComputerActionInput
         required:
           - jsonrpc
           - id

@@ -1,14 +1,13 @@
 // Command mcpexecutor is the Go executor peer of the cross-language interop
 // tests (TypeScript and Python). It dials the harness at -url (ws://, wss://
 // or unix://path, bearer -token), answers bash with "go:<command>", blocks
-// tool "block" until canceled, and on every assigned session opens MCP
+// the bash command "block" until canceled, and on every assigned session opens MCP
 // channel "echo" and answers each frame with "ping" replaced by "pong". It
 // prints "REGISTERED" and exits 0 when stdin closes or the harness ends it.
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -59,15 +58,12 @@ func run(url, token string) error {
 		}()
 		return bmaexecutor.SessionAssignResult{Accepted: true, SessionID: params.SessionID}, nil
 	})
-	client.OnToolCall(func(callCtx context.Context, params bmaexecutor.ToolCallParams) (bmaexecutor.ToolResultParams, error) {
-		if params.Tool == "block" {
+	client.Tools.Bash.Handle(func(callCtx context.Context, input bmaexecutor.BashInput, _ bmaexecutor.ToolContext) (bmaexecutor.ToolOutput, error) {
+		if input.Command == "block" {
 			<-callCtx.Done()
-			return bmaexecutor.ToolResultParams{Outcome: bmaexecutor.ToolOutcomeSucceeded}, nil
+			return bmaexecutor.ToolOutput{}, nil
 		}
-		var input bmaexecutor.ToolInput
-		_ = json.Unmarshal(params.Input, &input)
-		return bmaexecutor.ToolResultParams{Outcome: bmaexecutor.ToolOutcomeSucceeded,
-			Content: []bmaexecutor.ContentBlock{{Type: bmaexecutor.ContentBlockTypeText, Text: "go:" + input.Command}}}, nil
+		return bmaexecutor.TextOutput("go:" + input.Command), nil
 	})
 	if _, err := client.Start(ctx); err != nil {
 		return err

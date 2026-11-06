@@ -18,7 +18,7 @@ socket or Windows named pipe (`unix://`, `npipe://`), in-process.
 | Integration guide | [docs/executor](../docs/executor/README.md) ([中文](../docs/executor/README.zh-CN.md)) |
 
 ```sh
-npm install @beeos-ai/bma-executor-sdk@0.4.9
+npm install @beeos-ai/bma-executor-sdk
 ```
 
 The REST / façade client is the separate package
@@ -34,19 +34,20 @@ const client = new ExecutorClient({
   environmentKey: process.env.BMA_ENVIRONMENT_KEY,
   environmentId: process.env.BMA_ENVIRONMENT_ID!,
   executor: { name: "my-executor", os: process.platform, arch: process.arch, version: "0.1.0" },
-  capabilities: { shell: { enabled: true } },
 });
-client.handleTool("bash", async (call, { signal, progress }) => {
+client.tools.bash.handle(async (input, { signal, progress }) => {   // input: BashInput
   progress("running");
-  return { outcome: "succeeded", is_error: false, content: [{ type: "text", text: "ok" }] };
+  const r = await run(input.command, { cwd: input.cwd, env: input.env, signal });
+  return { stdout: r.stdout, stderr: r.stderr, exitCode: r.code };    // rendered like Go Core
 });
+client.tools.read.handle(async ({ path, offset, limit }) => readText(path, offset, limit)); // string or content blocks
 await client.start();
 ```
 
 Set `baseUrl` to your BMA deployment: the hosted service is in early access and the default
-`DEFAULT_BASE_URL` (`https://api.bma.beeos.ai`) does not resolve yet. It is the API root
-without `/v1` (for example `https://bma.example.com/api` when the API is served under `/api`);
-the client posts the environment key to `{baseUrl}/v1/executors/token`. The SDK does not read
+`DEFAULT_BASE_URL` (`https://api.bma.beeos.ai`) does not resolve yet. It is the deployment
+origin, the same value as `BMA_BASE_URL` in bma-sdk (for example `https://api.staging.bma.beeos.ai`);
+the client posts the environment key to `{baseUrl}/v1/executors/token` and drops a trailing `/api/v1`. The SDK does not read
 `BMA_BASE_URL` itself. A `tokenSource` carries its own channel URL and ignores `baseUrl`.
 
 ### Executor lifecycle, cancellation, and results
@@ -54,7 +55,24 @@ the client posts the environment key to `{baseUrl}/v1/executors/token`. The SDK 
 - `tool.cancel` aborts the handler's `signal` (so do `deadline_ms` and
   `stop()`); the client answers `{"canceled":true}` and reports
   `outcome: "canceled"`. A repeated `tool.call` id is acknowledged, not run
-  twice. `handleTool(name, …)` routes one tool, `onToolCall` the rest.
+  twice. Each built-in tool has a typed slot `client.tools.<name>.handle(fn)`
+  (`bash`, `read`, `write`, `edit`, `glob`, `grep`, `list_files`; the
+  `computer_*` tools get slots once the contract defines their input) whose
+  input is the contract's `<Tool>Input`. Input missing a required member
+  fails the call (`bash requires command`) before the handler runs. A
+  handler returns a string, content blocks or `{ content, isError,
+  artifacts }`; bash may return `{ stdout, stderr, exitCode, truncated? }`,
+  rendered as Go Core does (stdout, stderr, `exit_code: N`, cut to Core's
+  preview beyond `INLINE_RESULT_BYTES`). `throw new ToolError(msg)` reports
+  a tool-level error (`is_error: true`); any other exception is
+  `outcome: "failed"`. A `tool.call` for a tool without a handler is refused
+  before the ack with `-32012` (`data.capability: "tool:<name>"`), as Go
+  Core refuses it.
+- The `shell` and `files` capabilities are enabled while a handler of the
+  group is registered, unless you set `enabled: false` (which wins, like
+  MCP's `RegisteredTool.enabled`); a handler registered after `start()`
+  sends `executor.capabilities.update`, as an MCP server sends
+  `tools/list_changed`.
 - Call `sessionReady` after workspace/MCP setup and `sessionEnded` after
   cleanup. `tool.result` is retried on `-32009`, `-32004` or
   `data.retryable: true`, idempotent by `tool_call_id`; when every attempt
@@ -67,7 +85,11 @@ the client posts the environment key to `{baseUrl}/v1/executors/token`. The SDK 
   (`?channel=mcp&session_id=&server_key=`); `read()`/`write()` carry MCP
   JSON-RPC frames unchanged.
 - A handler that throws `RpcError` keeps its code and data on the wire.
-  `onRequest(method, …)` serves `process.*`, `terminal.*` and `skill.install`.
+  `onRequest('process.start', (params) => …)` serves `process.*`,
+  `terminal.*`, `skill.install` and `workspace.backup` with the contract's
+  params and result types; `call(method, params)` and
+  `notify(method, params)` send executor-to-harness methods typed the same
+  way (`MethodParamsMap` / `MethodResultMap`).
 
 ### Harness quick start
 
@@ -80,12 +102,12 @@ const { url } = await harness.listen(); // or harness.attach(httpServer)
 const executor = await harness.waitExecutor();
 const session = await executor.assignSession({ session_id: "sess_1" });
 await session.ready();
-const result = await session.callTool({ tool: "bash", input: { command: "ls" } });
+const result = await session.tools.bash.call({ command: "ls" }); // or callTool("bash", { command: "ls" }, { toolCallId })
 const mcp = await session.mcp("echo"); // raw MCP JSON-RPC
 await session.stop("done");
 ```
 
-Semantics match the Go `Harness`: `callTool` is idempotent by `tool_call_id`;
+Semantics match the Go `Harness`: `callTool` is idempotent by `toolCallId`;
 an unknown call's `tool.result` is `-32002`, a foreign session `-32007`;
 sessions and pending calls survive a reconnect within `leaseTtlMs`; a newer
 connection replaces the old one with 4004; lease expiry or `executor.close`
@@ -148,8 +170,9 @@ executor and in-memory platform in one process).
 | --- | --- |
 | `NewClient(Options)` / `Start` / `Stop` | `new ExecutorClient(options)` / `start()` / `stop()` |
 | `Options.TokenSource`, `StaticToken` | `tokenSource`, `staticToken` (or `dialer`) |
-| `OnToolCall(ctx, call)` | `onToolCall(call, { signal, progress })`, `handleTool(name, …)` |
-| `OnSessionAssign` / `OnSessionStop` / `OnDrain` / `OnRequest` / `OnNotification` | `onSessionAssign` / `onSessionStop` / `onDrain` / `onRequest` / `onNotification` |
+| `Tools.<Name>.Handle(func(ctx, input, tool))` | `tools.<name>.handle(input, { signal, progress })` |
+| `OnSessionAssign` / `OnSessionStop` / `OnDrain` | `onSessionAssign` / `onSessionStop` / `onDrain` |
+| `Requests.ProcessStart.Handle(client, fn)` / `Calls.X.Call(ctx, client, p)` / `Notifications.X.Notify(ctx, client, p)` | `onRequest('process.start', fn)` / `call('x', p)` / `notify('x', p)` |
 | `SessionReady` / `SessionEnded` / `ReportToolResult` | `sessionReady` / `sessionEnded` / `reportToolResult` |
 | `SendSessionStatus` / `SendToolProgress` / `SendExecutorCapabilitiesUpdate` | `sessionStatus` / `toolProgress` / `updateCapabilities` |
 | `OpenMCPChannel` → `MCPChannel` | `openMcpChannel` → `FrameChannel` |

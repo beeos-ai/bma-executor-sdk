@@ -25,6 +25,9 @@ type AgentCapability struct {
 	FileInputs bool `json:"file_inputs,omitempty"`
 	// Concurrent agent sessions. turn.start for a new session beyond it answers -32009 executor_busy.
 	MaxSessions int64 `json:"max_sessions,omitempty"`
+	// The executor keeps the state of its turns across a process restart. When it registers again without a session whose turn was running, the platform starts the same turn again in a new event epoch (turn.start with the same turn_id, input_id and executor_session_ref, then the turn.input the turn already received) and the executor continues the turn from its own state. Without it such a turn ends failed (session.error, session.status_idle retries_exhausted) and is not sent again: an executor without that state would run the turn again from its opening input and repeat tool calls whose effects already happened.
+	TurnResume bool                    `json:"turn_resume,omitempty"`
+	Harness    *AgentHarnessCapability `json:"harness,omitempty"`
 }
 
 // AgentErrorInfo Typed session error.
@@ -45,6 +48,34 @@ const (
 	AgentEventTypeSessionStatusIdle    = "session.status_idle"
 	AgentEventTypeSessionError         = "session.error"
 )
+
+// AgentHarnessCapability What the third-party agent the executor hosts (for example an ACP agent) supports; an omitted boolean is false. Sent with executor.capabilities.update once the agent has started; absent until then and after a reconnect until the next turn. Informational: the platform records it and reflects it in the session harness capabilities.
+type AgentHarnessCapability struct {
+	// Agent profile id, for example dsh.
+	ID string `json:"id"`
+	// Installed agent package version.
+	Version string `json:"version"`
+	// Protocol the executor speaks to the agent, for example acp/1.
+	Protocol string `json:"protocol,omitempty"`
+	// Name the agent reported about itself (ACP initialize agentInfo.name).
+	AgentName string `json:"agent_name,omitempty"`
+	// Version the agent reported about itself (ACP initialize agentInfo.version); may differ from version.
+	AgentVersion string `json:"agent_version,omitempty"`
+	// token: agent.message and agent.thinking stream as deltas. committed: each message arrives whole once the agent committed it.
+	Streaming string `json:"streaming,omitempty"`
+	// A conversation continues in a new agent process (ACP session/resume).
+	SessionResume bool `json:"session_resume,omitempty"`
+	// A conversation can be reloaded with its history replayed (ACP session/load).
+	SessionLoad bool `json:"session_load,omitempty"`
+	// The agent accepts image input.
+	ImageInputs bool `json:"image_inputs,omitempty"`
+	// Which tool calls reach interaction.request. full: every call the agent's policy asks about. escalation_only: only calls that leave the agent's own sandbox; calls inside it (including workspace writes) are never asked. none: the agent never asks, so platform approval covers no tool call.
+	PermissionRelay string `json:"permission_relay,omitempty"`
+	// The agent reports typed errors; false means session.error carries agent_error with the agent's text.
+	StructuredErrors bool `json:"structured_errors,omitempty"`
+	// tokens: the agent reports token usage. context_only: it reports context window occupancy only; usage is metered by the model proxy.
+	Usage string `json:"usage,omitempty"`
+}
 
 // AgentInputBlock One block of user input. A file block references a platform session file by file_id; the executor downloads it through the executor files API. File bytes never travel on the control channel.
 type AgentInputBlock struct {
@@ -144,6 +175,18 @@ type ArtifactRef struct {
 	CreatedAt string `json:"created_at,omitempty"`
 }
 
+// BashInput bash input: run command with a login shell.
+type BashInput struct {
+	// Shell command line.
+	Command string `json:"command"`
+	// Working directory, relative to the session workspace.
+	Cwd string `json:"cwd,omitempty"`
+	// Per-call timeout; the executor default applies when absent.
+	TimeoutMS int64 `json:"timeout_ms,omitempty"`
+	// Extra environment variables.
+	Env map[string]string `json:"env,omitempty"`
+}
+
 // Capabilities Executor capability object. The server only sends a method to an executor that advertised its capability; otherwise the executor answers -32012 capability_unavailable.
 type Capabilities struct {
 	Shell       *ShellCapability `json:"shell,omitempty"`
@@ -175,6 +218,19 @@ const (
 	ComputerActionScroll = "scroll"
 	ComputerActionDrag   = "drag"
 )
+
+// ComputerActionInput computer_action input.
+type ComputerActionInput struct {
+	Action string `json:"action"`
+	// Display to act on.
+	Display string `json:"display,omitempty"`
+}
+
+// ComputerObserveInput computer_observe input.
+type ComputerObserveInput struct {
+	// Display to observe.
+	Display string `json:"display,omitempty"`
+}
 
 // ConnectionState values. Executor control channel state machine.
 const (
@@ -215,6 +271,16 @@ type DisplayCapability struct {
 	RFB bool `json:"rfb,omitempty"`
 	// The machine can host its own desktop for a desktop session (it carries bma-desktop-session, started through process.start). Absent means unknown (an executor that predates the field).
 	Desktop bool `json:"desktop,omitempty"`
+}
+
+// EditInput edit input: replace the single occurrence of old_string.
+type EditInput struct {
+	// File path, relative to the session workspace.
+	Path string `json:"path"`
+	// Text that must occur exactly once.
+	OldString string `json:"old_string"`
+	// Replacement text.
+	NewString string `json:"new_string"`
 }
 
 // EvaluatedPermission Permission decision the executor applied to a tool use. ask means the executor opened an interaction.request for it.
@@ -324,6 +390,24 @@ type FilesCapability struct {
 	Enabled    bool     `json:"enabled"`
 	ReadRoots  []string `json:"read_roots,omitempty"`
 	WriteRoots []string `json:"write_roots,omitempty"`
+}
+
+// GlobInput glob input: list paths matching pattern.
+type GlobInput struct {
+	// Glob pattern.
+	Pattern string `json:"pattern"`
+	// Base directory, relative to the session workspace.
+	Path string `json:"path,omitempty"`
+}
+
+// GrepInput grep input: search file lines with a regular expression.
+type GrepInput struct {
+	// Regular expression.
+	Pattern string `json:"pattern"`
+	// Directory to search, relative to the session workspace.
+	Path string `json:"path,omitempty"`
+	// File name filter.
+	Glob string `json:"glob,omitempty"`
 }
 
 // IOMode values. process.start io_mode. "pty" runs the command on a 24x80 pseudo-terminal: stdout is the PTY output, stdin writes go to the PTY and close_stdin is rejected. Requires process.pty.
@@ -479,6 +563,12 @@ type Limits struct {
 	MaxProcessWriteBytes      int   `json:"max_process_write_bytes"`
 	MaxProcessesPerSession    int   `json:"max_processes_per_session"`
 	MaxArtifactBytes          int64 `json:"max_artifact_bytes"`
+}
+
+// ListFilesInput list_files input.
+type ListFilesInput struct {
+	// Directory, relative to the session workspace.
+	Path string `json:"path,omitempty"`
 }
 
 // MCPCapability Environment-origin MCP servers.
@@ -736,6 +826,16 @@ const (
 	ProtocolV11 = "bma.executor.v1.1"
 )
 
+// ReadInput read input: return lines of a text file.
+type ReadInput struct {
+	// File path, relative to the session workspace.
+	Path string `json:"path"`
+	// First line to return, 1-based.
+	Offset int64 `json:"offset,omitempty"`
+	// Maximum number of lines.
+	Limit int64 `json:"limit,omitempty"`
+}
+
 // SessionAssignResult session.assign result.
 type SessionAssignResult struct {
 	Accepted  bool   `json:"accepted"`
@@ -902,7 +1002,7 @@ type ToolCancelResult struct {
 	Canceled bool `json:"canceled"`
 }
 
-// ToolInput Built-in tool input. The selected tool decides which members are meaningful; unknown members are ignored.
+// ToolInput Superset of every built-in tool input, decoded by executors that read input generically. tool.call selects the exact per-tool schema through x-bma-params-discriminator; unknown members are ignored.
 type ToolInput struct {
 	Command   string            `json:"command,omitempty"`
 	Cwd       string            `json:"cwd,omitempty"`
@@ -982,6 +1082,14 @@ type WorkspaceBackupResult struct {
 // WorkspaceCapability workspace.backup support and the startup restore of a pending backup. Machine-scoped executors only.
 type WorkspaceCapability struct {
 	Backup bool `json:"backup"`
+}
+
+// WriteInput write input: create or replace a file.
+type WriteInput struct {
+	// File path, relative to the session workspace.
+	Path string `json:"path"`
+	// Full file content.
+	Content string `json:"content"`
 }
 
 // MethodDirection is the direction a JSON-RPC method travels.

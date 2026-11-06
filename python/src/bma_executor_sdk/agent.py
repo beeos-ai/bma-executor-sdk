@@ -133,7 +133,7 @@ class AgentTurn:
             "event_type": event_type, "index": index, "text": text,
         }
         try:
-            await client.notify(METHOD_SESSION_EVENT_DELTA, params)
+            await client._notify(METHOD_SESSION_EVENT_DELTA, params)
         except (NotConnectedError, ClientStoppedError) as error:
             client._log("debug", "session.event_delta dropped", error)  # noqa: SLF001
 
@@ -155,7 +155,7 @@ class AgentTurn:
         s.pending[interaction_id] = answer
         try:
             await self.flush()
-            await s.call_until_connected(lambda: s.runtime.client.call(METHOD_INTERACTION_REQUEST, params))
+            await s.call_until_connected(lambda: s.runtime.client._call(METHOD_INTERACTION_REQUEST, params))
             timeout = None
             if params.get("expires_at"):
                 expires = datetime.fromisoformat(params["expires_at"].replace("Z", "+00:00"))
@@ -304,7 +304,7 @@ class _AgentRuntime:
         async def ended() -> None:
             try:
                 await asyncio.wait_for(
-                    s.call_until_connected(lambda: self.client.call(METHOD_SESSION_ENDED, {"session_id": s.id, "reason": params.get("reason", "")})),
+                    s.call_until_connected(lambda: self.client._call(METHOD_SESSION_ENDED, {"session_id": s.id, "reason": params.get("reason", "")})),
                     _AGENT_CLOSE_FLUSH_WAIT,
                 )
             except Exception as error:
@@ -373,7 +373,7 @@ class _AgentSession:
         client = self.runtime.client
         params: InteractionCancelParams = {"session_id": self.id, "interaction_id": interaction_id, "reason": reason}  # type: ignore[typeddict-item]
         try:
-            await asyncio.wait_for(self.call_until_connected(lambda: client.call(METHOD_INTERACTION_CANCEL, params)), _AGENT_CLOSE_FLUSH_WAIT)
+            await asyncio.wait_for(self.call_until_connected(lambda: client._call(METHOD_INTERACTION_CANCEL, params)), _AGENT_CLOSE_FLUSH_WAIT)
         except Exception as error:
             client._log("warn", f"interaction.cancel for {interaction_id} failed", error)  # noqa: SLF001
 
@@ -391,7 +391,7 @@ class _AgentSession:
                 continue
             head = self.outbox[0]
             try:
-                await self.call_until_connected(lambda: client.call(METHOD_SESSION_EVENT, head))
+                await self.call_until_connected(lambda: client._call(METHOD_SESSION_EVENT, head))
             except ClientStoppedError:
                 return
             except RPCError as error:
