@@ -14,12 +14,12 @@
 
 状态标注（全套文档统一）：
 
-- **【已有】**：bma-executor-sdk 0.4.0 已发布，或 BMA 平台已上线。
+- **【已有】**：bma-executor-sdk 1.0.0 已发布，或 BMA 平台已上线。
 - **【预览】**：BMA 平台已上线，限制在使用处注明；正式可用（GA）前可能调整。
 - **【即将提供】**：契约中已定义、尚未提供服务；按能力位（capability-gated）发布，未声明对应能力位的一方不会收到这些方法。
 - **【设计中】**：只有设计，没有实现。
 
-> 基线：bma-executor-sdk **0.4.9**（相关功能自 0.4.0 起提供），协议 `bma.executor.v1.1`（契约 1.1.0，[`contracts/bma/executor`](../../contracts/bma/executor)）。
+> 基线：bma-executor-sdk **1.0.0**，协议 `bma.executor.v1.1`（契约 1.1.0，[`contracts/bma/executor`](../../contracts/bma/executor)）。
 
 ---
 
@@ -101,7 +101,7 @@ bmad（这台电脑唯一的执行端）
    └─ 作为 agent 提供方：接收平台任务、产生 Agent 事件 ………………………… 【平台预览】
 ```
 
-现状：bmad 目前只有到平台的一条出站连接，还不能接受本机脑连入，也不能转发 agent 能力。所需的 SDK 部件（`ListenUnixSocket`、`Harness.DialExecutor`、agent 能力）已在 0.4.0 发布。
+现状：bmad 目前只有到平台的一条出站连接，还不能接受本机脑连入，也不能转发 agent 能力。所需的 SDK 部件（`ListenUnixSocket`、`Harness.DialExecutor`、agent 能力）已在 1.0.0 发布。
 
 ### 方案 B：Desktop 内嵌手
 
@@ -158,7 +158,7 @@ bma-executor-sdk（Go）
 
 ## 5. 能力现状一览
 
-| 能力 | 协议 | 平台 | bmad | Go SDK 0.4.x |
+| 能力 | 协议 | 平台 | bmad | Go SDK 1.0.0 |
 | --- | --- | --- | --- | --- |
 | 注册/心跳/重连/drain/4004 替换 | v1 | 已有 | 已有 | 已有（两端） |
 | `tool.call`（bash、文件工具） | v1 | environment 路径已有；机器路径不用 `tool.call` | 只实现 `bash` | `Core`：bash/read/write/edit/glob/grep |

@@ -5,8 +5,8 @@
 | 示例 | 能做什么 | 依赖 | 状态 |
 | --- | --- | --- | --- |
 | 1A：云端脑 → bmad（本机手） | 平台 agent 在你的电脑上跑 `run_command`/进程工具/终端/技能/文件传输 | bmad ≥ 0.2.11、机器 token | 【已有】 |
-| 1B：云端脑 → SDK 手（`Core`） | 平台按 `tool.call` 派发 bash/文件工具与 stdio MCP | selfhost environment + environment key；Go SDK 0.4.0 | 【已有】（平台派发 MCP server【即将提供】） |
-| 2：本机脑 → 本机手 → 事件回平台 | 本机脑经 loopback 驱动同一执行核心；agent 事件回传平台 | SDK 0.4.0（Go、TypeScript、Python）；平台 agent 能力 | 本机部分【已有】；回平台部分【预览】（仅文本输入） |
+| 1B：云端脑 → SDK 手（`Core`） | 平台按 `tool.call` 派发 bash/文件工具与 stdio MCP | selfhost environment + environment key；Go SDK 1.0.0 | 【已有】（平台派发 MCP server【即将提供】） |
+| 2：本机脑 → 本机手 → 事件回平台 | 本机脑经 loopback 驱动同一执行核心；agent 事件回传平台 | SDK 1.0.0（Go、TypeScript、Python）；平台 agent 能力 | 本机部分【已有】；回平台部分【预览】（仅文本输入） |
 
 ---
 

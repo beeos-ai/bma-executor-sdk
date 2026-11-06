@@ -13,13 +13,13 @@ bmad's execution model and the BMA server speak the same contract.
 
 | Language | Package | Install |
 | --- | --- | --- |
-| Go | [![Go Reference](https://pkg.go.dev/badge/github.com/beeos-ai/bma-executor-sdk.svg)](https://pkg.go.dev/github.com/beeos-ai/bma-executor-sdk) `github.com/beeos-ai/bma-executor-sdk` (package `bmaexecutor`, this directory) | `go get github.com/beeos-ai/bma-executor-sdk@v0.4.9` |
-| TypeScript | [![npm](https://img.shields.io/npm/v/@beeos-ai/bma-executor-sdk.svg)](https://www.npmjs.com/package/@beeos-ai/bma-executor-sdk) [`@beeos-ai/bma-executor-sdk`](typescript) | `npm install @beeos-ai/bma-executor-sdk@0.4.9` |
-| Python | [![PyPI](https://img.shields.io/pypi/v/bma-executor-sdk.svg)](https://pypi.org/project/bma-executor-sdk/) [`bma-executor-sdk`](python) (`bma_executor_sdk`) | `pip install bma-executor-sdk==0.4.9` |
+| Go | [![Go Reference](https://pkg.go.dev/badge/github.com/beeos-ai/bma-executor-sdk.svg)](https://pkg.go.dev/github.com/beeos-ai/bma-executor-sdk) `github.com/beeos-ai/bma-executor-sdk` (package `bmaexecutor`, this directory) | `go get github.com/beeos-ai/bma-executor-sdk@v1.0.0` |
+| TypeScript | [![npm](https://img.shields.io/npm/v/@beeos-ai/bma-executor-sdk.svg)](https://www.npmjs.com/package/@beeos-ai/bma-executor-sdk) [`@beeos-ai/bma-executor-sdk`](typescript) | `npm install @beeos-ai/bma-executor-sdk@1.0.0` |
+| Python | [![PyPI](https://img.shields.io/pypi/v/bma-executor-sdk.svg)](https://pypi.org/project/bma-executor-sdk/) [`bma-executor-sdk`](python) (`bma_executor_sdk`) | `pip install bma-executor-sdk==1.0.0` |
 
 | | |
 | --- | --- |
-| Version | 0.4.9 (tag `v0.4.9`, all three languages), see [CHANGELOG](CHANGELOG.md) |
+| Version | 1.0.0 (tag `v1.0.0`, all three languages), see [CHANGELOG](CHANGELOG.md) |
 | Protocol | `bma.executor.v1.1` (the harness also accepts `v1`; contract 1.1.0, [`lock.json`](contracts/bma/executor/lock.json)) |
 | Runtimes | Go 1.24+, Node.js 20+ (ESM), Python 3.10+ |
 | Integration guide | [docs/executor](docs/executor/README.md) ([中文](docs/executor/README.zh-CN.md)) |

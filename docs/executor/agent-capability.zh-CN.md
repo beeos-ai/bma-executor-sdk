@@ -7,7 +7,7 @@
 | 部分 | 位置 | 状态 |
 | --- | --- | --- |
 | 契约（方法、[`schemas/agent.json`](../../contracts/bma/executor/schemas/agent.json)、一致性示例） | [`contracts/bma/executor`](../../contracts/bma/executor)（`bma.executor.v1.1`，契约 1.1.0） | 【已有】 |
-| SDK：executor 侧 `ServeAgent` / `AgentHandler`，harness 侧 `AgentPlatform` | bma-executor-sdk 0.4.0（Go、TypeScript、Python） | 【已有】 |
+| SDK：executor 侧 `ServeAgent` / `AgentHandler`，harness 侧 `AgentPlatform` | bma-executor-sdk 1.0.0（Go、TypeScript、Python） | 【已有】 |
 | 平台侧（绑定、BMA API 下发任务、事件入库与 SSE、interactions 映射） | BMA 平台 | 【预览】 |
 
 本章描述外部接入方需要实现/依赖的线上契约。方法名、字段以 [`contracts/bma/executor`](../../contracts/bma/executor) 中的契约为准。

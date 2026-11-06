@@ -2,7 +2,7 @@
 
 [English](local-connection.md) · [总览](README.zh-CN.md)
 
-本机脑 ↔ 本机手用的是与云端同一套 Executor Protocol 消息，只是传输与鉴权不同。除特别标注外，本文内容均已在 bma-executor-sdk 0.4.0 提供。
+本机脑 ↔ 本机手用的是与云端同一套 Executor Protocol 消息，只是传输与鉴权不同。除特别标注外，本文内容均已在 bma-executor-sdk 1.0.0 提供。
 
 | 传输 | 谁监听 | Go | TypeScript | Python |
 | --- | --- | --- | --- | --- |
