@@ -76,11 +76,17 @@ type ProcessContext struct {
 	Metadata       map[string]string
 }
 
-// LaunchRequest is one command process about to start.
+// LaunchRequest is one command process or package install about to start.
 type LaunchRequest struct {
 	ProcessContext
-	Argv []string
-	// Cwd is the requested cwd as sent (not resolved or confined).
+	// PackageInstall is set for a process.start package_install and nil for
+	// a command. Argv, Cwd and Env are then the installer's fixed command
+	// (PackageInstallCommand): the hook may wrap it, change its environment
+	// or directory, or refuse it, but the packages come from here.
+	PackageInstall *ProcessPackageInstall
+	Argv           []string
+	// Cwd is the requested cwd as sent (not resolved or confined); for a
+	// package install, the installer command's Dir.
 	Cwd string
 	// DefaultCwd is the session workspace, the cwd used when the hook
 	// returns no Dir and the request names none.
@@ -101,9 +107,11 @@ type LaunchSpec struct {
 	Env []string
 }
 
-// LaunchFunc is called once per new command process (not for replays, file
-// transfers or package installs), after the session's files are synced and
-// before it is spawned. It may choose the directory (for example from the
+// LaunchFunc is called once per new command process or package install (not
+// for replays or file transfers), after the session's files are synced and
+// before it is spawned. A package install calls the package manager and may
+// run install scripts, so a hook that confines or refuses commands should
+// check LaunchRequest.PackageInstall too. It may choose the directory (for example from the
 // session's metadata), wrap argv in a sandbox command (sandbox-exec, bwrap)
 // and change the environment. Returning an error refuses the start: an
 // *RPCError (NewReasonError) is answered as is, so the harness sees its
@@ -532,6 +540,9 @@ type launchPlan struct {
 	cwd          string
 	argv, env    []string
 	filesSession string
+	// install is the installer's command of a package install, with the
+	// Launch hook's changes applied.
+	install *PackageInstallCommand
 }
 
 // prepare validates the command's cwd and env, syncs the agent session's
@@ -567,6 +578,9 @@ func (p *processes) prepare(ctx context.Context, req Request, params ProcessStar
 		}
 		plan.filesSession = plan.process.AgentSessionID
 	}
+	if params.PackageInstall != nil {
+		return p.prepareInstall(ctx, session, plan, params)
+	}
 	if !command || p.opts.Launch == nil {
 		return plan, nil
 	}
@@ -574,16 +588,12 @@ func (p *processes) prepare(ctx context.Context, req Request, params ProcessStar
 	if err != nil {
 		return launchPlan{}, spawnFailed(err)
 	}
-	spec, err := p.opts.Launch(ctx, LaunchRequest{
+	spec, err := p.launch(ctx, LaunchRequest{
 		ProcessContext: plan.process, Argv: slices.Clone(plan.argv), Cwd: params.Cwd,
 		DefaultCwd: defaultCwd, Env: slices.Clone(plan.env),
 	})
 	if err != nil {
-		var rpcErr *RPCError
-		if errors.As(err, &rpcErr) {
-			return launchPlan{}, rpcErr
-		}
-		return launchPlan{}, spawnFailed(fmt.Errorf("launch: %w", err))
+		return launchPlan{}, err
 	}
 	if len(spec.Argv) > 0 {
 		plan.argv = spec.Argv
@@ -604,6 +614,61 @@ func (p *processes) prepare(ctx context.Context, req Request, params ProcessStar
 	return plan, nil
 }
 
+// launch runs the Launch hook and maps its error: an *RPCError is answered
+// as is, any other error is spawn_failed.
+func (p *processes) launch(ctx context.Context, req LaunchRequest) (LaunchSpec, error) {
+	spec, err := p.opts.Launch(ctx, req)
+	if err != nil {
+		var rpcErr *RPCError
+		if errors.As(err, &rpcErr) {
+			return LaunchSpec{}, rpcErr
+		}
+		return LaunchSpec{}, spawnFailed(fmt.Errorf("launch: %w", err))
+	}
+	return spec, nil
+}
+
+// prepareInstall builds the installer's command and, with a Launch hook,
+// lets it wrap, re-environ, move or refuse the install.
+func (p *processes) prepareInstall(ctx context.Context, session *CoreSession, plan launchPlan, params ProcessStartParams) (launchPlan, error) {
+	command, err := p.opts.PackageInstaller.PackageInstallCommand(params.ProcessID, *params.PackageInstall)
+	if err != nil {
+		return launchPlan{}, invalidParams("%v", err)
+	}
+	if len(command.Argv) == 0 {
+		return launchPlan{}, spawnFailed(errors.New("package installer returned no command"))
+	}
+	if p.opts.Launch != nil {
+		defaultCwd, err := session.ResolveCwd("")
+		if err != nil {
+			return launchPlan{}, spawnFailed(err)
+		}
+		install := *params.PackageInstall
+		install.Packages = slices.Clone(install.Packages)
+		spec, err := p.launch(ctx, LaunchRequest{
+			ProcessContext: plan.process, PackageInstall: &install, Argv: slices.Clone(command.Argv),
+			Cwd: command.Dir, DefaultCwd: defaultCwd, Env: slices.Clone(command.Env),
+		})
+		if err != nil {
+			return launchPlan{}, err
+		}
+		if len(spec.Argv) > 0 {
+			command.Argv = spec.Argv
+		}
+		if spec.Env != nil {
+			command.Env = spec.Env
+		}
+		switch {
+		case spec.Dir != "" && !filepath.IsAbs(spec.Dir):
+			return launchPlan{}, spawnFailed(fmt.Errorf("launch: dir %q is not absolute", spec.Dir))
+		case spec.Dir != "":
+			command.Dir = spec.Dir
+		}
+	}
+	plan.install = &command
+	return plan, nil
+}
+
 // create starts the process for a prepared start request. Callers hold the
 // table lock.
 func (p *processes) create(plan launchPlan, params ProcessStartParams) (*process, error) {
@@ -611,7 +676,7 @@ func (p *processes) create(plan launchPlan, params ProcessStartParams) (*process
 		return p.startTransfer(plan.process, params), nil
 	}
 	if params.PackageInstall != nil {
-		return p.startPackageInstall(params)
+		return p.startPackageInstall(params, *plan.install)
 	}
 	env := plan.env
 	var release func()
@@ -636,14 +701,7 @@ func (p *processes) create(plan launchPlan, params ProcessStartParams) (*process
 
 // startPackageInstall runs the installer's fixed command with stdin closed;
 // only a privileged command keeps the executor's identity.
-func (p *processes) startPackageInstall(params ProcessStartParams) (*process, error) {
-	command, err := p.opts.PackageInstaller.PackageInstallCommand(params.ProcessID, *params.PackageInstall)
-	if err != nil {
-		return nil, invalidParams("%v", err)
-	}
-	if len(command.Argv) == 0 {
-		return nil, spawnFailed(errors.New("package installer returned no command"))
-	}
+func (p *processes) startPackageInstall(params ProcessStartParams, command PackageInstallCommand) (*process, error) {
 	runAs := p.core.opts.RunAs
 	if command.Privileged {
 		runAs = nil

@@ -49,6 +49,28 @@ func TestLaunchPolicyRefusals(t *testing.T) {
 	}
 }
 
+// A process without agent_session_id (no session to check the owner or the
+// workspace against) is refused instead of falling back to a default folder.
+func TestAdmitRefusesAProcessWithoutASession(t *testing.T) {
+	p, _ := testPolicy(t)
+	requireReason(t, p.admit(bmaexecutor.LaunchRequest{Argv: []string{"true"}}), bmaexecutor.ReasonSessionRejected)
+	req := bmaexecutor.LaunchRequest{Argv: []string{"true"}}
+	req.AgentSessionID = "sesn_1"
+	if err := p.admit(req); err != nil {
+		t.Fatalf("a command of a session = %v", err)
+	}
+}
+
+// A package install writes outside the folder; the example offers no local
+// confirmation, so it refuses.
+func TestAdmitRefusesPackageInstalls(t *testing.T) {
+	p, _ := testPolicy(t)
+	req := bmaexecutor.LaunchRequest{Argv: []string{"apt-get", "install", "jq"},
+		PackageInstall: &bmaexecutor.ProcessPackageInstall{Manager: bmaexecutor.PackageManagerApt, Packages: []string{"jq"}}}
+	req.AgentSessionID = "sesn_1"
+	requireReason(t, p.admit(req), bmaexecutor.ReasonLocalConfirmationDenied)
+}
+
 func TestLaunchPolicyChoosesTheFolder(t *testing.T) {
 	p, folder := testPolicy(t)
 	spec, err := p.launch(session("u_42", "ws_7"), bmaexecutor.LaunchRequest{Argv: []string{"true"}, Cwd: "src"})

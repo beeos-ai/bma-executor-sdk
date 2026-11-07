@@ -6,6 +6,12 @@
 // and runs the command in this machine's folder for the reference. BMA never
 // stores the path.
 //
+// A process.start without metadata.agent_session_id has no session to check
+// against (for example a terminal a person opens in the console): it is refused
+// with session_rejected, never run in a default folder. A package install runs
+// a package manager that writes outside the folder: this example has no local
+// confirmation, so it refuses with local_confirmation_denied.
+//
 // TypeScript has no built-in process runtime (Go's ProcessOptions.Launch):
 // the executor serves process.* itself. This example keeps output in memory
 // and serves process.start and process.read only.
@@ -36,6 +42,12 @@ const processes = new Map()
 client.onRequest('process.start', async (params) => {
   const existing = processes.get(params.process_id)
   if (existing) return state(existing) // a replayed start
+  if (!params.metadata?.agent_session_id) {
+    throw RpcError.withReason(Code.Forbidden, ErrorReason.SessionRejected, 'the process names no agent session')
+  }
+  if (params.package_install) {
+    throw RpcError.withReason(Code.Forbidden, ErrorReason.LocalConfirmationDenied, 'package installs need a local confirmation this executor does not offer')
+  }
   const session = await client.sessionContext(params.process_id)
   if (session.metadata.owner !== owner) {
     throw RpcError.withReason(Code.Forbidden, ErrorReason.SessionRejected, 'this machine does not serve the session owner')

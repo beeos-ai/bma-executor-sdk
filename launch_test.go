@@ -152,3 +152,94 @@ func TestSessionFileTransfererGetsTheSession(t *testing.T) {
 		t.Fatalf("session transfer calls = %+v", transfer.calls)
 	}
 }
+
+func installParams(id string, packages ...string) ProcessStartParams {
+	return ProcessStartParams{
+		ProcessID: id, Stderr: StderrMerge, WaitMS: 5000,
+		Metadata:       map[string]string{MetadataAgentSessionID: "sesn_pkg"},
+		PackageInstall: &ProcessPackageInstall{Manager: PackageManagerApt, Packages: packages},
+	}
+}
+
+// A package install goes through Launch like a command: the hook sees the
+// session, the install and the installer's fixed command, and may wrap it.
+func TestLaunchWrapsAPackageInstall(t *testing.T) {
+	installer := &fakeInstaller{}
+	folder := t.TempDir()
+	recorder := &launchRecorder{launch: func(req LaunchRequest) (LaunchSpec, error) {
+		argv := append([]string{"sh", "-c", `echo "wrapped $PWD $WRAP"; exec "$@"`, "sh"}, req.Argv...)
+		return LaunchSpec{Dir: folder, Argv: argv, Env: append(slices.Clone(req.Env), "WRAP=yes")}, nil
+	}}
+	h := newProcessHarness(t, CoreOptions{}, ProcessOptions{PackageInstaller: installer, Launch: recorder.hook})
+	state := h.mustStart(t, installParams("pkg_wrap", "jq", "g++"))
+	if state.State != ProcessExited || *state.ExitCode != 0 {
+		t.Fatalf("install = %+v", state)
+	}
+	resolved, err := filepath.EvalSymlinks(folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := readAll(t, h.executor, h.session, "pkg_wrap")
+	if !strings.Contains(out, "wrapped "+resolved+" yes\n") || !strings.HasSuffix(out, ":apt jq g++") {
+		t.Fatalf("output = %q", out)
+	}
+	calls := recorder.calls()
+	if len(calls) != 1 {
+		t.Fatalf("launch calls = %+v", calls)
+	}
+	req := calls[0]
+	if req.PackageInstall == nil || req.PackageInstall.Manager != PackageManagerApt || !slices.Equal(req.PackageInstall.Packages, []string{"jq", "g++"}) {
+		t.Fatalf("PackageInstall = %+v", req.PackageInstall)
+	}
+	if req.AgentSessionID != "sesn_pkg" || req.ProcessID != "pkg_wrap" || len(req.Argv) == 0 || len(req.Env) == 0 {
+		t.Fatalf("request = %+v", req)
+	}
+	if got := installer.calls(); len(got) != 1 {
+		t.Fatalf("installer calls = %+v", got)
+	}
+}
+
+// A hook that refuses an install leaves no process and answers its reason; an
+// empty spec keeps the installer's own command.
+func TestLaunchRefusesAPackageInstall(t *testing.T) {
+	installer := &fakeInstaller{}
+	recorder := &launchRecorder{launch: func(req LaunchRequest) (LaunchSpec, error) {
+		if req.PackageInstall == nil {
+			t.Errorf("a command reached the install hook: %+v", req)
+		}
+		return LaunchSpec{}, NewReasonError(CodeForbidden, ReasonSessionRejected, "installs are not allowed here")
+	}}
+	h := newProcessHarness(t, CoreOptions{}, ProcessOptions{PackageInstaller: installer, Launch: recorder.hook})
+	_, err := h.start(t, installParams("pkg_denied", "jq"))
+	rpcErr := requireCode(t, err, CodeForbidden)
+	if rpcErr.Data == nil || rpcErr.Data.Reason != ReasonSessionRejected {
+		t.Fatalf("refusal = %+v data %+v", rpcErr, rpcErr.Data)
+	}
+	var list ProcessListResult
+	if err := h.executor.Call(testContext(t), MethodProcessList, ProcessListParams{SessionID: h.session}, &list); err != nil || len(list.Processes) != 0 {
+		t.Fatalf("refused install left %+v (err %v)", list.Processes, err)
+	}
+	recorder.launch = func(LaunchRequest) (LaunchSpec, error) { return LaunchSpec{}, nil }
+	state := h.mustStart(t, installParams("pkg_denied", "jq"))
+	if state.State != ProcessExited || *state.ExitCode != 0 {
+		t.Fatalf("install after the hook allows it = %+v", state)
+	}
+	if got := readAll(t, h.executor, h.session, "pkg_denied"); !strings.HasSuffix(got, ":apt jq") {
+		t.Fatalf("empty spec must keep the installer's command, output = %q", got)
+	}
+}
+
+// A replayed install does not launch again; a relative or missing Dir keeps
+// the installer's own directory rules.
+func TestLaunchRunsOncePerPackageInstall(t *testing.T) {
+	recorder := &launchRecorder{launch: func(LaunchRequest) (LaunchSpec, error) { return LaunchSpec{}, nil }}
+	h := newProcessHarness(t, CoreOptions{}, ProcessOptions{PackageInstaller: &fakeInstaller{}, Launch: recorder.hook})
+	h.mustStart(t, installParams("pkg_once", "jq"))
+	h.mustStart(t, installParams("pkg_once", "jq"))
+	if calls := recorder.calls(); len(calls) != 1 {
+		t.Fatalf("launch calls = %+v", calls)
+	}
+	recorder.launch = func(LaunchRequest) (LaunchSpec, error) { return LaunchSpec{Dir: "relative"}, nil }
+	_, err := h.start(t, installParams("pkg_rel", "jq"))
+	requireCode(t, err, CodeInternalError)
+}

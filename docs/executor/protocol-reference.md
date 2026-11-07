@@ -266,7 +266,7 @@ Every `process.*` acts on a process in an assigned session; the harness allocate
 | `stderr` | empty = separate streams; `"merge"` = OS-level dup2 into stdout (one cursor). The machine path always uses `merge` and requires the result to echo `stderr:"merge"`, else it fails as `-32012`  |
 | `wait_ms` | 0–300000: wait that long for the process to end before answering |
 | `timeout_ms` | 0–86400000: kill and end as `failed`, `reason:"timeout"` |
-| `metadata` | string map; the platform sends `tool_call_id`; session files add `agent_session_id` |
+| `metadata` | string map; the platform sends `tool_call_id`; every process an agent tool starts (command, file transfer, package install, terminal) carries `agent_session_id`, see [session context](session-context.md#which-processes-carry-agent_session_id) |
 | `io_mode` | `"pty"`: run on a 24x80 PTY; needs `process.pty`; `close_stdin` rejected |
 | `file_transfer` | `{direction: upload\|download, local_path}` instead of `argv`; needs `process.file_transfer`; excludes `argv`/`io_mode`/`git_credentials` (§6.2) |
 | `git_credentials` | `true`: per-process GitHub credential helper; needs `process.git_credentials` (§6.3) |

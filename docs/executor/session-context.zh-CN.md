@@ -13,7 +13,17 @@
 | 不在本机 | `ErrSessionContextNotFound` | `SessionContextNotFoundError` | `SessionContextNotFoundError` |
 | 不是机器范围执行端 | `ErrMachineTokenRequired` | `MachineTokenRequiredError` | `MachineTokenRequiredError` |
 
-返回 `GET /api/v1/daemon/processes/{process_id}/session` 或 `GET /api/v1/daemon/sessions/{session_id}` 的 `{id, environment_id, metadata, created_at}`，不含 agent 配置、凭据或其他会话。按会话缓存首读值；失败不缓存。`process.start` metadata 的 `agent_session_id`（`MetadataAgentSessionID`）指明会话。
+返回 `GET /api/v1/daemon/processes/{process_id}/session` 或 `GET /api/v1/daemon/sessions/{session_id}` 的 `{id, environment_id, metadata, created_at}`，不含 agent 配置、凭据或其他会话。按会话缓存，所以 metadata 是首次读取的值（见[缓存语义](#缓存语义)）；失败不缓存。`process.start` metadata 的 `agent_session_id`（`MetadataAgentSessionID`）指明会话。
+
+## 缓存语义
+
+返回值是**首次读取时**的会话：执行端按会话缓存（Go、TypeScript、Python 一致），该会话之后的所有进程看到同一份 `metadata`。会话 `metadata` 之后被补丁修改（API 允许，与 Claude Managed Agents 一致）**不保证**传到执行端。调用方不得依赖中途修改来改变会话的执行位置或主人：`workspace_ref`、`owner` 等在建会话时就写好，要改就新建会话。执行端自己也应把首次的值当作最终值并据此校验，不要为了追随变化而重复读取。失败（不存在、临时错误）不缓存，下一个进程会重新读取。
+
+这与 Claude Managed Agents 一致：worker 领取的工作项只带会话 ID、不带 metadata，worker 在领取时读一次会话并用这个值完成整次运行（[Stage files for a session](https://platform.claude.com/docs/en/managed-agents/self-hosted-sandboxes-workers#stage-files-for-a-session)，读取 metadata 是官方明说；“只读一次、不再重读”是据其 spawn 脚本推断，官方未明说）。
+
+## 哪些进程带 `agent_session_id`
+
+Agent 工具发起的进程都带 `process.start` metadata 的 `agent_session_id`：命令（`run_command`、shell 工具）、文件传输（`write_file`、`edit_file`、存储上传下载）、包安装（`install_packages`）以及 agent 打开的终端。不带它的进程不是 agent 工具发起的，例如人在控制台打开的终端：没有会话，也没有可校验的主人。按会话决策的执行端（`Launch`、会话文件、主人校验）必须显式处理缺失：返回 `session_rejected`，而不是退回默认目录。人的终端应走执行端自己掌控的另一条本地路径（自己的认证与策略），不要走会话路径。Go 中表现为 `ProcessContext.AgentSessionID == ""`；TypeScript / Python 中为 `params.metadata?.agent_session_id` / `params["metadata"].get("agent_session_id")` 缺失或为空。
 
 ## 带原因拒绝
 
@@ -21,11 +31,13 @@
 
 ## Go：`ProcessOptions.Launch`
 
-每个新命令进程调用一次（重放、文件传输、包安装不调用），在会话文件同步之后、spawn 之前。`LaunchRequest` 含执行端会话 id、进程 id、`AgentSessionID`、`Metadata`、请求的 `Argv`、未解析的 `Cwd`、会话工作区 `DefaultCwd` 与计算出的 `Env`；`LaunchSpec{Dir, Argv, Env}` 替换之，空字段保持原值（无 `Dir` 时照旧把请求 cwd 限制在工作区内；`Dir` 必须是绝对路径且不受工作区限制）。返回 `*RPCError` 原样拒绝；其他错误为 `spawn_failed`。实现 `SessionFileTransferer` 的文件传输器改收 `TransferSessionFile(ctx, ProcessContext, transfer)`。
+每个新命令进程或包安装调用一次（重放、文件传输不调用），在会话文件同步之后、spawn 之前。`LaunchRequest` 含执行端会话 id、进程 id、`AgentSessionID`、`Metadata`、请求的 `Argv`、未解析的 `Cwd`、会话工作区 `DefaultCwd` 与计算出的 `Env`。包安装时 `PackageInstall` 为管理器与包名，`Argv`、`Cwd`、`Env` 是安装器的固定命令（其 `Dir` 作为 `Cwd`）；`PackageInstall == nil` 即命令。`LaunchSpec{Dir, Argv, Env}` 替换之，空字段保持原值（无 `Dir` 时照旧把请求 cwd 限制在工作区内；`Dir` 必须是绝对路径且不受工作区限制）。返回 `*RPCError` 原样拒绝；其他错误为 `spawn_failed`。包安装会调用包管理器、可能执行安装脚本并写系统或全局目录，所以限制或拒绝命令的钩子应显式处理 `req.PackageInstall != nil`：像命令一样包装、改环境，或带原因拒绝（例如需要用户在本机确认时返回 `local_confirmation_denied`）。返回空 `LaunchSpec` 则保持安装器自己的命令、目录与环境。没有 `Launch` 钩子时包安装照旧运行。
 
-示例 [`examples/sandboxed-folder`](../../examples/sandboxed-folder)：metadata `owner` 校验（`session_rejected`）、`workspace_ref` → 本机目录（`workspace_unavailable`）、cwd 越界（`workspace_boundary`）、macOS `sandbox-exec` 包装（只允许写该目录与会话 outputs）。
+实现 `SessionFileTransferer` 的文件传输器改收 `TransferSessionFile(ctx, ProcessContext, transfer)`。
 
-TypeScript / Python 没有 process 运行时，因此不提供 Launch 钩子：执行端自己的 `process.start` handler 就是等价物（读上下文、校验、再 spawn），见 [`typescript/examples/session-context`](../../typescript/examples/session-context/main.mjs)。
+示例 [`examples/sandboxed-folder`](../../examples/sandboxed-folder)：metadata `owner` 校验（`session_rejected`）、`workspace_ref` → 本机目录（`workspace_unavailable`）、cwd 越界（`workspace_boundary`）、macOS `sandbox-exec` 包装（只允许写该目录与会话 outputs）、缺 `agent_session_id` 的进程返回 `session_rejected`、包安装返回 `local_confirmation_denied`。
+
+TypeScript / Python 没有 process 运行时，因此不提供 Launch 钩子：执行端自己的 `process.start` handler 就是等价物（读上下文、校验、再 spawn），其 params 里能看到 `package_install`，所以包安装与命令有同样的决策点。见 [`typescript/examples/session-context`](../../typescript/examples/session-context/main.mjs) 与 [`python/examples/session_context.py`](../../python/examples/session_context.py)：缺 `agent_session_id` 与 `package_install` 在读取会话上下文之前就被拒绝。
 
 ## 会话文件根
 

@@ -10,7 +10,9 @@
 // (session_rejected), resolves workspace_ref with this machine's own folder
 // table (BMA never stores the path; an unknown reference is
 // workspace_unavailable), refuses a cwd outside the folder
-// (workspace_boundary) and wraps the command in sandbox-exec.
+// (workspace_boundary) and wraps the command in sandbox-exec. A process
+// without agent_session_id is refused with session_rejected, and so is a
+// package install (local_confirmation_denied), which writes outside the folder.
 //
 //	BMA_BASE_URL=https://api.<env>.bma.beeos.ai BMA_MACHINE_TOKEN=... \
 //	go run ./examples/sandboxed-folder -owner u_42 -folder ws_7=$HOME/projects/site \
@@ -58,6 +60,25 @@ type policy struct {
 	outputs func(agentSessionID string) string
 	// wrap is true where sandbox-exec exists (macOS).
 	wrap bool
+}
+
+// admit refuses what no session or local policy can allow, before the session
+// context is read. A process without agent_session_id has no session to check
+// the owner or workspace against: it is refused with session_rejected instead
+// of falling back to a default folder. Those are processes the platform
+// starts without an agent session, such as a terminal a person opens in the
+// console. A package install runs a package manager that writes outside the
+// folder; this example has no local confirmation, so it refuses.
+func (p policy) admit(req bmaexecutor.LaunchRequest) error {
+	switch {
+	case req.AgentSessionID == "":
+		return bmaexecutor.NewReasonError(bmaexecutor.CodeForbidden, bmaexecutor.ReasonSessionRejected,
+			"the process names no agent session; this machine serves sessions only")
+	case req.PackageInstall != nil:
+		return bmaexecutor.NewReasonError(bmaexecutor.CodeForbidden, bmaexecutor.ReasonLocalConfirmationDenied,
+			"package installs need a local confirmation this executor does not offer")
+	}
+	return nil
 }
 
 // launch decides how one process of a session starts.
@@ -151,6 +172,9 @@ func main() {
 	}
 	var client *bmaexecutor.Client
 	launch := func(ctx context.Context, req bmaexecutor.LaunchRequest) (bmaexecutor.LaunchSpec, error) {
+		if err := local.admit(req); err != nil {
+			return bmaexecutor.LaunchSpec{}, err
+		}
 		session, err := client.SessionContext(ctx, req.ProcessID)
 		if errors.Is(err, bmaexecutor.ErrSessionContextNotFound) {
 			return bmaexecutor.LaunchSpec{}, bmaexecutor.NewReasonError(bmaexecutor.CodeForbidden,

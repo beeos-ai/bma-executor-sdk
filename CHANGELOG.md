@@ -25,6 +25,25 @@ Additive; no breaking change ([MIGRATION](MIGRATION.md#110)). Guide:
   per-session session files reference implementation (bmad's `os.Root` and
   no-follow guards, concurrent sessions) that advertises
   `session_files.root`. Example `examples/sandboxed-folder`.
+- **Go:** `Launch` also runs for a package install (`process.start`
+  `package_install`): `LaunchRequest.PackageInstall` is set and `Argv` /
+  `Cwd` / `Env` are the installer's fixed command, which the hook may wrap,
+  re-environ, move or refuse with a `data.reason`, so an executor cannot be
+  bypassed through `install_packages`. An empty `LaunchSpec` keeps the
+  installer's command; without `Launch` nothing changes. TypeScript and
+  Python see `package_install` in their own `process.start` handler
+  (examples `typescript/examples/session-context`,
+  `python/examples/session_context.py`).
+- **Example `sandboxed-folder`:** a process without `agent_session_id` is
+  refused with `session_rejected` (no fallback to a default folder) and a
+  package install with `local_confirmation_denied`.
+- **Docs:** [session-context](docs/executor/session-context.md) states that
+  the session `metadata` is the first read's (cached; a mid-session change
+  is not guaranteed to reach the executor and must not be used to move a
+  session or change its owner, as a Claude Managed Agents worker reads
+  metadata once when it claims work) and which processes carry
+  `agent_session_id` (all started by agent tools; a person's console
+  terminal has none).
 - **Go:** the module needs Go 1.25 (`os.Root.MkdirAll` / `Rename`).
 - TypeScript and Python have no process runtime and get no Launch hook: the
   executor's `process.start` handler is the equivalent (example

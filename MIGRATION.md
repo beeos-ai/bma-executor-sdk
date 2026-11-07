@@ -13,6 +13,10 @@ opt-in ([guide](docs/executor/session-context.md)):
 - `ProcessOptions` gains `Launch` and `SessionFiles`; leaving them nil keeps
   1.0 behavior (cwd confined to the workspace, no `session_files`
   capability, `/mnt/session` on the platform side).
+- `Launch` is also called for a package install (`LaunchRequest.PackageInstall`
+  is non-nil, `Argv`/`Env` are the installer's command); a hook that only
+  handles commands should return an empty `LaunchSpec` for them or refuse
+  them explicitly.
 - `FileTransferer` is unchanged; implement `SessionFileTransferer` as well
   to receive the session with each transfer.
 - `Capabilities.SessionFiles` / `session_files` is a new optional field;

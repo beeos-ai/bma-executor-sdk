@@ -13,7 +13,17 @@ A machine-scoped executor (machine daemon token in `EnvironmentKey` / `environme
 | not on this machine | `ErrSessionContextNotFound` | `SessionContextNotFoundError` | `SessionContextNotFoundError` |
 | not a machine-scoped executor | `ErrMachineTokenRequired` | `MachineTokenRequiredError` | `MachineTokenRequiredError` |
 
-The result is `{id, environment_id, metadata, created_at}` from `GET /api/v1/daemon/processes/{process_id}/session` or `GET /api/v1/daemon/sessions/{session_id}`; it never contains agent configuration, credentials or other sessions. Results are cached per session (metadata is read once, as of the session's start); failures are not cached. `process.start` metadata `agent_session_id` (`MetadataAgentSessionID`) names the session.
+The result is `{id, environment_id, metadata, created_at}` from `GET /api/v1/daemon/processes/{process_id}/session` or `GET /api/v1/daemon/sessions/{session_id}`; it never contains agent configuration, credentials or other sessions. Results are cached per session, so the metadata is the first read's (see [Cached metadata](#cached-metadata)); failures are not cached. `process.start` metadata `agent_session_id` (`MetadataAgentSessionID`) names the session.
+
+## Cached metadata
+
+The result is the session as of the first read: the executor caches it per session (Go, TypeScript and Python alike) and every later process of that session sees the same `metadata`. A later `metadata` patch on the session (the API allows it, as Claude Managed Agents does) is not guaranteed to reach the executor. Callers must not rely on a mid-session change to move a session to another location or owner: set `workspace_ref`, `owner` and the like when creating the session, and create a new session to change them. An executor should itself treat the first value as final and check it, not re-read it to follow changes. Failures (`not found`, transient errors) are not cached, so the next process asks again.
+
+This matches Claude Managed Agents: the work item a worker claims carries the session id but not the metadata, so the worker reads the session once when it takes the work and uses that value for the run ([Stage files for a session](https://platform.claude.com/docs/en/managed-agents/self-hosted-sandboxes-workers#stage-files-for-a-session), the metadata read is stated there; "read once, not re-read" is inferred from its spawn script, not stated).
+
+## Which processes carry `agent_session_id`
+
+Every process an agent tool starts carries `process.start` metadata `agent_session_id`: commands (`run_command`, shell tools), file transfers (`write_file`, `edit_file`, storage upload and download), package installs (`install_packages`) and terminals the agent opens. A process without it is not an agent tool's: for example a terminal a person opens in the console, which has no session and no owner to check. An executor that decides by session (`Launch`, session files, owner check) must handle the missing id explicitly: refuse with `session_rejected` instead of falling back to a default folder. Offer a person's terminal through a separate local path the executor itself controls (its own authentication and policy), not through the session path. Go delivers it as `ProcessContext.AgentSessionID == ""`; in TypeScript and Python it is `params.metadata?.agent_session_id` / `params["metadata"].get("agent_session_id")` being absent or empty.
 
 ## Refusing with a reason
 
@@ -34,13 +44,15 @@ The set is open: any other value is passed through. Construct the error with Go 
 
 ## Go: `ProcessOptions.Launch`
 
-`Launch(ctx, LaunchRequest) (LaunchSpec, error)` runs once per new command process (not for replays, file transfers or package installs), after the session's files are synced and before spawning. `LaunchRequest` carries the executor session id, process id, `AgentSessionID`, `Metadata`, the requested `Argv`, the unresolved `Cwd`, the session workspace `DefaultCwd` and the computed `Env`. `LaunchSpec{Dir, Argv, Env}` replaces them; an empty field keeps the request's value (no `Dir` confines the requested cwd to the workspace as without a hook; a `Dir` must be absolute and is not confined). An `*RPCError` refuses the start as is; any other error is `spawn_failed`.
+`Launch(ctx, LaunchRequest) (LaunchSpec, error)` runs once per new command process or package install (not for replays or file transfers), after the session's files are synced and before spawning. `LaunchRequest` carries the executor session id, process id, `AgentSessionID`, `Metadata`, the requested `Argv`, the unresolved `Cwd`, the session workspace `DefaultCwd` and the computed `Env`. For a package install `PackageInstall` holds the manager and packages, and `Argv`, `Cwd` and `Env` are the installer's fixed command (its `Dir` as `Cwd`); `PackageInstall == nil` is a command. `LaunchSpec{Dir, Argv, Env}` replaces them; an empty field keeps the request's value (no `Dir` confines the requested cwd to the workspace as without a hook; a `Dir` must be absolute and is not confined). An `*RPCError` refuses the start as is; any other error is `spawn_failed`.
+
+A package install calls a package manager, may run install scripts and writes system or global directories, so a hook that confines or refuses commands should handle `req.PackageInstall != nil` explicitly: wrap it like a command, change its environment, or refuse it with a reason (for example `local_confirmation_denied` when the user must confirm locally). An empty `LaunchSpec` keeps the installer's own command, directory and environment. Without a `Launch` hook installs run as before.
 
 A file transferer that implements `SessionFileTransferer` gets `TransferSessionFile(ctx, ProcessContext, transfer)` instead of `TransferFile`, so it can check a path against the session's folder.
 
-See [`examples/sandboxed-folder`](../../examples/sandboxed-folder): metadata `owner` check (`session_rejected`), `workspace_ref` → local folder (`workspace_unavailable`), cwd outside the folder (`workspace_boundary`), command wrapped in macOS `sandbox-exec` that only allows writes to the folder and the session's outputs.
+See [`examples/sandboxed-folder`](../../examples/sandboxed-folder): metadata `owner` check (`session_rejected`), `workspace_ref` → local folder (`workspace_unavailable`), cwd outside the folder (`workspace_boundary`), command wrapped in macOS `sandbox-exec` that only allows writes to the folder and the session's outputs, a process without `agent_session_id` refused with `session_rejected`, and a package install refused with `local_confirmation_denied`.
 
-TypeScript and Python have no process runtime, so there is no Launch hook: the executor's own `process.start` handler is the equivalent (read the context, check, then spawn). See [`typescript/examples/session-context`](../../typescript/examples/session-context/main.mjs).
+TypeScript and Python have no process runtime, so there is no Launch hook: the executor's own `process.start` handler is the equivalent (read the context, check, then spawn), and it sees `package_install` in its params, so installs get the same decision point as commands. See [`typescript/examples/session-context`](../../typescript/examples/session-context/main.mjs) and [`python/examples/session_context.py`](../../python/examples/session_context.py): missing `agent_session_id` and `package_install` are refused before the session context is read.
 
 ## Session files root
 
