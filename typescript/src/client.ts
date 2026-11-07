@@ -69,6 +69,8 @@ import { RpcPeer, type LogLevel, type Logger } from './rpc.js'
 import { dialWebSocket, FrameChannel, type Conn } from './transport.js'
 
 export const DEFAULT_BASE_URL = 'https://api.bma.beeos.ai'
+/** The environment variable that carries the machine id of a machine-scoped executor (injected by the machine pool template). */
+export const MACHINE_ID_ENV = 'BMA_MACHINE_ID'
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 /** 0 reconnects until stop(), as gRPC connection backoff and long-running agents (GitHub Actions runner, Buildkite agent) do. */
 export const DEFAULT_MAX_RECONNECT_ATTEMPTS = 0
@@ -123,9 +125,19 @@ export function staticToken(wsUrl: string, token = ''): TokenSource {
 }
 
 export interface WebSocketDialerOptions {
+  /**
+   * The selfhost environment (POST {baseUrl}/v1/environments/{environmentId}/token). environmentId and
+   * machineId are alternatives. With neither, the legacy alias POST {baseUrl}/api/v1/executors/token
+   * serves a machine daemon token (removed in contract 2.0).
+   */
   environmentId: string
+  /**
+   * The machine of a machine-scoped executor (POST {baseUrl}/v1/machines/{machineId}/token). Defaults to
+   * BMA_MACHINE_ID when environmentId is empty. It must equal the machine of the credential, else 404.
+   */
+  machineId?: string
   executor: ExecutorInfo
-  /** POST {baseUrl}/v1/executors/token with environmentKey, unless tokenSource is set. */
+  /** POST the token exchange to {baseUrl} with environmentKey, unless tokenSource is set. */
   baseUrl?: string
   environmentKey?: string
   tokenSource?: TokenSource
@@ -156,7 +168,21 @@ export function webSocketDialer(options: WebSocketDialerOptions): Dialer {
   return async (target) => dialWithToken(options, await fetchToken(), target)
 }
 
-/** options.tokenSource, or POST {baseUrl}/v1/executors/token with environmentKey. */
+/** The machine id of a machine-scoped executor: options.machineId, else BMA_MACHINE_ID when there is no environmentId. */
+function machineIdOf(options: Pick<WebSocketDialerOptions, 'environmentId' | 'machineId'>): string {
+  if (options.environmentId && options.machineId) throw new Error('environmentId and machineId are alternatives; set one')
+  if (options.environmentId) return ''
+  return options.machineId ?? process.env[MACHINE_ID_ENV]?.trim() ?? ''
+}
+
+/** The token exchange of the executor's own resource (ADR-0023 1.3); the legacy alias serves a machine token without an id. */
+function tokenPath(environmentId: string, machineId: string): string {
+  if (environmentId) return `/v1/environments/${encodeURIComponent(environmentId)}/token`
+  if (machineId) return `/v1/machines/${encodeURIComponent(machineId)}/token`
+  return '/api/v1/executors/token'
+}
+
+/** options.tokenSource, or the token exchange with environmentKey. */
 function executorTokenSource(options: WebSocketDialerOptions): TokenSource {
   if (!options.tokenSource && !options.environmentKey?.trim()) throw new Error('environmentKey or tokenSource is required')
   return (
@@ -164,8 +190,7 @@ function executorTokenSource(options: WebSocketDialerOptions): TokenSource {
     (async () => {
       // The deployment origin (as BMA_BASE_URL in bma-sdk); a trailing /api/v1 is dropped.
       const base = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '').replace(/\/api\/v1$/, '')
-      // A machine daemon token (no environmentId) is exchanged by bma-api, an environment key by managed-agents.
-      const path = options.environmentId ? '/v1/executors/token' : '/api/v1/executors/token'
+      const path = tokenPath(options.environmentId, machineIdOf(options))
       const response = await (options.fetch ?? fetch)(`${base}${path}`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${options.environmentKey}`, 'Content-Type': 'application/json' },
@@ -389,6 +414,7 @@ export class ExecutorClient {
   constructor(options: ExecutorClientOptions) {
     if (options.environmentId === undefined) throw new Error('environmentId is required')
     if (!options.executor?.name) throw new Error('executor.name is required')
+    machineIdOf(options)
     this.options = options
     this.dialer = options.dialer ?? webSocketDialer(options)
     if (!options.dialer) this.tokenSource = executorTokenSource(options)

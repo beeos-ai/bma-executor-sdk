@@ -144,7 +144,7 @@ func startTestServer(t *testing.T, session func(ctx context.Context, s *testSess
 	ts := &testServer{done: make(chan error, 1)}
 	ts.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v1/executors/token":
+		case "/v1/environments/env_test/token":
 			if got := r.Header.Get("Authorization"); got != "Bearer env_key" {
 				http.Error(w, "authorization", http.StatusUnauthorized)
 				return
@@ -154,10 +154,10 @@ func startTestServer(t *testing.T, session func(ctx context.Context, s *testSess
 				ExecutorID:   "exec_test",
 				Token:        "jwt_test",
 				ExpiresIn:    300,
-				WSURL:        "ws://" + r.Host + "/v1/executors/channel",
+				WSURL:        "ws://" + r.Host + "/v1/environments/env_test/channel",
 				ChannelScope: []string{ChannelControl, ChannelMCP},
 			})
-		case "/v1/executors/channel":
+		case "/v1/environments/env_test/channel":
 			if got := r.Header.Get("Authorization"); got != "Bearer jwt_test" {
 				http.Error(w, "authorization", http.StatusUnauthorized)
 				return
@@ -593,16 +593,16 @@ func TestMCPChannelDialsWithScopedQuery(t *testing.T) {
 	handled := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v1/executors/token":
+		case "/v1/environments/env_test/token":
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(ExecutorTokenResponse{
 				ExecutorID:   "exec_test",
 				Token:        "jwt_mcp",
 				ExpiresIn:    300,
-				WSURL:        "ws://" + r.Host + "/v1/executors/channel",
+				WSURL:        "ws://" + r.Host + "/v1/environments/env_test/channel",
 				ChannelScope: []string{ChannelMCP},
 			})
-		case "/v1/executors/channel":
+		case "/v1/environments/env_test/channel":
 			defer func() { handled <- checkMCPRequest(r) }()
 			if r.URL.Query().Get("channel") != "mcp" {
 				http.Error(w, "channel", http.StatusBadRequest)
@@ -661,7 +661,7 @@ func checkMCPRequest(r *http.Request) error {
 }
 
 func TestMCPChannelURLKeepsExistingQuery(t *testing.T) {
-	got, _, err := channelURL(nil, "wss://example.test/v1/executors/channel?region=eu",
+	got, _, err := channelURL(nil, "wss://example.test/v1/environments/env_test/channel?region=eu",
 		ChannelTarget{Channel: ChannelMCP, SessionID: "sess_1", ServerKey: "chrome"})
 	if err != nil {
 		t.Fatalf("channelURL: %v", err)
@@ -681,7 +681,7 @@ func TestMCPChannelURLKeepsExistingQuery(t *testing.T) {
 			t.Errorf("query %s = %q, want %q", key, got, want)
 		}
 	}
-	if !strings.HasPrefix(got, "wss://example.test/v1/executors/channel?") {
+	if !strings.HasPrefix(got, "wss://example.test/v1/environments/env_test/channel?") {
 		t.Errorf("unexpected URL %q", got)
 	}
 }

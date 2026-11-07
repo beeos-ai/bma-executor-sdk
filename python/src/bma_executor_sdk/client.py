@@ -8,10 +8,12 @@ lifecycle, tool cancellation, retried tool results, and the MCP channel.
 from __future__ import annotations
 
 import asyncio
+import os
 import random as _random
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.parse import quote
 
 import httpx
 
@@ -64,6 +66,9 @@ if TYPE_CHECKING:
     from .generated import AgentCapability
 
 DEFAULT_BASE_URL = "https://api.bma.beeos.ai"
+# The environment variable that carries the machine id of a machine-scoped executor
+# (injected by the machine pool template).
+MACHINE_ID_ENV = "BMA_MACHINE_ID"
 DEFAULT_REQUEST_TIMEOUT = 30.0
 # 0 reconnects until stop(), as gRPC connection backoff and long-running
 # agents (GitHub Actions runner, Buildkite agent) do.
@@ -127,6 +132,7 @@ class ExecutorClient:
         environment_id: str,
         executor: ExecutorInfo,
         capabilities: Capabilities | None = None,
+        machine_id: str = "",
         environment_key: str = "",
         base_url: str = DEFAULT_BASE_URL,
         ws_url: str = "",
@@ -146,17 +152,25 @@ class ExecutorClient:
         on_log: Callable[[LogEvent], None] | None = None,
     ) -> None:
         # environment_id may be empty: a machine-scoped executor registers
-        # without one (executor.register in the v1.1 contract).
+        # without one (executor.register in the v1.1 contract). environment_id
+        # and machine_id are alternatives; machine_id defaults to BMA_MACHINE_ID
+        # when environment_id is empty. With neither, the legacy alias
+        # POST /api/v1/executors/token serves a machine daemon token.
+        if environment_id and machine_id:
+            raise ValueError("bma_executor_sdk: environment_id and machine_id are alternatives; set one")
+        if not environment_id and not machine_id:
+            machine_id = os.environ.get(MACHINE_ID_ENV, "").strip()
         if token_source is None and not environment_key.strip():
             raise ValueError("bma_executor_sdk: environment_key is required without token_source")
         if not executor.get("name"):
             raise ValueError("bma_executor_sdk: executor['name'] is required")
         self._environment_id = environment_id
+        self._machine_id = machine_id
         self._executor = executor
         self._capabilities: Capabilities = capabilities or {}
         self._environment_key = environment_key
         # The deployment origin (as BMA_BASE_URL in bma-sdk); a trailing
-        # /api/v1 is dropped so the /v1/executors paths are not nested.
+        # /api/v1 is dropped so the /v1 paths are not nested.
         self._base_url = base_url.rstrip("/").removesuffix("/api/v1")
         self._ws_url = ws_url
         self._token_source = token_source
@@ -471,6 +485,14 @@ class ExecutorClient:
         if self._on_log is not None:
             self._on_log(LogEvent(level, message, error))
 
+    def _token_path(self) -> str:
+        """The token exchange of the executor's own resource (ADR-0023 1.3)."""
+        if self._environment_id:
+            return f"/v1/environments/{quote(self._environment_id, safe='')}/token"
+        if self._machine_id:
+            return f"/v1/machines/{quote(self._machine_id, safe='')}/token"
+        return "/api/v1/executors/token"
+
     async def _fetch_token(self) -> ExecutorTokenResponse:
         if self._token_source is not None:
             token = await self._token_source()
@@ -480,9 +502,7 @@ class ExecutorClient:
         client = self._http_client or httpx.AsyncClient()
         try:
             response = await client.post(
-                # A machine daemon token (no environment id) is exchanged by
-                # bma-api, an environment key by managed-agents.
-                f"{self._base_url}{'/v1' if self._environment_id else '/api/v1'}/executors/token",
+                f"{self._base_url}{self._token_path()}",
                 json={"environment_id": self._environment_id, "executor": self._executor},
                 headers={"Authorization": f"Bearer {self._environment_key}"},
                 timeout=self._request_timeout,
@@ -936,6 +956,7 @@ def _canceled_tool_result(params: ToolCallParams, reason: str) -> ToolResultPara
 
 __all__ = [
     "DEFAULT_BASE_URL",
+    "MACHINE_ID_ENV",
     "PROTOCOL_V1",
     "PROTOCOL_V11",
     "ExecutorClient",

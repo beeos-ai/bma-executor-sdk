@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.bma.beeos.ai/schemas/file.json",
+  "title": "BMA executor bma-file types",
+  "description": "fs.mount and fs.unmount (machine-scoped executors with the fs capability). bma-file HTTP routes live on the executor host at <service_url>/machines/{machine_id}/fs/<op> (service_url ends in /v1, for example https://executor.example.com/v1; machine_id is the executor's BMA_MACHINE_ID; the previous <origin>/v1/fs/<op> stays as an alias); they are authenticated with the mount token, not executor methods.",
+  "$defs": {
+    "FsMount": {
+      "type": "object",
+      "description": "One view to mount. path is the absolute mount point on the executor host (derived from session_files by the harness). readonly is also fixed inside token; the executor mounts read-only when it is true. token is a capability token for this session and machine: keep it in memory only, never write it to disk, argv, environment or logs.",
+      "properties": {
+        "view": {
+          "type": "string",
+          "description": "uploads (FS1). Open enum: outputs, skills and memory follow."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 2
+        },
+        "readonly": {
+          "type": "boolean"
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Reserved mount tuning (string values); unknown keys are ignored."
+        }
+      },
+      "required": [
+        "view",
+        "path",
+        "readonly",
+        "token"
+      ],
+      "additionalProperties": true
+    },
+    "FsMountResult": {
+      "type": "object",
+      "description": "fs.mount result. state is \"mounted\" once every listed view is mounted and serving, or \"failed\" with error_code and error (nothing stays half-mounted).",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "mounted",
+            "failed"
+          ]
+        },
+        "error_code": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "additionalProperties": true
+    },
+    "FsUnmountResult": {
+      "type": "object",
+      "description": "fs.unmount result. pending_bytes is data not yet committed to bma-file when flush was requested (always 0 for read-only views).",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "unmounted",
+            "failed"
+          ]
+        },
+        "pending_bytes": {
+          "type": "integer"
+        },
+        "error_code": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "pending_bytes"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

@@ -29,7 +29,7 @@ func startOutageServer(t *testing.T, failStatus int, failFor int32) (*outageServ
 	o := &outageServer{registered: make(chan struct{}, 8), failStatus: failStatus, failFor: failFor}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v1/executors/token":
+		case "/v1/environments/env_test/token":
 			n := o.tokens.Add(1)
 			if n > 1 && (o.failFor < 0 || n-1 <= o.failFor) {
 				http.Error(w, "upstream unavailable", o.failStatus)
@@ -38,9 +38,9 @@ func startOutageServer(t *testing.T, failStatus int, failFor int32) (*outageServ
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(ExecutorTokenResponse{
 				ExecutorID: "exec_test", Token: "jwt_test", ExpiresIn: 300,
-				WSURL: "ws://" + r.Host + "/v1/executors/channel",
+				WSURL: "ws://" + r.Host + "/v1/environments/env_test/channel",
 			})
-		case "/v1/executors/channel":
+		case "/v1/environments/env_test/channel":
 			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV11}})
 			if err != nil {
 				return
@@ -130,13 +130,13 @@ func TestClientReconnectsWhenAHeartbeatTimesOut(t *testing.T) {
 	registered := make(chan struct{}, 8)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v1/executors/token":
+		case "/v1/environments/env_test/token":
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(ExecutorTokenResponse{
 				ExecutorID: "exec_test", Token: "jwt_test", ExpiresIn: 300,
-				WSURL: "ws://" + r.Host + "/v1/executors/channel",
+				WSURL: "ws://" + r.Host + "/v1/environments/env_test/channel",
 			})
-		case "/v1/executors/channel":
+		case "/v1/environments/env_test/channel":
 			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV11}})
 			if err != nil {
 				return
@@ -180,7 +180,7 @@ func TestClientRetriesAReconnectTokenRequestThatHangs(t *testing.T) {
 	release := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v1/executors/token":
+		case "/v1/environments/env_test/token":
 			if tokens.Add(1) == 2 {
 				select { // the second request never answers
 				case <-release:
@@ -191,9 +191,9 @@ func TestClientRetriesAReconnectTokenRequestThatHangs(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(ExecutorTokenResponse{
 				ExecutorID: "exec_test", Token: "jwt_test", ExpiresIn: 300,
-				WSURL: "ws://" + r.Host + "/v1/executors/channel",
+				WSURL: "ws://" + r.Host + "/v1/environments/env_test/channel",
 			})
-		case "/v1/executors/channel":
+		case "/v1/environments/env_test/channel":
 			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV11}})
 			if err != nil {
 				return

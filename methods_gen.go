@@ -16,6 +16,8 @@ var Requests = struct {
 	TerminalClose    RequestMethod[TerminalCloseParams, TerminalCloseResult]
 	SkillInstall     RequestMethod[SkillInstallParams, SkillInstallResult]
 	WorkspaceBackup  RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]
+	FsMount          RequestMethod[FsMountParams, FsMountResult]
+	FsUnmount        RequestMethod[FsUnmountParams, FsUnmountResult]
 }{
 	ProcessStart:     RequestMethod[ProcessStartParams, ProcessState]{Method: "process.start"},
 	ProcessRead:      RequestMethod[ProcessReadParams, ProcessReadResult]{Method: "process.read"},
@@ -28,6 +30,8 @@ var Requests = struct {
 	TerminalClose:    RequestMethod[TerminalCloseParams, TerminalCloseResult]{Method: "terminal.close"},
 	SkillInstall:     RequestMethod[SkillInstallParams, SkillInstallResult]{Method: "skill.install"},
 	WorkspaceBackup:  RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]{Method: "workspace.backup"},
+	FsMount:          RequestMethod[FsMountParams, FsMountResult]{Method: "fs.mount"},
+	FsUnmount:        RequestMethod[FsUnmountParams, FsUnmountResult]{Method: "fs.unmount"},
 }
 
 // Calls are the executor-to-harness requests a client sends:

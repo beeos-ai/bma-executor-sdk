@@ -2,19 +2,48 @@ asyncapi: 3.0.0
 id: https://contracts.bma.beeos.ai/executor.asyncapi
 info:
   title: BMA Executor Protocol channels
-  version: 1.1.0
+  version: 1.2.0
   description: WebSocket channels for bma.executor.v1 and bma.executor.v1.1. The control channel carries JSON-RPC 2.0 requests, notifications, and responses. The mcp channel carries raw MCP JSON-RPC with no BMA wrapper. PTY bytes travel on per-attach outbound host sockets (subprotocol bma.terminal.v1), not on these channels.
   license:
     name: Apache-2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
 defaultContentType: application/json
 servers:
+  machine:
+    host: "{host}"
+    protocol: wss
+    protocolVersion: "1.1"
+    pathname: /v1/machines/{machine_id}/channel
+    description: Machine-scoped executor channel (control only). Token is a short-lived executor JWT from POST /v1/machines/{machine_id}/token; machine_id must equal the machine in the credential, else 404.
+    security:
+      - $ref: "#/components/securitySchemes/executorJWT"
+    variables:
+      host:
+        default: executor.example.com
+        description: BMA executor host.
+      machine_id:
+        description: Machine id; executors read it from BMA_MACHINE_ID.
+  environment:
+    host: "{host}"
+    protocol: wss
+    protocolVersion: "1.1"
+    pathname: /v1/environments/{environment_id}/channel
+    description: Environment-scoped executor channel (control, and mcp via ?channel=mcp). Token is a short-lived executor JWT from POST /v1/environments/{environment_id}/token; environment_id must equal the environment in the credential, else 404.
+    security:
+      - $ref: "#/components/securitySchemes/executorJWT"
+    variables:
+      host:
+        default: executor.example.com
+        description: BMA executor host.
+      environment_id:
+        description: Environment id.
   control:
     host: "{host}"
     protocol: wss
     protocolVersion: "1.1"
     pathname: /v1/executors/channel
-    description: Executor control channel. Token is a short-lived executor JWT.
+    description: "Deprecated: use the machine or environment server. Legacy executor control channel, served as an alias until the legacy paths are removed (contract 2.0). Token is a short-lived executor JWT."
+    x-bma-deprecated: true
     security:
       - $ref: "#/components/securitySchemes/executorJWT"
     variables:
@@ -26,7 +55,8 @@ servers:
     protocol: wss
     protocolVersion: "1.1"
     pathname: /v1/executors/channel
-    description: Raw MCP JSON-RPC channel for one environment-origin MCP server.
+    description: "Deprecated: use the environment server with ?channel=mcp. Legacy raw MCP JSON-RPC channel for one environment-origin MCP server."
+    x-bma-deprecated: true
     security:
       - $ref: "#/components/securitySchemes/executorJWT"
     variables:
@@ -37,7 +67,11 @@ channels:
   control:
     address: /v1/executors/channel?channel=control
     title: Executor control channel
-    description: "Subprotocol bma.executor.v1.1 or bma.executor.v1; the server selects one and executor.register.protocol must equal it. Max outbound control frame: 64 KiB UTF-8. Close codes: 4001 token expired, 4003 unsupported protocol, 4004 replaced, 4005 drained."
+    x-bma-addresses:
+      machine: /v1/machines/{machine_id}/channel?channel=control
+      environment: /v1/environments/{environment_id}/channel?channel=control
+      legacy: /v1/executors/channel?channel=control
+    description: "Addresses: GET /v1/machines/{machine_id}/channel (machine-scoped) or GET /v1/environments/{environment_id}/channel (environment-scoped); address below is the deprecated legacy alias. Subprotocol bma.executor.v1.1 or bma.executor.v1; the server selects one and executor.register.protocol must equal it. Max outbound control frame: 64 KiB UTF-8. Close codes: 4001 token expired, 4003 unsupported protocol, 4004 replaced, 4005 drained."
     messages:
       executorRegister:
         $ref: "#/components/messages/executorRegister"
@@ -95,6 +129,10 @@ channels:
         $ref: "#/components/messages/skillInstall"
       workspaceBackup:
         $ref: "#/components/messages/workspaceBackup"
+      fsMount:
+        $ref: "#/components/messages/fsMount"
+      fsUnmount:
+        $ref: "#/components/messages/fsUnmount"
       turnStart:
         $ref: "#/components/messages/turnStart"
       turnInput:
@@ -118,7 +156,10 @@ channels:
   mcp:
     address: /v1/executors/channel?channel=mcp
     title: Executor MCP channel
-    description: Raw MCP JSON-RPC for one environment-origin MCP server. Connect with ?channel=mcp&session_id=<id>&server_key=<key>. No BMA wrapper and no mcp.start/mcp.frame/mcp.stop methods.
+    x-bma-addresses:
+      environment: /v1/environments/{environment_id}/channel?channel=mcp
+      legacy: /v1/executors/channel?channel=mcp
+    description: "Addresses: GET /v1/environments/{environment_id}/channel?channel=mcp; address below is the deprecated legacy alias. Raw MCP JSON-RPC for one environment-origin MCP server. Connect with ?channel=mcp&session_id=<id>&server_key=<key>. No BMA wrapper and no mcp.start/mcp.frame/mcp.stop methods."
     messages:
       mcpInitialize:
         $ref: "#/components/messages/mcpInitialize"
@@ -307,6 +348,18 @@ operations:
       $ref: "#/channels/control"
     messages:
       - $ref: "#/components/messages/workspaceBackup"
+  fsMountReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/fsMount"
+  fsUnmountReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/fsUnmount"
   turnStartReceive:
     action: receive
     channel:
@@ -361,7 +414,7 @@ components:
       name: executor.register
       title: executor.register
       summary: Register an executor connection.
-      description: Executor to harness request, the first frame on the control channel. protocol MUST equal the negotiated WebSocket subprotocol; otherwise the server answers -32010 and closes with 4003. A machine-scoped executor sends an empty environment_id. resume.active_sessions reattaches sessions after reconnect.
+      description: Executor to harness request, the first frame on the control channel. protocol MUST equal the negotiated WebSocket subprotocol; otherwise the server answers -32010 and closes with 4003. A machine-scoped executor sends an empty environment_id. resume.active_sessions reattaches sessions after reconnect. A machine-scoped executor that declares neither capabilities.process nor capabilities.agent is answered -32012 with data.reason "capability_missing" and data.capability "process" instead of a result; no runtime is bound and the connection stays unregistered.
       contentType: application/json
       payload:
         type: object
@@ -449,7 +502,7 @@ components:
       name: executor.token.refresh
       title: executor.token.refresh
       summary: Extend the connection with a fresh executor token.
-      description: Executor to harness request. Before the current token expires the executor fetches a new one from POST /v1/executors/token with its original credential and sends it on the open control channel. The harness verifies that it names the same executor, scope and machine credential as the connection and moves the connection's 4001 deadline to the new token's expiry; nothing else about the connection changes. A rejected token leaves the old deadline in place. A harness without the method answers -32601; the executor then keeps reconnecting on 4001.
+      description: Executor to harness request. Before the current token expires the executor fetches a new one from POST /v1/machines/{machine_id}/token or POST /v1/environments/{environment_id}/token (legacy alias POST /v1/executors/token) with its original credential and sends it on the open control channel. The harness verifies that it names the same executor, scope and machine credential as the connection and moves the connection's 4001 deadline to the new token's expiry; nothing else about the connection changes. A rejected token leaves the old deadline in place. A harness without the method answers -32601; the executor then keeps reconnecting on 4001.
       contentType: application/json
       payload:
         type: object
@@ -948,7 +1001,7 @@ components:
       name: tool.result
       title: tool.result
       summary: Report a tool result.
-      description: Executor to harness request, idempotent by tool_call_id and retried until accepted. Large output is uploaded first (POST /v1/executors/artifacts) and referenced by an artifact content block.
+      description: Executor to harness request, idempotent by tool_call_id and retried until accepted. Large output is uploaded first (POST /v1/environments/{environment_id}/artifacts; legacy alias POST /v1/executors/artifacts) and referenced by an artifact content block.
       contentType: application/json
       payload:
         type: object
@@ -1673,6 +1726,89 @@ components:
       x-bma-kind: request
       x-bma-channel: control
       x-bma-idempotent-by: backup_id
+    fsMount:
+      name: fs.mount
+      title: fs.mount
+      summary: Mount session file views backed by bma-file.
+      description: Harness to executor request (machine-scoped). The executor mounts each listed view at its path as a FUSE file system that reads from service_url with the view's token, and keeps the token in memory only. Idempotent by (session_id, view), so resending the same mounts with new tokens renews the tokens without remounting; a changed path or readonly remounts. Sent when the session is bound to the machine and again after a resume or reconnect, because tokens are bound to the binding epoch.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: fs.mount
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              service_url:
+                type: string
+              mounts:
+                type: array
+                minItems: 1
+                items:
+                  $ref: schemas/file.json#/$defs/FsMount
+            required:
+              - session_id
+              - service_url
+              - mounts
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: fs.mount
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: session_id+view
+    fsUnmount:
+      name: fs.unmount
+      title: fs.unmount
+      summary: Unmount the session file views.
+      description: Harness to executor request (machine-scoped). Unmounts every view of the session and drops its tokens. With flush the executor first commits pending writes (none for read-only views). Idempotent by session_id, a session with nothing mounted answers "unmounted".
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: fs.unmount
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              flush:
+                type: boolean
+            required:
+              - session_id
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: fs.unmount
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: session_id
     turnStart:
       name: turn.start
       title: turn.start
@@ -2235,8 +2371,29 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Channel-scoped executor JWT fetched from POST /v1/executors/token with an environment key or a machine daemon token. A machine-scoped JWT carries machine_id and daemon_token_id.
+      description: "Channel-scoped executor JWT fetched from POST /v1/environments/{environment_id}/token with an environment key or POST /v1/machines/{machine_id}/token with a machine daemon token (legacy alias: POST /v1/executors/token). A machine-scoped JWT carries machine_id and daemon_token_id."
+x-bma-token-endpoints:
+  - method: POST
+    path: /v1/machines/{machine_id}/token
+    authentication:
+      - machine-daemon-token
+    description: Machine-scoped executor token (owner bma-machine). machine_id must equal the machine in the credential, else 404; the executor_id of the result is exec_<machine_id>. The body environment_id is empty or absent.
+    request:
+      $ref: schemas/executor.json#/$defs/ExecutorTokenRequest
+    response:
+      $ref: schemas/executor.json#/$defs/ExecutorTokenResponse
+  - method: POST
+    path: /v1/environments/{environment_id}/token
+    authentication:
+      - environment-key
+    description: Environment-scoped executor token (owner bma-environment). environment_id must equal the environment of the key, else 404; a body environment_id, when sent, must equal it.
+    request:
+      $ref: schemas/executor.json#/$defs/ExecutorTokenRequest
+    response:
+      $ref: schemas/executor.json#/$defs/ExecutorTokenResponse
 x-bma-token-endpoint:
+  deprecated: true
+  description: Deprecated alias of the two endpoints in x-bma-token-endpoints; the credential, not the path, picks the executor kind.
   method: POST
   path: /v1/executors/token
   authentication:

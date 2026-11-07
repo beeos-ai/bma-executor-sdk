@@ -17,6 +17,8 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +27,10 @@ import (
 )
 
 const (
+	// MachineIDEnv is the environment variable that carries the machine id of
+	// a machine-scoped executor (injected by the machine pool template).
+	MachineIDEnv = "BMA_MACHINE_ID"
+
 	DefaultBaseURL        = "https://api.bma.beeos.ai"
 	DefaultRequestTimeout = 30 * time.Second
 	// DefaultMaxReconnectAttempts is 0: reconnect until Stop, as gRPC's
@@ -50,7 +56,6 @@ const (
 	maxRefusedRegistrations = 3
 
 	// Artifact upload (v1.1 §6.5).
-	artifactPath         = "/v1/executors/artifacts"
 	headerSessionID      = "X-BMA-Session-ID"
 	headerArtifactDigest = "X-BMA-Artifact-Digest"
 	headerArtifactName   = "X-BMA-Artifact-Name"
@@ -113,22 +118,28 @@ type DrainHandler func(ctx context.Context, params ExecutorDrainParams) (Executo
 // Options configures a Client.
 type Options struct {
 	// EnvironmentKey is the bearer of the token exchange: an environment key
-	// (POST /v1/executors/token), or a machine daemon token for a
-	// machine-scoped executor (empty EnvironmentID; POST
-	// /api/v1/executors/token).
+	// (POST /v1/environments/{EnvironmentID}/token), or a machine daemon token
+	// for a machine-scoped executor (POST /v1/machines/{MachineID}/token).
 	EnvironmentKey string
-	// EnvironmentID is the selfhost environment; empty registers a
-	// machine-scoped executor.
+	// EnvironmentID is the selfhost environment. EnvironmentID and MachineID
+	// are alternatives: setting both is an error. With neither the client
+	// registers a machine-scoped executor on the legacy alias
+	// POST /api/v1/executors/token (removed in contract 2.0).
 	EnvironmentID string
-	Executor      ExecutorInfo
-	Capabilities  Capabilities
+	// MachineID is the machine of a machine-scoped executor, taken from
+	// BMA_MACHINE_ID (MachineIDEnv) when empty and EnvironmentID is empty.
+	// The id must equal the machine of the credential, otherwise the server
+	// answers 404.
+	MachineID    string
+	Executor     ExecutorInfo
+	Capabilities Capabilities
 	// Protocol is the WebSocket subprotocol and executor.register protocol.
 	// Defaults to ProtocolV11.
 	Protocol string
 
 	BaseURL string
 	WSURL   string
-	// TokenSource replaces the POST /v1/executors/token bootstrap, for example
+	// TokenSource replaces the token exchange bootstrap, for example
 	// StaticToken for a local harness. When set, EnvironmentKey and BaseURL
 	// are not used.
 	TokenSource func(ctx context.Context) (ExecutorTokenResponse, error)
@@ -310,6 +321,12 @@ func NewClient(options Options) (*Client, error) {
 	if options.Executor.Name == "" {
 		return nil, errors.New("bmaexecutor: Executor.Name is required")
 	}
+	if options.EnvironmentID != "" && options.MachineID != "" {
+		return nil, errors.New("bmaexecutor: EnvironmentID and MachineID are alternatives; set one")
+	}
+	if options.EnvironmentID == "" && options.MachineID == "" {
+		options.MachineID = strings.TrimSpace(os.Getenv(MachineIDEnv))
+	}
 	if options.Protocol == "" {
 		options.Protocol = ProtocolV11
 	}
@@ -317,7 +334,7 @@ func NewClient(options Options) (*Client, error) {
 		options.BaseURL = DefaultBaseURL
 	}
 	// BaseURL is the deployment origin (as BMA_BASE_URL in bma-sdk); a
-	// trailing /api/v1 is dropped so the /v1/executors paths are not nested.
+	// trailing /api/v1 is dropped so the /v1 paths are not nested.
 	options.BaseURL = strings.TrimSuffix(strings.TrimRight(options.BaseURL, "/"), "/api/v1")
 	if options.HTTPClient == nil {
 		options.HTTPClient = http.DefaultClient
@@ -752,19 +769,22 @@ func (c *Client) rememberToolCallLocked(set map[string]struct{}, id string) {
 	set[id] = struct{}{}
 }
 
-// UploadArtifact implements POST /v1/executors/artifacts (v1.1 §6.5) with
+// UploadArtifact implements POST /v1/environments/{environment_id}/artifacts (v1.1 §6.5) with
 // the current executor token. It must finish before a tool.result references
 // the artifact; the upload is idempotent by (session, digest).
 func (c *Client) UploadArtifact(ctx context.Context, sessionID, name, mimeType string, content []byte) (ArtifactRef, error) {
 	if len(content) > DefaultMaxArtifactBytes {
 		return ArtifactRef{}, fmt.Errorf("bmaexecutor: artifact is %d bytes, limit is %d", len(content), DefaultMaxArtifactBytes)
 	}
+	if c.options.EnvironmentID == "" {
+		return ArtifactRef{}, errors.New("bmaexecutor: artifact upload needs an environment-scoped executor (EnvironmentID)")
+	}
 	c.mu.Lock()
 	token := c.token.Token
 	c.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.options.BaseURL+artifactPath, bytes.NewReader(content))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.options.BaseURL+"/v1/environments/"+url.PathEscape(c.options.EnvironmentID)+"/artifacts", bytes.NewReader(content))
 	if err != nil {
 		return ArtifactRef{}, err
 	}
@@ -798,14 +818,19 @@ func StaticToken(wsURL, token string) func(context.Context) (ExecutorTokenRespon
 	}
 }
 
-// tokenPath is the token exchange of the credential (protocol reference
-// §2.1): a machine daemon token (no environment id) is exchanged by bma-api,
-// an environment key by managed-agents.
-func tokenPath(environmentID string) string {
-	if environmentID == "" {
+// tokenPath is the token exchange of the executor's own resource (ADR-0023
+// 1.3): an environment key goes to /v1/environments/{id}/token, a machine
+// daemon token to /v1/machines/{id}/token. Without either id the legacy alias
+// serves a machine daemon token (the server derives the machine from it).
+func tokenPath(environmentID, machineID string) string {
+	switch {
+	case environmentID != "":
+		return "/v1/environments/" + url.PathEscape(environmentID) + "/token"
+	case machineID != "":
+		return "/v1/machines/" + url.PathEscape(machineID) + "/token"
+	default:
 		return "/api/v1/executors/token"
 	}
-	return "/v1/executors/token"
 }
 
 func (c *Client) fetchToken(ctx context.Context) (ExecutorTokenResponse, error) {
@@ -823,7 +848,7 @@ func (c *Client) fetchToken(ctx context.Context) (ExecutorTokenResponse, error) 
 	if err != nil {
 		return ExecutorTokenResponse{}, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.options.BaseURL+tokenPath(c.options.EnvironmentID), bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.options.BaseURL+tokenPath(c.options.EnvironmentID, c.options.MachineID), bytes.NewReader(body))
 	if err != nil {
 		return ExecutorTokenResponse{}, err
 	}

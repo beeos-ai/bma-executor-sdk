@@ -4,6 +4,23 @@ ADR 0012 replaces string-dispatched tool handlers with one typed slot per
 built-in tool, and string-named protocol calls with methods typed by the
 contract, in TypeScript, Python and Go (one release, **1.0.0**).
 
+## 1.2.0
+
+No breaking change. Set the machine id so a machine-scoped executor uses
+the new token path; nothing else is required.
+
+- A machine executor sets `Options.MachineID` / `machineId` / `machine_id`, or
+  exports `BMA_MACHINE_ID` (the machine pool template injects it). The client
+  then posts to `/v1/machines/{machine_id}/token`; without an id it keeps
+  `/api/v1/executors/token` (served as an alias until contract 2.0).
+- Go: `EnvironmentID` and `MachineID` are alternatives (both set is a
+  `NewClient` error). An environment key goes to
+  `/v1/environments/{environment_id}/token`, not `/v1/executors/token`;
+  the new routes need a server with the executor gateway (BMA #514), older
+  servers answer 404 until then.
+- The id in the path must equal the credential's machine or environment,
+  otherwise the server answers 404.
+
 ## 1.1.0
 
 No breaking change; 1.0 code builds and behaves the same. Everything new is

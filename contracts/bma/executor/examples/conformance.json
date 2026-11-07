@@ -46,6 +46,12 @@
             },
             "workspace": {
               "backup": true
+            },
+            "fs": {
+              "fuse": true,
+              "views": [
+                "uploads"
+              ]
             }
           },
           "resume": {
@@ -1046,6 +1052,59 @@
         "digest": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
         "size_bytes": 1048576,
         "entries": 42
+      }
+    },
+    {
+      "name": "fs.mount request",
+      "method": "fs.mount",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_fs_mount",
+        "method": "fs.mount",
+        "params": {
+          "session_id": "sesn_01JFS",
+          "service_url": "https://executor.example.com/v1",
+          "mounts": [
+            {
+              "view": "uploads",
+              "path": "/mnt/session/uploads",
+              "readonly": true,
+              "token": "bma_cap_v1.example.example"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fs.mount result",
+      "method": "fs.mount",
+      "kind": "result",
+      "result": {
+        "state": "mounted"
+      }
+    },
+    {
+      "name": "fs.unmount request",
+      "method": "fs.unmount",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_fs_unmount",
+        "method": "fs.unmount",
+        "params": {
+          "session_id": "sesn_01JFS",
+          "flush": true
+        }
+      }
+    },
+    {
+      "name": "fs.unmount result",
+      "method": "fs.unmount",
+      "kind": "result",
+      "result": {
+        "state": "unmounted",
+        "pending_bytes": 0
       }
     },
     {
