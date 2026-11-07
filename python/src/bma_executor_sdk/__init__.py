@@ -6,7 +6,18 @@ Protocol types are generated from the BMA contract into
 """
 
 from . import generated
-from ._rpc import ClientStoppedError, ExecutorError, NotConnectedError, RPCError
+from ._rpc import (
+    METADATA_AGENT_SESSION_ID,
+    ClientStoppedError,
+    DaemonHTTPError,
+    ErrorReason,
+    ExecutorError,
+    MachineTokenRequiredError,
+    NotConnectedError,
+    RPCError,
+    SessionContextNotFoundError,
+)
+from .session_context import SessionContext
 from .agent import AgentEventRecord, AgentHandler, AgentPlatform, AgentSessionClosedError, AgentTurn
 from .client import (
     DEFAULT_BASE_URL,
@@ -60,6 +71,12 @@ from .transport import (
 
 __all__ = [
     "INLINE_RESULT_BYTES",
+    "METADATA_AGENT_SESSION_ID",
+    "DaemonHTTPError",
+    "ErrorReason",
+    "MachineTokenRequiredError",
+    "SessionContext",
+    "SessionContextNotFoundError",
     "Call",
     "Notification",
     "Request",

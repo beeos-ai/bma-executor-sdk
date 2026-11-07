@@ -1,5 +1,73 @@
 # Changelog
 
+## 1.1.0 (unreleased)
+
+Additive; no breaking change ([MIGRATION](MIGRATION.md#110)). Guide:
+[docs/executor/session-context.md](docs/executor/session-context.md).
+
+- **TypeScript / Python examples:** the `session-context` examples now accept
+  `session.assign` and report `session.ready`, answer `process.list`, and honor
+  `stderr: "merge"`; without these a machine-scoped executor never went online,
+  was refused after registering, or failed `process.start` with `-32012`
+  against the platform (found in the staging run).
+- **Contract:** `Capabilities.session_files` (`SessionFilesCapability{root}`,
+  `make contract-sdk`): an executor-declared session files root; the
+  harness derives `<root>/<session_id>/{uploads,outputs}`.
+- **All languages:** session context over the machine token —
+  Go `Client.SessionContext(ctx, processID)` / `SessionContextByID`,
+  TypeScript `sessionContext` / `sessionContextById`, Python
+  `session_context` / `session_context_by_id` (cached per session;
+  not-found and machine-token-required errors). Recommended refusal reasons
+  with the same names in every language (Go `Reason*`, TypeScript and Python
+  `ErrorReason`) and constructors for a JSON-RPC error with `data.reason`
+  (Go `NewReasonError`, TypeScript `RpcError.withReason`, Python
+  `RPCError.with_reason`); `MetadataAgentSessionID` /
+  `MetadataAgentSessionId` / `METADATA_AGENT_SESSION_ID`.
+- **Go:** `ProcessOptions.Launch` — a per-process start hook that may set
+  the directory, wrap argv (sandbox-exec, bwrap), change the environment or
+  refuse with a reason; `SessionFileTransferer` gives file transfers the
+  session; `ProcessOptions.SessionFiles` / `NewSessionFiles` — the
+  per-session session files reference implementation (bmad's `os.Root` and
+  no-follow guards, concurrent sessions) that advertises
+  `session_files.root`. Example `examples/sandboxed-folder`.
+- **Go:** `Launch` also runs for a package install (`process.start`
+  `package_install`): `LaunchRequest.PackageInstall` is set and `Argv` /
+  `Cwd` / `Env` are the installer's fixed command, which the hook may wrap,
+  re-environ, move or refuse with a `data.reason`, so an executor cannot be
+  bypassed through `install_packages`. An empty `LaunchSpec` keeps the
+  installer's command; without `Launch` nothing changes. TypeScript and
+  Python see `package_install` in their own `process.start` handler
+  (examples `typescript/examples/session-context`,
+  `python/examples/session_context.py`).
+- **Examples (Go `sandboxed-folder`, TypeScript `session-context`, Python
+  `session_context.py`):** a process without `agent_session_id` is refused with
+  `session_rejected` (no fallback to a default folder) and a package install
+  with `local_confirmation_denied`. A platform-initiated process (`initiator:
+  "platform"`, no `agent_session_id`, for example the machine desktop agent)
+  is refused too unless `-platform-dir` / `EXAMPLE_PLATFORM_DIR` is set, in
+  which case it runs in that directory, never in a session folder.
+- **Contract:** snapshot refreshed from BMA #470: `process.start` metadata says
+  who started the process (`agent_session_id` + `tool_call_id` for agent
+  tools, `initiator: "platform"` for the platform's own, human terminals are
+  `terminal.attach`); `session_files.root` must be clean. Relative
+  `write_file` / `edit_file` paths reach only executors that declared
+  `session_files`.
+- **Docs:** [session-context](docs/executor/session-context.md) states that
+  the session `metadata` is the first read's (cached; a mid-session change
+  is not guaranteed to reach the executor and must not be used to move a
+  session or change its owner, as a Claude Managed Agents worker reads
+  metadata once when it claims work) and which processes carry
+  `agent_session_id` (every agent tool process; a platform-initiated process
+  carries `initiator: "platform"` instead, and a person's console terminal is
+  `terminal.attach`, not `process.start`).
+- **Go:** the module needs Go 1.25 (`os.Root.MkdirAll` / `Rename`).
+- TypeScript and Python have no process runtime and get no Launch hook: the
+  executor's `process.start` handler is the equivalent (example
+  `typescript/examples/session-context`).
+- Platform dependencies (beeos-managed-agents #411): the session context
+  routes (F1), `session_files` handling (F2) and `data.reason` propagation
+  (F3). Without them the calls answer 404 and the declaration is ignored.
+
 ## 1.0.5
 
 ### Fixed
@@ -114,7 +182,7 @@ failed on Python 3.10 (see 1.0.5). Use 1.0.5 in every language.
   token `404`, so the machine path could not connect without a custom
   `TokenSource`. An environment key keeps `/v1/executors/token`.
 
-## 1.0.0 (unreleased)
+## 1.0.0
 
 - **Breaking (ADR 0012 §4.3), all languages:** protocol methods are typed by
   the contract: TypeScript `onRequest` / `call` / `notify` and harness `call`

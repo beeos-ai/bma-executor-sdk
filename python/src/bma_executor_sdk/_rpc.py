@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
+from enum import Enum
 from typing import Any
 
 from .generated import JsonRpcErrorCode
@@ -38,6 +39,14 @@ class RPCError(ExecutorError):
         self.message = message
         self.data = data
 
+    @classmethod
+    def with_reason(cls, code: int, reason: str, message: str) -> RPCError:
+        """An error refusing a request with a machine-readable ``data.reason``
+        (for example ``ErrorReason.SessionRejected``), which BMA passes to the
+        tool result's error_code and session.error.code unchanged. Go:
+        ``NewReasonError``."""
+        return cls(code, message, {"reason": reason.value if isinstance(reason, Enum) else reason})
+
     @property
     def retryable(self) -> bool | None:
         return None if self.data is None else self.data.get("retryable")
@@ -47,6 +56,61 @@ class RPCError(ExecutorError):
         if self.data is not None:
             error["data"] = self.data
         return error
+
+
+class ErrorReason(str, Enum):
+    """Recommended ``error.data.reason`` values (open set: any other value is
+    passed through as well). Go ``Reason*`` constants and TypeScript
+    ``ErrorReason`` carry the same names and values."""
+
+    WorkspaceUnavailable = "workspace_unavailable"
+    """The referenced workspace is gone or its directory does not exist."""
+    WorkspaceBoundary = "workspace_boundary"
+    """The request leaves what the executor's local policy allows."""
+    WorkspaceReadOnly = "workspace_read_only"
+    """The request writes where the local policy only allows reads."""
+    SessionRejected = "session_rejected"
+    """The session is not one this machine serves (an owner check failed)."""
+    LocalConfirmationDenied = "local_confirmation_denied"
+    """The local user denied the access."""
+    LocalConfirmationExpired = "local_confirmation_expired"
+    """Nobody answered the local confirmation in time."""
+    SpawnFailed = "spawn_failed"
+    """The process could not be started."""
+    ProcessIdSpecMismatch = "process_id_spec_mismatch"
+    """A process.start replay changed the spec of an existing process id."""
+
+
+METADATA_AGENT_SESSION_ID = "agent_session_id"
+"""process.start metadata key naming the agent session a process runs for."""
+
+
+class MachineTokenRequiredError(ExecutorError):
+    """session_context on a client that is not a machine-scoped executor:
+    environment_key must hold the machine daemon token and environment_id
+    must be empty."""
+
+    def __init__(self) -> None:
+        super().__init__("a machine-scoped executor (machine daemon token in environment_key, empty environment_id) is required")
+
+
+class SessionContextNotFoundError(ExecutorError):
+    """The process is not on this machine (or ended over 15 minutes ago), or
+    the session is not bound to it."""
+
+    def __init__(self) -> None:
+        super().__init__("session context not found")
+
+
+class DaemonHTTPError(ExecutorError):
+    """A non-2xx answer of a BMA daemon route; ``code`` and ``message`` are
+    BMA's error body when it sent one."""
+
+    def __init__(self, status: int, message: str, code: str = "") -> None:
+        super().__init__(f"daemon API returned {status}" + (f": {message}" if message else ""))
+        self.status = status
+        self.message = message
+        self.code = code
 
 
 def rpc_error(code: JsonRpcErrorCode, message: str, retryable: bool) -> RPCError:

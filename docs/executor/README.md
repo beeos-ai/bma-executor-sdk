@@ -156,7 +156,7 @@ Protocol messages are the same on every transport.
 
 ## 5. Capability status
 
-| Capability | Protocol | Platform | bmad | Go SDK 1.0.0 |
+| Capability | Protocol | Platform | bmad | Go SDK 1.0.0 / 1.1.0 |
 | --- | --- | --- | --- | --- |
 | register/heartbeat/reconnect/drain/4004 | v1 | available | available | available (both ends) |
 | `tool.call` (bash, file tools) | v1 | environment path; the machine path does not use `tool.call` | `bash` only | `Core`: bash/read/write/edit/glob/grep |
@@ -167,6 +167,10 @@ Protocol messages are the same on every transport.
 | artifact upload `POST /v1/executors/artifacts` | v1.1 | environment path | environment path | available (`Client.UploadArtifact`) |
 | MCP channel (`channel=mcp`) | v1 | server channel available (environment path); the platform harness does not dispatch MCP servers to executors in production yet | no | `OpenMCPChannel` and the `Core` stdio supervisor |
 | session files (`/mnt/session/uploads\|outputs`) | machine-token HTTP routes | available | available | — |
+| executor-declared session files root (`capabilities.session_files.root`, `<root>/<session>/{uploads,outputs}`) | v1.1 additive | pending (#411 F2) | no (keeps `/mnt/session`) | 1.1: `SessionFiles` in `ProcessOptions` (TS/Python: declare the capability, sync yourself) |
+| session context (`GET …/daemon/processes/{id}/session`, `…/daemon/sessions/{id}`) | machine-token HTTP routes | pending (#411 F1) | — | 1.1: `Client.SessionContext` / `SessionContextByID` (TS `sessionContext`, Python `session_context`) |
+| per-process launch hook (cwd/argv/env, sandbox wrapper, refusal) | — | — | — | 1.1: `ProcessOptions.Launch` (TS/Python: your `process.start` handler) |
+| refusal reasons (`error.data.reason`: `workspace_boundary`, `session_rejected`, …) | v1.1 | pending (#411 F3) | `spawn_failed` | 1.1: `Reason*` + `NewReasonError` (TS `ErrorReason` + `RpcError.withReason`, Python `ErrorReason` + `RPCError.with_reason`) |
 | `workspace.backup` | v1.1 additive | available | available | — |
 | agent (`turn.*`, interactions) | v1.1 + `agent` | preview (machine executors, bound with `PUT …/agents/{agentID}/executor-binding`; text input only) | no | available (both sides) |
 | local socket | — | — | coming | available |

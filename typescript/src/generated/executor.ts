@@ -219,6 +219,7 @@ export interface Capabilities {
   skills?: SkillsCapability
   workspace?: WorkspaceCapability
   agent?: AgentCapability
+  session_files?: SessionFilesCapability
 }
 
 /** Channels a short-lived executor JWT may open. */
@@ -562,7 +563,7 @@ export interface JsonRpcErrorData {
   detail?: string
   /** Missing capability for -32012, for example "tool:read" or "process.pty". */
   capability?: string
-  /** Machine-readable cause, for example "spawn_failed" for process.start. */
+  /** Machine-readable cause; an open set that the harness passes through unchanged (process.start: the tool result error_code and the process state reason; turn.start: the session.error code). Recommended values: workspace_unavailable, workspace_boundary, workspace_read_only, session_rejected, local_confirmation_denied, local_confirmation_expired, and spawn_failed / process_id_spec_mismatch for process.start. Receivers must accept values they do not know. */
   reason?: string
   /** bma.terminal.v1 error code for a failed terminal.* call. */
   terminal_code?: string
@@ -938,6 +939,12 @@ export const SessionEventType = {
   SessionStatusIdle: 'session.status_idle',
   SessionError: 'session.error',
 } as const
+
+/** Executor-owned per-session file layout. The harness derives <root>/<agent_session_id>/uploads (read-only session inputs) and <root>/<agent_session_id>/outputs (deliverables) from it, with agent_session_id as sent in process.start metadata, and uses these real paths in prompts, tool descriptions, write rules and the session files manifest. Absent: the harness keeps /mnt/session/uploads and /mnt/session/outputs. Fixed at executor.register: executor.capabilities.update does not change it. Machine-scoped executors only. */
+export interface SessionFilesCapability {
+  /** Absolute, already-expanded, clean path on the executor host (no ~, no . or .. segments, no trailing /). */
+  root: string
+}
 
 /** A memory store mounted into the session workspace. */
 export interface SessionMemoryResource {
@@ -1319,6 +1326,7 @@ export interface ProcessStartParams {
   wait_ms?: number
   /** Kills the process and ends it as failed with reason "timeout". */
   timeout_ms?: number
+  /** Who started the process. A process an agent tool started (a command, a file transfer, a package install) always carries agent_session_id (the public agent session id) and tool_call_id; it carries no initiator. A process the platform started on its own, such as the machine desktop agent, carries initiator "platform" and no agent_session_id. A process with neither is not started by the harness: an executor that resolves a directory, files or owner per session refuses it (reason session_rejected) instead of using a default. Human console terminals are terminal.attach, not process.start. */
   metadata?: Record<string, string>
   /** Requires capability process.pty. */
   io_mode?: IOMode

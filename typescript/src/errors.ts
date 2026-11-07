@@ -15,8 +15,78 @@ export class RpcError extends Error {
     this.name = 'RpcError'
   }
 
+  /**
+   * An error refusing a request with a machine-readable data.reason (for
+   * example ErrorReason.SessionRejected), which BMA passes to the tool
+   * result's error_code and session.error.code unchanged. Same as Go
+   * NewReasonError.
+   */
+  static withReason(code: number, reason: string, message: string): RpcError {
+    return new RpcError(code, message, { reason })
+  }
+
   toJSON(): JsonRpcError {
     return { code: this.code as JsonRpcError['code'], message: this.message, ...(this.data ? { data: this.data } : {}) }
+  }
+}
+
+/**
+ * Recommended error.data.reason values (open set: any other value is passed
+ * through as well). Go Reason* constants and Python ErrorReason carry the
+ * same names and values.
+ */
+export const ErrorReason = {
+  /** The referenced workspace is gone or its directory does not exist. */
+  WorkspaceUnavailable: 'workspace_unavailable',
+  /** The request leaves what the executor's local policy allows. */
+  WorkspaceBoundary: 'workspace_boundary',
+  /** The request writes where the local policy only allows reads. */
+  WorkspaceReadOnly: 'workspace_read_only',
+  /** The session is not one this machine serves (an owner check failed). */
+  SessionRejected: 'session_rejected',
+  /** The local user denied the access. */
+  LocalConfirmationDenied: 'local_confirmation_denied',
+  /** Nobody answered the local confirmation in time. */
+  LocalConfirmationExpired: 'local_confirmation_expired',
+  /** The process could not be started. */
+  SpawnFailed: 'spawn_failed',
+  /** A process.start replay changed the spec of an existing process id. */
+  ProcessIdSpecMismatch: 'process_id_spec_mismatch',
+} as const
+export type ErrorReason = (typeof ErrorReason)[keyof typeof ErrorReason]
+
+/** process.start metadata key naming the agent session a process runs for. */
+export const MetadataAgentSessionId = 'agent_session_id'
+
+/**
+ * sessionContext / sessionContextById on a client that is not a
+ * machine-scoped executor: environmentKey must hold the machine daemon token
+ * and environmentId must be empty.
+ */
+export class MachineTokenRequiredError extends Error {
+  constructor() {
+    super('a machine-scoped executor (machine daemon token in environmentKey, empty environmentId) is required')
+    this.name = 'MachineTokenRequiredError'
+  }
+}
+
+/** The process is not on this machine (or ended over 15 minutes ago), or the session is not bound to it. */
+export class SessionContextNotFoundError extends Error {
+  constructor() {
+    super('session context not found')
+    this.name = 'SessionContextNotFoundError'
+  }
+}
+
+/** A non-2xx answer of a BMA daemon route; code and message are BMA's error body when it sent one. */
+export class DaemonHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly code?: string,
+  ) {
+    super(`daemon API returned ${status}${message ? `: ${message}` : ''}`)
+    this.name = 'DaemonHttpError'
   }
 }
 

@@ -114,7 +114,10 @@ The SDK treats a refusal as a configuration error: after 3 registrations in a ro
   (`?channel=mcp&session_id=&server_key=`); `read()`/`write()` carry MCP
   JSON-RPC frames unchanged.
 - A handler that throws `RpcError` keeps its code and data on the wire.
-  `onRequest('process.start', (params) => …)` serves `process.*`,
+  `onRequest('process.start', (params) => …)` serves `process.*` (read
+  `sessionContext(params.process_id)` there and refuse with
+  `RpcError.withReason(code, ErrorReason.X, msg)`; see
+  [session context](../docs/executor/session-context.md)),
   `terminal.*`, `skill.install` and `workspace.backup` with the contract's
   params and result types; `call(method, params)` and
   `notify(method, params)` send executor-to-harness methods typed the same

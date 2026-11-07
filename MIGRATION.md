@@ -4,6 +4,26 @@ ADR 0012 replaces string-dispatched tool handlers with one typed slot per
 built-in tool, and string-named protocol calls with methods typed by the
 contract, in TypeScript, Python and Go (one release, **1.0.0**).
 
+## 1.1.0
+
+No breaking change; 1.0 code builds and behaves the same. Everything new is
+opt-in ([guide](docs/executor/session-context.md)):
+
+- Go needs **Go 1.25** or later (the module's `go` directive).
+- `ProcessOptions` gains `Launch` and `SessionFiles`; leaving them nil keeps
+  1.0 behavior (cwd confined to the workspace, no `session_files`
+  capability, `/mnt/session` on the platform side).
+- `Launch` is also called for a package install (`LaunchRequest.PackageInstall`
+  is non-nil, `Argv`/`Env` are the installer's command); a hook that only
+  handles commands should return an empty `LaunchSpec` for them or refuse
+  them explicitly.
+- `FileTransferer` is unchanged; implement `SessionFileTransferer` as well
+  to receive the session with each transfer.
+- `Capabilities.SessionFiles` / `session_files` is a new optional field;
+  executors that do not set it are unaffected.
+- `NewToolError(text)` keeps its meaning (a tool-level error the model sees);
+  a protocol refusal with `data.reason` is `NewReasonError(code, reason, msg)`.
+
 ## All languages
 
 - **Register tool handlers before `start()`** if the first registration

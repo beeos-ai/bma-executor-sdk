@@ -2,6 +2,7 @@
 // reconnect with resume, session lifecycle, tool dispatch and cancellation,
 // retried tool results and the raw MCP channel. Mirrors go/executor Client.
 
+import { SessionContexts, type SessionContext } from './session-context.js'
 import {
   ChannelScope,
   ConnectionState,
@@ -383,6 +384,7 @@ export class ExecutorClient {
   private readonly requestHandlers = new Map<string, (params: unknown) => unknown>()
   private registration = deferred()
   private agent?: AgentRuntime
+  private readonly sessionContexts: SessionContexts
 
   constructor(options: ExecutorClientOptions) {
     if (options.environmentId === undefined) throw new Error('environmentId is required')
@@ -391,6 +393,12 @@ export class ExecutorClient {
     this.dialer = options.dialer ?? webSocketDialer(options)
     if (!options.dialer) this.tokenSource = executorTokenSource(options)
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS
+    this.sessionContexts = new SessionContexts({
+      baseUrl: options.baseUrl ?? DEFAULT_BASE_URL,
+      environmentId: options.environmentId,
+      environmentKey: options.environmentKey,
+      fetch: options.fetch,
+    })
     const tools = {} as Record<SlotToolName, ToolSlot<ToolName>>
     for (const name of Object.keys(REQUIRED_TOOL_INPUT) as SlotToolName[]) {
       tools[name] = { handle: (handler) => this.setToolHandler(name, handler as ToolHandler<ToolName>) }
@@ -413,6 +421,24 @@ export class ExecutorClient {
   }
   get activeSessions(): string[] {
     return [...this.sessions]
+  }
+
+  /**
+   * The context of the agent session processId runs for (process.start
+   * metadata agent_session_id): its environment and the metadata its creator
+   * set. Read it in a process.start handler to resolve a metadata reference
+   * or check an owner before spawning, and refuse with
+   * RpcError.withReason(...). Needs a machine-scoped executor
+   * (MachineTokenRequiredError); cached per session, failures are not.
+   * Throws SessionContextNotFoundError for a process not on this machine.
+   */
+  sessionContext(processId: string): Promise<SessionContext> {
+    return this.sessionContexts.byProcess(processId)
+  }
+
+  /** The context of an agent session bound to this machine (for an agent capability without a process); cached like sessionContext. */
+  sessionContextById(sessionId: string): Promise<SessionContext> {
+    return this.sessionContexts.byId(sessionId)
   }
 
   onSessionAssign(handler: SessionAssignHandler): void {

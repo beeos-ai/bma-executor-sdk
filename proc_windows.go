@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// noFollow: os.Root already refuses links that leave the root on Windows.
+const noFollow = 0
+
 type processSignal int
 
 const (

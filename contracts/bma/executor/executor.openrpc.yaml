@@ -683,6 +683,14 @@ methods:
           maximum: 86400000
       - name: metadata
         required: false
+        description: >-
+          Who started the process. A process an agent tool started (a command, a file transfer, a
+          package install) always carries agent_session_id (the public agent session id) and
+          tool_call_id; it carries no initiator. A process the platform started on its own, such as
+          the machine desktop agent, carries initiator "platform" and no agent_session_id. A process
+          with neither is not started by the harness: an executor that resolves a directory, files or
+          owner per session refuses it (reason session_rejected) instead of using a default.
+          Human console terminals are terminal.attach, not process.start.
         schema:
           type: object
           additionalProperties:
