@@ -25,8 +25,8 @@ import (
 )
 
 const (
-	DefaultBaseURL              = "https://api.bma.beeos.ai"
-	DefaultRequestTimeout       = 30 * time.Second
+	DefaultBaseURL        = "https://api.bma.beeos.ai"
+	DefaultRequestTimeout = 30 * time.Second
 	// DefaultMaxReconnectAttempts is 0: reconnect until Stop, as gRPC's
 	// connection backoff and long-running agents (GitHub Actions runner,
 	// Buildkite agent) do.
