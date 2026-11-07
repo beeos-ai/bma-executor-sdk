@@ -120,6 +120,8 @@ export interface WebSocketDialerOptions {
   wsUrl?: string
   protocols?: string[]
   fetch?: typeof fetch
+  /** Bounds one request, the token request included (as Go and Python). Defaults to 30s. */
+  requestTimeoutMs?: number
 }
 
 export function channelUrl(rawUrl: string, target: ChannelTarget): string {
@@ -155,6 +157,7 @@ function executorTokenSource(options: WebSocketDialerOptions): TokenSource {
         method: 'POST',
         headers: { Authorization: `Bearer ${options.environmentKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ environment_id: options.environmentId, executor: options.executor }),
+        signal: AbortSignal.timeout(options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
       })
       if (response.status !== 200) {
         const detail = (await response.text()).slice(0, 4096).trim()
@@ -269,7 +272,6 @@ export interface ExecutorClientOptions extends Omit<WebSocketDialerOptions, 'env
   dialer?: Dialer
   /** false for a connection that cannot be redialed (an accepted local connection). */
   reconnect?: boolean
-  requestTimeoutMs?: number
   /** Overrides the interval returned by executor.register. */
   heartbeatIntervalMs?: number
   heartbeatLoad?: () => ExecutorLoad | undefined
