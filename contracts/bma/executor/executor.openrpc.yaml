@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 1.1.0
+  version: 1.2.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -21,16 +21,38 @@ info:
     name: Apache-2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
 servers:
+  - name: machine
+    url: wss://{host}/v1/machines/{machine_id}/channel?channel=control
+    summary: Machine-scoped executor control channel.
+    description: The executor's token comes from POST /v1/machines/{machine_id}/token. machine_id must equal the machine in the credential, otherwise the server answers 404. Executors read it from BMA_MACHINE_ID.
+    variables:
+      host:
+        default: executor.example.com
+        description: BMA executor host.
+      machine_id:
+        default: mach_example
+        description: Machine id.
+  - name: environment
+    url: wss://{host}/v1/environments/{environment_id}/channel?channel=control
+    summary: Environment-scoped executor control channel; ?channel=mcp selects the raw MCP channel.
+    description: The executor's token comes from POST /v1/environments/{environment_id}/token. environment_id must equal the environment in the credential, otherwise the server answers 404. The raw MCP channel for one environment-origin MCP server is the same path with ?channel=mcp&session_id={session_id}&server_key={server_key}.
+    variables:
+      host:
+        default: executor.example.com
+        description: BMA executor host.
+      environment_id:
+        default: env_example
+        description: Environment id.
   - name: control
     url: wss://{host}/v1/executors/channel?channel=control
-    summary: Executor control channel.
+    summary: Deprecated alias of the machine and environment servers; executor control channel.
     variables:
       host:
         default: api.bma.beeos.ai
         description: BMA API host.
   - name: mcp
     url: wss://{host}/v1/executors/channel?channel=mcp&session_id={session_id}&server_key={server_key}
-    summary: Raw MCP JSON-RPC channel for one environment-origin MCP server.
+    summary: Deprecated alias of the environment server with ?channel=mcp; raw MCP JSON-RPC channel for one environment-origin MCP server.
     variables:
       host:
         default: api.bma.beeos.ai
@@ -47,7 +69,10 @@ methods:
     description: Executor to harness request, the first frame on the control channel. protocol MUST
       equal the negotiated WebSocket subprotocol; otherwise the server answers -32010 and closes
       with 4003. A machine-scoped executor sends an empty environment_id. resume.active_sessions
-      reattaches sessions after reconnect.
+      reattaches sessions after reconnect. A machine-scoped executor that declares neither
+      capabilities.process nor capabilities.agent is answered -32012 with data.reason
+      "capability_missing" and data.capability "process" instead of a result; no runtime is bound
+      and the connection stays unregistered.
     tags:
       - name: executor
     x-bma-direction: executor-to-harness
@@ -88,6 +113,7 @@ methods:
       - $ref: "#/components/errors/NotFound"
       - $ref: "#/components/errors/PayloadTooLarge"
       - $ref: "#/components/errors/UnsupportedProtocol"
+      - $ref: "#/components/errors/CapabilityUnavailable"
       - $ref: "#/components/errors/InternalError"
   - name: executor.heartbeat
     summary: Refresh the executor lease.
@@ -127,7 +153,8 @@ methods:
   - name: executor.token.refresh
     summary: Extend the connection with a fresh executor token.
     description: Executor to harness request. Before the current token expires the executor fetches
-      a new one from POST /v1/executors/token with its original credential and sends it on the open
+      a new one from POST /v1/machines/{machine_id}/token or POST /v1/environments/{environment_id}/token
+      (legacy alias POST /v1/executors/token) with its original credential and sends it on the open
       control channel. The harness verifies that it names the same executor, scope and machine
       credential as the connection and moves the connection's 4001 deadline to the new token's
       expiry; nothing else about the connection changes. A rejected token leaves the old deadline in
@@ -510,7 +537,7 @@ methods:
   - name: tool.result
     summary: Report a tool result.
     description: Executor to harness request, idempotent by tool_call_id and retried until accepted.
-      Large output is uploaded first (POST /v1/executors/artifacts) and referenced by an artifact
+      Large output is uploaded first (POST /v1/environments/{environment_id}/artifacts; legacy alias POST /v1/executors/artifacts) and referenced by an artifact
       content block.
     tags:
       - name: tool
@@ -1198,6 +1225,77 @@ methods:
       name: WorkspaceBackupResult
       schema:
         $ref: schemas/workspace.json#/$defs/WorkspaceBackupResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: fs.mount
+    summary: Mount session file views backed by bma-file.
+    description: Harness to executor request (machine-scoped). The executor mounts each listed view
+      at its path as a FUSE file system that reads from service_url with the view's token, and keeps
+      the token in memory only. Idempotent by (session_id, view), so resending the same mounts with new
+      tokens renews the tokens without remounting; a changed path or readonly remounts. Sent when the
+      session is bound to the machine and again after a resume or reconnect, because tokens are bound
+      to the binding epoch.
+    tags:
+      - name: fs
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: fs.fuse
+    x-bma-idempotent-by: session_id+view
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: service_url
+        required: true
+        description: Complete prefix of the bma-file routes for this machine, ending in /v1/machines/{machine_id}/fs (for example https://executor.example.com/v1/machines/mach_01/fs). The executor appends "/<op>" and nothing else; it does not compose the machine id itself. The previous <origin>/v1/fs/<op> routes stay as an alias until they are removed.
+        schema:
+          type: string
+      - name: mounts
+        required: true
+        schema:
+          type: array
+          minItems: 1
+          items:
+            $ref: schemas/file.json#/$defs/FsMount
+    result:
+      name: FsMountResult
+      schema:
+        $ref: schemas/file.json#/$defs/FsMountResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/ResourceUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: fs.unmount
+    summary: Unmount the session file views.
+    description: Harness to executor request (machine-scoped). Unmounts every view of the session and
+      drops its tokens. With flush the executor first commits pending writes (none for read-only
+      views). Idempotent by session_id, a session with nothing mounted answers "unmounted".
+    tags:
+      - name: fs
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: fs.fuse
+    x-bma-idempotent-by: session_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: flush
+        schema:
+          type: boolean
+    result:
+      name: FsUnmountResult
+      schema:
+        $ref: schemas/file.json#/$defs/FsUnmountResult
     errors:
       - $ref: "#/components/errors/InvalidParams"
       - $ref: "#/components/errors/CapabilityUnavailable"

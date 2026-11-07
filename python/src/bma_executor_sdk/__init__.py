@@ -21,6 +21,7 @@ from .session_context import SessionContext
 from .agent import AgentEventRecord, AgentHandler, AgentPlatform, AgentSessionClosedError, AgentTurn
 from .client import (
     DEFAULT_BASE_URL,
+    MACHINE_ID_ENV,
     PROTOCOL_V1,
     PROTOCOL_V11,
     CredentialRejectedError,
@@ -82,6 +83,7 @@ __all__ = [
     "Request",
     "methods",
     "DEFAULT_BASE_URL",
+    "MACHINE_ID_ENV",
     "PROTOCOL_V1",
     "PROTOCOL_V11",
     "TERMINAL_CLOSE_CODES",

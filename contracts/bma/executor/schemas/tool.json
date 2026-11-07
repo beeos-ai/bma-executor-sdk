@@ -319,7 +319,7 @@
     },
     "ArtifactRef": {
       "type": "object",
-      "description": "Artifact reference returned by POST /v1/executors/artifacts and listed in tool.result artifacts (v1.1 §6.5).",
+      "description": "Artifact reference returned by POST /v1/environments/{environment_id}/artifacts (legacy alias POST /v1/executors/artifacts) and listed in tool.result artifacts (v1.1 §6.5).",
       "properties": {
         "artifact_id": {
           "type": "string"

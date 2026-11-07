@@ -37,6 +37,15 @@ The machine-readable contract is in this repository: [`executor.openrpc.yaml`](.
 | channel | `GET /api/v1/executors/channel` (WebSocket) | `GET /v1/executors/channel` |
 | artifacts | — | `POST /v1/executors/artifacts`, `GET /v1/executors/artifacts/{id}` |
 
+Since 1.2.0 the executor host serves the same operations on the executor's own resource; the id in the path must equal the credential's machine or environment, otherwise 404. `machine_id` comes from `BMA_MACHINE_ID`. The paths above stay as aliases until contract 2.0.
+
+| Path | Machine executor | Environment executor |
+| --- | --- | --- |
+| token | `POST /v1/machines/{machine_id}/token` | `POST /v1/environments/{environment_id}/token` |
+| channel | `GET /v1/machines/{machine_id}/channel` (WebSocket) | `GET /v1/environments/{environment_id}/channel` |
+| artifacts | — | `POST /v1/environments/{environment_id}/artifacts` |
+| bma-file | `/v1/machines/{machine_id}/fs/<op>` | — |
+
 bma-api mounts them only when the executor token secret is configured. `bmad executor --executor-url` takes the origin including `/api`, for example `https://api.bma.beeos.ai/api`.
 
 ### 2.2 Token exchange: `POST …/v1/executors/token`

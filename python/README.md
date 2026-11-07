@@ -47,7 +47,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Set `base_url` to your BMA deployment: the hosted service is in early access and the default `DEFAULT_BASE_URL` (`https://api.bma.beeos.ai`) does not resolve yet. It is the deployment origin, the same value as `BMA_BASE_URL` in bma-sdk (for example `https://api.staging.bma.beeos.ai`); the client posts the environment key to `{base_url}/v1/executors/token` and drops a trailing `/api/v1`. The SDK does not read `BMA_BASE_URL` itself. A `token_source` carries its own channel URL.
+Set `base_url` to your BMA deployment: the hosted service is in early access and the default `DEFAULT_BASE_URL` (`https://api.bma.beeos.ai`) does not resolve yet. It is the deployment origin, the same value as `BMA_BASE_URL` in bma-sdk (for example `https://api.staging.bma.beeos.ai`); the client posts the environment key to `{base_url}/v1/environments/{environment_id}/token` (a machine daemon token to `{base_url}/v1/machines/{machine_id}/token`) and drops a trailing `/api/v1`. `machine_id` and `environment_id` are alternatives; an empty `machine_id` reads `BMA_MACHINE_ID` (`MACHINE_ID_ENV`), and without any id the legacy `/api/v1/executors/token` alias is used. The SDK does not read `BMA_BASE_URL` itself. A `token_source` carries its own channel URL.
 
 ### A machine-scoped executor must declare `process` or `agent`
 

@@ -8,6 +8,10 @@ from ._methods import Call, Notification, Request
 from .generated import (
     Ack,
     ExecutorCapabilitiesUpdateParams,
+    FsMountParams,
+    FsMountResult,
+    FsUnmountParams,
+    FsUnmountResult,
     InteractionCancelParams,
     InteractionRequestParams,
     InteractionRequestResult,
@@ -53,6 +57,8 @@ __all__ = [
     "TERMINAL_CLOSE",
     "SKILL_INSTALL",
     "WORKSPACE_BACKUP",
+    "FS_MOUNT",
+    "FS_UNMOUNT",
     "SESSION_READY",
     "SESSION_EVENT",
     "SESSION_ENDED",
@@ -78,6 +84,8 @@ TERMINAL_ATTACH: Request[TerminalAttachParams, TerminalAttachResult] = Request("
 TERMINAL_CLOSE: Request[TerminalCloseParams, TerminalCloseResult] = Request("terminal.close")
 SKILL_INSTALL: Request[SkillInstallParams, SkillInstallResult] = Request("skill.install")
 WORKSPACE_BACKUP: Request[WorkspaceBackupParams, WorkspaceBackupResult] = Request("workspace.backup")
+FS_MOUNT: Request[FsMountParams, FsMountResult] = Request("fs.mount")
+FS_UNMOUNT: Request[FsUnmountParams, FsUnmountResult] = Request("fs.unmount")
 
 # Executor-to-harness requests a client sends with call.
 SESSION_READY: Call[SessionReadyParams, Ack] = Call("session.ready")

@@ -29,13 +29,13 @@ func startRefusalServer(t *testing.T, s *refusalServer) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v1/executors/token":
+		case "/v1/environments/env_test/token":
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(ExecutorTokenResponse{
 				ExecutorID: "exec_test", Token: "jwt_test", ExpiresIn: 300,
-				WSURL: "ws://" + r.Host + "/v1/executors/channel",
+				WSURL: "ws://" + r.Host + "/v1/environments/env_test/channel",
 			})
-		case "/v1/executors/channel":
+		case "/v1/environments/env_test/channel":
 			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV11}})
 			if err != nil {
 				return

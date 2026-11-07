@@ -143,7 +143,7 @@
     },
     "ArtifactCapability": {
       "type": "object",
-      "description": "v1.1 artifact upload (POST /v1/executors/artifacts). Environment-scoped executors only.",
+      "description": "v1.1 artifact upload (POST /v1/environments/{environment_id}/artifacts; legacy alias POST /v1/executors/artifacts). Environment-scoped executors only.",
       "properties": {
         "upload": {
           "type": "boolean"
@@ -203,6 +203,25 @@
       },
       "required": [
         "backup"
+      ],
+      "additionalProperties": true
+    },
+    "FsCapability": {
+      "type": "object",
+      "description": "Session file views mounted by the executor as FUSE file systems backed by bma-file (docs/adr/0021). Declared only after the executor probed that it can mount. Absent or fuse=false: the session files stay on the copy-and-scan protocol (session_files). views lists the views the executor can mount; the harness only mounts those. Machine-scoped executors only.",
+      "properties": {
+        "fuse": {
+          "type": "boolean"
+        },
+        "views": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "fuse"
       ],
       "additionalProperties": true
     },
@@ -272,6 +291,9 @@
         },
         "session_files": {
           "$ref": "executor.json#/$defs/SessionFilesCapability"
+        },
+        "fs": {
+          "$ref": "executor.json#/$defs/FsCapability"
         }
       },
       "required": [],
@@ -401,7 +423,7 @@
     },
     "ExecutorTokenRequest": {
       "type": "object",
-      "description": "POST /v1/executors/token body. The bearer is an environment key, or a machine daemon token. An empty environment_id with a machine token requests a machine-scoped executor: its executor_id is exec_<machine_id>, stable across refreshes, and the JWT carries machine_id and daemon_token_id.",
+      "description": "Token request body for POST /v1/machines/{machine_id}/token (bearer: machine daemon token) and POST /v1/environments/{environment_id}/token (bearer: environment key); the legacy alias POST /v1/executors/token takes either bearer. The id in the path must equal the credential's machine or environment, otherwise 404; on the new paths environment_id may be empty or absent for a machine and, when sent for an environment, must equal the path id. An empty environment_id with a machine token requests a machine-scoped executor: its executor_id is exec_<machine_id>, stable across refreshes, and the JWT carries machine_id and daemon_token_id.",
       "properties": {
         "environment_id": {
           "type": "string"
@@ -418,7 +440,7 @@
     },
     "ExecutorTokenResponse": {
       "type": "object",
-      "description": "POST /v1/executors/token response.",
+      "description": "Token response of POST /v1/machines/{machine_id}/token, POST /v1/environments/{environment_id}/token and the legacy alias POST /v1/executors/token.",
       "properties": {
         "executor_id": {
           "type": "string"

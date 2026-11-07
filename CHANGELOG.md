@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.2.0
+
+Additive; no breaking change ([MIGRATION](MIGRATION.md#120)). Contract 1.2.0
+(`make contract-sdk`, BMA #527).
+
+- **All languages:** new `machine_id` option — Go `Options.MachineID`,
+  TypeScript `machineId`, Python `machine_id` — defaulting to `BMA_MACHINE_ID`
+  (`MachineIDEnv` / `MACHINE_ID_ENV`) when no environment id is set. Go's
+  `EnvironmentID` and `MachineID` are alternatives; setting both is an error.
+- **Token exchange and renewal** use the executor's own resource:
+  `POST /v1/machines/{machine_id}/token` and
+  `POST /v1/environments/{environment_id}/token`. A machine token without a
+  machine id keeps the legacy `POST /api/v1/executors/token` alias, which the
+  server serves until contract 2.0. The channel URL is the token response's
+  `ws_url` (`/v1/machines/{machine_id}/channel`,
+  `/v1/environments/{environment_id}/channel`), so there is no client change
+  for it. Renewal (`executor.token.refresh`) repeats the same exchange.
+- **Go:** `UploadArtifact` posts to
+  `/v1/environments/{environment_id}/artifacts` and refuses a machine-scoped
+  client.
+- **Contract:** `Capabilities.fs` (`FsCapability{fuse, views}`),
+  `AgentCapability.platform_credentials`, and the `fs.mount` / `fs.unmount`
+  methods (`service_url` is the complete prefix
+  `<origin>/v1/machines/{machine_id}/fs`; append `/<op>` only).
+- Not changed: the `/api/v1/daemon/*` session-context routes and the
+  `daemon` symbol names (a later release).
+
 ## 1.1.0
 
 Additive; no breaking change ([MIGRATION](MIGRATION.md#110)). Guide:

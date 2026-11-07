@@ -20,7 +20,7 @@ func TestClientRegistersAndRunsToolCall(t *testing.T) {
 	serverDone := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v1/executors/token":
+		case "/v1/environments/env_test/token":
 			if r.Method != http.MethodPost {
 				http.Error(w, "method", http.StatusMethodNotAllowed)
 				return
@@ -37,7 +37,7 @@ func TestClientRegistersAndRunsToolCall(t *testing.T) {
 				WSURL:        wsURL,
 				ChannelScope: []string{ChannelControl},
 			})
-		case "/v1/executors/channel":
+		case "/v1/environments/env_test/channel":
 			if got := r.Header.Get("Authorization"); got != "Bearer jwt_test" {
 				serverDone <- errString("bad websocket authorization: " + got)
 				http.Error(w, "authorization", http.StatusUnauthorized)
@@ -56,7 +56,7 @@ func TestClientRegistersAndRunsToolCall(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	wsURL = "ws" + strings.TrimPrefix(server.URL, "http") + "/v1/executors/channel"
+	wsURL = "ws" + strings.TrimPrefix(server.URL, "http") + "/v1/environments/env_test/channel"
 
 	client, err := NewClient(Options{
 		EnvironmentKey: "env_key",
