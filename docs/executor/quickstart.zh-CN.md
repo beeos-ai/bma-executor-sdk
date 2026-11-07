@@ -123,7 +123,7 @@ go run ./examples/agentexecutor
 | 升级 `400 missing … subprotocol` | 没有提供 `Sec-WebSocket-Protocol: bma.executor.v1.1`（或 v1） | 设置子协议 |
 | 升级 `403 … does not allow channel mcp` | 机器路径 JWT 只有 `control` | 机器路径不开 MCP 通道 |
 | 注册后立即 close `4003` | `executor.register.protocol` 与协商的子协议不一致 | 两者都用 `bma.executor.v1.1` |
-| 注册后 close `4002` | 机器路径：未声明 `capabilities.process.enabled`；`executor.version` 不是 `MAJOR.MINOR.PATCH`（或 `0.0.0-dev`）；或运行时被平台结束 | 声明能力；修正版本号；重连 |
+| 注册后 close `4002` | 机器路径：未声明 `capabilities.process.enabled`；`executor.version` 不是 `MAJOR.MINOR.PATCH`（或 `0.0.0-dev`）；或运行时被平台结束 | 声明 `process`（或 `agent`）；修正版本号；重连。SDK 连续 3 次被拒后以配置错误结束 |
 | 周期性 close `4001` | JWT 5 分钟到期 | 正常：重新换 token 重连 |
 | close `4004` 后反复被顶 | 同一台机器上两个执行端（bmad + Desktop，或两个 bmad） | 只保留一个；收到 4004 的一方必须停止 |
 | `bmad executor cannot start: the bmad daemon (or another executor) is running` | daemon 模式仍在运行 | `bmad stop` 后再启动 |

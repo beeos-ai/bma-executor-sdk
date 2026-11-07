@@ -54,6 +54,26 @@ origin, the same value as `BMA_BASE_URL` in bma-sdk (for example `https://api.st
 the client posts the environment key to `{baseUrl}/v1/executors/token` and drops a trailing `/api/v1`. The SDK does not read
 `BMA_BASE_URL` itself. A `tokenSource` carries its own channel URL and ignores `baseUrl`.
 
+#### A machine-scoped executor must declare `process` or `agent`
+
+With an empty `environmentId` (a machine token) the platform binds the connection as the machine's runtime and **refuses the registration of an executor that advertises neither the `process` nor the `agent` capability**: it answers `executor.register`, then closes with `4002` "runtime registration refused". Shell and files alone are such an executor. Declare `process` and serve `process.*` (or `serveAgent`), with `executor.version` as `MAJOR.MINOR.PATCH`:
+
+```ts
+const client = new ExecutorClient({
+  baseUrl: process.env.BMA_BASE_URL,
+  environmentKey: process.env.BMA_MACHINE_TOKEN, // the machine token
+  environmentId: '',                              // machine scope
+  executor: { name: 'my-machine', os: process.platform, arch: process.arch, version: '1.0.0' },
+  capabilities: { process: { enabled: true } },
+})
+client.onRequest('process.start', async (params) => { /* start it, answer with the result */ })
+// ... onRequest for process.read / write / interrupt / terminate / list as needed
+await client.start()
+await client.waitReady(30_000) // registered and still open one heartbeat later
+```
+
+The SDK treats a refusal as a configuration error: after 3 registrations in a row refused right after `executor.register` (close `4002` "runtime registration refused", or an `executor.register` error `capability_unavailable` / `invalid_params`), `waitClosed()` rejects with `RegistrationRefusedError`; other `4002` closes (for example "daemon runtime ended") reconnect as before. `state` is `ready` as soon as `executor.register` returns, which a refused registration also does; `waitReady(timeoutMs?)` resolves only after the registration stayed open for one heartbeat interval, and rejects with the error of a client that ended.
+
 ### Executor lifecycle, cancellation, and results
 
 - `tool.cancel` aborts the handler's `signal` (so do `deadline_ms` and
@@ -83,10 +103,10 @@ the client posts the environment key to `{baseUrl}/v1/executors/token` and drops
   fails `onToolResultLost` receives the result to persist and replay.
 - Reconnect: until `stop()` by default, with exponential backoff (1 s base,
   ×2, 60 s cap, jitter), a fresh token per dial and `resume` (`executor_id`,
-  `last_connection_id`, `active_sessions`). Only close codes 4003 and 4004 are
-  terminal. A positive `maxReconnectAttempts` bounds the attempts. `await
+  `last_connection_id`, `active_sessions`). Only close codes 4003 and 4004, and 3
+  refused registrations in a row, are terminal. A positive `maxReconnectAttempts` bounds the attempts. `await
   client.waitClosed()` resolves after `stop()` / `executor.close` and rejects
-  with `ChannelClosedError` (4003/4004), `CredentialRejectedError` (the token
+  with `ChannelClosedError` (4003/4004), `RegistrationRefusedError`, `CredentialRejectedError` (the token
   endpoint answered 401/403 on reconnect: revoked or invalid credential, not
   retried) or `ReconnectExhaustedError`; exit the process on a rejection so a
   supervisor can restart it.

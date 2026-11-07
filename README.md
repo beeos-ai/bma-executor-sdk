@@ -85,6 +85,27 @@ Set `Options.BaseURL` to your BMA deployment: the hosted service is in early acc
 
 A machine-scoped executor uses a machine token through `Options.TokenSource` and no environment id. Go clients negotiate `bma.executor.v1.1` by default (`Options.Protocol`).
 
+#### A machine-scoped executor must declare `process` or `agent`
+
+The platform binds a machine-scoped connection as the machine's runtime, and **refuses the registration of an executor that advertises neither the `process` nor the `agent` capability**: it answers `executor.register`, then closes with `4002` "runtime registration refused". The default `Options.Capabilities` (shell and files only) is such an executor. Declare `process` (and serve `process.*`) or `agent` (`ServeAgent`), and give `Executor.Version` as `MAJOR.MINOR.PATCH`:
+
+```go
+core, _ := bmaexecutor.NewCore(bmaexecutor.CoreOptions{WorkRoot: dir})
+_ = core.Register(bmaexecutor.NewProcessCapability(core, bmaexecutor.ProcessOptions{})) // advertises process.enabled
+client, _ := bmaexecutor.NewClient(bmaexecutor.Options{
+	TokenSource:  bmaexecutor.StaticToken(wsURL, machineToken), // or a token source that exchanges the machine token
+	Executor:     bmaexecutor.ExecutorInfo{Name: "my-machine", OS: "linux", Arch: "arm64", Version: "1.0.0"},
+	Capabilities: core.Capabilities(),
+})
+_ = core.Attach("cloud", client)
+_, _ = client.Start(ctx)
+if err := client.WaitReady(ctx); err != nil { // registered and still open one heartbeat later
+	log.Fatal(err)
+}
+```
+
+The SDK treats this as a configuration error: after 3 registrations in a row refused right after `executor.register` (close `4002` "runtime registration refused", or an `executor.register` error `capability_unavailable` / `invalid_params`), the client ends and `Done` closes with `Err()` wrapping `ErrRegistrationRefused`; other `4002` closes (for example "daemon runtime ended") reconnect as before. `State()` is `ready` as soon as `executor.register` returns, which a refused registration also does; `WaitReady(ctx)` returns only after the registration stayed open for one heartbeat interval, or with the error of a client that ended.
+
 Executor types follow one mapping: required members are values, optional members are values with `omitempty` (named structs and nullable members are pointers), enums are untyped constants (`Code*` error codes on `RPCError.Code`), and opaque payloads such as `ToolCallParams.Input` stay `json.RawMessage`. Tool handlers receive the decoded per-tool input (`BashInput`, `ReadInput`, ...) through `client.Tools.<Name>.Handle`; return `TextOutput`, `BashResult{...}.Output()` (rendered like `Core`: stdout, stderr, `exit_code: N`) or a `ToolOutput`, `NewToolError(text)` for a tool-level error the model sees (`is_error: true`), any other error for `outcome: "failed"`. The harness calls them as `session.Tools.Bash.Call(ctx, BashInput{Command: "ls"}, CallToolOptions{})`. Other protocol methods are typed too: `Requests.ProcessStart.Handle(client, fn)`, `Calls.SessionEvent.Call(ctx, client, params)`, `Notifications.ToolProgress.Notify(ctx, client, params)` (tables generated from the contract by `tools/gen_methods.py`).
 
 ### Lifecycle, cancellation, and results

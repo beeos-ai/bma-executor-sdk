@@ -45,6 +45,9 @@ const (
 	maxTrackedToolResults   = 8192
 	maxToolResultRetryDelay = 10 * time.Second
 	maxFrameBytes           = 4 << 20
+	// maxRefusedRegistrations is how many registrations in a row the
+	// platform may refuse before the client gives up (ErrRegistrationRefused).
+	maxRefusedRegistrations = 3
 
 	// Artifact upload (v1.1 §6.5).
 	artifactPath         = "/v1/executors/artifacts"
@@ -69,6 +72,14 @@ var (
 	// key or machine token). A reconnect does not retry it: the client ends
 	// with it as Err. A TokenSource may wrap it for the same effect.
 	ErrCredentialRejected = errors.New("bmaexecutor: executor credential rejected")
+	// ErrRegistrationRefused is Err after the platform refused the
+	// executor's registration maxRefusedRegistrations times in a row: the
+	// close 4002 "runtime registration refused" right after
+	// executor.register, or an executor.register error for the executor's
+	// capabilities. It is a configuration error (a machine-scoped executor
+	// must declare the process or agent capability) that reconnecting
+	// cannot fix. It wraps the last refusal.
+	ErrRegistrationRefused = errors.New("bmaexecutor: executor registration refused")
 )
 
 // ConnectionState is the executor control channel state (ConnectionState* values).
@@ -250,21 +261,27 @@ type Client struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 
-	mu                   sync.Mutex
-	conn                 *connection
-	state                ConnectionState
-	stopped              bool
-	err                  error
-	registerResult       *ExecutorRegisterResult
-	token                ExecutorTokenResponse
-	connectionID         string
-	executorID           string
-	heartbeatInterval    time.Duration
-	leaseTTL             time.Duration
-	disconnectedAt       time.Time
-	sessions             map[string]struct{}
-	pending              map[string]chan rpcOutcome
-	reconnectAttempts    int
+	mu                sync.Mutex
+	conn              *connection
+	state             ConnectionState
+	stopped           bool
+	err               error
+	registerResult    *ExecutorRegisterResult
+	token             ExecutorTokenResponse
+	connectionID      string
+	executorID        string
+	heartbeatInterval time.Duration
+	leaseTTL          time.Duration
+	disconnectedAt    time.Time
+	sessions          map[string]struct{}
+	pending           map[string]chan rpcOutcome
+	reconnectAttempts int
+	// refusedStreak counts registrations refused in a row; stableConn is the
+	// connection that stayed registered for one heartbeat interval, and
+	// stable is closed and replaced whenever a connection becomes stable.
+	refusedStreak        int
+	stableConn           *connection
+	stable               chan struct{}
 	completedToolResults map[string]struct{}
 	seenToolCalls        map[string]struct{}
 	runningToolCalls     map[string]*runningToolCall
@@ -346,6 +363,7 @@ func NewClient(options Options) (*Client, error) {
 		runningToolCalls:     make(map[string]*runningToolCall),
 		requestHandlers:      make(map[string]func(context.Context, json.RawMessage) (any, error)),
 		registered:           make(chan struct{}),
+		stable:               make(chan struct{}),
 		toolHandlers:         make(map[string]toolHandler),
 	}
 	client.Tools = newTools(client)
@@ -893,6 +911,7 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 		c.disconnectedAt = time.Time{}
 		c.state = ConnectionStateReady
 		c.reconnectAttempts = 0
+		time.AfterFunc(interval, func() { c.markStable(conn) })
 	}
 	close(c.registered)
 	c.registered = make(chan struct{})
@@ -900,6 +919,83 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 	c.log(LogInfo, "executor registered as "+result.ExecutorID, nil)
 	go c.refreshTokenLoop(conn, token)
 	return nil
+}
+
+// markStable records that conn stayed registered for one heartbeat
+// interval: the platform did not refuse its runtime, so it is ready.
+func (c *Client) markStable(conn *connection) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stopped || c.conn != conn {
+		return
+	}
+	c.stableConn = conn
+	c.refusedStreak = 0
+	close(c.stable)
+	c.stable = make(chan struct{})
+}
+
+// WaitReady blocks until the executor is registered and the registration
+// stayed open for one heartbeat interval. State() is ready as soon as
+// executor.register returns, but a machine-scoped executor that declared
+// neither the process nor the agent capability is closed with 4002 right
+// after that, so only WaitReady separates a usable executor from a
+// registration that is about to be refused. It returns the error of a client
+// that ended (Err, or ErrClientStopped after Stop) and ctx.Err() on timeout.
+func (c *Client) WaitReady(ctx context.Context) error {
+	for {
+		c.mu.Lock()
+		if c.stopped {
+			err := c.err
+			c.mu.Unlock()
+			if err == nil {
+				err = ErrClientStopped
+			}
+			return err
+		}
+		if c.conn != nil && c.stableConn == c.conn {
+			c.mu.Unlock()
+			return nil
+		}
+		stable := c.stable
+		c.mu.Unlock()
+		select {
+		case <-stable:
+		case <-c.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// refusedRegistration reports whether err is the platform refusing the
+// registration: the close 4002 "runtime registration refused", or an
+// executor.register error for the executor's capabilities or params.
+func refusedRegistration(err error) bool {
+	var rpcErr *RPCError
+	if errors.As(err, &rpcErr) {
+		return rpcErr.Code == CodeCapabilityUnavailable || rpcErr.Code == CodeInvalidParams
+	}
+	var closeErr *CloseError
+	return errors.As(err, &closeErr) && closeErr.Code == 4002 &&
+		strings.Contains(strings.ToLower(closeErr.Reason), "registration refused")
+}
+
+// countRefusedRegistration records one refusal and ends the client with
+// ErrRegistrationRefused at maxRefusedRegistrations in a row.
+func (c *Client) countRefusedRegistration(cause error) bool {
+	c.mu.Lock()
+	c.refusedStreak++
+	streak := c.refusedStreak
+	c.mu.Unlock()
+	if streak < maxRefusedRegistrations {
+		return false
+	}
+	err := fmt.Errorf("%w: %d registrations in a row (a machine-scoped executor must declare the process or agent capability): %w",
+		ErrRegistrationRefused, streak, cause)
+	c.log(LogError, "executor registration refused; not reconnecting", err)
+	c.finish(err, 1000, "registration refused")
+	return true
 }
 
 // refreshTokenLoop keeps conn open across token lifetimes: at 70% of the
@@ -1467,6 +1563,7 @@ func (c *Client) disconnected(conn *connection, err error) {
 	pending := c.pending
 	c.pending = make(map[string]chan rpcOutcome)
 	stopped := c.stopped
+	stable := c.stableConn == conn
 	if c.disconnectedAt.IsZero() {
 		c.disconnectedAt = time.Now()
 	}
@@ -1480,6 +1577,15 @@ func (c *Client) disconnected(conn *connection, err error) {
 	c.setState(ConnectionStateDisconnected)
 	if c.finishOnTerminalClose(err) {
 		return
+	}
+	if !stable && refusedRegistration(err) {
+		if c.countRefusedRegistration(err) {
+			return
+		}
+	} else {
+		c.mu.Lock()
+		c.refusedStreak = 0
+		c.mu.Unlock()
 	}
 	c.log(LogWarn, "executor connection lost", err)
 	c.scheduleReconnect(err)
@@ -1582,6 +1688,9 @@ func (c *Client) reconnect() {
 	}
 	if err := c.connect(c.rootCtx, token); err != nil {
 		if c.finishOnTerminalClose(err) {
+			return
+		}
+		if refusedRegistration(err) && c.countRefusedRegistration(err) {
 			return
 		}
 		c.log(LogWarn, "executor reconnect failed", err)

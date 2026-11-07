@@ -63,6 +63,51 @@ Additive; no breaking change ([MIGRATION](MIGRATION.md#110)). Guide:
   routes (F1), `session_files` handling (F2) and `data.reason` propagation
   (F3). Without them the calls answer 404 and the declaration is ignored.
 
+## 1.0.5
+
+### Fixed
+
+- **Python:** `wait_ready(timeout)` raised `asyncio.TimeoutError`, which is not
+  the builtin `TimeoutError` before Python 3.11; it now raises `TimeoutError`
+  on every supported version. This is the only change from 1.0.4.
+
+
+## 1.0.4
+
+The `v1.0.4` tag exists (Go module) but npm and PyPI were never published at 1.0.4: the release CI
+failed on Python 3.10 (see 1.0.5). Use 1.0.5 in every language.
+
+### Fixed
+
+- **All languages:** a machine-scoped executor that advertises neither the
+  `process` nor the `agent` capability is refused by the platform: it answers
+  `executor.register`, then closes with `4002` "runtime registration
+  refused". 1.0.3 reconnected forever on that and reported `ready` between
+  the register answer and the close. After 3 registrations in a row refused
+  right after `executor.register` (close `4002` "runtime registration
+  refused" before the connection stayed registered for one heartbeat
+  interval, or an `executor.register` error `capability_unavailable` /
+  `invalid_params`) the client now ends with a configuration error: Go `Done`
+  closes with `Err()` wrapping `ErrRegistrationRefused`, TypeScript
+  `waitClosed()` rejects with `RegistrationRefusedError`, Python
+  `wait_closed()` raises `RegistrationRefusedError`. Other `4002` closes
+  (`daemon runtime ended`) and every other close still reconnect, and a
+  refusal of a connection that had been stable does not count.
+
+### Added
+
+- **All languages:** `WaitReady(ctx)` / `waitReady(timeoutMs?)` /
+  `wait_ready(timeout=None)` return once the executor is registered and the
+  registration stayed open for one heartbeat interval, or with the error of a
+  client that ended. `State()` still turns `ready` when `executor.register`
+  returns; use the wait to tell a usable executor from a registration that
+  is about to be refused.
+
+### Documentation
+
+- READMEs and `docs/executor`: a machine-scoped executor must declare
+  `process` (or `agent`); minimal examples for Go, TypeScript and Python.
+
 ## 1.0.3
 
 ### Fixed

@@ -129,6 +129,22 @@ export class ReconnectExhaustedError extends Error {
   }
 }
 
+/**
+ * The platform refused the executor's registration 3 times in a row: the close 4002
+ * "runtime registration refused" right after executor.register, or an executor.register error for
+ * the executor's capabilities. It is a configuration error (a machine-scoped executor must declare
+ * the process or agent capability) that reconnecting cannot fix. `cause` is the last refusal.
+ */
+export class RegistrationRefusedError extends Error {
+  constructor(
+    readonly streak: number,
+    cause: unknown,
+  ) {
+    super(`executor registration refused ${streak} times in a row (a machine-scoped executor must declare the process or agent capability)`, { cause })
+    this.name = 'RegistrationRefusedError'
+  }
+}
+
 /** The harness closed the channel with a terminal close code (4003 unsupported protocol, 4004 replaced). */
 export class ChannelClosedError extends Error {
   constructor(

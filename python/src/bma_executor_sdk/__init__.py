@@ -30,6 +30,7 @@ from .client import (
     LogEvent,
     MCPChannel,
     ReconnectExhaustedError,
+    RegistrationRefusedError,
     static_token,
 )
 from .generated import (
@@ -119,6 +120,7 @@ __all__ = [
     "NotConnectedError",
     "Principal",
     "ReconnectExhaustedError",
+    "RegistrationRefusedError",
     "RPCError",
     "ReadInput",
     "Session",

@@ -77,6 +77,8 @@ PROTOCOL_V11 = ProtocolVersion.BmaExecutorV11.value
 _MAX_TRACKED_TOOL_RESULTS = 8192
 _MAX_TOOL_RESULT_RETRY_DELAY = 10.0
 _MAX_RECONNECT_DELAY = 60.0
+# Registrations the platform may refuse in a row before the client gives up.
+_MAX_REFUSED_REGISTRATIONS = 3
 # Fraction of a token's lifetime after which executor.token.refresh is sent.
 _TOKEN_REFRESH_AT = 0.7
 
@@ -184,6 +186,11 @@ class ExecutorClient:
         self._heartbeat_interval = heartbeat_interval
         self._sessions: set[str] = set()
         self._reconnect_attempts = 0
+        # Registrations refused in a row; the peer that stayed registered for
+        # one heartbeat interval; set (then replaced) whenever one does.
+        self._refused_streak = 0
+        self._stable_peer: Peer | None = None
+        self._stable = asyncio.Event()
         self._completed_tool_results: dict[str, None] = {}
         self._seen_tool_calls: dict[str, None] = {}
         self._running_tool_calls: dict[str, _RunningToolCall] = {}
@@ -246,11 +253,41 @@ class ExecutorClient:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
 
+    async def wait_ready(self, timeout: float | None = None) -> None:
+        """Wait until the executor is registered and the registration stayed
+        open for one heartbeat interval. ``state`` is Ready as soon as
+        executor.register returns, but a machine-scoped executor that declared
+        neither the process nor the agent capability is closed with 4002 right
+        after that, so only wait_ready() separates a usable executor from a
+        registration about to be refused. Raises the error of a client that
+        ended (see wait_closed), ClientStoppedError after stop() and
+        TimeoutError after ``timeout`` seconds."""
+
+        async def wait() -> None:
+            while True:
+                if self._stopped:
+                    raise self._close_error or ClientStoppedError()
+                if self._peer is not None and self._stable_peer is self._peer:
+                    return
+                stable = asyncio.ensure_future(self._stable.wait())
+                closed = asyncio.ensure_future(self._closed.wait())
+                try:
+                    await asyncio.wait({stable, closed}, return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    stable.cancel()
+                    closed.cancel()
+
+        try:
+            await asyncio.wait_for(wait(), timeout)
+        except asyncio.TimeoutError as error:  # not the builtin TimeoutError before Python 3.11
+            raise TimeoutError("wait_ready timed out") from error
+
     async def wait_closed(self) -> None:
         """Wait until the client stops for good (Go: ``Done`` and ``Err``).
         Returns after stop() or executor.close; raises ChannelClosed for a
         terminal close code (4003, 4004), CredentialRejectedError when the
-        token endpoint rejects the credential on reconnect, and
+        token endpoint rejects the credential on reconnect,
+        RegistrationRefusedError after 3 refused registrations in a row, and
         ReconnectExhaustedError after a positive max_reconnect_attempts."""
         await self._closed.wait()
         if self._close_error is not None:
@@ -496,6 +533,7 @@ class ExecutorClient:
         self._executor_id = result["executor_id"]
         self._state = ConnectionState.Ready
         self._reconnect_attempts = 0
+        self._spawn(self._mark_stable_later(peer, self._heartbeat_interval))
         registered, self._registered = self._registered, asyncio.Event()
         registered.set()
         self._log("info", f"executor registered as {result['executor_id']}")
@@ -549,6 +587,30 @@ class ExecutorClient:
             resume["last_connection_id"] = self._connection_id
         return resume
 
+    async def _mark_stable_later(self, peer: Peer, delay: float) -> None:
+        """peer stayed registered for one heartbeat interval: the platform did not refuse its runtime."""
+        await asyncio.sleep(delay)
+        if self._stopped or self._peer is not peer:
+            return
+        self._stable_peer = peer
+        self._refused_streak = 0
+        stable, self._stable = self._stable, asyncio.Event()
+        stable.set()
+
+    def _count_refused_registration(self, cause: BaseException) -> bool:
+        """Record one refused registration; end the client at the limit."""
+        self._refused_streak += 1
+        if self._refused_streak < _MAX_REFUSED_REGISTRATIONS:
+            return False
+        error = RegistrationRefusedError(
+            f"executor registration refused {self._refused_streak} times in a row "
+            "(a machine-scoped executor must declare the process or agent capability)"
+        )
+        error.__cause__ = cause
+        self._log("error", "executor registration refused; not reconnecting", cause)
+        self._end(error)
+        return True
+
     async def _read(self, peer: Peer) -> None:
         closed = await peer.run()
         await self._disconnected(peer, closed)
@@ -556,6 +618,7 @@ class ExecutorClient:
     async def _disconnected(self, peer: Peer, closed: ChannelClosed) -> None:
         if self._peer is not peer:
             return
+        was_stable = self._stable_peer is peer
         self._peer = None
         if self._stopped:
             return
@@ -563,6 +626,11 @@ class ExecutorClient:
             self._log("error", f"executor channel closed with terminal code {closed.code}: {closed.reason}")
             self._end(closed)
             return
+        if not was_stable and _is_registration_refusal(closed):
+            if self._count_refused_registration(closed):
+                return
+        else:
+            self._refused_streak = 0
         self._state = ConnectionState.Disconnected
         self._spawn(self._reconnect_loop())
 
@@ -596,6 +664,8 @@ class ExecutorClient:
                 self._end(error)
                 return
             except Exception as error:
+                if _is_registration_refusal(error) and self._count_refused_registration(error):
+                    return
                 cause = error
                 self._state = ConnectionState.Disconnected
                 self._log("warn", "executor reconnect failed", error)
@@ -779,6 +849,21 @@ class CredentialRejectedError(ExecutorTokenError):
     def __init__(self, message: str, status_code: int) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class RegistrationRefusedError(ExecutorError):
+    """The platform refused the executor's registration 3 times in a row: the
+    close 4002 "runtime registration refused" right after executor.register,
+    or an executor.register error for the executor's capabilities. A
+    configuration error (a machine-scoped executor must declare the process
+    or agent capability) that reconnecting cannot fix; ``__cause__`` is the
+    last refusal."""
+
+
+def _is_registration_refusal(error: BaseException) -> bool:
+    if isinstance(error, RPCError):
+        return error.code in (JsonRpcErrorCode.CapabilityUnavailable, JsonRpcErrorCode.InvalidParams)
+    return isinstance(error, ChannelClosed) and error.code == 4002 and "registration refused" in error.reason.lower()
 
 
 class ReconnectExhaustedError(ExecutorError):
