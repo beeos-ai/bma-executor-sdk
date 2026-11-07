@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 (unreleased)
+## 1.1.0
 
 Additive; no breaking change ([MIGRATION](MIGRATION.md#110)). Guide:
 [docs/executor/session-context.md](docs/executor/session-context.md).
