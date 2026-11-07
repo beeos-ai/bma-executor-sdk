@@ -99,6 +99,10 @@ class Peer:
             raise TimeoutError(f"{method}: no response within {timeout}s") from error
         finally:
             self._pending.pop(request_id, None)
+            if future.done() and not future.cancelled():
+                # The channel can fail the call while it is still being written; that error
+                # surfaces from the write, so retrieve the Future's own (asyncio would log it).
+                future.exception()
 
     async def notify(self, method: str, params: Any) -> None:
         if self.closed is not None:
