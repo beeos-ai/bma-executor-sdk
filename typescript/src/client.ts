@@ -52,11 +52,13 @@ import {
 import { AgentRuntime, type AgentHandler, type AgentHost } from './agent.js'
 import {
   ChannelClosedError,
+  Code,
   ClientStoppedError,
   CredentialRejectedError,
   deferred,
   NotConnectedError,
   ReconnectExhaustedError,
+  RegistrationRefusedError,
   RequestTimeoutError,
   RpcError,
   ToolError,
@@ -78,6 +80,8 @@ export const INLINE_RESULT_BYTES = 48 * 1024
 const MAX_TRACKED_TOOL_CALLS = 8192
 const MAX_TOOL_RESULT_RETRY_DELAY_MS = 10_000
 const MAX_RECONNECT_DELAY_MS = 60_000
+/** Registrations the platform may refuse in a row before the client gives up (RegistrationRefusedError). */
+const MAX_REFUSED_REGISTRATIONS = 3
 /** Fraction of a token's lifetime after which executor.token.refresh is sent. */
 const TOKEN_REFRESH_AT = 0.7
 
@@ -89,6 +93,15 @@ const TOKEN_REFRESH_AT = 0.7
  */
 export function isTerminalCloseCode(code: number): boolean {
   return code === 4003 || code === 4004
+}
+
+/**
+ * Whether error is the platform refusing the registration: the close 4002 "runtime registration
+ * refused", or an executor.register error for the executor's capabilities or params.
+ */
+function isRegistrationRefusal(error: unknown): boolean {
+  if (error instanceof RpcError) return error.code === Code.CapabilityUnavailable || error.code === Code.InvalidParams
+  return error instanceof ChannelClosedError && error.code === 4002 && /registration refused/i.test(error.reason)
 }
 
 /** Which channel to open: the control channel, or one MCP channel of a session. */
@@ -353,6 +366,10 @@ export class ExecutorClient {
   private heartbeatIntervalMs: number
   private heartbeatTimer?: ReturnType<typeof setTimeout>
   private reconnectAttempts = 0
+  /** Registrations refused in a row; the peer that stayed registered for one heartbeat interval; replaced whenever one does. */
+  private refusedStreak = 0
+  private stablePeer?: RpcPeer
+  private stable = deferred()
   private readonly sessions = new Set<string>()
   private readonly completedToolResults = new BoundedSet()
   private readonly seenToolCalls = new BoundedSet()
@@ -436,10 +453,35 @@ export class ExecutorClient {
   }
 
   /**
+   * Resolves once the executor is registered and the registration stayed open for one heartbeat
+   * interval. `state` is ready as soon as executor.register returns, but a machine-scoped executor
+   * that declared neither the process nor the agent capability is closed with 4002 right after
+   * that, so only waitReady() separates a usable executor from a registration about to be refused.
+   * Rejects with the error of a client that ended (waitClosed()), ClientStoppedError after stop(),
+   * and RequestTimeoutError after timeoutMs.
+   */
+  async waitReady(timeoutMs?: number): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      if (timeoutMs !== undefined) timer = setTimeout(() => reject(new RequestTimeoutError('waitReady')), timeoutMs)
+    })
+    try {
+      for (;;) {
+        if (this.stopped) throw this.closeError ?? new ClientStoppedError()
+        if (this.peer && this.stablePeer === this.peer) return
+        await Promise.race([this.stable.promise, this.closed.promise, timeout])
+      }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /**
    * Resolves when the client stops for good: after stop() or executor.close.
    * Rejects with ChannelClosedError for a terminal close code (4003, 4004),
    * CredentialRejectedError when the token endpoint rejects the credential on
-   * reconnect, and ReconnectExhaustedError after a positive maxReconnectAttempts.
+   * reconnect, RegistrationRefusedError after 3 refused registrations in a row, and
+   * ReconnectExhaustedError after a positive maxReconnectAttempts.
    */
   async waitClosed(): Promise<void> {
     await this.closed.promise
@@ -650,11 +692,31 @@ export class ExecutorClient {
       result.heartbeat_interval_ms > 0 ? result.heartbeat_interval_ms : (this.options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS)
     this.currentState = result.drain ? ConnectionState.Draining : ConnectionState.Ready
     this.reconnectAttempts = 0
+    const stableTimer = setTimeout(() => this.markStable(peer), this.heartbeatIntervalMs)
+    stableTimer.unref?.()
     const registered = this.registration
     this.registration = deferred()
     registered.resolve()
     this.log('info', `executor registered as ${result.executor_id}`)
     if (token?.expires_in) this.scheduleTokenRefresh(peer, token.expires_in * 1000, Date.now() + token.expires_in * 1000)
+  }
+
+  /** peer stayed registered for one heartbeat interval: the platform did not refuse its runtime. */
+  private markStable(peer: RpcPeer): void {
+    if (this.stopped || this.peer !== peer) return
+    this.stablePeer = peer
+    this.refusedStreak = 0
+    const stable = this.stable
+    this.stable = deferred()
+    stable.resolve()
+  }
+
+  /** Records one refused registration; ends the client with RegistrationRefusedError at the limit. */
+  private countRefusedRegistration(cause: unknown): boolean {
+    if (++this.refusedStreak < MAX_REFUSED_REGISTRATIONS) return false
+    this.log('error', 'executor registration refused; not reconnecting', cause)
+    this.end(new RegistrationRefusedError(this.refusedStreak, cause))
+    return true
   }
 
   /**
@@ -685,6 +747,7 @@ export class ExecutorClient {
 
   private disconnected(peer: RpcPeer, code: number, reason: string): void {
     if (this.peer !== peer) return
+    const wasStable = this.stablePeer === peer
     this.peer = undefined
     if (this.stopped) {
       this.currentState = ConnectionState.Closed
@@ -696,7 +759,13 @@ export class ExecutorClient {
       this.end(new ChannelClosedError(code, reason))
       return
     }
-    this.scheduleReconnect(new ChannelClosedError(code, reason))
+    const closed = new ChannelClosedError(code, reason)
+    if (!wasStable && isRegistrationRefusal(closed)) {
+      if (this.countRefusedRegistration(closed)) return
+    } else {
+      this.refusedStreak = 0
+    }
+    this.scheduleReconnect(closed)
   }
 
   /** Retries after cause, the failure that ended the last connection or reconnect attempt. */
@@ -727,6 +796,7 @@ export class ExecutorClient {
         this.end(error)
         return
       }
+      if (isRegistrationRefusal(error) && this.countRefusedRegistration(error)) return
       this.log('warn', 'executor reconnect failed', error)
       this.currentState = ConnectionState.Disconnected
       this.scheduleReconnect(error)

@@ -49,6 +49,25 @@ asyncio.run(main())
 
 Set `base_url` to your BMA deployment: the hosted service is in early access and the default `DEFAULT_BASE_URL` (`https://api.bma.beeos.ai`) does not resolve yet. It is the deployment origin, the same value as `BMA_BASE_URL` in bma-sdk (for example `https://api.staging.bma.beeos.ai`); the client posts the environment key to `{base_url}/v1/executors/token` and drops a trailing `/api/v1`. The SDK does not read `BMA_BASE_URL` itself. A `token_source` carries its own channel URL.
 
+### A machine-scoped executor must declare `process` or `agent`
+
+With an empty `environment_id` (a machine token) the platform binds the connection as the machine's runtime and **refuses the registration of an executor that advertises neither the `process` nor the `agent` capability**: it answers `executor.register`, then closes with `4002` "runtime registration refused". Shell and files alone are such an executor. Declare `process` and serve `process.*` (or `serve_agent`), with `executor["version"]` as `MAJOR.MINOR.PATCH`:
+
+```python
+client = ExecutorClient(
+    base_url=os.environ["BMA_BASE_URL"],
+    environment_key=os.environ["BMA_MACHINE_TOKEN"],  # the machine token
+    environment_id="",                                # machine scope
+    executor={"name": "my-machine", "os": "linux", "arch": "arm64", "version": "1.0.0"},
+    capabilities={"process": {"enabled": True}},
+)
+client.on_request(methods.PROCESS_START, handle_process_start)  # and process.read / write / interrupt / terminate / list
+await client.start()
+await client.wait_ready(30)  # registered and still open one heartbeat later
+```
+
+The SDK treats a refusal as a configuration error: after 3 registrations in a row refused right after `executor.register` (close `4002` "runtime registration refused", or an `executor.register` error `capability_unavailable` / `invalid_params`), `wait_closed()` raises `RegistrationRefusedError`; other `4002` closes (for example "daemon runtime ended") reconnect as before. `state` is Ready as soon as `executor.register` returns, which a refused registration also does; `wait_ready(timeout=None)` returns only after the registration stayed open for one heartbeat interval, and raises the error of a client that ended (`TimeoutError` after `timeout`).
+
 A complete version that runs bash and stops the process on cancellation is [`examples/executor_minimal.py`](examples/executor_minimal.py); set `BMA_HARNESS_URL` (`ws://…` or `unix:///path.sock`) to connect it to a local harness instead of BMA.
 
 Behavior matches the Go SDK:
@@ -56,7 +75,7 @@ Behavior matches the Go SDK:
 - A handler returns a string, content blocks, `ToolResult(content, is_error, artifacts)` or (bash) `BashResult`, rendered like the Go `Core`; `raise ToolError(text)` reports a tool-level error (`is_error: true`), any other exception is `outcome: "failed"`. The harness calls tools as `await session.tools.bash.call({"command": "ls"})`.
 - `tool.cancel` cancels the handler's task and reports `outcome: "canceled"`; duplicate `tool.call` ids run once.
 - `tool.result` retries `-32009` / `-32004` / `retryable` errors and hands a lost result to `on_tool_result_lost`.
-- Reconnect resumes with `resume.executor_id` / `active_sessions`, until `stop()` by default (backoff 1 s doubling to 60 s, jitter); only close codes 4003 and 4004 stop the client. A positive `max_reconnect_attempts` bounds the attempts. `await client.wait_closed()` returns after `stop()` / `executor.close` and raises `ChannelClosed` (4003/4004), `CredentialRejectedError` (the token endpoint answered 401/403 on reconnect: revoked or invalid credential, not retried) or `ReconnectExhaustedError`; let it end the process so a supervisor can restart it.
+- Reconnect resumes with `resume.executor_id` / `active_sessions`, until `stop()` by default (backoff 1 s doubling to 60 s, jitter); only close codes 4003 and 4004 stop the client, and so does `RegistrationRefusedError` (3 refused registrations in a row). A positive `max_reconnect_attempts` bounds the attempts. `await client.wait_closed()` returns after `stop()` / `executor.close` and raises `ChannelClosed` (4003/4004), `RegistrationRefusedError`, `CredentialRejectedError` (the token endpoint answered 401/403 on reconnect: revoked or invalid credential, not retried) or `ReconnectExhaustedError`; let it end the process so a supervisor can restart it.
 - Call `session_ready` after setup and `session_ended` after cleanup. `client.on_request(methods.PROCESS_START, handler)` serves `process.*`, `terminal.*`, `skill.install` or `workspace.backup` yourself with the contract's TypedDicts; `await client.call(methods.SESSION_EVENT, params)` / `await client.notify(methods.TOOL_PROGRESS, params)` send typed methods (`bma_executor_sdk.methods`). There is no execution `Core` in Python.
 - Input missing a required member fails the call before the handler runs; a `tool.call` for a tool without a handler is refused with `-32012` before the ack; `shell` / `files` are enabled while a handler of the group is registered unless set `enabled: False`, and a handler registered after `start()` sends `executor.capabilities.update`. `BashResult` beyond `INLINE_RESULT_BYTES` (or `truncated=True`) is cut to Go Core's preview. The `computer_*` tools get slots once the contract defines their input.
 
