@@ -18,7 +18,7 @@ confirmation, so it refuses with local_confirmation_denied.
 
 Python has no built-in process runtime (Go's ProcessOptions.Launch): the executor
 serves process.* itself. This example keeps output in memory and serves
-process.start and process.read only.
+process.start, process.read and process.list only.
 
     BMA_BASE_URL=https://api.<env>.bma.beeos.ai BMA_MACHINE_TOKEN=... \\
     EXAMPLE_OWNER=u_42 EXAMPLE_FOLDERS='{"ws_7": "/Users/me/projects/site"}' \\
@@ -84,7 +84,7 @@ def state(proc: dict[str, Any]) -> dict[str, Any]:
     return {
         "accepted": True, "process_id": proc["id"], "state": proc["state"],
         "cursors": {"stdout": len(proc["stdout"]), "stderr": len(proc["stderr"])},
-        "exit_code": proc["exit_code"], "exit_signal": None,
+        "exit_code": proc["exit_code"], "exit_signal": None, **({"stderr": "merge"} if proc["merge"] else {}),
     }
 
 
@@ -121,11 +121,14 @@ def make_client() -> ExecutorClient:
             if not folder:
                 raise refuse(ErrorReason.WorkspaceUnavailable, "unknown workspace on this machine")
             cwd = confine(folder, params.get("cwd"))
+        merge = params.get("stderr") == "merge"
         child = await asyncio.create_subprocess_exec(
             *params["argv"], cwd=cwd, env={**os.environ, **(params.get("env") or {})},
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL,
+            # stderr "merge" (the harness asks for it): one stream, one cursor, reported in the state.
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT if merge else asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
         )
-        proc: dict[str, Any] = {"id": params["process_id"], "stdout": bytearray(), "stderr": bytearray(), "exit_code": None, "state": "running"}
+        proc: dict[str, Any] = {"id": params["process_id"], "stdout": bytearray(), "stderr": bytearray(), "exit_code": None, "state": "running", "merge": merge}
         PROCESSES[params["process_id"]] = proc
         asyncio.create_task(run(proc, child))
         return state(proc)
@@ -142,7 +145,21 @@ def make_client() -> ExecutorClient:
             "exit_code": proc["exit_code"], "exit_signal": None,
         }
 
+    async def session_assign(params: Any) -> Any:
+        # Python has no execution Core: accept the session and report it ready
+        # (nothing to prepare here), or the platform never uses this machine.
+        asyncio.get_running_loop().call_soon(lambda: asyncio.ensure_future(client.session_ready(
+            {"session_id": params["session_id"], "work_id": params["work_id"], "lease_token": params["lease"]["token"]})))
+        return {"accepted": True, "session_id": params["session_id"]}
+
+    client.on_session_assign(session_assign)
     client.on_request(methods.PROCESS_START, process_start)
+    async def process_list(_params: Any) -> Any:
+        # The platform lists processes when it reconciles a session; a machine-scoped
+        # executor that declares process must answer it.
+        return {"processes": [state(proc) for proc in PROCESSES.values()]}
+
+    client.on_request(methods.PROCESS_LIST, process_list)
     client.on_request(methods.PROCESS_READ, process_read)
     return client
 

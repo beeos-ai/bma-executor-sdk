@@ -5,6 +5,11 @@
 Additive; no breaking change ([MIGRATION](MIGRATION.md#110)). Guide:
 [docs/executor/session-context.md](docs/executor/session-context.md).
 
+- **TypeScript / Python examples:** the `session-context` examples now accept
+  `session.assign` and report `session.ready`, answer `process.list`, and honor
+  `stderr: "merge"`; without these a machine-scoped executor never went online,
+  was refused after registering, or failed `process.start` with `-32012`
+  against the platform (found in the staging run).
 - **Contract:** `Capabilities.session_files` (`SessionFilesCapability{root}`,
   `make contract-sdk`): an executor-declared session files root; the
   harness derives `<root>/<session_id>/{uploads,outputs}`.

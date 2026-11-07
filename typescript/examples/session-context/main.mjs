@@ -19,7 +19,7 @@
 //
 // TypeScript has no built-in process runtime (Go's ProcessOptions.Launch):
 // the executor serves process.* itself. This example keeps output in memory
-// and serves process.start and process.read only.
+// and serves process.start, process.read and process.list only.
 //
 //   BMA_BASE_URL=https://api.<env>.bma.beeos.ai BMA_MACHINE_TOKEN=... \
 //   EXAMPLE_OWNER=u_42 EXAMPLE_FOLDERS='{"ws_7":"/Users/me/projects/site"}' \
@@ -62,6 +62,13 @@ function confine(folder, cwd) {
 const installRefusal = () =>
   RpcError.withReason(Code.Forbidden, ErrorReason.LocalConfirmationDenied, 'package installs need a local confirmation this executor does not offer')
 
+// No execution Core in TypeScript: accept the session and report it ready
+// (nothing to prepare here), or the platform never uses this machine.
+client.onSessionAssign(async (assign) => {
+  setImmediate(() => void client.sessionReady({ session_id: assign.session_id, work_id: assign.work_id, lease_token: assign.lease.token }))
+  return { accepted: true, session_id: assign.session_id }
+})
+
 client.onRequest('process.start', async (params) => {
   const existing = processes.get(params.process_id)
   if (existing) return state(existing) // a replayed start
@@ -83,13 +90,19 @@ client.onRequest('process.start', async (params) => {
     throw RpcError.withReason(Code.Forbidden, ErrorReason.SessionRejected, 'the process names no agent session')
   }
   const child = spawn(params.argv[0], params.argv.slice(1), { cwd, env: { ...process.env, ...params.env }, stdio: ['ignore', 'pipe', 'pipe'] })
-  const proc = { id: params.process_id, startedAt: new Date().toISOString(), stdout: [], stderr: [], exitCode: null, state: 'running' }
+  // stderr "merge" (the harness asks for it): one stream, one cursor, reported in the state.
+  const merge = params.stderr === 'merge'
+  const proc = { id: params.process_id, startedAt: new Date().toISOString(), stdout: [], stderr: [], exitCode: null, state: 'running', merge }
   child.stdout.on('data', (chunk) => proc.stdout.push(chunk))
-  child.stderr.on('data', (chunk) => proc.stderr.push(chunk))
+  child.stderr.on('data', (chunk) => (merge ? proc.stdout : proc.stderr).push(chunk))
   child.on('close', (code) => Object.assign(proc, { exitCode: code ?? -1, state: 'exited', endedAt: new Date().toISOString() }))
   processes.set(params.process_id, proc)
   return state(proc)
 })
+
+// The platform lists processes when it reconciles a session; a machine-scoped
+// executor that declares process must answer it.
+client.onRequest('process.list', async () => ({ processes: [...processes.values()].map(state) }))
 
 client.onRequest('process.read', async ({ process_id, stream, cursor }) => {
   const proc = processes.get(process_id)
@@ -99,7 +112,7 @@ client.onRequest('process.read', async ({ process_id, stream, cursor }) => {
   return {
     process_id, stream, data: data.toString('base64'), from_cursor: cursor, next_cursor: all.length, earliest_cursor: 0,
     gap: false, truncated: false, eof: proc.state !== 'running', state: proc.state, ended_at: proc.endedAt,
-    exit_code: proc.exitCode, exit_signal: null,
+    exit_code: proc.exitCode, exit_signal: null, ...(proc.merge ? { stderr: 'merge' } : {}),
   }
 })
 
@@ -107,7 +120,7 @@ function state(proc) {
   return {
     accepted: true, process_id: proc.id, state: proc.state, started_at: proc.startedAt, ended_at: proc.endedAt,
     cursors: { stdout: Buffer.concat(proc.stdout).length, stderr: Buffer.concat(proc.stderr).length },
-    exit_code: proc.exitCode, exit_signal: null,
+    exit_code: proc.exitCode, exit_signal: null, ...(proc.merge ? { stderr: 'merge' } : {}),
   }
 }
 
