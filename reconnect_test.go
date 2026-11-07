@@ -287,3 +287,97 @@ func TestClientEndsAfterMaxReconnectAttempts(t *testing.T) {
 		t.Fatalf("token requests = %d, want 1 + 3 reconnect attempts", n)
 	}
 }
+
+// registerThenLostConn registers, and the connection is lost before the
+// connect call that registered it has returned: Write(register) queues the
+// register result and a 1012 close, then waits until the client has handled
+// the close and scheduled its first reconnect. It makes the otherwise racy
+// order (read loop sees the close before connect finishes) deterministic.
+type registerThenLostConn struct {
+	client  *Client
+	frames  chan []byte
+	closed  chan struct{}
+	replied bool // read loop only
+}
+
+func (c *registerThenLostConn) Read(ctx context.Context) ([]byte, error) {
+	if !c.replied { // the register result always precedes the close
+		select {
+		case frame := <-c.frames:
+			c.replied = true
+			return frame, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	select {
+	case <-c.closed:
+		return nil, &CloseError{Code: int(websocket.StatusServiceRestart), Reason: "node replaced"}
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (c *registerThenLostConn) Write(ctx context.Context, frame []byte) error {
+	var request rpcInbound
+	if err := json.Unmarshal(frame, &request); err != nil || request.ID == nil {
+		return err
+	}
+	reply, err := json.Marshal(rpcSuccessEnvelope{JSONRPC: "2.0", ID: *request.ID,
+		Result: ExecutorRegisterResult{Protocol: ProtocolV11, ExecutorID: "exec_test", ConnectionID: "conn_test",
+			HeartbeatIntervalMS: 60000, LeaseTTLMS: 60000}})
+	if err != nil {
+		return err
+	}
+	c.frames <- reply
+	close(c.closed)
+	for { // until the read loop has handled the close
+		c.client.mu.Lock()
+		handled := c.client.conn == nil
+		c.client.mu.Unlock()
+		if handled {
+			return nil
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func (c *registerThenLostConn) Close(int, string) error { return nil }
+func (c *registerThenLostConn) Subprotocol() string     { return ProtocolV11 }
+
+// A connection lost right after it registered must not reset the reconnect
+// budget afterwards: connect used to mark the already-lost connection ready
+// and zero reconnectAttempts after the read loop had counted the close, so
+// MaxReconnectAttempts=3 allowed 4 reconnect attempts.
+func TestClientCountsReconnectsAfterAConnectionLostDuringRegistration(t *testing.T) {
+	var dials atomic.Int32
+	var client *Client
+	var err error
+	client, err = NewClient(Options{
+		EnvironmentID: "env_test", Executor: ExecutorInfo{Name: "test", OS: "linux", Arch: "arm64", Version: "test"},
+		TokenSource:          StaticToken("ws://local/", ""),
+		MaxReconnectAttempts: 3,
+		ReconnectBaseDelay:   time.Millisecond, ReconnectMaxDelay: 2 * time.Millisecond,
+		Dial: func(context.Context, ExecutorTokenResponse, string, ChannelTarget) (Conn, error) {
+			if dials.Add(1) == 1 {
+				return &registerThenLostConn{client: client, frames: make(chan []byte, 1), closed: make(chan struct{})}, nil
+			}
+			return nil, errors.New("dial refused")
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	startTestClient(t, client)
+	select {
+	case <-client.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("client did not end after 3 failed reconnects")
+	}
+	if !errors.Is(client.Err(), ErrReconnectExhausted) {
+		t.Fatalf("Err = %v, want ErrReconnectExhausted", client.Err())
+	}
+	if n := dials.Load(); n != 4 {
+		t.Fatalf("dials = %d, want 1 + 3 reconnect attempts", n)
+	}
+}
