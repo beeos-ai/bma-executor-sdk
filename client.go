@@ -884,9 +884,14 @@ func (c *Client) connect(ctx context.Context, token ExecutorTokenResponse) error
 	if result.LeaseTTLMS > 0 {
 		c.leaseTTL = time.Duration(result.LeaseTTLMS) * time.Millisecond
 	}
-	c.disconnectedAt = time.Time{}
-	c.state = ConnectionStateReady
-	c.reconnectAttempts = 0
+	// A connection already lost (the read loop handled its close before this
+	// registration returned) is not ready, and its reconnect is already
+	// counted: resetting the budget here would grant an extra attempt.
+	if c.conn == conn {
+		c.disconnectedAt = time.Time{}
+		c.state = ConnectionStateReady
+		c.reconnectAttempts = 0
+	}
 	close(c.registered)
 	c.registered = make(chan struct{})
 	c.mu.Unlock()

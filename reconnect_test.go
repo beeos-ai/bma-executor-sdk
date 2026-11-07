@@ -294,15 +294,23 @@ func TestClientEndsAfterMaxReconnectAttempts(t *testing.T) {
 // the close and scheduled its first reconnect. It makes the otherwise racy
 // order (read loop sees the close before connect finishes) deterministic.
 type registerThenLostConn struct {
-	client *Client
-	frames chan []byte
-	closed chan struct{}
+	client  *Client
+	frames  chan []byte
+	closed  chan struct{}
+	replied bool // read loop only
 }
 
 func (c *registerThenLostConn) Read(ctx context.Context) ([]byte, error) {
+	if !c.replied { // the register result always precedes the close
+		select {
+		case frame := <-c.frames:
+			c.replied = true
+			return frame, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	select {
-	case frame := <-c.frames:
-		return frame, nil
 	case <-c.closed:
 		return nil, &CloseError{Code: int(websocket.StatusServiceRestart), Reason: "node replaced"}
 	case <-ctx.Done():
