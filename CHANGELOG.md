@@ -14,6 +14,18 @@
   and Buildkite agent also retry until reconnected). `MaxReconnectAttempts` /
   `max_reconnect_attempts` / `maxReconnectAttempts` = 0 (the new default) or
   negative means unlimited; a positive value still bounds the attempts.
+- **All languages:** a heartbeat with no answer within the request timeout
+  closes the connection and reconnects, as gRPC keepalive closes a transport
+  whose ping times out. 1.0.1 only logged the failure, so after a network cut
+  the Go and TypeScript clients stayed `ready` on a dead (half-open)
+  connection until the kernel gave up on TCP (about 15 minutes); Python
+  relied on the `websockets` keepalive ping alone.
+- **Go:** each reconnect attempt drops the HTTP client's idle connections
+  and bounds the token request by `RequestTimeout` (as Python does). After a
+  network cut the pooled HTTP/2 connection was dead; with
+  `http.DefaultClient` (no timeout) the reconnect hung on it, and a timeout
+  alone left it pooled, so every later attempt failed although the network
+  was back.
 - **All languages:** a `401` or `403` from the token endpoint on reconnect
   (revoked or invalid environment key or machine token) is not retried; the
   client ends with `ErrCredentialRejected` (Go) / `CredentialRejectedError`

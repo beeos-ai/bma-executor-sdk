@@ -747,11 +747,19 @@ export class ExecutorClient {
       active_sessions: this.activeSessions,
       ...(load ? { load } : {}),
     }
+    const peer = this.peer
     try {
       const result = await this.call('executor.heartbeat', params)
       if (result.drain && this.currentState === ConnectionState.Ready) this.currentState = ConnectionState.Draining
     } catch (error) {
       this.log('warn', 'executor heartbeat failed', error)
+      if (error instanceof RequestTimeoutError && peer && peer === this.peer) {
+        // No answer within requestTimeoutMs: the connection is dead (a half-open TCP connection
+        // after a network cut). Close it so the client reconnects, as gRPC keepalive closes a
+        // transport whose ping times out.
+        this.log('warn', 'executor heartbeat timed out; closing the connection to reconnect')
+        peer.close(1001, 'heartbeat timeout')
+      }
     }
   }
 

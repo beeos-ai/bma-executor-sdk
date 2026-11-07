@@ -98,6 +98,33 @@ async def test_terminal_close_code_ends_the_client() -> None:
     assert raised.value.code == 4004
 
 
+async def test_heartbeat_timeout_reconnects(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A heartbeat unanswered within request_timeout means a dead (half-open)
+    connection: the client closes it and reconnects (gRPC keepalive)."""
+    from bma_executor_sdk import harness as bxh
+
+    silent = {"on": False}
+    dispatch = bxh._HarnessConn._dispatch  # noqa: SLF001
+
+    async def maybe_silent(self: Any, executor: Any, request_id: str, method: str, params: Any) -> Any:
+        if method == bx.generated.METHOD_EXECUTOR_HEARTBEAT and silent["on"]:
+            await asyncio.Event().wait()
+        return await dispatch(self, executor, request_id, method, params)
+
+    monkeypatch.setattr(bxh._HarnessConn, "_dispatch", maybe_silent)  # noqa: SLF001
+    harness = bx.Harness(request_timeout=2.0, heartbeat_interval=0.02)
+    client = await start_client(harness, TokenEndpoint(503, 0))
+    client._request_timeout = 0.1  # noqa: SLF001
+    first = client.connection_id
+    silent["on"] = True
+    for _ in range(300):
+        if client.state == Ready and client.connection_id != first:
+            break
+        await asyncio.sleep(0.01)
+    assert client.state == Ready and client.connection_id != first
+    await client.stop()
+
+
 def test_reconnect_defaults() -> None:
     assert bxc.DEFAULT_MAX_RECONNECT_ATTEMPTS == 0
     assert bxc.DEFAULT_RECONNECT_BASE_DELAY == 1.0

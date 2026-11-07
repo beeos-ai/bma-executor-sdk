@@ -123,6 +123,147 @@ func TestClientEndsWhenTheCredentialIsRejectedOnReconnect(t *testing.T) {
 	}
 }
 
+// A heartbeat left unanswered past RequestTimeout means the connection is
+// dead (a half-open TCP connection after a network cut): the client closes it
+// and reconnects, as gRPC keepalive closes a transport whose ping times out.
+func TestClientReconnectsWhenAHeartbeatTimesOut(t *testing.T) {
+	registered := make(chan struct{}, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/executors/token":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(ExecutorTokenResponse{
+				ExecutorID: "exec_test", Token: "jwt_test", ExpiresIn: 300,
+				WSURL: "ws://" + r.Host + "/v1/executors/channel",
+			})
+		case "/v1/executors/channel":
+			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV11}})
+			if err != nil {
+				return
+			}
+			defer ws.CloseNow()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			s := &testSession{ws: ws, log: newFrameLog()}
+			go s.readLoop(ctx)
+			if err := registerSession(ctx, s, 20); err != nil {
+				return
+			}
+			registered <- struct{}{}
+			<-ctx.Done() // never answers executor.heartbeat
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := newTestClient(t, server.URL, func(o *Options) {
+		fastReconnect(o)
+		o.RequestTimeout = 100 * time.Millisecond
+	})
+	startTestClient(t, client)
+	<-registered
+	select {
+	case <-registered:
+	case <-client.Done():
+		t.Fatalf("client ended: %v", client.Err())
+	case <-time.After(5 * time.Second):
+		t.Fatal("client kept a connection whose heartbeats time out")
+	}
+}
+
+// A reconnect token request that never answers (a dead pooled connection
+// after a network cut; http.DefaultClient has no timeout) is abandoned after
+// RequestTimeout and retried instead of hanging the reconnect for good.
+func TestClientRetriesAReconnectTokenRequestThatHangs(t *testing.T) {
+	var tokens atomic.Int32
+	registered := make(chan struct{}, 8)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/executors/token":
+			if tokens.Add(1) == 2 {
+				select { // the second request never answers
+				case <-release:
+				case <-r.Context().Done():
+				}
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(ExecutorTokenResponse{
+				ExecutorID: "exec_test", Token: "jwt_test", ExpiresIn: 300,
+				WSURL: "ws://" + r.Host + "/v1/executors/channel",
+			})
+		case "/v1/executors/channel":
+			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ProtocolV11}})
+			if err != nil {
+				return
+			}
+			defer ws.CloseNow()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			s := &testSession{ws: ws, log: newFrameLog()}
+			go s.readLoop(ctx)
+			if err := registerSession(ctx, s, 60000); err != nil {
+				return
+			}
+			registered <- struct{}{}
+			if tokens.Load() == 1 {
+				_ = ws.Close(websocket.StatusServiceRestart, "node replaced")
+				return
+			}
+			<-ctx.Done()
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(release) }) // before server.Close (cleanups run last-in first-out)
+	client := newTestClient(t, server.URL, func(o *Options) {
+		fastReconnect(o)
+		o.RequestTimeout = 200 * time.Millisecond
+	})
+	startTestClient(t, client)
+	<-registered
+	select {
+	case <-registered:
+	case <-client.Done():
+		t.Fatalf("client ended: %v", client.Err())
+	case <-time.After(5 * time.Second):
+		t.Fatalf("reconnect hung on a token request that never answers (token requests = %d)", tokens.Load())
+	}
+}
+
+// countingTransport counts CloseIdleConnections calls.
+type countingTransport struct {
+	http.RoundTripper
+	closed atomic.Int32
+}
+
+func (t *countingTransport) CloseIdleConnections() { t.closed.Add(1) }
+
+// Each reconnect attempt drops the HTTP client's idle connections: after a
+// network cut the pooled (HTTP/2) connection is dead, and reusing it made
+// every later attempt time out although the network was back.
+func TestClientDropsIdleConnectionsOnReconnect(t *testing.T) {
+	o, server := startOutageServer(t, http.StatusServiceUnavailable, 1)
+	transport := &countingTransport{RoundTripper: http.DefaultTransport}
+	client := newTestClient(t, server.URL, func(opts *Options) {
+		fastReconnect(opts)
+		opts.HTTPClient = &http.Client{Transport: transport}
+	})
+	startTestClient(t, client)
+	<-o.registered
+	o.healthy.Store(true)
+	select {
+	case <-o.registered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("client did not register again")
+	}
+	if n := transport.closed.Load(); n != 2 {
+		t.Fatalf("CloseIdleConnections calls = %d, want 2 (one per reconnect attempt)", n)
+	}
+}
+
 // A positive MaxReconnectAttempts still bounds the retries; the client then
 // ends with ErrReconnectExhausted carrying the last failure.
 func TestClientEndsAfterMaxReconnectAttempts(t *testing.T) {

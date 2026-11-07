@@ -184,7 +184,7 @@ Result:
 
 ### 4.2 `executor.heartbeat`
 
-`{connection_id, active_sessions[], load?{cpu_percent, memory_percent}}` → `{server_time, lease_ttl_ms, drain}`. Wrong `connection_id` is `-32602`. Sent every `heartbeat_interval_ms` (15s); renews the leases of the connection's work items and, on the machine path, the daemon runtime lease and presence. When a lease expires (default 60s, max 10 min) the server sends `tool.cancel` + `session.stop` (`lease_expired`). `drain:true` means accept no new sessions.
+`{connection_id, active_sessions[], load?{cpu_percent, memory_percent}}` → `{server_time, lease_ttl_ms, drain}`. Wrong `connection_id` is `-32602`. Sent every `heartbeat_interval_ms` (15s); renews the leases of the connection's work items and, on the machine path, the daemon runtime lease and presence. When a lease expires (default 60s, max 10 min) the server sends `tool.cancel` + `session.stop` (`lease_expired`). `drain:true` means accept no new sessions. SDK clients close the connection and reconnect when a heartbeat gets no answer within the request timeout (a dead, half-open connection after a network cut), as gRPC keepalive does.
 
 ### 4.3 `executor.capabilities.update` (notif)
 

@@ -589,10 +589,18 @@ class ExecutorClient:
                 load = self._heartbeat_load()
                 if load is not None:
                     params["load"] = load
+            peer = self._peer
             try:
                 result = await self._call(METHOD_EXECUTOR_HEARTBEAT, params)
             except (RPCError, NotConnectedError, TimeoutError) as error:
                 self._log("warn", "executor heartbeat failed", error)
+                if isinstance(error, TimeoutError) and peer is not None and peer is self._peer:
+                    # No answer within request_timeout: the connection is dead
+                    # (a half-open TCP connection after a network cut). Close it
+                    # so the client reconnects, as gRPC keepalive closes a
+                    # transport whose ping times out.
+                    self._log("warn", "executor heartbeat timed out; closing the connection to reconnect")
+                    await peer.conn.close(1001, "heartbeat timeout")
                 continue
             if result.get("drain") and self._state == ConnectionState.Ready:
                 self._state = ConnectionState.Draining

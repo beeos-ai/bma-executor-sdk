@@ -18,7 +18,7 @@ import {
 import { executorInfo, waitFor } from './helpers.js'
 
 /** A harness that registers every connection and, until healthy, closes it with closeCode. */
-async function outageHarness(closeCode = 1012) {
+async function outageHarness(closeCode = 1012, heartbeatMs = 60000) {
   const server = new WebSocketServer({ port: 0, host: '127.0.0.1', handleProtocols: () => 'bma.executor.v1.1' })
   await new Promise<void>((resolve) => server.once('listening', resolve))
   const state = { healthy: false, registrations: 0 }
@@ -30,7 +30,7 @@ async function outageHarness(closeCode = 1012) {
       const n = state.registrations
       ws.send(JSON.stringify({ jsonrpc: '2.0', id: frame.id, result: {
         protocol: 'bma.executor.v1.1', executor_id: 'exec_test', connection_id: `conn_${n}`, server_time: new Date().toISOString(),
-        heartbeat_interval_ms: 60000, lease_ttl_ms: 60000, max_control_frame_bytes: 65536, max_mcp_frame_bytes: 1 << 20,
+        heartbeat_interval_ms: heartbeatMs, lease_ttl_ms: 60000, max_control_frame_bytes: 65536, max_mcp_frame_bytes: 1 << 20,
       } }))
       if (!state.healthy) setTimeout(() => ws.close(closeCode, 'node replaced'), 5)
     })
@@ -114,6 +114,22 @@ describe('reconnect policy', () => {
     try {
       await executor.start()
       await assert.rejects(executor.waitClosed(), (error: unknown) => error instanceof ChannelClosedError && error.code === 4004)
+    } finally {
+      executor.stop()
+      await harness.close()
+    }
+  })
+
+  test('a heartbeat that times out closes the connection and reconnects', async () => {
+    // The harness never answers executor.heartbeat: a dead (half-open) connection
+    // after a network cut. gRPC keepalive closes a transport whose ping times out.
+    const harness = await outageHarness(1012, 20)
+    harness.state.healthy = true
+    const token = tokenEndpoint(harness.url, 503, 0)
+    const executor = client(token.fetch, { requestTimeoutMs: 100 })
+    try {
+      await executor.start()
+      await waitFor(() => harness.state.registrations >= 2 && executor.state === 'ready', 5000)
     } finally {
       executor.stop()
       await harness.close()

@@ -217,7 +217,7 @@ bmad 实际声明的能力：`shell`、`process{enabled, max_processes:64, buffe
 
 ### 4.2 `executor.heartbeat`（E→H，req）
 
-参数：`{connection_id, active_sessions[], load?{cpu_percent, memory_percent}}`；`connection_id` 必须是本连接的，否则 `-32602`。结果：`{server_time, lease_ttl_ms, drain}`。按 `heartbeat_interval_ms`（默认 15s）发送；每次心跳续期该连接上工作项的租约，机器路径续期 daemon runtime 租约与在线状态。租约到期（默认 60s，最大 10 分钟）后，服务端对相关会话发 `tool.cancel` + `session.stop`（reason `lease_expired`）。`drain:true` 表示不要再接新会话。
+参数：`{connection_id, active_sessions[], load?{cpu_percent, memory_percent}}`；`connection_id` 必须是本连接的，否则 `-32602`。结果：`{server_time, lease_ttl_ms, drain}`。按 `heartbeat_interval_ms`（默认 15s）发送；每次心跳续期该连接上工作项的租约，机器路径续期 daemon runtime 租约与在线状态。租约到期（默认 60s，最大 10 分钟）后，服务端对相关会话发 `tool.cancel` + `session.stop`（reason `lease_expired`）。`drain:true` 表示不要再接新会话。SDK 客户端在心跳超过请求超时仍无应答（断网后的半开连接）时关闭连接并重连，同 gRPC keepalive。
 
 ### 4.3 `executor.capabilities.update`（E→H，notif）
 

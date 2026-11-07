@@ -1427,9 +1427,18 @@ func (c *Client) heartbeat() {
 	if c.options.HeartbeatLoad != nil {
 		params.Load = c.options.HeartbeatLoad()
 	}
+	conn := c.currentConn()
 	var result ExecutorHeartbeatResult
 	if err := c.callInto(c.rootCtx, MethodExecutorHeartbeat, params, &result); err != nil {
 		c.log(LogWarn, "executor heartbeat failed", err)
+		if errors.Is(err, context.DeadlineExceeded) && conn != nil {
+			// No answer within RequestTimeout: the connection is dead (a
+			// half-open TCP connection after a network cut). Close it so the
+			// read loop ends and the client reconnects, as gRPC keepalive
+			// closes a transport whose ping times out.
+			c.log(LogWarn, "executor heartbeat timed out; closing the connection to reconnect", nil)
+			_ = conn.conn.Close(1001, "heartbeat timeout")
+		}
 		return
 	}
 	if result.Drain {
@@ -1543,7 +1552,15 @@ func (c *Client) reconnect() {
 	if stopped {
 		return
 	}
-	token, err := c.fetchToken(c.rootCtx)
+	// Each attempt dials afresh: after a network cut the pooled connection
+	// (HTTP/2 multiplexes every request on one) is dead, and a timed-out
+	// request does not close it.
+	c.httpClient.CloseIdleConnections()
+	// Bounded: after a network cut the request can land on a dead pooled
+	// connection and, with http.DefaultClient (no timeout), never return.
+	tokenCtx, cancel := context.WithTimeout(c.rootCtx, c.options.RequestTimeout)
+	token, err := c.fetchToken(tokenCtx)
+	cancel()
 	if errors.Is(err, ErrCredentialRejected) {
 		// Retrying cannot help a revoked or invalid credential (GitHub
 		// Actions runner and Buildkite agent stop on 401/403 too).
