@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.0.4
+
+### Fixed
+
+- **All languages:** a machine-scoped executor that advertises neither the
+  `process` nor the `agent` capability is refused by the platform: it answers
+  `executor.register`, then closes with `4002` "runtime registration
+  refused". 1.0.3 reconnected forever on that and reported `ready` between
+  the register answer and the close. After 3 registrations in a row refused
+  right after `executor.register` (close `4002` "runtime registration
+  refused" before the connection stayed registered for one heartbeat
+  interval, or an `executor.register` error `capability_unavailable` /
+  `invalid_params`) the client now ends with a configuration error: Go `Done`
+  closes with `Err()` wrapping `ErrRegistrationRefused`, TypeScript
+  `waitClosed()` rejects with `RegistrationRefusedError`, Python
+  `wait_closed()` raises `RegistrationRefusedError`. Other `4002` closes
+  (`daemon runtime ended`) and every other close still reconnect, and a
+  refusal of a connection that had been stable does not count.
+
+### Added
+
+- **All languages:** `WaitReady(ctx)` / `waitReady(timeoutMs?)` /
+  `wait_ready(timeout=None)` return once the executor is registered and the
+  registration stayed open for one heartbeat interval, or with the error of a
+  client that ended. `State()` still turns `ready` when `executor.register`
+  returns; use the wait to tell a usable executor from a registration that
+  is about to be refused.
+
+### Documentation
+
+- READMEs and `docs/executor`: a machine-scoped executor must declare
+  `process` (or `agent`); minimal examples for Go, TypeScript and Python.
+
 ## 1.0.3
 
 ### Fixed

@@ -109,7 +109,7 @@ bmad（这台电脑唯一的执行端）
 
 Desktop 用 SDK 的 executor 端自己当执行端，并完成这台电脑的配对，拿到机器 token；**这台电脑不再运行 bmad**（否则两者互相 `4004` 替换）。本机脑在进程内（`InProcessDialer`）或经本机 socket 驱动同一个 `Core`。
 
-机器路径要求 executor 声明 `process.enabled`，否则注册后以 `4002` 关闭。Go SDK 已提供：在 `Core` 上注册 `NewProcessCapability(core, ProcessOptions{...})`（含 PTY、文件传输与 Git 凭据钩子）；Go 客户端默认协商 `bma.executor.v1.1`。TypeScript 与 Python 没有 `Core` 和 `process.*` 辅助实现，需要自己用 `onRequest` / `on_request` 实现 `process.*`，或先用 environment key 连 selfhost environment 路径联调（`tool.call` 模式），见[快速开始](quickstart.zh-CN.md)。
+**机器路径要求 executor 声明 `process.enabled`（或 `agent` 能力）：两者都没有的 executor 会被拒绝——平台先回复 `executor.register`，随后以 `4002` “runtime registration refused” 关闭连接，每次尝试都是如此。** SDK 在连续 3 次被拒后以配置错误结束客户端（Go `ErrRegistrationRefused`，TypeScript / Python `RegistrationRefusedError`），并且只有注册保持一个心跳周期后才报告 ready（`WaitReady` / `waitReady` / `wait_ready`）；最小示例见各语言 README。Go SDK 已提供：在 `Core` 上注册 `NewProcessCapability(core, ProcessOptions{...})`（含 PTY、文件传输与 Git 凭据钩子）；Go 客户端默认协商 `bma.executor.v1.1`。TypeScript 与 Python 没有 `Core` 和 `process.*` 辅助实现，需要自己用 `onRequest` / `on_request` 实现 `process.*`，或先用 environment key 连 selfhost environment 路径联调（`tool.call` 模式），见[快速开始](quickstart.zh-CN.md)。
 
 两种方案对平台是一样的：平台只看到一个 `exec_<machine_id>` 执行端。
 

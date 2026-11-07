@@ -123,7 +123,7 @@ Against the platform (preview), the same program connects with the machine token
 | upgrade `400 missing … subprotocol` | no `Sec-WebSocket-Protocol: bma.executor.v1.1` (or v1) | set the subprotocol |
 | upgrade `403 … does not allow channel mcp` | machine-path JWTs only allow `control` | no MCP channel on the machine path |
 | close `4003` right after register | `executor.register.protocol` ≠ negotiated subprotocol | use `bma.executor.v1.1` for both |
-| close `4002` after register | machine path: no `capabilities.process.enabled`; `executor.version` not `MAJOR.MINOR.PATCH` (or `0.0.0-dev`); or the runtime was ended | advertise the capability; fix the version; reconnect |
+| close `4002` after register | machine path: no `capabilities.process.enabled`; `executor.version` not `MAJOR.MINOR.PATCH` (or `0.0.0-dev`); or the runtime was ended | advertise `process` (or `agent`); fix the version; reconnect. The SDK ends with a configuration error after 3 refusals in a row |
 | periodic close `4001` | 5-minute JWT expired | expected: new token, reconnect |
 | repeated close `4004` | two executors on one computer (bmad + desktop, or two bmads) | keep one; the side that gets 4004 must stop |
 | `bmad executor cannot start: the bmad daemon (or another executor) is running` | daemon mode is running | `bmad stop` first |
