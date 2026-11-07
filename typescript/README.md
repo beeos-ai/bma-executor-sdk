@@ -21,7 +21,7 @@ socket or Windows named pipe (`unix://`, `npipe://`), in-process.
 | Integration guide | [docs/executor](../docs/executor/README.md) ([中文](../docs/executor/README.zh-CN.md)) |
 
 ```sh
-npm install @beeos-ai/bma-executor-sdk@1.0.1
+npm install @beeos-ai/bma-executor-sdk@1.0.2
 ```
 
 The REST / façade client is the separate package
@@ -45,6 +45,7 @@ client.tools.bash.handle(async (input, { signal, progress }) => {   // input: Ba
 });
 client.tools.read.handle(async ({ path, offset, limit }) => readText(path, offset, limit)); // string or content blocks
 await client.start();
+await client.waitClosed(); // rejects when the client ends for good
 ```
 
 Set `baseUrl` to your BMA deployment: the hosted service is in early access and the default
@@ -80,10 +81,15 @@ the client posts the environment key to `{baseUrl}/v1/executors/token` and drops
   cleanup. `tool.result` is retried on `-32009`, `-32004` or
   `data.retryable: true`, idempotent by `tool_call_id`; when every attempt
   fails `onToolResultLost` receives the result to persist and replay.
-- Reconnect: exponential backoff (500 ms base, ×2, 30 s cap, jitter) with a
-  fresh token per dial and `resume` (`executor_id`, `last_connection_id`,
-  `active_sessions`). Close codes 1008, 4002, 4003, 4004 and 4005 are terminal;
-  4001 (token expired) reconnects with a new token.
+- Reconnect: until `stop()` by default, with exponential backoff (1 s base,
+  ×2, 60 s cap, jitter), a fresh token per dial and `resume` (`executor_id`,
+  `last_connection_id`, `active_sessions`). Only close codes 4003 and 4004 are
+  terminal. A positive `maxReconnectAttempts` bounds the attempts. `await
+  client.waitClosed()` resolves after `stop()` / `executor.close` and rejects
+  with `ChannelClosedError` (4003/4004), `CredentialRejectedError` (the token
+  endpoint answered 401/403 on reconnect: revoked or invalid credential, not
+  retried) or `ReconnectExhaustedError`; exit the process on a rejection so a
+  supervisor can restart it.
 - `openMcpChannel(sessionId, serverKey)` opens the raw MCP channel
   (`?channel=mcp&session_id=&server_key=`); `read()`/`write()` carry MCP
   JSON-RPC frames unchanged.

@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.0.2
+
+### Fixed
+
+- **All languages:** an executor no longer gives up reconnecting during an
+  outage. 1.0.1 stopped after 10 failed reconnects (about 2 minutes of `503`
+  from a restarting deployment); Go then closed `Done` with
+  `ErrReconnectExhausted`, while Python and TypeScript only set the state to
+  `closed` with no completion signal, so the process kept running offline.
+  By default the client now reconnects until stopped, backing off from 1s
+  doubling to 60s with jitter (gRPC connection backoff; GitHub Actions runner
+  and Buildkite agent also retry until reconnected). `MaxReconnectAttempts` /
+  `max_reconnect_attempts` / `maxReconnectAttempts` = 0 (the new default) or
+  negative means unlimited; a positive value still bounds the attempts.
+- **All languages:** a `401` or `403` from the token endpoint on reconnect
+  (revoked or invalid environment key or machine token) is not retried; the
+  client ends with `ErrCredentialRejected` (Go) / `CredentialRejectedError`
+  (Python, TypeScript).
+- **Python, TypeScript:** `wait_closed()` / `waitClosed()` report the end of
+  the client, as Go `Done`/`Err`: they return after `stop()` or
+  `executor.close` and raise / reject with `ChannelClosed` /
+  `ChannelClosedError` (4003, 4004), the credential error, or
+  `ReconnectExhaustedError` (wrapping the last failure, as Go's
+  `ErrReconnectExhausted` now does), so an executor can exit and be
+  restarted by its supervisor instead of hanging.
+
 ## 1.0.1
 
 ### Fixed

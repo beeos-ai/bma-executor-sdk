@@ -113,7 +113,7 @@ Authorization: Bearer <jwt>
 
 bmad 的参考行为：任何非 `4004` 的断开都以 1s 起、翻倍、上限约 30s 的退避重连；每次重连都重新换 token。重连时 `executor.register` 带 `resume`（§8.1）。
 
-SDK 客户端（Go、TypeScript、Python）只在 `4003`、`4004` 时停止；其他关闭（含服务端重启时的 `4002`、`4005`、`1001`、`1008`、`1012`、`1013`）同样退避重连。
+SDK 客户端（Go、TypeScript、Python）只在 `4003`、`4004` 时停止；其他关闭（含服务端重启时的 `4002`、`4005`、`1001`、`1008`、`1012`、`1013`）同样退避重连：默认重连到停止为止，退避 1s 起翻倍、上限 60s、带抖动（同 gRPC connection backoff）。重连时 token 端点返回 `401`/`403`（凭据吊销或无效）不重试，客户端以“凭据被拒”错误结束；可选的正数最大重连次数用尽后以“重连耗尽”错误结束。结束可被观察（Go `Done`/`Err`、Python `wait_closed()`、TypeScript `waitClosed()`），进程据此退出、由 supervisor 重启。
 
 ---
 

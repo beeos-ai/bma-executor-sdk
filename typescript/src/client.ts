@@ -50,15 +50,26 @@ import {
   ToolName,
 } from './generated/executor.js'
 import { AgentRuntime, type AgentHandler, type AgentHost } from './agent.js'
-import { ClientStoppedError, deferred, NotConnectedError, RequestTimeoutError, RpcError, ToolError } from './errors.js'
+import {
+  ChannelClosedError,
+  ClientStoppedError,
+  CredentialRejectedError,
+  deferred,
+  NotConnectedError,
+  ReconnectExhaustedError,
+  RequestTimeoutError,
+  RpcError,
+  ToolError,
+} from './errors.js'
 import { DEFAULT_PROTOCOLS } from './local.js'
 import { RpcPeer, type LogLevel, type Logger } from './rpc.js'
 import { dialWebSocket, FrameChannel, type Conn } from './transport.js'
 
 export const DEFAULT_BASE_URL = 'https://api.bma.beeos.ai'
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
-export const DEFAULT_MAX_RECONNECT_ATTEMPTS = 10
-export const DEFAULT_RECONNECT_BASE_DELAY_MS = 500
+/** 0 reconnects until stop(), as gRPC connection backoff and long-running agents (GitHub Actions runner, Buildkite agent) do. */
+export const DEFAULT_MAX_RECONNECT_ATTEMPTS = 0
+export const DEFAULT_RECONNECT_BASE_DELAY_MS = 1000
 export const DEFAULT_TOOL_RESULT_RETRY_ATTEMPTS = 5
 export const DEFAULT_TOOL_RESULT_RETRY_BASE_DELAY_MS = 250
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000
@@ -66,7 +77,7 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000
 export const INLINE_RESULT_BYTES = 48 * 1024
 const MAX_TRACKED_TOOL_CALLS = 8192
 const MAX_TOOL_RESULT_RETRY_DELAY_MS = 10_000
-const MAX_RECONNECT_DELAY_MS = 30_000
+const MAX_RECONNECT_DELAY_MS = 60_000
 /** Fraction of a token's lifetime after which executor.token.refresh is sent. */
 const TOKEN_REFRESH_AT = 0.7
 
@@ -146,7 +157,9 @@ function executorTokenSource(options: WebSocketDialerOptions): TokenSource {
       })
       if (response.status !== 200) {
         const detail = (await response.text()).slice(0, 4096).trim()
-        throw new Error(`executor token request failed: ${response.status}: ${detail}`)
+        const message = `executor token request failed: ${response.status}: ${detail}`
+        if (response.status === 401 || response.status === 403) throw new CredentialRejectedError(response.status, message)
+        throw new Error(message)
       }
       const token = (await response.json()) as ExecutorTokenResponse
       if (!token.token || !token.ws_url) throw new Error('executor token response is missing token or ws_url')
@@ -259,9 +272,15 @@ export interface ExecutorClientOptions extends Omit<WebSocketDialerOptions, 'env
   /** Overrides the interval returned by executor.register. */
   heartbeatIntervalMs?: number
   heartbeatLoad?: () => ExecutorLoad | undefined
+  /**
+   * Bounds consecutive failed reconnects; the client then ends and
+   * waitClosed() rejects with ReconnectExhaustedError. 0 (the default) or a
+   * negative value reconnects until stop().
+   */
   maxReconnectAttempts?: number
+  /** The first reconnect backoff (default 1 s); it doubles per failed attempt up to reconnectMaxDelayMs, with jitter. */
   reconnectBaseDelayMs?: number
-  /** Caps the reconnect backoff before jitter; defaults to 30 s. */
+  /** Caps the reconnect backoff before jitter; defaults to 60 s. */
   reconnectMaxDelayMs?: number
   random?: () => number
   /** Total tool.result attempts including the first; 1 disables retries. */
@@ -324,6 +343,8 @@ export class ExecutorClient {
   private currentState: ConnectionState = ConnectionState.Disconnected
   private stopped = false
   private readonly stopController = new AbortController()
+  private closeError?: Error
+  private readonly closed = deferred()
   private registerResult?: ExecutorRegisterResult
   private currentConnectionId = ''
   private currentExecutorId = ''
@@ -412,12 +433,21 @@ export class ExecutorClient {
     return this.registerResult!
   }
 
+  /**
+   * Resolves when the client stops for good: after stop() or executor.close.
+   * Rejects with ChannelClosedError for a terminal close code (4003, 4004),
+   * CredentialRejectedError when the token endpoint rejects the credential on
+   * reconnect, and ReconnectExhaustedError after a positive maxReconnectAttempts.
+   */
+  async waitClosed(): Promise<void> {
+    await this.closed.promise
+    if (this.closeError) throw this.closeError
+  }
+
   /** Sends executor.close, closes the channel and stops reconnecting. */
   stop(reason = 'stopped'): void {
     if (this.stopped) return
-    this.stopped = true
-    this.currentState = ConnectionState.Closed
-    clearTimeout(this.heartbeatTimer)
+    this.end()
     const peer = this.peer
     this.peer = undefined
     if (peer && !peer.closed) {
@@ -428,7 +458,17 @@ export class ExecutorClient {
       }
       peer.close(1000, reason)
     }
+  }
+
+  /** Stops for good; waitClosed() then resolves, or rejects with error. */
+  private end(error?: Error): void {
+    if (this.stopped) return
+    this.stopped = true
+    this.closeError = error
+    this.currentState = ConnectionState.Closed
+    clearTimeout(this.heartbeatTimer)
     this.stopController.abort(new ClientStoppedError())
+    this.closed.resolve()
   }
 
   /** Sends an executor-to-harness request on the control channel, typed by the contract. */
@@ -580,7 +620,7 @@ export class ExecutorClient {
       requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       onRequest: (method, params) => this.dispatchRequest(method, params),
       onNotification: (method, params) => this.dispatchNotification(peer, method, params),
-      onClose: (code) => this.disconnected(peer, code),
+      onClose: (code, reason) => this.disconnected(peer, code, reason),
       log: this.options.onLog,
     })
     this.peer = peer
@@ -641,7 +681,7 @@ export class ExecutorClient {
     }
   }
 
-  private disconnected(peer: RpcPeer, code: number): void {
+  private disconnected(peer: RpcPeer, code: number, reason: string): void {
     if (this.peer !== peer) return
     this.peer = undefined
     if (this.stopped) {
@@ -650,19 +690,20 @@ export class ExecutorClient {
     }
     this.currentState = ConnectionState.Disconnected
     if (isTerminalCloseCode(code) || this.options.reconnect === false) {
-      this.currentState = ConnectionState.Closed
       this.log('warn', `executor channel closed with ${code}; not reconnecting`)
+      this.end(new ChannelClosedError(code, reason))
       return
     }
-    this.scheduleReconnect()
+    this.scheduleReconnect(new ChannelClosedError(code, reason))
   }
 
-  private scheduleReconnect(): void {
+  /** Retries after cause, the failure that ended the last connection or reconnect attempt. */
+  private scheduleReconnect(cause: unknown): void {
     if (this.stopped) return
     const max = this.options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS
-    if (this.reconnectAttempts >= max) {
-      this.currentState = ConnectionState.Closed
-      this.log('error', 'executor reconnect attempts exhausted')
+    if (max > 0 && this.reconnectAttempts >= max) {
+      this.log('error', 'executor reconnect attempts exhausted', cause)
+      this.end(new ReconnectExhaustedError(cause))
       return
     }
     const attempt = this.reconnectAttempts++
@@ -678,9 +719,15 @@ export class ExecutorClient {
     try {
       await this.connect()
     } catch (error) {
+      if (error instanceof CredentialRejectedError) {
+        // Retrying cannot help a revoked or invalid credential (GitHub Actions runner and Buildkite agent stop on 401/403 too).
+        this.log('error', 'executor credential rejected; not reconnecting', error)
+        this.end(error)
+        return
+      }
       this.log('warn', 'executor reconnect failed', error)
       this.currentState = ConnectionState.Disconnected
-      this.scheduleReconnect()
+      this.scheduleReconnect(error)
     }
   }
 
@@ -732,12 +779,9 @@ export class ExecutorClient {
 
   private dispatchNotification(peer: RpcPeer, method: string, params: unknown): void {
     if (method === 'executor.close') {
-      this.stopped = true
-      this.currentState = ConnectionState.Closed
-      clearTimeout(this.heartbeatTimer)
       if (this.peer === peer) this.peer = undefined
       peer.close(1000, 'executor.close')
-      this.stopController.abort(new ClientStoppedError())
+      this.end()
       return
     }
     // executor.close is the only harness-to-executor notification.

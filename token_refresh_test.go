@@ -137,7 +137,10 @@ func TestReconnectDelayHonoursTheCap(t *testing.T) {
 		}
 	}
 	defaults := newTestClient(t, "http://127.0.0.1:1", func(o *Options) { o.Random = func() float64 { return 1 } })
-	if got := defaults.reconnectDelay(20); got != 30*time.Second {
-		t.Fatalf("default cap = %s, want 30s", got)
+	if got := defaults.reconnectDelay(0); got != time.Second {
+		t.Fatalf("default first delay = %s, want 1s", got)
+	}
+	if got := defaults.reconnectDelay(20); got != 60*time.Second {
+		t.Fatalf("default cap = %s, want 60s", got)
 	}
 }
