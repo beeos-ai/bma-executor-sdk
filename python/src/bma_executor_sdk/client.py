@@ -272,7 +272,10 @@ class ExecutorClient:
                     stable.cancel()
                     closed.cancel()
 
-        await asyncio.wait_for(wait(), timeout)
+        try:
+            await asyncio.wait_for(wait(), timeout)
+        except asyncio.TimeoutError as error:  # not the builtin TimeoutError before Python 3.11
+            raise TimeoutError("wait_ready timed out") from error
 
     async def wait_closed(self) -> None:
         """Wait until the client stops for good (Go: ``Done`` and ``Err``).

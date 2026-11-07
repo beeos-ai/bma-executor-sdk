@@ -1,6 +1,18 @@
 # Changelog
 
+## 1.0.5
+
+### Fixed
+
+- **Python:** `wait_ready(timeout)` raised `asyncio.TimeoutError`, which is not
+  the builtin `TimeoutError` before Python 3.11; it now raises `TimeoutError`
+  on every supported version. This is the only change from 1.0.4.
+
+
 ## 1.0.4
+
+The `v1.0.4` tag exists (Go module) but npm and PyPI were never published at 1.0.4: the release CI
+failed on Python 3.10 (see 1.0.5). Use 1.0.5 in every language.
 
 ### Fixed
 
