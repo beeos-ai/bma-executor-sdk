@@ -48,7 +48,7 @@ async def main() -> None:
     registered = await client.start()
     print("registered as", registered["executor_id"])
     try:
-        await asyncio.Event().wait()
+        await client.wait_closed()  # raises when the client ends for good
     finally:
         await client.stop("shutdown")
 

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 import httpx
 
 from ._methods import Call, Notification, Request
-from ._rpc import ClientStoppedError, NotConnectedError, Peer, RPCError
+from ._rpc import ClientStoppedError, ExecutorError, NotConnectedError, Peer, RPCError
 from .session_context import SessionContext, SessionContexts
 from .generated import (
     METHOD_EXECUTOR_CAPABILITIES_UPDATE,
@@ -65,8 +65,10 @@ if TYPE_CHECKING:
 
 DEFAULT_BASE_URL = "https://api.bma.beeos.ai"
 DEFAULT_REQUEST_TIMEOUT = 30.0
-DEFAULT_MAX_RECONNECT_ATTEMPTS = 10
-DEFAULT_RECONNECT_BASE_DELAY = 0.5
+# 0 reconnects until stop(), as gRPC connection backoff and long-running
+# agents (GitHub Actions runner, Buildkite agent) do.
+DEFAULT_MAX_RECONNECT_ATTEMPTS = 0
+DEFAULT_RECONNECT_BASE_DELAY = 1.0
 DEFAULT_TOOL_RESULT_RETRY_ATTEMPTS = 5
 DEFAULT_TOOL_RESULT_RETRY_BASE_DELAY = 0.25
 DEFAULT_HEARTBEAT_INTERVAL = 15.0
@@ -74,7 +76,7 @@ PROTOCOL_V1 = ProtocolVersion.BmaExecutorV1.value
 PROTOCOL_V11 = ProtocolVersion.BmaExecutorV11.value
 _MAX_TRACKED_TOOL_RESULTS = 8192
 _MAX_TOOL_RESULT_RETRY_DELAY = 10.0
-_MAX_RECONNECT_DELAY = 30.0
+_MAX_RECONNECT_DELAY = 60.0
 # Fraction of a token's lifetime after which executor.token.refresh is sent.
 _TOKEN_REFRESH_AT = 0.7
 
@@ -173,6 +175,9 @@ class ExecutorClient:
         self._peer: Peer | None = None
         self._state = ConnectionState.Disconnected
         self._stopped = False
+        self._stop_called = False
+        self._closed = asyncio.Event()
+        self._close_error: BaseException | None = None
         self._register_result: ExecutorRegisterResult | None = None
         self._connection_id = ""
         self._executor_id = ""
@@ -220,11 +225,11 @@ class ExecutorClient:
 
     async def stop(self, reason: str = "") -> None:
         """Send executor.close, close the channel and fail pending calls."""
-        if self._stopped:
+        if self._stop_called:
             return
-        self._stopped = True
+        self._stop_called = True
+        self._end(None)
         peer, self._peer = self._peer, None
-        self._state = ConnectionState.Closed
         if peer is not None:
             try:
                 await asyncio.wait_for(peer.notify(METHOD_EXECUTOR_CLOSE, {"reason": reason}), 2)
@@ -240,6 +245,25 @@ class ExecutorClient:
             task.cancel()
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
+
+    async def wait_closed(self) -> None:
+        """Wait until the client stops for good (Go: ``Done`` and ``Err``).
+        Returns after stop() or executor.close; raises ChannelClosed for a
+        terminal close code (4003, 4004), CredentialRejectedError when the
+        token endpoint rejects the credential on reconnect, and
+        ReconnectExhaustedError after a positive max_reconnect_attempts."""
+        await self._closed.wait()
+        if self._close_error is not None:
+            raise self._close_error
+
+    def _end(self, error: BaseException | None) -> None:
+        """Stop for good; wait_closed() then returns or raises error."""
+        if self._closed.is_set():
+            return
+        self._stopped = True
+        self._state = ConnectionState.Closed
+        self._close_error = error
+        self._closed.set()
 
     @property
     def state(self) -> ConnectionState:
@@ -430,7 +454,10 @@ class ExecutorClient:
             if self._http_client is None:
                 await client.aclose()
         if response.status_code != 200:
-            raise ExecutorTokenError(f"token request failed: {response.status_code}: {response.text[:4096].strip()}")
+            message = f"token request failed: {response.status_code}: {response.text[:4096].strip()}"
+            if response.status_code in (401, 403):
+                raise CredentialRejectedError(message, response.status_code)
+            raise ExecutorTokenError(message)
         token = response.json()
         if not token.get("token") or not token.get("ws_url"):
             raise ExecutorTokenError("token response is missing token or ws_url")
@@ -531,24 +558,27 @@ class ExecutorClient:
             return
         self._peer = None
         if self._stopped:
-            self._state = ConnectionState.Closed
             return
         if closed.code in TERMINAL_CLOSE_CODES:
-            self._state = ConnectionState.Closed
             self._log("error", f"executor channel closed with terminal code {closed.code}: {closed.reason}")
+            self._end(closed)
             return
         self._state = ConnectionState.Disconnected
         self._spawn(self._reconnect_loop())
 
     async def _reconnect_loop(self) -> None:
+        cause: BaseException | None = None
         while not self._stopped:
-            if self._reconnect_attempts >= self._max_reconnect_attempts:
-                self._state = ConnectionState.Closed
-                self._log("error", "executor reconnect attempts exhausted")
+            if 0 < self._max_reconnect_attempts <= self._reconnect_attempts:
+                error = ReconnectExhaustedError("executor reconnect attempts exhausted")
+                error.__cause__ = cause
+                self._log("error", "executor reconnect attempts exhausted", cause)
+                self._end(error)
                 return
             attempt = self._reconnect_attempts
             self._reconnect_attempts += 1
-            delay = min(self._reconnect_base_delay * (1 << attempt), self._reconnect_max_delay)
+            # The exponent is capped: unlimited attempts must not overflow the float.
+            delay = min(self._reconnect_base_delay * (1 << min(attempt, 32)), self._reconnect_max_delay)
             delay *= 0.5 + self._random() * 0.5
             self._log("info", f"reconnecting executor channel in {delay:.3f}s")
             await asyncio.sleep(delay)
@@ -559,7 +589,14 @@ class ExecutorClient:
                 return
             except asyncio.CancelledError:
                 raise
+            except CredentialRejectedError as error:
+                # Retrying cannot help a revoked or invalid credential (GitHub
+                # Actions runner and Buildkite agent stop on 401/403 too).
+                self._log("error", "executor credential rejected; not reconnecting", error)
+                self._end(error)
+                return
             except Exception as error:
+                cause = error
                 self._state = ConnectionState.Disconnected
                 self._log("warn", "executor reconnect failed", error)
 
@@ -573,10 +610,18 @@ class ExecutorClient:
                 load = self._heartbeat_load()
                 if load is not None:
                     params["load"] = load
+            peer = self._peer
             try:
                 result = await self._call(METHOD_EXECUTOR_HEARTBEAT, params)
             except (RPCError, NotConnectedError, TimeoutError) as error:
                 self._log("warn", "executor heartbeat failed", error)
+                if isinstance(error, TimeoutError) and peer is not None and peer is self._peer:
+                    # No answer within request_timeout: the connection is dead
+                    # (a half-open TCP connection after a network cut). Close it
+                    # so the client reconnects, as gRPC keepalive closes a
+                    # transport whose ping times out.
+                    self._log("warn", "executor heartbeat timed out; closing the connection to reconnect")
+                    await peer.conn.close(1001, "heartbeat timeout")
                 continue
             if result.get("drain") and self._state == ConnectionState.Ready:
                 self._state = ConnectionState.Draining
@@ -619,8 +664,7 @@ class ExecutorClient:
     def _dispatch_notification(self, method: str, params: Any) -> None:
         if method == METHOD_EXECUTOR_CLOSE:
             # The harness closed the executor deliberately: no reconnect.
-            self._stopped = True
-            self._state = ConnectionState.Closed
+            self._end(None)
             peer, self._peer = self._peer, None
             if peer is not None:
                 peer.fail_pending(ClientStoppedError())
@@ -726,6 +770,20 @@ class ExecutorClient:
 
 class ExecutorTokenError(Exception):
     """POST /v1/executors/token failed."""
+
+
+class CredentialRejectedError(ExecutorTokenError):
+    """The token endpoint answered 401 or 403: the environment key or machine
+    token is invalid or revoked. A reconnect does not retry it."""
+
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class ReconnectExhaustedError(ExecutorError):
+    """A positive max_reconnect_attempts failed in a row; ``__cause__`` is the
+    last failure."""
 
 
 class ExecutorTokenScopeError(Exception):

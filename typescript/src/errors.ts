@@ -110,6 +110,36 @@ export class ClientStoppedError extends Error {
   }
 }
 
+/** The token endpoint answered 401 or 403: the environment key or machine token is invalid or revoked. A reconnect does not retry it. */
+export class CredentialRejectedError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'CredentialRejectedError'
+  }
+}
+
+/** A positive maxReconnectAttempts failed in a row; `cause` is the last failure. */
+export class ReconnectExhaustedError extends Error {
+  constructor(cause: unknown) {
+    super('executor reconnect attempts exhausted', { cause })
+    this.name = 'ReconnectExhaustedError'
+  }
+}
+
+/** The harness closed the channel with a terminal close code (4003 unsupported protocol, 4004 replaced). */
+export class ChannelClosedError extends Error {
+  constructor(
+    readonly code: number,
+    readonly reason: string,
+  ) {
+    super(`executor channel closed: ${code} ${reason}`.trimEnd())
+    this.name = 'ChannelClosedError'
+  }
+}
+
 /** A request did not get an answer within requestTimeoutMs. */
 export class RequestTimeoutError extends Error {
   constructor(method: string) {
