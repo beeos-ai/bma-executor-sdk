@@ -129,6 +129,38 @@
       }
     },
     {
+      "name": "executor.register request (session files root)",
+      "method": "executor.register",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_1",
+        "method": "executor.register",
+        "params": {
+          "protocol": "bma.executor.v1.1",
+          "environment_id": "",
+          "executor": {
+            "name": "desktop-agent",
+            "os": "darwin",
+            "arch": "arm64",
+            "version": "1.2.0"
+          },
+          "capabilities": {
+            "shell": {
+              "enabled": true
+            },
+            "process": {
+              "enabled": true,
+              "file_transfer": true
+            },
+            "session_files": {
+              "root": "/Users/alice/Library/Application Support/Agent/sessions"
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "executor.heartbeat request",
       "method": "executor.heartbeat",
       "kind": "request",
@@ -579,7 +611,11 @@
             "fetch"
           ],
           "cwd": "repo",
-          "git_credentials": true
+          "git_credentials": true,
+          "metadata": {
+            "agent_session_id": "sesn_01",
+            "tool_call_id": "call_01"
+          }
         }
       }
     },
@@ -598,6 +634,10 @@
           "file_transfer": {
             "direction": "upload",
             "local_path": "/workspace/report.pdf"
+          },
+          "metadata": {
+            "agent_session_id": "sesn_01",
+            "tool_call_id": "call_01"
           }
         }
       }
@@ -622,6 +662,39 @@
               "jq",
               "libssl3"
             ]
+          },
+          "metadata": {
+            "agent_session_id": "sesn_01",
+            "tool_call_id": "call_01"
+          }
+        }
+      }
+    },
+    {
+      "name": "process.start platform-initiated request",
+      "method": "process.start",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_platform",
+        "method": "process.start",
+        "params": {
+          "session_id": "sess_01JABC",
+          "process_id": "proc_desktop",
+          "argv": [
+            "sh",
+            "-c",
+            "exec desktop-agent"
+          ],
+          "env": {
+            "CI": "1"
+          },
+          "stdin": "open",
+          "stderr": "merge",
+          "wait_ms": 100,
+          "timeout_ms": 600000,
+          "metadata": {
+            "initiator": "platform"
           }
         }
       }

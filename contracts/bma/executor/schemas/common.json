@@ -143,7 +143,7 @@
         },
         "reason": {
           "type": "string",
-          "description": "Machine-readable cause, for example \"spawn_failed\" for process.start."
+          "description": "Machine-readable cause; an open set that the harness passes through unchanged (process.start: the tool result error_code and the process state reason; turn.start: the session.error code). Recommended values: workspace_unavailable, workspace_boundary, workspace_read_only, session_rejected, local_confirmation_denied, local_confirmation_expired, and spawn_failed / process_id_spec_mismatch for process.start. Receivers must accept values they do not know."
         },
         "terminal_code": {
           "type": "string",

@@ -705,7 +705,7 @@ class SessionEventType(str, Enum):
     SessionError = "session.error"
 
 class SessionFilesCapability(TypedDict):
-    """Executor-owned per-session file layout. The harness derives <root>/<session_id>/uploads (read-only) and <root>/<session_id>/outputs and uses these real paths in prompts, tool descriptions and write rules. Absent: the harness keeps /mnt/session."""
+    """Executor-owned per-session file layout. The harness derives <root>/<agent_session_id>/uploads (read-only session inputs) and <root>/<agent_session_id>/outputs (deliverables) from it, with agent_session_id as sent in process.start metadata, and uses these real paths in prompts, tool descriptions, write rules and the session files manifest. Absent: the harness keeps /mnt/session/uploads and /mnt/session/outputs. Fixed at executor.register: executor.capabilities.update does not change it. Machine-scoped executors only."""
     root: str
 
 class SessionMemoryResource(TypedDict):
