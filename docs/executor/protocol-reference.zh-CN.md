@@ -313,7 +313,7 @@ bmad 实际声明的能力：`shell`、`process{enabled, max_processes:64, buffe
 | `stderr` | 空 = stdout/stderr 两个流；`"merge"` = OS 级 dup2 合并到 stdout（一个游标）。机器路径总是用 `merge`，executor 必须在结果里回显 `stderr:"merge"`，否则平台按 `-32012` 失败 |
 | `wait_ms` | 0–300000；等待进程结束最多这么久再应答 |
 | `timeout_ms` | 0–86400000；到时杀进程，状态 `failed`、`reason:"timeout"` |
-| `metadata` | 字符串 map；平台会带 `tool_call_id`；session files 引入 `agent_session_id` |
+| `metadata` | 字符串 map。Agent 工具发起的进程（命令、文件传输、包安装）带 `agent_session_id` 与 `tool_call_id`，无 `initiator`；平台自发的进程（机器桌面 agent）带 `initiator: "platform"`、无 `agent_session_id`；控制台终端是 `terminal.attach`，不是 `process.start`。两键皆无的启动，按会话分目录的执行端返回 `session_rejected`。见[会话上下文](session-context.zh-CN.md#哪些进程带-agent_session_id) |
 | `io_mode` | `"pty"`：在 24x80 PTY 上运行；需要 `process.pty`；`close_stdin` 被拒 |
 | `file_transfer` | `{direction: upload\|download, local_path}`，替代 `argv`；需要 `process.file_transfer`；与 `argv`/`io_mode`/`git_credentials` 互斥（§6.2） |
 | `git_credentials` | `true`：为该进程安装 `https://github.com` 的 Git credential helper；需要 `process.git_credentials`（§6.3） |
@@ -431,7 +431,7 @@ JSON-RPC 错误：`{code, message, data?}`；`data` 可含 `retryable`、`detail
 
 对齐 Anthropic Managed Agents files：挂到会话的文件在机器上可读于 `/mnt/session/uploads/<mount_path 或 file_id>`；agent 写到 `/mnt/session/outputs/` 下的文件成为会话作用域文件。
 
-- 平台在每个 shell 进程的 `process.start.metadata.agent_session_id` 中标明会话；机器显示“最后一个启动 shell 进程的会话”，切换会话时先上传旧会话 outputs，再清空并同步新会话。
+- 平台在 agent 工具进程的 `process.start.metadata.agent_session_id` 中标明会话（平台自发进程改带 `initiator: "platform"`，不属于任何会话）；机器显示“最后一个启动 shell 进程的会话”，切换会话时先上传旧会话 outputs，再清空并同步新会话。
 - uploads：进程启动前 `GET /api/v1/daemon/processes/{id}/session-files` 拿清单，不在清单内的内容被删除；缺失/变化的文件从 `…/session-files/{resource_id}/content` 下载，校验长度与 sha256 后 `chmod 0444` 原子落盘。同步失败则进程启动失败（`session files: …`）。
 - outputs：每 2s 扫描，两次扫描间大小与 mtime 不变且自上次上传后有变化的普通非空文件，`POST …/session-outputs?path=<相对路径>` 带 `X-BMA-File-Digest`；按 (会话, sha256, 路径) 幂等。限额：单文件 1 GiB、路径 512 字节、每次扫描 10000 个文件。`413/422/400` 不重试直到文件变化；传输错误、`404`、`409` 下次扫描重试。
 - 鉴权：机器 token，锚定在调用机器上一个已授予、会话活跃的进程；挂载路由要求进程 starting/running，outputs 允许进程结束后 15 分钟内上传。

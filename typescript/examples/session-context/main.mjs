@@ -7,10 +7,15 @@
 // stores the path.
 //
 // A process.start without metadata.agent_session_id has no session to check
-// against (for example a terminal a person opens in the console): it is refused
-// with session_rejected, never run in a default folder. A package install runs
-// a package manager that writes outside the folder: this example has no local
-// confirmation, so it refuses with local_confirmation_denied.
+// against: it is refused with session_rejected, never run in a default folder
+// (the harness does not send one; a person's console terminal is
+// terminal.attach, not process.start). The exception is a process the platform
+// starts on its own (metadata initiator "platform", for example the machine
+// desktop agent): with EXAMPLE_PLATFORM_DIR set it runs in that directory by
+// this machine's policy, never in a session folder; without it, it is refused
+// too. A package install runs a package manager that writes outside the
+// folder: this example has no local confirmation, so it refuses with
+// local_confirmation_denied.
 //
 // TypeScript has no built-in process runtime (Go's ProcessOptions.Launch):
 // the executor serves process.* itself. This example keeps output in memory
@@ -18,14 +23,19 @@
 //
 //   BMA_BASE_URL=https://api.<env>.bma.beeos.ai BMA_MACHINE_TOKEN=... \
 //   EXAMPLE_OWNER=u_42 EXAMPLE_FOLDERS='{"ws_7":"/Users/me/projects/site"}' \
+//   EXAMPLE_PLATFORM_DIR=/Users/me/bma-platform \
 //   node session-context/main.mjs
 import { spawn } from 'node:child_process'
+import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 
 import { Code, ErrorReason, ExecutorClient, RpcError } from '@beeos-ai/bma-executor-sdk'
 
 const owner = process.env.EXAMPLE_OWNER
 const folders = JSON.parse(process.env.EXAMPLE_FOLDERS ?? '{}')
+// Where platform-initiated processes run; empty means this machine hosts none.
+const platformDir = process.env.EXAMPLE_PLATFORM_DIR ?? ''
+if (platformDir) mkdirSync(platformDir, { recursive: true })
 
 const client = new ExecutorClient({
   baseUrl: process.env.BMA_BASE_URL,
@@ -39,25 +49,38 @@ const client = new ExecutorClient({
 
 const processes = new Map()
 
+// Resolve cwd (relative to folder) and refuse one outside it.
+function confine(folder, cwd) {
+  const resolved = path.resolve(folder, cwd ?? '.')
+  const rel = path.relative(folder, resolved)
+  if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+    throw RpcError.withReason(Code.Forbidden, ErrorReason.WorkspaceBoundary, 'cwd is outside the allowed folder')
+  }
+  return resolved
+}
+
+const installRefusal = () =>
+  RpcError.withReason(Code.Forbidden, ErrorReason.LocalConfirmationDenied, 'package installs need a local confirmation this executor does not offer')
+
 client.onRequest('process.start', async (params) => {
   const existing = processes.get(params.process_id)
   if (existing) return state(existing) // a replayed start
-  if (!params.metadata?.agent_session_id) {
+  let cwd
+  if (params.metadata?.agent_session_id) {
+    if (params.package_install) throw installRefusal()
+    const session = await client.sessionContext(params.process_id)
+    if (session.metadata.owner !== owner) {
+      throw RpcError.withReason(Code.Forbidden, ErrorReason.SessionRejected, 'this machine does not serve the session owner')
+    }
+    const folder = folders[session.metadata.workspace_ref]
+    if (!folder) throw RpcError.withReason(Code.Forbidden, ErrorReason.WorkspaceUnavailable, 'unknown workspace on this machine')
+    cwd = confine(folder, params.cwd)
+  } else if (platformDir && params.metadata?.initiator === 'platform') {
+    // Started by the platform on its own: no session, its own directory.
+    if (params.package_install) throw installRefusal()
+    cwd = confine(platformDir, params.cwd)
+  } else {
     throw RpcError.withReason(Code.Forbidden, ErrorReason.SessionRejected, 'the process names no agent session')
-  }
-  if (params.package_install) {
-    throw RpcError.withReason(Code.Forbidden, ErrorReason.LocalConfirmationDenied, 'package installs need a local confirmation this executor does not offer')
-  }
-  const session = await client.sessionContext(params.process_id)
-  if (session.metadata.owner !== owner) {
-    throw RpcError.withReason(Code.Forbidden, ErrorReason.SessionRejected, 'this machine does not serve the session owner')
-  }
-  const folder = folders[session.metadata.workspace_ref]
-  if (!folder) throw RpcError.withReason(Code.Forbidden, ErrorReason.WorkspaceUnavailable, 'unknown workspace on this machine')
-  const cwd = path.resolve(folder, params.cwd ?? '.')
-  const rel = path.relative(folder, cwd)
-  if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
-    throw RpcError.withReason(Code.Forbidden, ErrorReason.WorkspaceBoundary, 'cwd is outside the session workspace')
   }
   const child = spawn(params.argv[0], params.argv.slice(1), { cwd, env: { ...process.env, ...params.env }, stdio: ['ignore', 'pipe', 'pipe'] })
   const proc = { id: params.process_id, startedAt: new Date().toISOString(), stdout: [], stderr: [], exitCode: null, state: 'running' }

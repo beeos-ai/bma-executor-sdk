@@ -49,15 +49,63 @@ func TestLaunchPolicyRefusals(t *testing.T) {
 	}
 }
 
-// A process without agent_session_id (no session to check the owner or the
-// workspace against) is refused instead of falling back to a default folder.
+func initiator(value string) bmaexecutor.ProcessContext {
+	return bmaexecutor.ProcessContext{Metadata: map[string]string{metadataInitiator: value}}
+}
+
+func platformRequest() bmaexecutor.LaunchRequest {
+	return bmaexecutor.LaunchRequest{ProcessContext: initiator(initiatorPlatform), Argv: []string{"true"}}
+}
+
+// A process with neither agent_session_id nor initiator has no session to
+// check the owner or the workspace against: it is refused instead of falling
+// back to a default folder.
 func TestAdmitRefusesAProcessWithoutASession(t *testing.T) {
 	p, _ := testPolicy(t)
-	requireReason(t, p.admit(bmaexecutor.LaunchRequest{Argv: []string{"true"}}), bmaexecutor.ReasonSessionRejected)
+	_, err := p.admit(bmaexecutor.LaunchRequest{Argv: []string{"true"}})
+	requireReason(t, err, bmaexecutor.ReasonSessionRejected)
+	// initiator is an open set; only "platform" is defined.
+	_, err = p.admit(bmaexecutor.LaunchRequest{ProcessContext: initiator("other"), Argv: []string{"true"}})
+	requireReason(t, err, bmaexecutor.ReasonSessionRejected)
 	req := bmaexecutor.LaunchRequest{Argv: []string{"true"}}
 	req.AgentSessionID = "sesn_1"
-	if err := p.admit(req); err != nil {
-		t.Fatalf("a command of a session = %v", err)
+	platform, err := p.admit(req)
+	if err != nil || platform {
+		t.Fatalf("a command of a session = platform %v, %v", platform, err)
+	}
+}
+
+// A platform process (the machine desktop agent) has no session. An executor
+// that does not host platform processes refuses it like any start without a
+// session; one that does runs it by its own policy, never in a session folder.
+func TestAdmitPlatformProcesses(t *testing.T) {
+	p, _ := testPolicy(t)
+	_, err := p.admit(platformRequest())
+	requireReason(t, err, bmaexecutor.ReasonSessionRejected)
+
+	p.platformDir = t.TempDir()
+	platform, err := p.admit(platformRequest())
+	if err != nil || !platform {
+		t.Fatalf("platform process = platform %v, %v", platform, err)
+	}
+	install := platformRequest()
+	install.PackageInstall = &bmaexecutor.ProcessPackageInstall{Manager: bmaexecutor.PackageManagerApt, Packages: []string{"jq"}}
+	_, err = p.admit(install)
+	requireReason(t, err, bmaexecutor.ReasonLocalConfirmationDenied)
+}
+
+func TestLaunchPlatformStaysInThePlatformDir(t *testing.T) {
+	p, folder := testPolicy(t)
+	p.platformDir = t.TempDir()
+	spec, err := p.launchPlatform(platformRequest())
+	if err != nil || spec.Dir != p.platformDir {
+		t.Fatalf("spec = %+v err = %v", spec, err)
+	}
+	for _, cwd := range []string{"..", folder} {
+		req := platformRequest()
+		req.Cwd = cwd
+		_, err = p.launchPlatform(req)
+		requireReason(t, err, bmaexecutor.ReasonWorkspaceBoundary)
 	}
 }
 
@@ -68,7 +116,8 @@ func TestAdmitRefusesPackageInstalls(t *testing.T) {
 	req := bmaexecutor.LaunchRequest{Argv: []string{"apt-get", "install", "jq"},
 		PackageInstall: &bmaexecutor.ProcessPackageInstall{Manager: bmaexecutor.PackageManagerApt, Packages: []string{"jq"}}}
 	req.AgentSessionID = "sesn_1"
-	requireReason(t, p.admit(req), bmaexecutor.ReasonLocalConfirmationDenied)
+	_, err := p.admit(req)
+	requireReason(t, err, bmaexecutor.ReasonLocalConfirmationDenied)
 }
 
 func TestLaunchPolicyChoosesTheFolder(t *testing.T) {

@@ -34,16 +34,27 @@ Additive; no breaking change ([MIGRATION](MIGRATION.md#110)). Guide:
   Python see `package_install` in their own `process.start` handler
   (examples `typescript/examples/session-context`,
   `python/examples/session_context.py`).
-- **Example `sandboxed-folder`:** a process without `agent_session_id` is
-  refused with `session_rejected` (no fallback to a default folder) and a
-  package install with `local_confirmation_denied`.
+- **Examples (Go `sandboxed-folder`, TypeScript `session-context`, Python
+  `session_context.py`):** a process without `agent_session_id` is refused with
+  `session_rejected` (no fallback to a default folder) and a package install
+  with `local_confirmation_denied`. A platform-initiated process (`initiator:
+  "platform"`, no `agent_session_id`, for example the machine desktop agent)
+  is refused too unless `-platform-dir` / `EXAMPLE_PLATFORM_DIR` is set, in
+  which case it runs in that directory, never in a session folder.
+- **Contract:** snapshot refreshed from BMA #470: `process.start` metadata says
+  who started the process (`agent_session_id` + `tool_call_id` for agent
+  tools, `initiator: "platform"` for the platform's own, human terminals are
+  `terminal.attach`); `session_files.root` must be clean. Relative
+  `write_file` / `edit_file` paths reach only executors that declared
+  `session_files`.
 - **Docs:** [session-context](docs/executor/session-context.md) states that
   the session `metadata` is the first read's (cached; a mid-session change
   is not guaranteed to reach the executor and must not be used to move a
   session or change its owner, as a Claude Managed Agents worker reads
   metadata once when it claims work) and which processes carry
-  `agent_session_id` (all started by agent tools; a person's console
-  terminal has none).
+  `agent_session_id` (every agent tool process; a platform-initiated process
+  carries `initiator: "platform"` instead, and a person's console terminal is
+  `terminal.attach`, not `process.start`).
 - **Go:** the module needs Go 1.25 (`os.Root.MkdirAll` / `Rename`).
 - TypeScript and Python have no process runtime and get no Launch hook: the
   executor's `process.start` handler is the equivalent (example

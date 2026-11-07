@@ -23,7 +23,17 @@
 
 ## 哪些进程带 `agent_session_id`
 
-Agent 工具发起的进程都带 `process.start` metadata 的 `agent_session_id`：命令（`run_command`、shell 工具）、文件传输（`write_file`、`edit_file`、存储上传下载）、包安装（`install_packages`）以及 agent 打开的终端。不带它的进程不是 agent 工具发起的，例如人在控制台打开的终端：没有会话，也没有可校验的主人。按会话决策的执行端（`Launch`、会话文件、主人校验）必须显式处理缺失：返回 `session_rejected`，而不是退回默认目录。人的终端应走执行端自己掌控的另一条本地路径（自己的认证与策略），不要走会话路径。Go 中表现为 `ProcessContext.AgentSessionID == ""`；TypeScript / Python 中为 `params.metadata?.agent_session_id` / `params["metadata"].get("agent_session_id")` 缺失或为空。
+`process.start` 是谁发起的，由 metadata 区分，语义由平台定义（[executor-session-files](https://github.com/beeos-ai/beeos-managed-agents/blob/main/docs/architecture/executor-session-files.md)，契约 [`executor.openrpc.yaml`](../../contracts/bma/executor/executor.openrpc.yaml)）：
+
+| 发起方 | 消息 | metadata |
+| --- | --- | --- |
+| Agent 工具：命令（`run_command`、shell 工具）、文件传输（`write_file`、`edit_file`、存储上传下载）、包安装（`install_packages`）、脑托管的工具命令 | `process.start` | `agent_session_id` 与 `tool_call_id`；无 `initiator` |
+| 平台自发，例如机器桌面 agent | `process.start` | `initiator: "platform"`；无 `agent_session_id` |
+| 人在控制台打开的终端 | `terminal.attach`，不是 `process.start` | 无；终端恒为人工打开，没有 agent 工具会发起 |
+
+两个键都没有的 `process.start` 不是 harness 发出的。按会话决策的执行端（`Launch`、会话文件、主人校验）必须显式处理：返回 `session_rejected`，而不是退回默认目录。`initiator` 是开放枚举，目前只定义了 `platform`；无 `agent_session_id` 且值未知的，与缺失同样拒绝。
+
+平台自发进程不属于任何会话，不能落进会话目录。要承载它的执行端按自己的策略处理（自己的目录与限制，如示例的 `-platform-dir`）；不承载的返回 `session_rejected`。人的终端以 `terminal.attach` 到达，由执行端自己的终端能力（自己的认证与策略）处理，不走会话路径。Go 中键表现为 `ProcessContext.AgentSessionID`（缺失为空）与 `ProcessContext.Metadata["initiator"]`（`LaunchRequest` 内同样可取）；TypeScript / Python 中为 `params.metadata?.agent_session_id` / `params.metadata?.initiator`（`params["metadata"].get(...)`），未发送时缺失或为空。
 
 ## 带原因拒绝
 
@@ -35,13 +45,15 @@ Agent 工具发起的进程都带 `process.start` metadata 的 `agent_session_id
 
 实现 `SessionFileTransferer` 的文件传输器改收 `TransferSessionFile(ctx, ProcessContext, transfer)`。
 
-示例 [`examples/sandboxed-folder`](../../examples/sandboxed-folder)：metadata `owner` 校验（`session_rejected`）、`workspace_ref` → 本机目录（`workspace_unavailable`）、cwd 越界（`workspace_boundary`）、macOS `sandbox-exec` 包装（只允许写该目录与会话 outputs）、缺 `agent_session_id` 的进程返回 `session_rejected`、包安装返回 `local_confirmation_denied`。
+示例 [`examples/sandboxed-folder`](../../examples/sandboxed-folder)：metadata `owner` 校验（`session_rejected`）、`workspace_ref` → 本机目录（`workspace_unavailable`）、cwd 越界（`workspace_boundary`）、macOS `sandbox-exec` 包装（只允许写该目录与会话 outputs）、缺 `agent_session_id` 的进程返回 `session_rejected`（平台自发进程在设置了 `-platform-dir` 时运行于该独立目录，不进任何会话目录）、包安装返回 `local_confirmation_denied`。
 
-TypeScript / Python 没有 process 运行时，因此不提供 Launch 钩子：执行端自己的 `process.start` handler 就是等价物（读上下文、校验、再 spawn），其 params 里能看到 `package_install`，所以包安装与命令有同样的决策点。见 [`typescript/examples/session-context`](../../typescript/examples/session-context/main.mjs) 与 [`python/examples/session_context.py`](../../python/examples/session_context.py)：缺 `agent_session_id` 与 `package_install` 在读取会话上下文之前就被拒绝。
+TypeScript / Python 没有 process 运行时，因此不提供 Launch 钩子：执行端自己的 `process.start` handler 就是等价物（读上下文、校验、再 spawn），其 params 里能看到 `package_install`，所以包安装与命令有同样的决策点。见 [`typescript/examples/session-context`](../../typescript/examples/session-context/main.mjs) 与 [`python/examples/session_context.py`](../../python/examples/session_context.py)：缺 `agent_session_id`（承载的 `initiator: "platform"` 除外）与 `package_install` 在读取会话上下文之前就被拒绝。
 
 ## 会话文件根
 
 声明 `capabilities.session_files.root`（展开后的绝对路径）的执行端，平台在提示、工具说明和写入规则中使用 `<root>/<会话ID>/uploads`（只读）与 `<root>/<会话ID>/outputs`，代替 `/mnt/session`，同一台机器上的并发会话互不共享文件。不声明则保持 `/mnt/session`。
+
+只有这样的执行端才会收到 `write_file` / `edit_file` 的相对路径：不含 `.`、`..` 段且不以 `~` 开头的 `file_path` 原样进入 `process.start` 的 `file_transfer.local_path`，由执行端在该会话的目录（与会话命令同一个）中解析。其他机器的相对路径在审批提示之前、进程创建之前就被平台拒绝。`uploads/` 下的相对路径与只读输入一样被拒；其余的限制由执行端负责（平台的检查不是沙箱）。绝对路径与 `~/` 路径不变。
 
 Go：`files, _ := NewSessionFiles(SessionFilesOptions{Root: root})`，传 `ProcessOptions{SessionFiles: files}`（自动声明 root），并 `go files.Run(ctx)`。会话的每个进程启动前同步挂载文件到 uploads（sha256 校验、0444、其余条目删除）；outputs 稳定后每 2 秒上传，`process.read` 报告进程结束时立即上传。全部经 `os.Root`，不跟随符号链接，只上传普通文件。`files.Dirs(sessionID)` 返回两个目录（例如写进沙箱配置）。根目录不要放在执行端状态库与 IPC 目录下。TypeScript / Python 声明 `capabilities: { session_files: { root } }`，用同一组 daemon 路由自行同步。
 

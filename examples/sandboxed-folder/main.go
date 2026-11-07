@@ -11,12 +11,16 @@
 // table (BMA never stores the path; an unknown reference is
 // workspace_unavailable), refuses a cwd outside the folder
 // (workspace_boundary) and wraps the command in sandbox-exec. A process
-// without agent_session_id is refused with session_rejected, and so is a
-// package install (local_confirmation_denied), which writes outside the folder.
+// without agent_session_id is refused with session_rejected, unless the
+// platform started it on its own (metadata initiator "platform", for example
+// the machine desktop agent) and -platform-dir is set: that runs in its own
+// directory by this machine's policy, never in a session folder. A package
+// install is refused (local_confirmation_denied), which writes outside the folder.
 //
 //	BMA_BASE_URL=https://api.<env>.bma.beeos.ai BMA_MACHINE_TOKEN=... \
 //	go run ./examples/sandboxed-folder -owner u_42 -folder ws_7=$HOME/projects/site \
-//	  -session-files "$HOME/Library/Application Support/example/sessions"
+//	  -session-files "$HOME/Library/Application Support/example/sessions" \
+//	  -platform-dir "$HOME/Library/Application Support/example/platform"
 package main
 
 import (
@@ -38,6 +42,11 @@ import (
 const (
 	metadataWorkspaceRef = "workspace_ref"
 	metadataOwner        = "owner"
+	// metadataInitiator marks a process the platform starts on its own; it is
+	// an open set and "platform" is the only value defined. Such a process
+	// carries no agent_session_id.
+	metadataInitiator = "initiator"
+	initiatorPlatform = "platform"
 )
 
 // sandboxProfile allows everything except writes outside the session's
@@ -60,25 +69,69 @@ type policy struct {
 	outputs func(agentSessionID string) string
 	// wrap is true where sandbox-exec exists (macOS).
 	wrap bool
+	// platformDir is where platform-initiated processes run; empty means this
+	// machine hosts none and refuses them.
+	platformDir string
 }
 
 // admit refuses what no session or local policy can allow, before the session
-// context is read. A process without agent_session_id has no session to check
-// the owner or workspace against: it is refused with session_rejected instead
-// of falling back to a default folder. Those are processes the platform
-// starts without an agent session, such as a terminal a person opens in the
-// console. A package install runs a package manager that writes outside the
-// folder; this example has no local confirmation, so it refuses.
-func (p policy) admit(req bmaexecutor.LaunchRequest) error {
-	switch {
-	case req.AgentSessionID == "":
-		return bmaexecutor.NewReasonError(bmaexecutor.CodeForbidden, bmaexecutor.ReasonSessionRejected,
-			"the process names no agent session; this machine serves sessions only")
-	case req.PackageInstall != nil:
-		return bmaexecutor.NewReasonError(bmaexecutor.CodeForbidden, bmaexecutor.ReasonLocalConfirmationDenied,
+// context is read. It reports platform == true for a process the platform
+// started on its own, which has no session and is handled by launchPlatform.
+// A process with neither agent_session_id nor a hosted platform initiator has
+// no session to check the owner or workspace against: it is refused with
+// session_rejected instead of falling back to a default folder (the harness
+// does not send one; a person's console terminal is terminal.attach, not
+// process.start). A package install runs a package manager that writes outside
+// the folder; this example has no local confirmation, so it refuses.
+func (p policy) admit(req bmaexecutor.LaunchRequest) (platform bool, err error) {
+	if req.AgentSessionID == "" {
+		if p.platformDir == "" || req.Metadata[metadataInitiator] != initiatorPlatform {
+			return false, bmaexecutor.NewReasonError(bmaexecutor.CodeForbidden, bmaexecutor.ReasonSessionRejected,
+				"the process names no agent session; this machine serves sessions only")
+		}
+		platform = true
+	}
+	if req.PackageInstall != nil {
+		return false, bmaexecutor.NewReasonError(bmaexecutor.CodeForbidden, bmaexecutor.ReasonLocalConfirmationDenied,
 			"package installs need a local confirmation this executor does not offer")
 	}
-	return nil
+	return platform, nil
+}
+
+// launchPlatform starts a platform-initiated process in platformDir under the
+// same write-confining sandbox, apart from every session folder.
+func (p policy) launchPlatform(req bmaexecutor.LaunchRequest) (bmaexecutor.LaunchSpec, error) {
+	dir, err := confine(p.platformDir, req.Cwd)
+	if err != nil {
+		return bmaexecutor.LaunchSpec{}, err
+	}
+	spec := bmaexecutor.LaunchSpec{Dir: dir}
+	if p.wrap {
+		spec.Argv = p.sandboxed(p.platformDir, p.platformDir, req.Argv)
+	}
+	return spec, nil
+}
+
+// sandboxed wraps argv in sandbox-exec, allowing writes only to folder and outputs.
+func (p policy) sandboxed(folder, outputs string, argv []string) []string {
+	return append([]string{"/usr/bin/sandbox-exec", "-D", "FOLDER=" + folder, "-D", "OUTPUTS=" + outputs,
+		"-p", sandboxProfile}, argv...)
+}
+
+// confine resolves cwd (relative to folder) and refuses one outside it.
+func confine(folder, cwd string) (string, error) {
+	dir := folder
+	if cwd != "" {
+		dir = cwd
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(folder, dir)
+		}
+		if !within(folder, dir) {
+			return "", bmaexecutor.NewReasonError(bmaexecutor.CodeForbidden,
+				bmaexecutor.ReasonWorkspaceBoundary, "cwd is outside the allowed folder")
+		}
+	}
+	return dir, nil
 }
 
 // launch decides how one process of a session starts.
@@ -96,16 +149,9 @@ func (p policy) launch(session bmaexecutor.SessionContext, req bmaexecutor.Launc
 		return bmaexecutor.LaunchSpec{}, bmaexecutor.NewReasonError(bmaexecutor.CodeForbidden,
 			bmaexecutor.ReasonWorkspaceUnavailable, "the session's workspace folder does not exist")
 	}
-	dir := folder
-	if req.Cwd != "" {
-		dir = req.Cwd
-		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(folder, dir)
-		}
-		if !within(folder, dir) {
-			return bmaexecutor.LaunchSpec{}, bmaexecutor.NewReasonError(bmaexecutor.CodeForbidden,
-				bmaexecutor.ReasonWorkspaceBoundary, "cwd is outside the session's workspace folder")
-		}
+	dir, err := confine(folder, req.Cwd)
+	if err != nil {
+		return bmaexecutor.LaunchSpec{}, err
 	}
 	spec := bmaexecutor.LaunchSpec{Dir: dir}
 	if p.wrap {
@@ -113,8 +159,7 @@ func (p policy) launch(session bmaexecutor.SessionContext, req bmaexecutor.Launc
 		if p.outputs != nil && req.AgentSessionID != "" {
 			outputs = p.outputs(req.AgentSessionID)
 		}
-		spec.Argv = append([]string{"/usr/bin/sandbox-exec", "-D", "FOLDER=" + folder, "-D", "OUTPUTS=" + outputs,
-			"-p", sandboxProfile}, req.Argv...)
+		spec.Argv = p.sandboxed(folder, outputs, req.Argv)
 	}
 	return spec, nil
 }
@@ -151,6 +196,7 @@ func main() {
 	owner := flag.String("owner", "", "the owner reference this machine serves")
 	workRoot := flag.String("work-root", "bma-work", "directory holding session workspaces")
 	sessionFilesRoot := flag.String("session-files", "", "absolute session files root (optional)")
+	platformDir := flag.String("platform-dir", "", "absolute directory for platform-initiated processes, e.g. the desktop agent (optional; without it they are refused)")
 	flag.Var(folders, "folder", "<workspace_ref>=<absolute folder>, repeatable")
 	flag.Parse()
 	if *owner == "" || len(folders) == 0 {
@@ -163,6 +209,15 @@ func main() {
 	}
 	defer core.Close()
 	local := policy{owner: *owner, folders: folders, wrap: runtime.GOOS == "darwin"}
+	if *platformDir != "" {
+		if !filepath.IsAbs(*platformDir) {
+			log.Fatal("-platform-dir must be an absolute path")
+		}
+		if err := os.MkdirAll(*platformDir, 0o700); err != nil {
+			log.Fatal(err)
+		}
+		local.platformDir = filepath.Clean(*platformDir)
+	}
 	var files *bmaexecutor.SessionFiles
 	if *sessionFilesRoot != "" {
 		if files, err = bmaexecutor.NewSessionFiles(bmaexecutor.SessionFilesOptions{Root: *sessionFilesRoot}); err != nil {
@@ -172,8 +227,12 @@ func main() {
 	}
 	var client *bmaexecutor.Client
 	launch := func(ctx context.Context, req bmaexecutor.LaunchRequest) (bmaexecutor.LaunchSpec, error) {
-		if err := local.admit(req); err != nil {
+		platform, err := local.admit(req)
+		if err != nil {
 			return bmaexecutor.LaunchSpec{}, err
+		}
+		if platform {
+			return local.launchPlatform(req)
 		}
 		session, err := client.SessionContext(ctx, req.ProcessID)
 		if errors.Is(err, bmaexecutor.ErrSessionContextNotFound) {

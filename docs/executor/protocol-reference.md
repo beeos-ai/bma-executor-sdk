@@ -266,7 +266,7 @@ Every `process.*` acts on a process in an assigned session; the harness allocate
 | `stderr` | empty = separate streams; `"merge"` = OS-level dup2 into stdout (one cursor). The machine path always uses `merge` and requires the result to echo `stderr:"merge"`, else it fails as `-32012`  |
 | `wait_ms` | 0–300000: wait that long for the process to end before answering |
 | `timeout_ms` | 0–86400000: kill and end as `failed`, `reason:"timeout"` |
-| `metadata` | string map; the platform sends `tool_call_id`; every process an agent tool starts (command, file transfer, package install, terminal) carries `agent_session_id`, see [session context](session-context.md#which-processes-carry-agent_session_id) |
+| `metadata` | string map. An agent tool's process (command, file transfer, package install) carries `agent_session_id` and `tool_call_id`, no `initiator`; a process the platform starts on its own (machine desktop agent) carries `initiator: "platform"` and no `agent_session_id`; a console terminal is `terminal.attach`, not `process.start`. A start with neither key is refused by a per-session executor with `session_rejected`. See [session context](session-context.md#which-processes-carry-agent_session_id) |
 | `io_mode` | `"pty"`: run on a 24x80 PTY; needs `process.pty`; `close_stdin` rejected |
 | `file_transfer` | `{direction: upload\|download, local_path}` instead of `argv`; needs `process.file_transfer`; excludes `argv`/`io_mode`/`git_credentials` (§6.2) |
 | `git_credentials` | `true`: per-process GitHub credential helper; needs `process.git_credentials` (§6.3) |
@@ -353,7 +353,7 @@ With `git_credentials:true` the executor sets `GIT_CONFIG_PARAMETERS` to the hel
 
 Matches Anthropic Managed Agents files: mounted files are readable at `/mnt/session/uploads/<mount_path or file_id>`; files written under `/mnt/session/outputs/` become session-scoped files.
 
-- The platform names the session in `process.start.metadata.agent_session_id`; the machine shows the session whose shell process started last; on a switch it uploads the old outputs, then empties and resyncs.
+- The platform names the session of an agent tool's process in `process.start.metadata.agent_session_id` (platform-initiated processes carry `initiator: "platform"` instead and belong to no session); the machine shows the session whose shell process started last; on a switch it uploads the old outputs, then empties and resyncs.
 - Uploads: before each shell process, `GET /api/v1/daemon/processes/{id}/session-files` returns the manifest; anything not in it is removed; missing/changed files are downloaded from `…/session-files/{resource_id}/content`, checked for length and sha256, `chmod 0444` and renamed in. A sync failure fails the process start (`session files: …`).
 - Outputs: every 2 s, regular non-empty files whose size and mtime were stable across two walks and changed since the last upload are sent with `POST …/session-outputs?path=<relative path>` and `X-BMA-File-Digest`; idempotent by (session, sha256, path). Limits: 1 GiB per file, 512-byte paths, 10 000 files per walk. `413/422/400` are not retried until the file changes; transport errors, `404`, `409` retry next walk.
 - Auth: machine token, anchored on a granted process of the calling machine with an active session; mount routes need a starting/running process, outputs are accepted up to 15 minutes after it ended.

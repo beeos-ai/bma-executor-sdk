@@ -6,11 +6,15 @@ handler reads the session context, refuses another owner's session
 (session_rejected) or an unknown reference (workspace_unavailable), and runs the
 command in this machine's folder for the reference. BMA never stores the path.
 
-A process.start without metadata.agent_session_id has no session to check against
-(for example a terminal a person opens in the console): it is refused with
-session_rejected, never run in a default folder. A package install runs a package
-manager that writes outside the folder: this example has no local confirmation, so
-it refuses with local_confirmation_denied.
+A process.start without metadata.agent_session_id has no session to check against:
+it is refused with session_rejected, never run in a default folder (the harness
+does not send one; a person's console terminal is terminal.attach, not
+process.start). The exception is a process the platform starts on its own
+(metadata initiator "platform", for example the machine desktop agent): with
+EXAMPLE_PLATFORM_DIR set it runs in that directory by this machine's policy,
+never in a session folder; without it, it is refused too. A package install runs
+a package manager that writes outside the folder: this example has no local
+confirmation, so it refuses with local_confirmation_denied.
 
 Python has no built-in process runtime (Go's ProcessOptions.Launch): the executor
 serves process.* itself. This example keeps output in memory and serves
@@ -18,6 +22,7 @@ process.start and process.read only.
 
     BMA_BASE_URL=https://api.<env>.bma.beeos.ai BMA_MACHINE_TOKEN=... \\
     EXAMPLE_OWNER=u_42 EXAMPLE_FOLDERS='{"ws_7": "/Users/me/projects/site"}' \\
+    EXAMPLE_PLATFORM_DIR=/Users/me/bma-platform \\
     python session_context.py
 """
 
@@ -36,6 +41,8 @@ from bma_executor_sdk.generated import JsonRpcErrorCode
 
 OWNER = os.environ.get("EXAMPLE_OWNER")
 FOLDERS: dict[str, str] = json.loads(os.environ.get("EXAMPLE_FOLDERS", "{}"))
+# Where platform-initiated processes run; empty means this machine hosts none.
+PLATFORM_DIR = os.environ.get("EXAMPLE_PLATFORM_DIR", "")
 PROCESSES: dict[str, dict[str, Any]] = {}
 
 
@@ -43,12 +50,34 @@ def refuse(reason: str, message: str) -> RPCError:
     return RPCError.with_reason(JsonRpcErrorCode.Forbidden, reason, message)
 
 
-def admit(params: dict[str, Any]) -> None:
-    """Refuse what no session or local policy can allow, before reading the session context."""
-    if not (params.get("metadata") or {}).get("agent_session_id"):
-        raise refuse(ErrorReason.SessionRejected, "the process names no agent session")
+def admit(params: dict[str, Any]) -> bool:
+    """Refuse what no session or local policy can allow, before reading the session context.
+
+    Returns True for a process the platform started on its own (no session,
+    handled by platform_cwd), False for a process of an agent session.
+    """
+    metadata = params.get("metadata") or {}
+    platform = False
+    if not metadata.get("agent_session_id"):
+        if not PLATFORM_DIR or metadata.get("initiator") != "platform":
+            raise refuse(ErrorReason.SessionRejected, "the process names no agent session")
+        platform = True
     if params.get("package_install") is not None:
         raise refuse(ErrorReason.LocalConfirmationDenied, "package installs need a local confirmation this executor does not offer")
+    return platform
+
+
+def confine(folder: str, cwd: str | None) -> Path:
+    """Resolve cwd (relative to folder) and refuse one outside it."""
+    root = Path(folder).resolve()
+    resolved = (root / (cwd or ".")).resolve()
+    if not resolved.is_relative_to(root):
+        raise refuse(ErrorReason.WorkspaceBoundary, "cwd is outside the allowed folder")
+    return resolved
+
+
+def platform_cwd(params: dict[str, Any]) -> Path:
+    return confine(PLATFORM_DIR, params.get("cwd"))
 
 
 def state(proc: dict[str, Any]) -> dict[str, Any]:
@@ -82,16 +111,16 @@ def make_client() -> ExecutorClient:
     async def process_start(params: Any) -> Any:
         if existing := PROCESSES.get(params["process_id"]):
             return state(existing)  # a replayed start
-        admit(params)
-        session = await client.session_context(params["process_id"])
-        if session["metadata"].get("owner") != OWNER:
-            raise refuse(ErrorReason.SessionRejected, "this machine does not serve the session owner")
-        folder = FOLDERS.get(session["metadata"].get("workspace_ref", ""))
-        if not folder:
-            raise refuse(ErrorReason.WorkspaceUnavailable, "unknown workspace on this machine")
-        cwd = (Path(folder) / (params.get("cwd") or ".")).resolve()
-        if not cwd.is_relative_to(Path(folder).resolve()):
-            raise refuse(ErrorReason.WorkspaceBoundary, "cwd is outside the session workspace")
+        if admit(params):
+            cwd = platform_cwd(params)  # not a session: its own directory, never a session folder
+        else:
+            session = await client.session_context(params["process_id"])
+            if session["metadata"].get("owner") != OWNER:
+                raise refuse(ErrorReason.SessionRejected, "this machine does not serve the session owner")
+            folder = FOLDERS.get(session["metadata"].get("workspace_ref", ""))
+            if not folder:
+                raise refuse(ErrorReason.WorkspaceUnavailable, "unknown workspace on this machine")
+            cwd = confine(folder, params.get("cwd"))
         child = await asyncio.create_subprocess_exec(
             *params["argv"], cwd=cwd, env={**os.environ, **(params.get("env") or {})},
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL,
@@ -119,6 +148,8 @@ def make_client() -> ExecutorClient:
 
 
 async def main() -> None:
+    if PLATFORM_DIR:
+        Path(PLATFORM_DIR).mkdir(parents=True, exist_ok=True)
     client = make_client()
     registered = await client.start()
     print("registered as", registered["executor_id"])
