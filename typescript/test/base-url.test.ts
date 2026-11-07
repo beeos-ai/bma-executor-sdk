@@ -30,3 +30,24 @@ test('a machine token (no environmentId) is exchanged by bma-api at /api/v1/exec
   await assert.rejects(dial({ channel: ChannelScope.Control }))
   assert.deepEqual(urls, ['https://bma.test/api/v1/executors/token'])
 })
+
+// Go and Python bound the token request by the request timeout; fetch has none of its own.
+test('a token request that gets no answer is aborted after requestTimeoutMs', { timeout: 5000 }, async () => {
+  let aborted = false
+  const fetch = ((_url: string, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        aborted = true
+        reject(init.signal?.reason)
+      })
+    })) as typeof globalThis.fetch
+  const dial = webSocketDialer({ environmentId: 'env', executor: executorInfo, baseUrl: 'https://bma.test', environmentKey: 'k', fetch, requestTimeoutMs: 50 })
+  // AbortSignal.timeout does not keep the loop alive; a real fetch holds a socket, this one holds nothing.
+  const keepAlive = setTimeout(() => {}, 5000)
+  try {
+    await assert.rejects(dial({ channel: ChannelScope.Control }))
+  } finally {
+    clearTimeout(keepAlive)
+  }
+  assert.ok(aborted, 'the fetch signal fired')
+})
