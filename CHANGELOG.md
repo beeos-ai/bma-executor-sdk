@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.3
+
+### Fixed
+
+- **All languages:** `MaxReconnectAttempts` / `max_reconnect_attempts` /
+  `maxReconnectAttempts` = N allows exactly N reconnects. When a connection
+  was lost while `executor.register` was still in flight, the registration
+  that returned afterwards reset the reconnect counter and so erased the
+  attempt the loss had already counted (N+1 attempts in practice, #10). Go
+  now resets the budget only when the connection that registered is still
+  the current one.
+- **TypeScript:** the token request is bounded by `requestTimeoutMs` (default
+  30s, `AbortSignal.timeout`), as Go and Python bound it by their request
+  timeout. `fetch` has no timeout of its own, so a token endpoint that
+  accepted the connection and never answered stalled the reconnect forever.
+- **Python:** a call whose channel ends while the request is still being
+  written (for example the harness closing with 4002) no longer leaves a
+  failed Future that nobody retrieves; asyncio logged "Future exception was
+  never retrieved" for it.
+
 ## 1.0.2
 
 ### Fixed
