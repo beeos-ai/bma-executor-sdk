@@ -27,14 +27,17 @@ import (
 const (
 	DefaultBaseURL              = "https://api.bma.beeos.ai"
 	DefaultRequestTimeout       = 30 * time.Second
-	DefaultMaxReconnectAttempts = 10
-	DefaultReconnectBaseDelay   = 500 * time.Millisecond
+	// DefaultMaxReconnectAttempts is 0: reconnect until Stop, as gRPC's
+	// connection backoff and long-running agents (GitHub Actions runner,
+	// Buildkite agent) do.
+	DefaultMaxReconnectAttempts = 0
+	DefaultReconnectBaseDelay   = time.Second
 	// DefaultToolResultRetryAttempts is the total number of tool.result attempts.
 	DefaultToolResultRetryAttempts = 5
 	// DefaultToolResultRetryBaseDelay is the first retry backoff for tool.result.
 	DefaultToolResultRetryBaseDelay = 250 * time.Millisecond
 	defaultHeartbeatInterval        = 15 * time.Second
-	defaultReconnectMaxDelay        = 30 * time.Second
+	defaultReconnectMaxDelay        = 60 * time.Second
 	// tokenRefreshAt is the fraction of a token's lifetime after which the
 	// client sends executor.token.refresh.
 	tokenRefreshAt          = 0.7
@@ -58,8 +61,14 @@ var (
 	// ErrReplaced is Err after the harness closed with 4004: a newer
 	// connection for this executor is authoritative and this one must stop.
 	ErrReplaced = errors.New("bmaexecutor: executor connection was replaced (4004)")
-	// ErrReconnectExhausted is Err after MaxReconnectAttempts failed.
+	// ErrReconnectExhausted is Err after a positive MaxReconnectAttempts
+	// failed; it wraps the last failure.
 	ErrReconnectExhausted = errors.New("bmaexecutor: executor reconnect attempts exhausted")
+	// ErrCredentialRejected is wrapped by the token request error when the
+	// token endpoint answers 401 or 403 (an invalid or revoked environment
+	// key or machine token). A reconnect does not retry it: the client ends
+	// with it as Err. A TokenSource may wrap it for the same effect.
+	ErrCredentialRejected = errors.New("bmaexecutor: executor credential rejected")
 )
 
 // ConnectionState is the executor control channel state (ConnectionState* values).
@@ -124,12 +133,15 @@ type Options struct {
 	HeartbeatInterval time.Duration
 	// HeartbeatLoad is sampled for each heartbeat.
 	HeartbeatLoad func() *ExecutorLoad
-	// MaxReconnectAttempts bounds consecutive failed reconnects (default 10);
-	// a negative value reconnects until Stop.
+	// MaxReconnectAttempts bounds consecutive failed reconnects; the client
+	// then ends with ErrReconnectExhausted (see Done and Err). Zero (the
+	// default) or a negative value reconnects until Stop.
 	MaxReconnectAttempts int
-	ReconnectBaseDelay   time.Duration
+	// ReconnectBaseDelay is the first reconnect backoff (default 1s); it
+	// doubles per failed attempt up to ReconnectMaxDelay, with jitter.
+	ReconnectBaseDelay time.Duration
 	// ReconnectMaxDelay caps the reconnect backoff before jitter. Defaults
-	// to 30s.
+	// to 60s.
 	ReconnectMaxDelay time.Duration
 	Random            func() float64
 	// ToolResultRetryAttempts is the total number of attempts for tool.result,
@@ -300,9 +312,6 @@ func NewClient(options Options) (*Client, error) {
 	if options.HeartbeatInterval <= 0 {
 		options.HeartbeatInterval = defaultHeartbeatInterval
 	}
-	if options.MaxReconnectAttempts == 0 {
-		options.MaxReconnectAttempts = DefaultMaxReconnectAttempts
-	}
 	if options.ReconnectBaseDelay <= 0 {
 		options.ReconnectBaseDelay = DefaultReconnectBaseDelay
 	}
@@ -422,12 +431,13 @@ func (c *Client) finish(err error, code int, reason string) {
 }
 
 // Done is closed when the client stops for good: Stop, executor.close, a
-// terminal close code (4004 replaced, 4003 unsupported protocol, ...) or
-// exhausted reconnects.
+// terminal close code (4004 replaced, 4003 unsupported protocol, ...), a
+// credential rejected on reconnect, or exhausted reconnects.
 func (c *Client) Done() <-chan struct{} { return c.done }
 
 // Err explains Done: nil after Stop or executor.close, ErrReplaced after
-// 4004, ErrReconnectExhausted, or the terminal close error.
+// 4004, ErrCredentialRejected, ErrReconnectExhausted, or the terminal close
+// error.
 func (c *Client) Err() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -806,7 +816,11 @@ func (c *Client) fetchToken(ctx context.Context) (ExecutorTokenResponse, error) 
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return ExecutorTokenResponse{}, fmt.Errorf("bmaexecutor: token request failed: %s: %s", response.Status, strings.TrimSpace(string(detail)))
+		err := fmt.Errorf("bmaexecutor: token request failed: %s: %s", response.Status, strings.TrimSpace(string(detail)))
+		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+			err = fmt.Errorf("%w: %w", ErrCredentialRejected, err)
+		}
+		return ExecutorTokenResponse{}, err
 	}
 	var token ExecutorTokenResponse
 	if err := json.NewDecoder(response.Body).Decode(&token); err != nil {
@@ -1413,9 +1427,18 @@ func (c *Client) heartbeat() {
 	if c.options.HeartbeatLoad != nil {
 		params.Load = c.options.HeartbeatLoad()
 	}
+	conn := c.currentConn()
 	var result ExecutorHeartbeatResult
 	if err := c.callInto(c.rootCtx, MethodExecutorHeartbeat, params, &result); err != nil {
 		c.log(LogWarn, "executor heartbeat failed", err)
+		if errors.Is(err, context.DeadlineExceeded) && conn != nil {
+			// No answer within RequestTimeout: the connection is dead (a
+			// half-open TCP connection after a network cut). Close it so the
+			// read loop ends and the client reconnects, as gRPC keepalive
+			// closes a transport whose ping times out.
+			c.log(LogWarn, "executor heartbeat timed out; closing the connection to reconnect", nil)
+			_ = conn.conn.Close(1001, "heartbeat timeout")
+		}
 		return
 	}
 	if result.Drain {
@@ -1452,7 +1475,7 @@ func (c *Client) disconnected(conn *connection, err error) {
 		return
 	}
 	c.log(LogWarn, "executor connection lost", err)
-	c.scheduleReconnect()
+	c.scheduleReconnect(err)
 }
 
 // finishOnTerminalClose stops the client for good when err carries a
@@ -1470,7 +1493,9 @@ func (c *Client) finishOnTerminalClose(err error) bool {
 	return true
 }
 
-func (c *Client) scheduleReconnect() {
+// scheduleReconnect retries after cause, the failure that ended the last
+// connection or reconnect attempt.
+func (c *Client) scheduleReconnect(cause error) {
 	c.mu.Lock()
 	if c.stopped {
 		c.mu.Unlock()
@@ -1478,8 +1503,9 @@ func (c *Client) scheduleReconnect() {
 	}
 	if c.options.MaxReconnectAttempts > 0 && c.reconnectAttempts >= c.options.MaxReconnectAttempts {
 		c.mu.Unlock()
-		c.log(LogError, "executor reconnect attempts exhausted", nil)
-		c.finish(ErrReconnectExhausted, 1000, "reconnect exhausted")
+		err := fmt.Errorf("%w: %w", ErrReconnectExhausted, cause)
+		c.log(LogError, "executor reconnect attempts exhausted", err)
+		c.finish(err, 1000, "reconnect exhausted")
 		return
 	}
 	attempt := c.reconnectAttempts
@@ -1526,10 +1552,25 @@ func (c *Client) reconnect() {
 	if stopped {
 		return
 	}
-	token, err := c.fetchToken(c.rootCtx)
+	// Each attempt dials afresh: after a network cut the pooled connection
+	// (HTTP/2 multiplexes every request on one) is dead, and a timed-out
+	// request does not close it.
+	c.httpClient.CloseIdleConnections()
+	// Bounded: after a network cut the request can land on a dead pooled
+	// connection and, with http.DefaultClient (no timeout), never return.
+	tokenCtx, cancel := context.WithTimeout(c.rootCtx, c.options.RequestTimeout)
+	token, err := c.fetchToken(tokenCtx)
+	cancel()
+	if errors.Is(err, ErrCredentialRejected) {
+		// Retrying cannot help a revoked or invalid credential (GitHub
+		// Actions runner and Buildkite agent stop on 401/403 too).
+		c.log(LogError, "executor credential rejected; not reconnecting", err)
+		c.finish(err, 1000, "credential rejected")
+		return
+	}
 	if err != nil {
 		c.log(LogWarn, "executor reconnect token request failed", err)
-		c.scheduleReconnect()
+		c.scheduleReconnect(err)
 		return
 	}
 	if err := c.connect(c.rootCtx, token); err != nil {
@@ -1537,7 +1578,7 @@ func (c *Client) reconnect() {
 			return
 		}
 		c.log(LogWarn, "executor reconnect failed", err)
-		c.scheduleReconnect()
+		c.scheduleReconnect(err)
 	}
 }
 

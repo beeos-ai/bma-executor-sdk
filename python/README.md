@@ -15,7 +15,7 @@ asyncio executor (`ExecutorClient`), harness (`Harness`) and agent ends of the B
 | Integration guide | [docs/executor](../docs/executor/README.md) ([中文](../docs/executor/README.zh-CN.md)) |
 
 ```sh
-pip install bma-executor-sdk==1.0.1
+pip install bma-executor-sdk==1.0.2
 ```
 
 The REST / façade client is the separate package [`bma-sdk`](https://github.com/beeos-ai/bma-sdk/tree/main/python).
@@ -42,7 +42,7 @@ async def main() -> None:
         return BashResult(stdout=out.decode(), stderr=err.decode(), exit_code=proc.returncode or 0)
 
     await client.start()
-    await asyncio.Event().wait()
+    await client.wait_closed()  # raises when the client ends for good
 
 asyncio.run(main())
 ```
@@ -56,7 +56,7 @@ Behavior matches the Go SDK:
 - A handler returns a string, content blocks, `ToolResult(content, is_error, artifacts)` or (bash) `BashResult`, rendered like the Go `Core`; `raise ToolError(text)` reports a tool-level error (`is_error: true`), any other exception is `outcome: "failed"`. The harness calls tools as `await session.tools.bash.call({"command": "ls"})`.
 - `tool.cancel` cancels the handler's task and reports `outcome: "canceled"`; duplicate `tool.call` ids run once.
 - `tool.result` retries `-32009` / `-32004` / `retryable` errors and hands a lost result to `on_tool_result_lost`.
-- Reconnect resumes with `resume.executor_id` / `active_sessions`; close codes 1008, 4002, 4003 and 4004 stop the client (4001 and 4005 reconnect).
+- Reconnect resumes with `resume.executor_id` / `active_sessions`, until `stop()` by default (backoff 1 s doubling to 60 s, jitter); only close codes 4003 and 4004 stop the client. A positive `max_reconnect_attempts` bounds the attempts. `await client.wait_closed()` returns after `stop()` / `executor.close` and raises `ChannelClosed` (4003/4004), `CredentialRejectedError` (the token endpoint answered 401/403 on reconnect: revoked or invalid credential, not retried) or `ReconnectExhaustedError`; let it end the process so a supervisor can restart it.
 - Call `session_ready` after setup and `session_ended` after cleanup. `client.on_request(methods.PROCESS_START, handler)` serves `process.*`, `terminal.*`, `skill.install` or `workspace.backup` yourself with the contract's TypedDicts; `await client.call(methods.SESSION_EVENT, params)` / `await client.notify(methods.TOOL_PROGRESS, params)` send typed methods (`bma_executor_sdk.methods`). There is no execution `Core` in Python.
 - Input missing a required member fails the call before the handler runs; a `tool.call` for a tool without a handler is refused with `-32012` before the ack; `shell` / `files` are enabled while a handler of the group is registered unless set `enabled: False`, and a handler registered after `start()` sends `executor.capabilities.update`. `BashResult` beyond `INLINE_RESULT_BYTES` (or `truncated=True`) is cut to Go Core's preview. The `computer_*` tools get slots once the contract defines their input.
 

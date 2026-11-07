@@ -97,7 +97,7 @@ Authorization: Bearer <jwt>
 
 bmad: any close other than `4004` reconnects with backoff from 1s doubling to about 30s, fetching a new token each time, and registers with `resume` (§8.1).
 
-The SDK clients (Go, TypeScript, Python) stop only on `4003` and `4004`; every other close, including `4002`, `4005`, `1001`, `1008`, `1012` and `1013` from a restarting server, reconnects the same way.
+The SDK clients (Go, TypeScript, Python) stop only on `4003` and `4004`; every other close, including `4002`, `4005`, `1001`, `1008`, `1012` and `1013` from a restarting server, reconnects the same way: by default until stopped, backing off from 1s doubling to 60s with jitter (as gRPC connection backoff). A token endpoint answer of `401` or `403` on reconnect (revoked or invalid credential) is not retried: the client ends with a credential-rejected error. An optional positive maximum of attempts ends the client with a reconnect-exhausted error. The end is observable (Go `Done`/`Err`, Python `wait_closed()`, TypeScript `waitClosed()`) so the process can exit and be restarted by its supervisor.
 
 ---
 
@@ -184,7 +184,7 @@ Result:
 
 ### 4.2 `executor.heartbeat`
 
-`{connection_id, active_sessions[], load?{cpu_percent, memory_percent}}` → `{server_time, lease_ttl_ms, drain}`. Wrong `connection_id` is `-32602`. Sent every `heartbeat_interval_ms` (15s); renews the leases of the connection's work items and, on the machine path, the daemon runtime lease and presence. When a lease expires (default 60s, max 10 min) the server sends `tool.cancel` + `session.stop` (`lease_expired`). `drain:true` means accept no new sessions.
+`{connection_id, active_sessions[], load?{cpu_percent, memory_percent}}` → `{server_time, lease_ttl_ms, drain}`. Wrong `connection_id` is `-32602`. Sent every `heartbeat_interval_ms` (15s); renews the leases of the connection's work items and, on the machine path, the daemon runtime lease and presence. When a lease expires (default 60s, max 10 min) the server sends `tool.cancel` + `session.stop` (`lease_expired`). `drain:true` means accept no new sessions. SDK clients close the connection and reconnect when a heartbeat gets no answer within the request timeout (a dead, half-open connection after a network cut), as gRPC keepalive does.
 
 ### 4.3 `executor.capabilities.update` (notif)
 
