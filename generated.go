@@ -1484,7 +1484,7 @@ type WorkspaceBackupParams struct {
 // FsMountParams is the params object of fs.mount.
 type FsMountParams struct {
 	SessionID string `json:"session_id"`
-	// Base URL of the executor host's bma-file routes, ending in /v1 (for example https://executor.example.com/v1; self-hosted <origin>/v1). The executor appends "/machines/{machine_id}/fs/<op>" with machine_id from BMA_MACHINE_ID and adds nothing else. The previous /v1/fs/<op> routes stay as an alias until they are removed.
+	// Complete prefix of the bma-file routes for this machine, ending in /v1/machines/{machine_id}/fs (for example https://executor.example.com/v1/machines/mach_01/fs). The executor appends "/<op>" and nothing else; it does not compose the machine id itself. The previous <origin>/v1/fs/<op> routes stay as an alias until they are removed.
 	ServiceURL string    `json:"service_url"`
 	Mounts     []FsMount `json:"mounts"`
 }

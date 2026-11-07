@@ -22,8 +22,8 @@ Additive; no breaking change ([MIGRATION](MIGRATION.md#120)). Contract 1.2.0
   client.
 - **Contract:** `Capabilities.fs` (`FsCapability{fuse, views}`),
   `AgentCapability.platform_credentials`, and the `fs.mount` / `fs.unmount`
-  methods (`service_url` is `<origin>/v1`; the file routes are
-  `/v1/machines/{machine_id}/fs/<op>`).
+  methods (`service_url` is the complete prefix
+  `<origin>/v1/machines/{machine_id}/fs`; append `/<op>` only).
 - Not changed: the `/api/v1/daemon/*` session-context routes and the
   `daemon` symbol names (a later release).
 

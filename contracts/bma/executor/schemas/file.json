@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.bma.beeos.ai/schemas/file.json",
   "title": "BMA executor bma-file types",
-  "description": "fs.mount and fs.unmount (machine-scoped executors with the fs capability). bma-file HTTP routes live on the executor host at <service_url>/machines/{machine_id}/fs/<op> (service_url ends in /v1, for example https://executor.example.com/v1; machine_id is the executor's BMA_MACHINE_ID; the previous <origin>/v1/fs/<op> stays as an alias); they are authenticated with the mount token, not executor methods.",
+  "description": "fs.mount and fs.unmount (machine-scoped executors with the fs capability). bma-file HTTP routes live under the service_url the harness sends (a complete prefix ending in /v1/machines/{machine_id}/fs, for example https://executor.example.com/v1/machines/mach_01/fs, operations at <service_url>/<op>; the executor does not compose the machine id; the previous <origin>/v1/fs/<op> stays as an alias); they are authenticated with the mount token, not executor methods.",
   "$defs": {
     "FsMount": {
       "type": "object",

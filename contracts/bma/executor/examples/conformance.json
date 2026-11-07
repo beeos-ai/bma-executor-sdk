@@ -1064,7 +1064,7 @@
         "method": "fs.mount",
         "params": {
           "session_id": "sesn_01JFS",
-          "service_url": "https://executor.example.com/v1",
+          "service_url": "https://executor.example.com/v1/machines/mach_01/fs",
           "mounts": [
             {
               "view": "uploads",
