@@ -354,6 +354,25 @@ func (w winProc) waitEnded(t *testing.T, id string) ProcessReadResult {
 	return r
 }
 
+// waitFor reads stdout until it contains want.
+func (w winProc) waitFor(t *testing.T, id, want string) {
+	t.Helper()
+	var seen strings.Builder
+	var cursor int64
+	for deadline := time.Now().Add(60 * time.Second); time.Now().Before(deadline); {
+		r := w.read(t, id, StreamStdout, cursor, 5000)
+		seen.WriteString(decodeData(t, r))
+		cursor = r.NextCursor
+		if strings.Contains(seen.String(), want) {
+			return
+		}
+		if r.EOF {
+			break
+		}
+	}
+	t.Fatalf("output never contained %q: %q", want, seen.String())
+}
+
 // TestWindowsConPTYAdvertisedAndATerminal (G3).
 func TestWindowsConPTYAdvertisedAndATerminal(t *testing.T) {
 	w := newWinProc(t, CoreOptions{}, ProcessOptions{})
@@ -393,9 +412,7 @@ func TestWindowsConPTYInputAndOutput(t *testing.T) {
 func TestWindowsConPTYInterrupt(t *testing.T) {
 	w := newWinProc(t, CoreOptions{}, ProcessOptions{})
 	ptyStart(t, w, "int", "interrupt")
-	if r := w.read(t, "int", StreamStdout, 0, 30000); !strings.Contains(decodeData(t, r), "ready") {
-		t.Fatalf("read = %+v", r)
-	}
+	w.waitFor(t, "int", "ready")
 	var state ProcessState
 	if err := w.executor.Call(winContext(t), MethodProcessInterrupt,
 		ProcessSignalParams{SessionID: w.session.ID(), ProcessID: "int"}, &state); err != nil {

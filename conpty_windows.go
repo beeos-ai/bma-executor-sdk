@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 	"unicode/utf16"
 	"unsafe"
 
@@ -37,9 +39,50 @@ const (
 type conPTY struct {
 	hpc windows.Handle
 	in  *os.File
-	out *os.File
+	out *activityFile
 
 	closeOnce sync.Once
+}
+
+// activityFile is the terminal's output pipe that remembers when it last
+// delivered bytes.
+type activityFile struct {
+	*os.File
+	last atomic.Int64 // unix nanoseconds
+}
+
+func (f *activityFile) Read(p []byte) (int, error) {
+	n, err := f.File.Read(p)
+	if n > 0 {
+		f.last.Store(time.Now().UnixNano())
+	}
+	return n, err
+}
+
+const (
+	// ptyDrainQuiet is how long the output must stay silent before a pseudo
+	// console whose process ended is closed, and ptyDrainMax bounds the wait.
+	// ConPTY renders the client's last output to the pipe asynchronously, and
+	// closing it first discards what is still pending (node-pty waits too).
+	ptyDrainQuiet = 200 * time.Millisecond
+	ptyDrainMax   = 3 * time.Second
+)
+
+// closeAfterDrain closes the pseudo console of an ended process once its
+// output went quiet.
+func (c *conPTY) closeAfterDrain() {
+	c.closeOnce.Do(func() {
+		go func() {
+			start := time.Now()
+			c.out.last.CompareAndSwap(0, start.UnixNano())
+			for time.Since(start) < ptyDrainMax &&
+				time.Since(time.Unix(0, c.out.last.Load())) < ptyDrainQuiet {
+				time.Sleep(25 * time.Millisecond)
+			}
+			windows.ClosePseudoConsole(c.hpc)
+			_ = c.in.Close()
+		}()
+	})
 }
 
 func (c *conPTY) interrupt() error {
@@ -127,7 +170,7 @@ func startConPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
 	pty := &conPTY{
 		hpc: hpc,
 		in:  os.NewFile(uintptr(inWrite), "conpty-in"),
-		out: os.NewFile(uintptr(outRead), "conpty-out"),
+		out: &activityFile{File: os.NewFile(uintptr(outRead), "conpty-out")},
 	}
 	fail := func(err error) (*process, error) {
 		pty.closeAsync()
@@ -189,7 +232,7 @@ func startConPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
 		}
 		// The terminal ends with its process: closing it lets the output
 		// reader see EOF after the last bytes.
-		pty.closeAsync()
+		pty.closeAfterDrain()
 		return tree.exitCode(code)
 	})
 	proc.stdin, proc.pty = pty.in, true

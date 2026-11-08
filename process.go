@@ -851,7 +851,7 @@ func newProcess(id string, pid int, tree *processTree, wait func() (int, string)
 	}
 }
 
-func (p *process) pump(r *os.File, pick func(*process) *stream) {
+func (p *process) pump(r io.ReadCloser, pick func(*process) *stream) {
 	defer func() { _ = r.Close() }()
 	chunk := make([]byte, 32*1024)
 	for {
