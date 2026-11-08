@@ -610,9 +610,10 @@ func (a *ACPAgent) turnFor(proc *acpProcess, sessionID string) *acpTurn {
 }
 
 // approvalID is the platform interaction id of a tool call: deterministic
-// across reconnects and restarts (ADR-0027: appr_ + 24 hex of sha256(session NUL call)).
-func approvalID(sessionID, callID string) string {
-	sum := sha256.Sum256([]byte(sessionID + "\x00" + callID))
+// across reconnects and restarts (ADR-0027: appr_ + 24 hex of sha256(session NUL turn NUL call)).
+// The turn is in it because providers may reuse call ids such as "call_0" in every turn.
+func approvalID(sessionID, turnID, callID string) string {
+	sum := sha256.Sum256([]byte(sessionID + "\x00" + turnID + "\x00" + callID))
 	return "appr_" + hex.EncodeToString(sum[:])[:24]
 }
 
@@ -714,7 +715,7 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 		case acpDecisionDeny:
 			return choose("reject_once"), nil
 		}
-		interactionID := approvalID(base.SessionID, p.ToolCall.ToolCallID)
+		interactionID := approvalID(base.SessionID, t.turn.Params().TurnID, p.ToolCall.ToolCallID)
 		a.interaction(ACPInteractionEvent{Phase: "requested", SessionID: base.SessionID, InteractionID: interactionID, ToolName: p.ToolCall.Title, ToolInput: p.ToolCall.RawInput})
 		answer, err := t.turn.RequestInteraction(ctx, InteractionRequestParams{
 			Kind: InteractionKindPermission, InteractionID: interactionID,

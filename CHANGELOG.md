@@ -9,7 +9,7 @@
   Client Protocol (bma-dsh-acp, ADR-0027): one agent process for all sessions,
   token deltas and durable messages, `agent.tool_use` / `agent.tool_result`,
   permission requests as platform interactions with the deterministic
-  `appr_` id, tools run in `Core` in the turn's working directory, a loopback
+  `appr_` id (sha256 of session, turn and call), tools run in `Core` in the turn's working directory, a loopback
   model proxy (placeholder key, running-turn and tool-catalog gate), cancel
   with a kill after `CancelGrace`, `max_tokens` as `output_limit_reached`,
   `session/load` from `executor_session_ref`. Example: `examples/local-dsh`.
@@ -85,6 +85,30 @@ supported runtimes).
   instead of being refused with `cwd must be under the executor work root`;
   other directories stay confined. Paths compare as real paths, so symlinks,
   8.3 names and drive-letter case do not matter on Windows.
+- **Go (G8):** optional computer use. `CoreOptions.ComputerUse`
+  (`ComputerUseBackend`) serves `computer_observe` / `computer_action` and
+  advertises `computer_use`; without a backend the capability is off and the
+  tools are refused as `capability_unavailable`. `NewCuaDriver` is the backend
+  on Cua Driver (MIT driver only; the AGPL perception extension and the FSL
+  space daemon are not used; telemetry is forced off): screenshots, the
+  window list and a window's accessibility tree (UIA on Windows) for
+  `computer_observe`, and click / type / key / scroll / drag for
+  `computer_action`, delivered to a named window in the background or to the
+  focused app on the desktop scope. It runs `cua-driver call` against the
+  daemon of the interactive session, so the executor itself may run in
+  session 0. A missing driver or daemon makes `NewCuaDriver` fail with
+  `ErrComputerUseUnavailable` (the capability stays off); a driver that fails
+  later is a failed tool result. Inputs follow Anthropic's computer-use tool
+  (`coordinate`, `start_coordinate`, `text`, `scroll_direction`,
+  `scroll_amount`) plus `click_count`, `button`, `pid`, `window_id`. Go only;
+  there is still no public `computer_*` tool slot in any language.
+- **Windows package:** `examples/windows-hand` is the machine executor for a
+  Windows machine (cmd.exe tool, processes, ConPTY, session files, file
+  transfers, optional Cua Driver). `packaging/windows` builds
+  `bma-windows-hand-<sha>-windows-amd64.zip` (`build.sh`, `install.ps1`
+  registers logon tasks, `uninstall.ps1`, checksums); CI keeps it as the
+  `bma-windows-hand` artifact and installs it on a runner. See
+  [docs/executor/windows.md](docs/executor/windows.md).
 - **CI:** the Go suite runs on `windows-latest`.
 
 ## 1.2.0
