@@ -70,6 +70,11 @@ function echoAgent(closed: string[]): AgentHandler {
         return
       }
       if (text === 'fail') throw new Error('model unavailable')
+      if (text === 'custom') {
+        const { toolUseId, result } = await turn.requestCustomTool('lookup', { q: 'weather' }, signal)
+        turn.emit({ type: 'agent.tool_result', tool_use_id: toolUseId, content: result.content, is_error: result.is_error })
+        return
+      }
       const messageId = turn.newEventId()
       turn.delta(messageId, 'agent.message', 0, 'thinking…')
       turn.emit({ type: 'agent.tool_use', name: 'bash', input: { command: 'ls' } })
@@ -271,6 +276,38 @@ describe('agent capability', () => {
       )
     } finally {
       client.stop()
+    }
+  })
+
+  test('agent.custom_tool_result answers the waiting call once; stale and unknown results are accepted=false', async () => {
+    const platform = new MemoryPlatform()
+    const env = await setup(platform, inProcess)
+    try {
+      const unknown = { session_id: 'as_none', tool_use_id: 'evt_x', content: [{ type: 'text' as const, text: 'x' }] }
+      assert.deepEqual(await env.executor.respondCustomToolResult(unknown), { accepted: false })
+
+      await env.executor.startTurn(turnStart('as_t', 't_t', 'custom'))
+      await waitFor(() => platform.types('as_t').includes('agent.custom_tool_use'))
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      assert.ok(!platform.types('as_t').includes('session.status_idle'), 'the turn waits for the result')
+      const use = platform.events.find((event) => event.type === 'agent.custom_tool_use')!
+      assert.deepEqual(await env.executor.respondCustomToolResult({ ...unknown, session_id: 'as_t', tool_use_id: 'evt_other' }), { accepted: false })
+      const answer = { session_id: 'as_t', tool_use_id: use.eventId, content: [{ type: 'text' as const, text: 'sunny' }], is_error: true }
+      assert.deepEqual(await env.executor.respondCustomToolResult(answer), { accepted: true })
+      assert.deepEqual(await env.executor.respondCustomToolResult(answer), { accepted: false })
+      await waitFor(() => platform.types('as_t').includes('session.status_idle'))
+      assert.deepEqual(platform.types('as_t'), ['session.status_running', 'agent.custom_tool_use', 'agent.tool_result', 'session.status_idle'])
+      assert.match(JSON.stringify(platform.events.find((event) => event.type === 'agent.tool_result')?.event), /sunny/)
+
+      // A result that arrives after the turn was canceled is stale.
+      await env.executor.startTurn(turnStart('as_t', 't_u', 'custom'))
+      await waitFor(() => platform.types('as_t').filter((type) => type === 'agent.custom_tool_use').length === 2)
+      const second = platform.events.filter((event) => event.type === 'agent.custom_tool_use')[1]!
+      assert.deepEqual(await env.executor.cancelTurn({ session_id: 'as_t', turn_id: 't_u' }), { canceled: true })
+      await waitFor(() => platform.types('as_t').filter((type) => type === 'session.status_idle').length === 2)
+      assert.deepEqual(await env.executor.respondCustomToolResult({ ...answer, tool_use_id: second.eventId }), { accepted: false })
+    } finally {
+      await env.close()
     }
   })
 })

@@ -6,7 +6,7 @@ export interface Ack {
   accepted: boolean
 }
 
-/** agent capability. Present with enabled=true when the executor runs a complete agent and accepts turn.start, turn.input, turn.cancel, session.close and interaction.response. */
+/** agent capability. Present with enabled=true when the executor runs a complete agent and accepts turn.start, turn.input, turn.cancel, session.close and interaction.response (and agent.custom_tool_result when custom_tools is true). */
 export interface AgentCapability {
   enabled: boolean
   /** Models the local agent can run. An empty list means the executor picks its own model and ignores AgentTurnConfig.model. */
@@ -23,31 +23,20 @@ export interface AgentCapability {
   turn_resume?: boolean
   /** Per-turn credentials the executor asks the platform to hand it in turn.start metadata: brain_tools (tools_mcp_url, tools_mcp_token: the session's tools endpoint) and harness_model (model_base_url, model_token: the session's model endpoint). A declaration only states what the executor can use; the platform decides by the executor's identity and hands them only to an executor registered as a platform service, never to a tenant executor. Tokens are computed for each turn.start, are valid until the turn ends, and are never stored. */
   platform_credentials?: Array<'brain_tools' | 'harness_model'>
+  /** The executor runs custom tools defined by the platform agent: it emits agent.custom_tool_use for a call to one and waits for agent.custom_tool_result. Without it the platform never sends agent.custom_tool_result and answers a user.custom_tool_result for the session with an error. */
+  custom_tools?: boolean
   harness?: AgentHarnessCapability
 }
 
-/** Stop code table: the error types an agent executor reports for a turn that ended failed, so every agent (Go ACP harness, brain hosts, local desktop agents) says the same thing for the same cause. output_limit_reached: the model reply was cut at its output-token limit (ACP stopReason max_tokens, DSH max-tokens, finish_reason length). context_too_large: the conversation does not fit the model context window even after compaction. model_stream_idle: the model stream sent no data for the idle limit (default 90 s). agent_error: any other failure of the agent. agent_unavailable: the agent process is gone or did not answer a cancel in time. agent_auth_required: the agent needs credentials it does not have. agent_protocol_error: the agent rejected the request as malformed or unsupported. A code is the type of session.error; an executor whose SDK cannot set the type yet (structured_errors false) puts it first in the message as '<code>: <detail>', and the platform reads both forms. The platform keeps the code in error.code and projects a type outside the official session.error union to unknown_error; a platform may map a code to an official type itself (context_too_large to compaction_limit_reached_error, ADR-0010). Executors report only these values; a new cause adds a value here first. */
-export type AgentErrorCode =
-  | 'output_limit_reached'
-  | 'context_too_large'
-  | 'model_stream_idle'
-  | 'agent_error'
-  | 'agent_unavailable'
-  | 'agent_auth_required'
-  | 'agent_protocol_error'
-export const AgentErrorCode = {
-  OutputLimitReached: 'output_limit_reached',
-  ContextTooLarge: 'context_too_large',
-  ModelStreamIdle: 'model_stream_idle',
-  AgentError: 'agent_error',
-  AgentUnavailable: 'agent_unavailable',
-  AgentAuthRequired: 'agent_auth_required',
-  AgentProtocolError: 'agent_protocol_error',
-} as const
+/** A custom tool the local agent is calling: a tool the user's application runs and answers (capability agent.custom_tools). Its event_id is the tool_use_id. The platform shows the session as waiting (session.status_idle with stop_reason requires_action naming the event) and delivers the user's result with agent.custom_tool_result. The turn stays open while the executor waits: the executor does not send session.status_idle for it. If its own timeout passes first, the executor ends the call with a failed agent.tool_result naming this event. */
+export interface AgentCustomToolUseEvent {
+  type: 'agent.custom_tool_use'
+  name: string
+  input: Record<string, unknown>
+}
 
 /** Typed session error. */
 export interface AgentErrorInfo {
-  /** An AgentErrorCode value; other strings are tolerated (objects accept unknown members) and projected as unknown_error. */
   type: string
   message?: string
 }
@@ -58,6 +47,7 @@ export type AgentEvent =
   | AgentThinkingEvent
   | AgentToolUseEvent
   | AgentToolResultEvent
+  | AgentCustomToolUseEvent
   | AgentMcpToolUseEvent
   | AgentMcpToolResultEvent
   | SessionStatusRunningEvent
@@ -70,6 +60,7 @@ export type AgentEventType =
   | 'agent.thinking'
   | 'agent.tool_use'
   | 'agent.tool_result'
+  | 'agent.custom_tool_use'
   | 'agent.mcp_tool_use'
   | 'agent.mcp_tool_result'
   | 'session.status_running'
@@ -80,6 +71,7 @@ export const AgentEventType = {
   AgentThinking: 'agent.thinking',
   AgentToolUse: 'agent.tool_use',
   AgentToolResult: 'agent.tool_result',
+  AgentCustomToolUse: 'agent.custom_tool_use',
   AgentMcpToolUse: 'agent.mcp_tool_use',
   AgentMcpToolResult: 'agent.mcp_tool_result',
   SessionStatusRunning: 'session.status_running',
@@ -310,6 +302,11 @@ export const ContentBlockType = {
 export interface Cursors {
   stdout: number
   stderr: number
+}
+
+/** agent.custom_tool_result result. accepted=true: the executor took the result for the call it was waiting on. accepted=false: it no longer waits (unknown tool_use_id, already answered, timed out, or canceled with its turn); the platform marks its copy stale and does not send it again. */
+export interface CustomToolResultResult {
+  accepted: boolean
 }
 
 /** v1.1 display object. v1 sent a boolean; the server accepts both. */
@@ -978,6 +975,7 @@ export type SessionEventType =
   | 'agent.message'
   | 'agent.thinking'
   | 'agent.tool_use'
+  | 'agent.custom_tool_use'
   | 'agent.mcp_tool_use'
   | 'agent.mcp_tool_result'
   | 'session.status_running'
@@ -988,6 +986,7 @@ export const SessionEventType = {
   AgentMessage: 'agent.message',
   AgentThinking: 'agent.thinking',
   AgentToolUse: 'agent.tool_use',
+  AgentCustomToolUse: 'agent.custom_tool_use',
   AgentMcpToolUse: 'agent.mcp_tool_use',
   AgentMcpToolResult: 'agent.mcp_tool_result',
   SessionStatusRunning: 'session.status_running',
@@ -1578,6 +1577,16 @@ export interface InteractionResponseParams {
   responder?: InteractionResponder
 }
 
+/** Params object of agent.custom_tool_result. */
+export interface AgentCustomToolResultParams {
+  session_id: string
+  /** The event_id of the agent.custom_tool_use this result answers. */
+  tool_use_id: string
+  content: Array<ContentBlock>
+  /** The user's application reports the call failed; the content explains why. */
+  is_error?: boolean
+}
+
 /** Params object of interaction.cancel. */
 export interface InteractionCancelParams {
   session_id: string
@@ -1624,6 +1633,7 @@ export type MethodName =
   | 'session.event_delta'
   | 'interaction.request'
   | 'interaction.response'
+  | 'agent.custom_tool_result'
   | 'interaction.cancel'
 export type ExecutorToHarnessRequestMethod =
   | 'executor.register'
@@ -1666,6 +1676,7 @@ export type HarnessToExecutorRequestMethod =
   | 'turn.cancel'
   | 'session.close'
   | 'interaction.response'
+  | 'agent.custom_tool_result'
 export type HarnessToExecutorNotificationMethod = 'executor.close'
 
 export interface MethodParamsMap {
@@ -1706,6 +1717,7 @@ export interface MethodParamsMap {
   'session.event_delta': SessionEventDeltaParams
   'interaction.request': InteractionRequestParams
   'interaction.response': InteractionResponseParams
+  'agent.custom_tool_result': AgentCustomToolResultParams
   'interaction.cancel': InteractionCancelParams
 }
 
@@ -1741,6 +1753,7 @@ export interface MethodResultMap {
   'session.close': SessionCloseResult
   'interaction.request': InteractionRequestResult
   'interaction.response': InteractionResponseResult
+  'agent.custom_tool_result': CustomToolResultResult
   'interaction.cancel': Ack
 }
 
@@ -2050,6 +2063,14 @@ export const methods: Readonly<Record<MethodName, MethodSpec>> = {
     since: 'bma.executor.v1.1',
     capability: 'agent',
     idempotentBy: 'interaction_id',
+  },
+  'agent.custom_tool_result': {
+    name: 'agent.custom_tool_result',
+    direction: 'harness-to-executor',
+    kind: 'request',
+    since: 'bma.executor.v1.1',
+    capability: 'agent',
+    idempotentBy: 'tool_use_id',
   },
   'interaction.cancel': {
     name: 'interaction.cancel',

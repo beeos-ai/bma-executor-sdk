@@ -155,6 +155,14 @@ func (a *scriptedAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}
+	if strings.Contains(text, "custom") {
+		toolUseID, result, err := turn.RequestCustomTool(ctx, "lookup", map[string]any{"q": "weather"})
+		if err != nil {
+			return err
+		}
+		_, err = turn.Emit(AgentToolResultEvent{Type: AgentEventTypeAgentToolResult, ToolUseID: toolUseID, Content: result.Content, IsError: result.IsError})
+		return err
+	}
 	messageID := turn.NewEventID()
 	turn.Delta(messageID, EventDeltaTypeAgentMessage, 0, "Working on: ")
 	turn.Delta(messageID, EventDeltaTypeAgentMessage, 0, text)
@@ -500,4 +508,80 @@ func contains(values []string, value string) bool {
 		}
 	}
 	return false
+}
+
+func TestAgentCustomToolResult(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	agent := &scriptedAgent{holding: make(chan struct{})}
+	_, executor, _, platform := startAgentPair(t, ctx, agent)
+
+	// Unknown session and unknown tool_use_id are answered accepted=false.
+	unknown := AgentCustomToolResultParams{SessionID: "sesn_none", ToolUseID: "evt_x", Content: textContent("x")}
+	if result, err := executor.RespondCustomToolResult(ctx, unknown); err != nil || result.Accepted {
+		t.Fatalf("unknown session = %+v, %v", result, err)
+	}
+	if _, err := executor.StartTurn(ctx, TurnStartParams{
+		SessionID: "sesn_c", TurnID: "turn_c", InputID: "ain_c",
+		Input: []AgentInputBlock{{Type: AgentInputBlockTypeText, Text: "custom tool"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	use := waitCustomToolUse(t, platform)
+	// The turn waits: no idle while the result is outstanding.
+	time.Sleep(100 * time.Millisecond)
+	if eventTypes(platform.snapshot())[len(platform.snapshot())-1] == AgentEventTypeSessionStatusIdle {
+		t.Fatal("turn ended while waiting for agent.custom_tool_result")
+	}
+	if result, err := executor.RespondCustomToolResult(ctx, AgentCustomToolResultParams{SessionID: "sesn_c", ToolUseID: "evt_other", Content: textContent("x")}); err != nil || result.Accepted {
+		t.Fatalf("unknown tool_use_id = %+v, %v", result, err)
+	}
+	answer := AgentCustomToolResultParams{SessionID: "sesn_c", ToolUseID: use.EventID, Content: textContent("sunny"), IsError: true}
+	if result, err := executor.RespondCustomToolResult(ctx, answer); err != nil || !result.Accepted {
+		t.Fatalf("agent.custom_tool_result = %+v, %v", result, err)
+	}
+	if result, err := executor.RespondCustomToolResult(ctx, answer); err != nil || result.Accepted {
+		t.Fatalf("duplicate must answer accepted=false: %+v, %v", result, err)
+	}
+	assertIdle(t, platform.waitIdle(t, "turn_c"), TurnOutcomeCompleted)
+	want := []string{AgentEventTypeSessionStatusRunning, AgentEventTypeAgentCustomToolUse, AgentEventTypeAgentToolResult, AgentEventTypeSessionStatusIdle}
+	if got := eventTypes(platform.snapshot()); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("events = %v, want %v", got, want)
+	}
+}
+
+func TestAgentCustomToolCanceledWithTurn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	agent := &scriptedAgent{holding: make(chan struct{})}
+	_, executor, _, platform := startAgentPair(t, ctx, agent)
+	if _, err := executor.StartTurn(ctx, TurnStartParams{
+		SessionID: "sesn_d", TurnID: "turn_d", InputID: "ain_d",
+		Input: []AgentInputBlock{{Type: AgentInputBlockTypeText, Text: "custom tool"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	useID := waitCustomToolUse(t, platform).EventID
+	if result, err := executor.CancelTurn(ctx, TurnCancelParams{SessionID: "sesn_d", TurnID: "turn_d"}); err != nil || !result.Canceled {
+		t.Fatalf("turn.cancel = %+v, %v", result, err)
+	}
+	assertIdle(t, platform.waitIdle(t, "turn_d"), TurnOutcomeCanceled)
+	if result, err := executor.RespondCustomToolResult(ctx, AgentCustomToolResultParams{SessionID: "sesn_d", ToolUseID: useID, Content: textContent("late")}); err != nil || result.Accepted {
+		t.Fatalf("result after cancel must answer accepted=false: %+v, %v", result, err)
+	}
+}
+
+func waitCustomToolUse(t *testing.T, platform *recordingPlatform) AgentEventRecord {
+	t.Helper()
+	var use AgentEventRecord
+	platform.waitFor(t, "agent.custom_tool_use", func() bool {
+		for _, e := range platform.events { // waitFor holds platform.mu
+			if e.Type == AgentEventTypeAgentCustomToolUse {
+				use = e
+				return true
+			}
+		}
+		return false
+	})
+	return use
 }
