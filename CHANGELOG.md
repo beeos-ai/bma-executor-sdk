@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Development only:** TypeScript 5.9.3 → 7.0.2 (native compiler, major upgrade of the build tool); the published API is unchanged, emitted `.d.ts` may differ in formatting.
+
 Toolchain and dependency upgrade; no API change and no change to the minimum
 supported runtimes (Go 1.25, Node.js 20, Python 3.10).
 
