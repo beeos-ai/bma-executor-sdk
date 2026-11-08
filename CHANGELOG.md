@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Contract 1.3.0 (additive, `make contract-sdk` from BMA feat/executor-agent-harnesses):**
+  `AgentCapability.harnesses[]` (every hosted agent; the single `harness` is
+  deprecated) and `AgentTurnConfig.harness` (the agent a turn runs on).
+- **Go `ACPAgent`:** an `AgentHandler` that hosts a local brain over the Agent
+  Client Protocol (bma-dsh-acp, ADR-0027): one agent process for all sessions,
+  token deltas and durable messages, `agent.tool_use` / `agent.tool_result`,
+  permission requests as platform interactions with the deterministic
+  `appr_` id (sha256 of session, turn and call), tools run in `Core` in the turn's working directory, a loopback
+  model proxy (placeholder key, running-turn and tool-catalog gate), cancel
+  with a kill after `CancelGrace`, `max_tokens` as `output_limit_reached`,
+  `session/load` from `executor_session_ref`. Example: `examples/local-dsh`.
 - **Contract sync + agent.custom_tool_result (Go/TS/Python):** `make contract-sdk` is synced to
   beeos-managed-agents main (lock `source_commit` is a clean commit). New: capability
   `agent.custom_tools`, event `agent.custom_tool_use`, request `agent.custom_tool_result`.

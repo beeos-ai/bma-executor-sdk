@@ -59,7 +59,15 @@
           "description": "The executor runs custom tools defined by the platform agent: it emits agent.custom_tool_use for a call to one and waits for agent.custom_tool_result. Without it the platform never sends agent.custom_tool_result and answers a user.custom_tool_result for the session with an error."
         },
         "harness": {
-          "$ref": "agent.json#/$defs/AgentHarnessCapability"
+          "$ref": "agent.json#/$defs/AgentHarnessCapability",
+          "description": "Deprecated: one hosted agent. Use harnesses; an executor that sets both lists this one in harnesses too."
+        },
+        "harnesses": {
+          "type": "array",
+          "items": {
+            "$ref": "agent.json#/$defs/AgentHarnessCapability"
+          },
+          "description": "Every third-party agent the executor can host, by distinct id (for example dsh and claude-code). The platform picks one per turn with AgentTurnConfig.harness; an executor declares only agents that are installed and passed their self-check."
         }
       },
       "required": [
@@ -185,6 +193,10 @@
         "system": {
           "type": "string",
           "description": "Extra system instructions from the platform agent definition."
+        },
+        "harness": {
+          "type": "string",
+          "description": "Id of the hosted agent (one of the capability harnesses[].id) the turn runs on. Omitted: the executor's only harness. An id the executor does not host answers -32012 capability_unavailable."
         }
       },
       "required": [],
