@@ -189,7 +189,7 @@ client.ServeAgent(myAgent, bmaexecutor.AgentCapability{
 
 `myAgent` implements `AgentHandler`: `OpenTurn` reports the effective configuration, `RunTurn` does the work with `turn.Emit` (durable events), `turn.Delta` (streaming previews), `turn.Inputs()` (`turn.input`) and `turn.RequestInteraction` (approvals and questions), and `CloseSession` releases the local conversation. The SDK assigns event ids and sequences, resends unacknowledged events after a reconnect, and frames every turn with `session.status_running` and a final `session.status_idle` whose `turn_outcome` is `completed`, `canceled` or `failed`.
 
-The harness side is `HarnessOptions.Agent` (`AgentPlatform`) plus `Executor.StartTurn`, `SendTurnInput`, `CancelTurn`, `CloseAgentSession` and `RespondInteraction`. The BMA platform side is in preview: bind an agent to the machine with `PUT /orgs/{orgID}/projects/{projectID}/agents/{agentID}/executor-binding`; its sessions accept text input only. See [agent capability](docs/executor/agent-capability.md#7-platform-preview).
+The harness side is `HarnessOptions.Agent` (`AgentPlatform`) plus `Executor.StartTurn`, `SendTurnInput`, `CancelTurn`, `CloseAgentSession` and `RespondInteraction`. The BMA platform side is in preview: the binding of an agent to the machine is made by the BMA team (the public `/v1` API has no route for it yet); its sessions accept text input only. See [agent capability](docs/executor/agent-capability.md#7-platform-preview).
 
 ## Examples
 

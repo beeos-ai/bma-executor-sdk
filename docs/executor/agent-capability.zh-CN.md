@@ -156,7 +156,7 @@ harness 侧（平台或测试用的模拟平台）：`HarnessOptions.Agent`（`A
 
 ## 7. 平台预览
 
-- 把 agent 绑定到其执行端提供 `agent` 能力的 machine：`PUT /orgs/{orgID}/projects/{projectID}/agents/{agentID}/executor-binding`，请求体 `{"machine_id": "..."}`（machine 须已授予该 project；同一路径 `GET` 读取绑定及执行端最近一次上报的 `capabilities.agent`）。绑定后该 agent 的会话不再由 BMA harness 运行。
+- 把 agent 绑定到其执行端提供 `agent` 能力的 machine：请 BMA 团队完成绑定（公开的 `/v1` API 目前还没有绑定路由）；machine 须已授予该 project，绑定会记录执行端最近一次上报的 `capabilities.agent`。绑定后该 agent 的会话不再由 BMA harness 运行。
 - 会话输入转为 `turn.start` / `turn.input`，取消转为 `turn.cancel`，归档转为 `session.close`；执行端离线时输入排队。
 - 执行端上报的事件入库，并经原生事件流与 facade 发布；审批与问答走 interactions API。
 - 限制：这类会话的输入只接受 `text` content block，其他类型（文件、图片）返回 `invalid_request`。

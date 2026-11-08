@@ -110,7 +110,7 @@ go run ./examples/agentexecutor
 
 示例用模拟平台演示完整生命周期：`turn.start` → 流式 `session.event_delta` 与持久 `session.event` → `interaction.request` 审批 → `interaction.response` → 结果 → `turn.input` 追加 → 断线（TCP 代理断开）后按 sequence 补报 → `turn.cancel` → `session.close`。你的实现只需提供 `AgentHandler`，见 [agent 能力](agent-capability.zh-CN.md#6-sdk-用法)。TypeScript 与 Python 对应示例：[`agent-minimal`](../../typescript/examples/agent-minimal/main.mjs)、[`agent_minimal.py`](../../python/examples/agent_minimal.py)。
 
-对接平台（预览）时，同一个程序用已绑定到该 agent 的 machine 的机器 token 连接（`PUT /orgs/{orgID}/projects/{projectID}/agents/{agentID}/executor-binding`）；客户端发送文本输入，并从平台会话事件流（SSE）订阅事件。见 [agent 能力](agent-capability.zh-CN.md#7-平台预览)。
+对接平台（预览）时，同一个程序用已绑定到该 agent 的 machine 的机器 token 连接（绑定由 BMA 团队完成；公开的 `/v1` API 目前还没有对应路由）；客户端发送文本输入，并从平台会话事件流（SSE）订阅事件。见 [agent 能力](agent-capability.zh-CN.md#7-平台预览)。
 
 ---
 
