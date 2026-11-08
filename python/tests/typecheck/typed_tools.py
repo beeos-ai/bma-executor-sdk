@@ -12,12 +12,12 @@ from bma_executor_sdk.generated import ToolResultParams
 
 def register(client: ExecutorClient) -> None:
     @client.tools.bash.handler
-    async def bash(input: BashInput, ctx: ToolContext) -> BashResult:  # pyright: ignore[reportUnusedFunction]
+    async def bash(input: BashInput, ctx: ToolContext) -> BashResult:
         assert_type(input["command"], str)
         return BashResult(stdout="", stderr="", exit_code=0)
 
     @client.tools.read.handler
-    async def read(input: ReadInput, ctx: ToolContext) -> str:  # pyright: ignore[reportUnusedFunction]
+    async def read(input: ReadInput, ctx: ToolContext) -> str:
         return input["path"]
 
     async def wrong(input: BashInput, ctx: ToolContext) -> str:

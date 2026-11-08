@@ -31,7 +31,7 @@
     "ws": "8.22.1"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.6.6",
     "expect-type": "1.4.0",
     "typescript": "5.9.3"
   }
