@@ -1,22 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- **Development only:** TypeScript 5.9.3 → 7.0.2 (native compiler, major upgrade of the build tool); the published API is unchanged, emitted `.d.ts` may differ in formatting.
-
-Toolchain and dependency upgrade; no API change and no change to the minimum
-supported runtimes (Go 1.25, Node.js 20, Python 3.10).
-
-- **Go:** `golang.org/x/sys` v0.10.0 → v0.47.0, the newest release that still
-  builds with Go 1.25. `go-winio` stays at v0.6.2: v0.6.3 and later need
-  Go 1.26.
-- **CI:** matrix of the oldest supported runtimes (Go 1.25, Node 20,
-  Python 3.10), Go 1.26 / Node 24 / Python 3.13, and Go 1.27 / Node 26 /
-  Python 3.14; the release job publishes npm with Node 26. GitHub Actions are
-  pinned by commit SHA at their latest stable release.
-- **Development only:** `@types/node` 22 → 26, pyright 1.1.407 → 1.1.414,
-  pytest >= 9, pytest-asyncio >= 1.4.
-
 ## 1.2.0
 
 Additive; no breaking change ([MIGRATION](MIGRATION.md#120)). Contract 1.2.0
@@ -43,6 +26,23 @@ Additive; no breaking change ([MIGRATION](MIGRATION.md#120)). Contract 1.2.0
   `<origin>/v1/machines/{machine_id}/fs`; append `/<op>` only).
 - Not changed: the `/api/v1/daemon/*` session-context routes and the
   `daemon` symbol names (a later release).
+
+### Toolchain (no API change)
+
+- **Development only:** TypeScript 5.9.3 → 7.0.2 (native compiler, major upgrade of the build tool); the published API is unchanged, emitted `.d.ts` may differ in formatting.
+
+Toolchain and dependency upgrade; no API change and no change to the minimum
+supported runtimes (Go 1.25, Node.js 20, Python 3.10).
+
+- **Go:** `golang.org/x/sys` v0.10.0 → v0.47.0, the newest release that still
+  builds with Go 1.25. `go-winio` stays at v0.6.2: v0.6.3 and later need
+  Go 1.26.
+- **CI:** matrix of the oldest supported runtimes (Go 1.25, Node 20,
+  Python 3.10), Go 1.26 / Node 24 / Python 3.13, and Go 1.27 / Node 26 /
+  Python 3.14; the release job publishes npm with Node 26. GitHub Actions are
+  pinned by commit SHA at their latest stable release.
+- **Development only:** `@types/node` 22 → 26, pyright 1.1.407 → 1.1.414,
+  pytest >= 9, pytest-asyncio >= 1.4.
 
 ## 1.1.0
 
