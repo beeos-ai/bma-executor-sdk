@@ -110,7 +110,7 @@ go run ./examples/agentexecutor
 
 A simulated platform walks the whole lifecycle: `turn.start` → streamed `session.event_delta` and durable `session.event` → `interaction.request` → `interaction.response` → result → `turn.input` → resend by sequence after a dropped connection → `turn.cancel` → `session.close`. You implement `AgentHandler`, see [agent capability](agent-capability.md#6-sdk-usage). TypeScript and Python equivalents: [`agent-minimal`](../../typescript/examples/agent-minimal/main.mjs), [`agent_minimal.py`](../../python/examples/agent_minimal.py).
 
-Against the platform (preview), the same program connects with the machine token of a machine bound to the agent (`PUT /orgs/{orgID}/projects/{projectID}/agents/{agentID}/executor-binding`); clients send text input and subscribe to the platform session event stream (SSE). See [agent capability](agent-capability.md#7-platform-preview).
+Against the platform (preview), the same program connects with the machine token of a machine bound to the agent (the BMA team makes the binding; the public `/v1` API has no route for it yet); clients send text input and subscribe to the platform session event stream (SSE). See [agent capability](agent-capability.md#7-platform-preview).
 
 ---
 

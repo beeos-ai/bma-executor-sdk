@@ -151,7 +151,7 @@ Full flow: `go run ./examples/agentexecutor` ([source](../../examples/agentexecu
 
 ## 7. Platform preview
 
-- Bind an agent to a machine whose executor serves the `agent` capability: `PUT /orgs/{orgID}/projects/{projectID}/agents/{agentID}/executor-binding` with `{"machine_id": "..."}` (the machine must be granted to the project; `GET` on the same path reads the binding and the executor's latest `capabilities.agent`). The BMA harness then no longer runs that agent's sessions.
+- Bind an agent to a machine whose executor serves the `agent` capability: ask the BMA team to bind it (the public `/v1` API has no route for the binding yet); the machine must be granted to the project, and the binding records the executor's latest `capabilities.agent`. The BMA harness then no longer runs that agent's sessions.
 - Session input becomes `turn.start` / `turn.input`, session cancel `turn.cancel`, and archiving `session.close`; input queues while the executor is offline.
 - Events the executor reports are stored and published on the native event stream and through the facade; approvals and questions go through the interactions API.
 - Limit: input to these sessions accepts `text` content blocks only; other block types (files, images) are rejected with `invalid_request`.
