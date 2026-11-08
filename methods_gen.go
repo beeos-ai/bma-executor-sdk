@@ -5,33 +5,35 @@ package bmaexecutor
 // Requests are the harness-to-executor requests a client serves:
 // Requests.ProcessStart.Handle(client, fn).
 var Requests = struct {
-	ProcessStart     RequestMethod[ProcessStartParams, ProcessState]
-	ProcessRead      RequestMethod[ProcessReadParams, ProcessReadResult]
-	ProcessWrite     RequestMethod[ProcessWriteParams, ProcessWriteResult]
-	ProcessInterrupt RequestMethod[ProcessSignalParams, ProcessState]
-	ProcessTerminate RequestMethod[ProcessSignalParams, ProcessState]
-	ProcessList      RequestMethod[ProcessListParams, ProcessListResult]
-	TerminalOpen     RequestMethod[TerminalOpenParams, TerminalOpenResult]
-	TerminalAttach   RequestMethod[TerminalAttachParams, TerminalAttachResult]
-	TerminalClose    RequestMethod[TerminalCloseParams, TerminalCloseResult]
-	SkillInstall     RequestMethod[SkillInstallParams, SkillInstallResult]
-	WorkspaceBackup  RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]
-	FsMount          RequestMethod[FsMountParams, FsMountResult]
-	FsUnmount        RequestMethod[FsUnmountParams, FsUnmountResult]
+	ProcessStart          RequestMethod[ProcessStartParams, ProcessState]
+	ProcessRead           RequestMethod[ProcessReadParams, ProcessReadResult]
+	ProcessWrite          RequestMethod[ProcessWriteParams, ProcessWriteResult]
+	ProcessInterrupt      RequestMethod[ProcessSignalParams, ProcessState]
+	ProcessTerminate      RequestMethod[ProcessSignalParams, ProcessState]
+	ProcessList           RequestMethod[ProcessListParams, ProcessListResult]
+	TerminalOpen          RequestMethod[TerminalOpenParams, TerminalOpenResult]
+	TerminalAttach        RequestMethod[TerminalAttachParams, TerminalAttachResult]
+	TerminalClose         RequestMethod[TerminalCloseParams, TerminalCloseResult]
+	SkillInstall          RequestMethod[SkillInstallParams, SkillInstallResult]
+	WorkspaceBackup       RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]
+	FsMount               RequestMethod[FsMountParams, FsMountResult]
+	FsUnmount             RequestMethod[FsUnmountParams, FsUnmountResult]
+	AgentCustomToolResult RequestMethod[AgentCustomToolResultParams, CustomToolResultResult]
 }{
-	ProcessStart:     RequestMethod[ProcessStartParams, ProcessState]{Method: "process.start"},
-	ProcessRead:      RequestMethod[ProcessReadParams, ProcessReadResult]{Method: "process.read"},
-	ProcessWrite:     RequestMethod[ProcessWriteParams, ProcessWriteResult]{Method: "process.write"},
-	ProcessInterrupt: RequestMethod[ProcessSignalParams, ProcessState]{Method: "process.interrupt"},
-	ProcessTerminate: RequestMethod[ProcessSignalParams, ProcessState]{Method: "process.terminate"},
-	ProcessList:      RequestMethod[ProcessListParams, ProcessListResult]{Method: "process.list"},
-	TerminalOpen:     RequestMethod[TerminalOpenParams, TerminalOpenResult]{Method: "terminal.open"},
-	TerminalAttach:   RequestMethod[TerminalAttachParams, TerminalAttachResult]{Method: "terminal.attach"},
-	TerminalClose:    RequestMethod[TerminalCloseParams, TerminalCloseResult]{Method: "terminal.close"},
-	SkillInstall:     RequestMethod[SkillInstallParams, SkillInstallResult]{Method: "skill.install"},
-	WorkspaceBackup:  RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]{Method: "workspace.backup"},
-	FsMount:          RequestMethod[FsMountParams, FsMountResult]{Method: "fs.mount"},
-	FsUnmount:        RequestMethod[FsUnmountParams, FsUnmountResult]{Method: "fs.unmount"},
+	ProcessStart:          RequestMethod[ProcessStartParams, ProcessState]{Method: "process.start"},
+	ProcessRead:           RequestMethod[ProcessReadParams, ProcessReadResult]{Method: "process.read"},
+	ProcessWrite:          RequestMethod[ProcessWriteParams, ProcessWriteResult]{Method: "process.write"},
+	ProcessInterrupt:      RequestMethod[ProcessSignalParams, ProcessState]{Method: "process.interrupt"},
+	ProcessTerminate:      RequestMethod[ProcessSignalParams, ProcessState]{Method: "process.terminate"},
+	ProcessList:           RequestMethod[ProcessListParams, ProcessListResult]{Method: "process.list"},
+	TerminalOpen:          RequestMethod[TerminalOpenParams, TerminalOpenResult]{Method: "terminal.open"},
+	TerminalAttach:        RequestMethod[TerminalAttachParams, TerminalAttachResult]{Method: "terminal.attach"},
+	TerminalClose:         RequestMethod[TerminalCloseParams, TerminalCloseResult]{Method: "terminal.close"},
+	SkillInstall:          RequestMethod[SkillInstallParams, SkillInstallResult]{Method: "skill.install"},
+	WorkspaceBackup:       RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]{Method: "workspace.backup"},
+	FsMount:               RequestMethod[FsMountParams, FsMountResult]{Method: "fs.mount"},
+	FsUnmount:             RequestMethod[FsUnmountParams, FsUnmountResult]{Method: "fs.unmount"},
+	AgentCustomToolResult: RequestMethod[AgentCustomToolResultParams, CustomToolResultResult]{Method: "agent.custom_tool_result"},
 }
 
 // Calls are the executor-to-harness requests a client sends:
