@@ -67,7 +67,7 @@ func (l *agentLedger) lock(sessionID string) *sync.Mutex {
 
 var agentEventTypes = map[string]bool{
 	AgentEventTypeAgentMessage: true, AgentEventTypeAgentThinking: true, AgentEventTypeAgentToolUse: true,
-	AgentEventTypeAgentToolResult: true, AgentEventTypeAgentMcpToolUse: true, AgentEventTypeAgentMcpToolResult: true,
+	AgentEventTypeAgentToolResult: true, AgentEventTypeAgentMcpToolUse: true, AgentEventTypeAgentMcpToolResult: true, AgentEventTypeAgentCustomToolUse: true,
 	AgentEventTypeSessionStatusRunning: true, AgentEventTypeSessionStatusIdle: true, AgentEventTypeSessionError: true,
 }
 

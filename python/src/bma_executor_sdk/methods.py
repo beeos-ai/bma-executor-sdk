@@ -7,6 +7,8 @@ from __future__ import annotations
 from ._methods import Call, Notification, Request
 from .generated import (
     Ack,
+    AgentCustomToolResultParams,
+    CustomToolResultResult,
     ExecutorCapabilitiesUpdateParams,
     FsMountParams,
     FsMountResult,
@@ -59,6 +61,7 @@ __all__ = [
     "WORKSPACE_BACKUP",
     "FS_MOUNT",
     "FS_UNMOUNT",
+    "AGENT_CUSTOM_TOOL_RESULT",
     "SESSION_READY",
     "SESSION_EVENT",
     "SESSION_ENDED",
@@ -86,6 +89,7 @@ SKILL_INSTALL: Request[SkillInstallParams, SkillInstallResult] = Request("skill.
 WORKSPACE_BACKUP: Request[WorkspaceBackupParams, WorkspaceBackupResult] = Request("workspace.backup")
 FS_MOUNT: Request[FsMountParams, FsMountResult] = Request("fs.mount")
 FS_UNMOUNT: Request[FsUnmountParams, FsUnmountResult] = Request("fs.unmount")
+AGENT_CUSTOM_TOOL_RESULT: Request[AgentCustomToolResultParams, CustomToolResultResult] = Request("agent.custom_tool_result")
 
 # Executor-to-harness requests a client sends with call.
 SESSION_READY: Call[SessionReadyParams, Ack] = Call("session.ready")

@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 1.2.0
+  version: 1.3.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -1637,6 +1637,56 @@ methods:
       name: InteractionResponseResult
       schema:
         $ref: schemas/agent.json#/$defs/InteractionResponseResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/InternalError"
+  - name: agent.custom_tool_result
+    summary: Deliver the user's result of a custom tool call.
+    description: >-
+      Harness to executor request (capability agent; sent only to an executor that declared
+      agent.custom_tools). The executor emitted agent.custom_tool_use (its event_id is the
+      tool_use_id) and waits; the platform sends the result the user's application submitted with
+      user.custom_tool_result. Only the first result of a call counts: the platform accepts one
+      per tool_use_id and the executor answers a repeat, an unknown tool_use_id or a call it no
+      longer waits for with accepted=false. Idempotent by tool_use_id: the platform retries the
+      same result until the executor answers, also on a new connection. Timeout: the executor
+      owns the wait. When its own limit passes it ends the call with a failed agent.tool_result
+      (tool_use_id of the call, is_error true), continues the turn, and answers a later result
+      with accepted=false; the platform stops accepting results for that call. Cancel: turn.cancel ends the waiting call as canceled with the turn, and the
+      platform drops results it has not delivered yet for a turn that ended.
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    x-bma-idempotent-by: tool_use_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: tool_use_id
+        required: true
+        description: The event_id of the agent.custom_tool_use this result answers.
+        schema:
+          type: string
+      - name: content
+        required: true
+        schema:
+          type: array
+          items:
+            $ref: schemas/tool.json#/$defs/ContentBlock
+      - name: is_error
+        required: false
+        description: The user's application reports the call failed; the content explains why.
+        schema:
+          type: boolean
+    result:
+      name: CustomToolResultResult
+      schema:
+        $ref: schemas/agent.json#/$defs/CustomToolResultResult
     errors:
       - $ref: "#/components/errors/InvalidParams"
       - $ref: "#/components/errors/InternalError"
