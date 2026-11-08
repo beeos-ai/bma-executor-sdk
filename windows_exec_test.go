@@ -5,9 +5,14 @@ package bmaexecutor
 import (
 	"context"
 	"encoding/base64"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // winContext allows for a cold PowerShell start on a CI runner.
@@ -123,4 +128,204 @@ func TestWindowsProcessStartCmdLineVerbatim(t *testing.T) {
 	if out := w.output(t, "ps"); !strings.Contains(out, "v=7") {
 		t.Fatalf("output = %q", out)
 	}
+}
+
+// helperEnv makes the test binary run as the helper command (see runTestHelper).
+func helperEnv(mode string, extra ...string) map[string]string {
+	env := map[string]string{"BMA_TEST_HELPER": mode}
+	for i := 0; i+1 < len(extra); i += 2 {
+		env[extra[i]] = extra[i+1]
+	}
+	return env
+}
+
+// grandchildPID waits for the helper to publish its grandchild's pid.
+func grandchildPID(t *testing.T, pidfile string) uint32 {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if raw, err := os.ReadFile(pidfile); err == nil {
+			pid, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 32)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return uint32(pid)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("helper did not publish its grandchild pid")
+	return 0
+}
+
+func winProcessAlive(pid uint32) bool {
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.SYNCHRONIZE, false, pid)
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(handle)
+	event, _ := windows.WaitForSingleObject(handle, 0)
+	return event == uint32(windows.WAIT_TIMEOUT)
+}
+
+func requireDead(t *testing.T, pid uint32) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if !winProcessAlive(pid) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("process %d is still running", pid)
+}
+
+func testExecutable(t *testing.T) string {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return exe
+}
+
+// TestWindowsTerminateEndsTheProcessTree (G4).
+func TestWindowsTerminateEndsTheProcessTree(t *testing.T) {
+	w := newWinProc(t, CoreOptions{}, ProcessOptions{})
+	pidfile := filepath.Join(t.TempDir(), "child.pid")
+	_, err := w.start(t, ProcessStartParams{
+		ProcessID: "tree", Argv: []string{testExecutable(t)}, Stdin: StdinClosed, Env: helperEnv("tree", "BMA_TEST_PIDFILE", pidfile),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := grandchildPID(t, pidfile)
+	if !winProcessAlive(child) {
+		t.Fatalf("grandchild %d is not running", child)
+	}
+	var state ProcessState
+	if err := w.executor.Call(winContext(t), MethodProcessTerminate,
+		ProcessSignalParams{SessionID: w.session.ID(), ProcessID: "tree", GraceMS: ptr(int64(0))}, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.State != ProcessKilled || state.ExitSignal == nil || *state.ExitSignal != "SIGKILL" {
+		t.Fatalf("terminate = %+v", state)
+	}
+	requireDead(t, child)
+}
+
+// TestWindowsTimeoutEndsTheProcessTree (G4).
+func TestWindowsTimeoutEndsTheProcessTree(t *testing.T) {
+	w := newWinProc(t, CoreOptions{}, ProcessOptions{})
+	pidfile := filepath.Join(t.TempDir(), "child.pid")
+	if _, err := w.start(t, ProcessStartParams{
+		ProcessID: "slow", Argv: []string{testExecutable(t)}, Stdin: StdinClosed, TimeoutMS: 1500,
+		Env: helperEnv("tree", "BMA_TEST_PIDFILE", pidfile),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	child := grandchildPID(t, pidfile)
+	r := w.read(t, "slow", StreamStdout, 0, 30000)
+	if r.State != ProcessFailed || r.Reason != "timeout" {
+		t.Fatalf("read = %+v", r)
+	}
+	requireDead(t, child)
+}
+
+// TestWindowsSessionEndEndsLeftoverProcesses (G4): a process that exited and
+// left a child behind does not outlive its session.
+func TestWindowsSessionEndEndsLeftoverProcesses(t *testing.T) {
+	w := newWinProc(t, CoreOptions{}, ProcessOptions{})
+	pidfile := filepath.Join(t.TempDir(), "child.pid")
+	if _, err := w.start(t, ProcessStartParams{
+		ProcessID: "orphan", Argv: []string{testExecutable(t)}, Stdin: StdinClosed, WaitMS: 30000,
+		Env: helperEnv("orphan", "BMA_TEST_PIDFILE", pidfile),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	child := grandchildPID(t, pidfile)
+	if !winProcessAlive(child) {
+		t.Fatalf("leftover child %d is not running", child)
+	}
+	if err := w.session.Stop(winContext(t), "done"); err != nil {
+		t.Fatal(err)
+	}
+	requireDead(t, child)
+}
+
+// TestWindowsBashTimeoutEndsTheProcessTree (G4): the bash tool's timeout ends
+// the command's descendants, not only cmd.exe.
+func TestWindowsBashTimeoutEndsTheProcessTree(t *testing.T) {
+	core := newTestCore(t, CoreOptions{})
+	session := readySession(t, attachBrain(t, core, "local"), SessionAssignParams{SessionID: "sess_bash", Lease: Lease{Token: "lease"}})
+	pidfile := filepath.Join(t.TempDir(), "child.pid")
+	result, err := session.CallTool(winContext(t), ToolCallParams{Tool: ToolNameBash, Input: NewToolInput(ToolInput{
+		Command: `"` + testExecutable(t) + `"`, TimeoutMS: 3000,
+		Env: helperEnv("tree", "BMA_TEST_PIDFILE", pidfile),
+	})})
+	if err != nil || !result.IsError {
+		t.Fatalf("bash = %q err %v", textOf(result), err)
+	}
+	requireDead(t, grandchildPID(t, pidfile))
+}
+
+// TestWindowsInterruptReachesTheProcess (G5): process.interrupt is a console
+// CTRL_BREAK that the process handles (the executor has no console of its own
+// under a service or a CI runner; it creates a hidden one).
+func TestWindowsInterruptReachesTheProcess(t *testing.T) {
+	w := newWinProc(t, CoreOptions{}, ProcessOptions{})
+	if _, err := w.start(t, ProcessStartParams{
+		ProcessID: "int", Argv: []string{testExecutable(t)}, Stdin: StdinClosed, Env: helperEnv("interrupt"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The helper installs its handler before printing "ready".
+	if r := w.read(t, "int", StreamStdout, 0, 30000); !strings.Contains(decodeData(t, r), "ready") {
+		t.Fatalf("read = %+v", r)
+	}
+	var state ProcessState
+	if err := w.executor.Call(winContext(t), MethodProcessInterrupt,
+		ProcessSignalParams{SessionID: w.session.ID(), ProcessID: "int"}, &state); err != nil {
+		t.Fatal(err)
+	}
+	final := w.read(t, "int", StreamStdout, 0, 30000)
+	for final.State == ProcessRunning {
+		final = w.read(t, "int", StreamStdout, final.NextCursor, 30000)
+	}
+	if final.State != ProcessExited || final.ExitCode == nil || *final.ExitCode != 0 {
+		t.Fatalf("after interrupt: %+v", final)
+	}
+	if out := w.output(t, "int"); !strings.Contains(out, "interrupted") {
+		t.Fatalf("output = %q", out)
+	}
+}
+
+// TestWindowsTerminateIsGraceful (G5): terminate asks first (CTRL_BREAK), so a
+// process that handles it exits by itself within the grace period.
+func TestWindowsTerminateIsGraceful(t *testing.T) {
+	w := newWinProc(t, CoreOptions{}, ProcessOptions{})
+	if _, err := w.start(t, ProcessStartParams{
+		ProcessID: "term", Argv: []string{testExecutable(t)}, Stdin: StdinClosed, Env: helperEnv("interrupt"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if r := w.read(t, "term", StreamStdout, 0, 30000); !strings.Contains(decodeData(t, r), "ready") {
+		t.Fatalf("read = %+v", r)
+	}
+	var state ProcessState
+	if err := w.executor.Call(winContext(t), MethodProcessTerminate,
+		ProcessSignalParams{SessionID: w.session.ID(), ProcessID: "term", GraceMS: ptr(int64(20000))}, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.State != ProcessExited || state.ExitCode == nil || *state.ExitCode != 0 {
+		t.Fatalf("terminate = %+v", state)
+	}
+}
+
+func decodeData(t *testing.T, r ProcessReadResult) string {
+	t.Helper()
+	raw, err := base64.StdEncoding.DecodeString(r.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
 }

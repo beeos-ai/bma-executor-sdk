@@ -43,6 +43,33 @@ func setProcessGroupID(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
+// processTree is the process group of one started command.
+type processTree struct{ process *os.Process }
+
+// startCommand starts cmd (already in its own process group, see
+// setProcessGroup/setProcessGroupID).
+func startCommand(cmd *exec.Cmd) (*processTree, error) {
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return &processTree{process: cmd.Process}, nil
+}
+
+func (t *processTree) signal(sig processSignal) error { return signalGroup(t.process, sig) }
+
+func (t *processTree) exit(state *os.ProcessState) (int, string) { return exitStatus(state) }
+
+// killAll is a no-op: a group's leftovers outlive an ended command, as they
+// always did on POSIX.
+func (t *processTree) killAll() {}
+
+// close is a no-op: context cancellation already killed the group, and the
+// group id may be recycled once its leader was reaped.
+func (t *processTree) close() {}
+
+// release leaves the group's remaining processes running.
+func (t *processTree) release() {}
+
 // setCommandLine is a Windows concern (cmd.exe quoting).
 func setCommandLine(*exec.Cmd) {}
 

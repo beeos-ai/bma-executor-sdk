@@ -15,6 +15,15 @@ supported runtimes).
   process.start argv of `cmd.exe /d /s /c <command>`) is started with the
   command line verbatim (`SysProcAttr.CmdLine`, with `/s`), so quotes and `$`
   in a PowerShell `-Command` survive.
+- **Go, Windows (G4):** every bash tool, process and stdio MCP server runs in
+  its own Job Object (`KILL_ON_JOB_CLOSE`; created suspended, assigned, then
+  resumed). Cancellation, a timeout, `process.terminate` and the end of the
+  session end the whole process tree, including children a process left
+  behind after it exited.
+- **Go, Windows (G5):** `process.interrupt` sends a console `CTRL_BREAK` to the
+  command's process group (the executor creates a hidden console when it has
+  none); `process.terminate` asks the same way and kills the tree after
+  `grace_ms`. Exits are reported as `exit_signal` `SIGINT`/`SIGTERM`/`SIGKILL`.
 - **CI:** the Go suite runs on `windows-latest`.
 
 ## 1.2.0

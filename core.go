@@ -927,7 +927,7 @@ func (c *Core) runShell(ctx context.Context, session *CoreSession, input ToolInp
 	stdout := &cappedBuffer{limit: c.opts.MaxOutputBytes}
 	stderr := &cappedBuffer{limit: c.opts.MaxOutputBytes}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	runErr := cmd.Run()
+	runErr := runCommand(cmd)
 	execution := shellExecution{
 		Stdout: stdout.buf.String(), Stderr: stderr.buf.String(), Truncated: stdout.truncated || stderr.truncated,
 	}
@@ -942,6 +942,18 @@ func (c *Core) runShell(ctx context.Context, session *CoreSession, input ToolInp
 		return execution, fmt.Errorf("spawn bash: %w", runErr)
 	}
 	return execution, nil
+}
+
+// runCommand runs cmd to completion in its own process tree. What the
+// command left running is not ended, as a POSIX process group's orphans are
+// not.
+func runCommand(cmd *exec.Cmd) error {
+	tree, err := startCommand(cmd)
+	if err != nil {
+		return err
+	}
+	defer tree.release()
+	return cmd.Wait()
 }
 
 // bashResult returns stdout, stderr and exit_code blocks inline. When they do
@@ -1314,12 +1326,14 @@ func (c *Core) runMCPOnce(client *Client, session *CoreSession, server MCPServer
 	}
 	stderr := &cappedBuffer{limit: 8 * 1024}
 	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
+	tree, err := startCommand(cmd)
+	if err != nil {
 		return err
 	}
 	defer func() {
 		cancel()
 		_ = cmd.Wait()
+		tree.close()
 		if stderr.buf.Len() > 0 {
 			c.log(LogDebug, "mcp server "+server.ServerKey+" stderr: "+stderr.String(), nil)
 		}
