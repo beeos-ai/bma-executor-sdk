@@ -113,6 +113,24 @@ type ACPAgentOptions struct {
 	CancelGrace  time.Duration
 	KillGrace    time.Duration
 	OnLog        func(LogEvent)
+	// OnInteraction, when set, is told when an approval is asked of the
+	// platform and when it ends (answered on any client, expired or
+	// withdrawn), so a local UI can show the same card under the same id and
+	// drop it when it is settled elsewhere. It is a view only: the answer
+	// still comes from the platform. It must not block.
+	OnInteraction func(ACPInteractionEvent)
+}
+
+// ACPInteractionEvent is one step of a platform interaction asked by the local agent.
+type ACPInteractionEvent struct {
+	// Phase is "requested" or "ended".
+	Phase         string
+	SessionID     string
+	InteractionID string
+	ToolName      string
+	// Outcome is the platform answer when Phase is "ended" (allow, deny,
+	// expired, canceled), or "withdrawn" when the turn ended first.
+	Outcome string
 }
 
 // ACPAgent hosts an ACP agent process; see the comment at the top of agent_acp.go.
@@ -239,6 +257,12 @@ func (a *ACPAgent) Close() error {
 	}
 	a.proxy.close()
 	return nil
+}
+
+func (a *ACPAgent) interaction(e ACPInteractionEvent) {
+	if a.opts.OnInteraction != nil {
+		a.opts.OnInteraction(e)
+	}
 }
 
 func (a *ACPAgent) log(level LogLevel, message string, err error) {
@@ -632,10 +656,17 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 			return cancelled
 		}
 		toolUseID := t.toolUse(p.ToolCall.ToolCallID, p.ToolCall.Title, p.ToolCall.RawInput, "ask")
+		interactionID := approvalID(base.SessionID, p.ToolCall.ToolCallID)
+		a.interaction(ACPInteractionEvent{Phase: "requested", SessionID: base.SessionID, InteractionID: interactionID, ToolName: p.ToolCall.Title})
 		answer, err := t.turn.RequestInteraction(ctx, InteractionRequestParams{
-			Kind: InteractionKindPermission, InteractionID: approvalID(base.SessionID, p.ToolCall.ToolCallID),
+			Kind: InteractionKindPermission, InteractionID: interactionID,
 			ToolUseID: toolUseID, ToolName: p.ToolCall.Title, ToolInput: p.ToolCall.RawInput, Scopes: []string{InteractionScopeOnce},
 		})
+		outcome := string(answer.Outcome)
+		if err != nil {
+			outcome = "withdrawn"
+		}
+		a.interaction(ACPInteractionEvent{Phase: "ended", SessionID: base.SessionID, InteractionID: interactionID, ToolName: p.ToolCall.Title, Outcome: outcome})
 		switch {
 		case err != nil:
 			return cancelled, nil

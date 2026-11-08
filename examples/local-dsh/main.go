@@ -9,10 +9,17 @@
 // Events, approvals, cancel and turn ends go through BMA; the model is the
 // node owner's endpoint (-model-base-url with BMA_LOCAL_MODEL_KEY), or the
 // platform's per-turn model endpoint when turn.start carries one.
+//
+// Output is one JSON object per line on stderr (a supervisor such as a desktop
+// app reads it): "executor registered" with executor_id, connection log lines,
+// and "interaction requested" / "interaction ended" with the platform
+// interaction id, so a local UI can show the same approval card as every other
+// client of the session and drop it when it is answered anywhere.
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -23,6 +30,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	bmaexecutor "github.com/beeos-ai/bma-executor-sdk"
 )
@@ -49,13 +57,23 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	logf := func(e bmaexecutor.LogEvent) { log.Printf("%v %s %v", e.Level, e.Message, e.Err) }
+	logf := func(e bmaexecutor.LogEvent) {
+		line := map[string]any{"level": e.Level, "msg": e.Message}
+		if e.Err != nil {
+			line["error"] = e.Err.Error()
+		}
+		emit(line)
+	}
+	onInteraction := func(e bmaexecutor.ACPInteractionEvent) {
+		emit(map[string]any{"level": "info", "msg": "interaction " + e.Phase, "interaction_id": e.InteractionID,
+			"session_id": e.SessionID, "tool_name": e.ToolName, "outcome": e.Outcome})
+	}
 
 	core, err := bmaexecutor.NewCore(bmaexecutor.CoreOptions{WorkRoot: *workRoot, OnLog: logf})
 	check(err)
 	defer core.Close()
 	brain, err := bmaexecutor.NewACPAgent(ctx, bmaexecutor.ACPAgentOptions{
-		Command: command, StateDir: *state, Core: core, OnLog: logf,
+		Command: command, StateDir: *state, Core: core, OnLog: logf, OnInteraction: onInteraction,
 		Upstream: bmaexecutor.ACPModelUpstream{BaseURL: *modelBase, Model: *model,
 			Header: func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+key) }},
 	})
@@ -73,13 +91,21 @@ func main() {
 	check(core.Attach("cloud", client))
 	registered, err := client.Start(ctx)
 	check(err)
-	fmt.Printf("registered %s; harness %s %s\n", registered.ExecutorID, capability.Harnesses[0].ID, capability.Harnesses[0].Version)
+	emit(map[string]any{"level": "info", "msg": "executor registered", "executor_id": registered.ExecutorID,
+		"harness": capability.Harnesses[0].ID, "harness_version": capability.Harnesses[0].Version})
 	select {
 	case <-ctx.Done():
 	case <-client.Done():
-		log.Printf("connection ended: %v", client.Err())
+		emit(map[string]any{"level": "error", "msg": "connection ended", "error": fmt.Sprint(client.Err())})
 	}
 	_ = client.Stop(context.Background(), "shutdown")
+}
+
+var out = json.NewEncoder(os.Stderr)
+
+func emit(line map[string]any) {
+	line["time"] = time.Now().UTC().Format(time.RFC3339Nano)
+	_ = out.Encode(line)
 }
 
 func check(err error) {

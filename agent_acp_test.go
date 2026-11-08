@@ -816,3 +816,40 @@ func TestACPAgentWithBmaDshAcp(t *testing.T) {
 		t.Fatal("no token deltas reached the platform")
 	}
 }
+
+func TestACPAgentOnInteractionReportsTheSameApproval(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var mu sync.Mutex
+	var seen []ACPInteractionEvent
+	got := func() []ACPInteractionEvent {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]ACPInteractionEvent(nil), seen...)
+	}
+	f := startACPFixture(t, ctx, ACPAgentOptions{OnInteraction: func(e ACPInteractionEvent) { mu.Lock(); seen = append(seen, e); mu.Unlock() }})
+	f.start(t, ctx, "sesn_o", "turn_1", "run")
+	f.platform.waitFor(t, "permission", func() bool { return len(f.platform.interactions) == 1 })
+	id := f.platform.interactions[0].InteractionID
+	if e := got(); len(e) != 1 || e[0] != (ACPInteractionEvent{Phase: "requested", SessionID: "sesn_o", InteractionID: id, ToolName: "bash"}) {
+		t.Fatalf("requested = %+v, platform id %s", e, id)
+	}
+	if _, err := f.executor.RespondInteraction(ctx, InteractionResponseParams{SessionID: "sesn_o", InteractionID: id, Outcome: InteractionOutcomeAllow}); err != nil {
+		t.Fatal(err)
+	}
+	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
+	if e := got(); len(e) != 2 || e[1] != (ACPInteractionEvent{Phase: "ended", SessionID: "sesn_o", InteractionID: id, ToolName: "bash", Outcome: InteractionOutcomeAllow}) {
+		t.Fatalf("ended = %+v", e)
+	}
+
+	// A canceled turn withdraws the card too.
+	f.start(t, ctx, "sesn_o", "turn_2", "run", func(p *TurnStartParams) { p.ExecutorSessionRef = "sesn_o" })
+	f.platform.waitFor(t, "second permission", func() bool { return len(f.platform.interactions) == 2 })
+	if _, err := f.executor.CancelTurn(ctx, TurnCancelParams{SessionID: "sesn_o", TurnID: "turn_2"}); err != nil {
+		t.Fatal(err)
+	}
+	assertIdle(t, f.platform.waitIdle(t, "turn_2"), TurnOutcomeCanceled)
+	if e := got(); len(e) != 4 || e[3].Phase != "ended" || e[3].Outcome != "withdrawn" || e[3].InteractionID != f.platform.interactions[1].InteractionID {
+		t.Fatalf("withdrawn = %+v", e)
+	}
+}
