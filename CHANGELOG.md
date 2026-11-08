@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+Windows executor gaps (additive; no contract change, no change to the minimum
+supported runtimes).
+
+- **Go, Windows (G1):** bash tools and processes inherit the variables Windows
+  programs need (`SystemRoot`, `windir`, `ComSpec`, `PATHEXT`, `TEMP`/`TMP`,
+  `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `ProgramFiles*`, ...) in addition
+  to `PATH`/`HOME`/`USER`/`LANG`/`TMPDIR`. `DenyEnv` still applies, a request's
+  env overrides an inherited name case-insensitively, and stdio MCP servers
+  keep the narrower `mcpBaseEnv`.
+- **Go, Windows (G2):** a `cmd.exe /c <command>` (the bash tool and a
+  process.start argv of `cmd.exe /d /s /c <command>`) is started with the
+  command line verbatim (`SysProcAttr.CmdLine`, with `/s`), so quotes and `$`
+  in a PowerShell `-Command` survive.
+- **CI:** the Go suite runs on `windows-latest`.
+
 ## 1.2.0
 
 Additive; no breaking change ([MIGRATION](MIGRATION.md#120)). Contract 1.2.0

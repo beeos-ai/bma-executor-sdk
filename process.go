@@ -777,6 +777,7 @@ func spawn(params ProcessStartParams, cwd string, env []string, runAs *RunAs) (*
 	cmd := exec.Command(params.Argv[0], params.Argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = env
+	setCommandLine(cmd)
 	if params.IOMode == IOModePTY {
 		master, err := startPTY(cmd, runAs)
 		if err != nil {
