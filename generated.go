@@ -32,8 +32,20 @@ type AgentCapability struct {
 	Harness             *AgentHarnessCapability `json:"harness,omitempty"`
 }
 
+// AgentErrorCode values. Stop code table: the error types an agent executor reports for a turn that ended failed, so every agent (Go ACP harness, brain hosts, local desktop agents) says the same thing for the same cause. output_limit_reached: the model reply was cut at its output-token limit (ACP stopReason max_tokens, DSH max-tokens, finish_reason length). context_too_large: the conversation does not fit the model context window even after compaction. model_stream_idle: the model stream sent no data for the idle limit (default 90 s). agent_error: any other failure of the agent. agent_unavailable: the agent process is gone or did not answer a cancel in time. agent_auth_required: the agent needs credentials it does not have. agent_protocol_error: the agent rejected the request as malformed or unsupported. A code is the type of session.error; an executor whose SDK cannot set the type yet (structured_errors false) puts it first in the message as '<code>: <detail>', and the platform reads both forms. The platform keeps the code in error.code and projects a type outside the official session.error union to unknown_error; a platform may map a code to an official type itself (context_too_large to compaction_limit_reached_error, ADR-0010). Executors report only these values; a new cause adds a value here first.
+const (
+	AgentErrorCodeOutputLimitReached = "output_limit_reached"
+	AgentErrorCodeContextTooLarge    = "context_too_large"
+	AgentErrorCodeModelStreamIdle    = "model_stream_idle"
+	AgentErrorCodeAgentError         = "agent_error"
+	AgentErrorCodeAgentUnavailable   = "agent_unavailable"
+	AgentErrorCodeAgentAuthRequired  = "agent_auth_required"
+	AgentErrorCodeAgentProtocolError = "agent_protocol_error"
+)
+
 // AgentErrorInfo Typed session error.
 type AgentErrorInfo struct {
+	// An AgentErrorCode value; other strings are tolerated (objects accept unknown members) and projected as unknown_error.
 	Type    string `json:"type"`
 	Message string `json:"message,omitempty"`
 }
