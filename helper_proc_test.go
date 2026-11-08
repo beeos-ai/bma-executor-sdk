@@ -17,6 +17,7 @@ import (
 //	orphan     like tree, then exits at once.
 //	interrupt  prints "ready", waits for an interrupt, prints "interrupted", exits 0.
 //	isatty     prints tty=true when stdout is a terminal.
+//	rawinput   (Windows) reads one byte from a raw console input, prints "got=<byte>".
 //	echo       copies a line from stdin to stdout, prefixed "echo:".
 func runTestHelper(mode string) {
 	switch mode {
@@ -45,6 +46,11 @@ func runTestHelper(mode string) {
 		fmt.Println("ready")
 		<-ch
 		fmt.Println("interrupted")
+	case "rawinput":
+		if helperRawInput == nil {
+			os.Exit(2)
+		}
+		helperRawInput()
 	case "isatty":
 		info, err := os.Stdout.Stat()
 		fmt.Printf("tty=%v\n", err == nil && info.Mode()&os.ModeCharDevice != 0)
@@ -54,3 +60,6 @@ func runTestHelper(mode string) {
 		fmt.Println("echo:" + line)
 	}
 }
+
+// helperRawInput is set on Windows (helper_windows_test.go).
+var helperRawInput func()

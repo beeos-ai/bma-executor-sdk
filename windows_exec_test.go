@@ -409,18 +409,20 @@ func TestWindowsConPTYInputAndOutput(t *testing.T) {
 	}
 }
 
-// TestWindowsConPTYInterrupt (G3, G5): process.interrupt writes ^C, which
-// ConPTY turns into CTRL_C for the process.
+// TestWindowsConPTYInterrupt (G3, G5): process.interrupt writes ^C into the
+// terminal's input. ConPTY turns it into CTRL_C for a program with processed
+// input; a program in raw mode (as here, so the test does not depend on the CI
+// runner's ctrl-c inheritance) reads the byte itself.
 func TestWindowsConPTYInterrupt(t *testing.T) {
 	w := newWinProc(t, CoreOptions{}, ProcessOptions{})
-	ptyStart(t, w, "int", "interrupt")
+	ptyStart(t, w, "int", "rawinput")
 	w.waitFor(t, "int", "ready")
 	var state ProcessState
 	if err := w.executor.Call(winContext(t), MethodProcessInterrupt,
 		ProcessSignalParams{SessionID: w.session.ID(), ProcessID: "int"}, &state); err != nil {
 		t.Fatal(err)
 	}
-	if out := w.output(t, "int"); !strings.Contains(out, "interrupted") {
+	if out := w.output(t, "int"); !strings.Contains(out, "got=3") {
 		t.Fatalf("output = %q", out)
 	}
 	if r := w.waitEnded(t, "int"); r.State != ProcessExited || r.ExitCode == nil || *r.ExitCode != 0 {
