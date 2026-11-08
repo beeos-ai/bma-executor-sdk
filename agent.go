@@ -52,6 +52,7 @@ func (c *Client) ServeAgent(handler AgentHandler, capability AgentCapability) {
 	c.onRequest(MethodTurnCancel, decodeThen(runtime.turnCancel))
 	c.onRequest(MethodSessionClose, decodeThen(runtime.sessionClose))
 	c.onRequest(MethodInteractionResponse, decodeThen(runtime.interactionResponse))
+	c.onRequest(MethodAgentCustomToolResult, decodeThen(runtime.customToolResult))
 }
 
 func decodeThen[P any, R any](handle func(context.Context, P) (R, error)) func(context.Context, json.RawMessage) (any, error) {
@@ -90,6 +91,9 @@ type agentSession struct {
 	results  map[string]TurnStartResult // by turn_id, for idempotent turn.start
 	pending  map[string]chan InteractionResponseParams
 	answered map[string]bool
+	// customTools: waiters by tool_use_id; customDone: ids no longer waited on.
+	customTools map[string]chan AgentCustomToolResultParams
+	customDone  map[string]bool
 }
 
 type agentOutboxEvent struct {
@@ -220,6 +224,41 @@ func (t *AgentTurn) RequestInteraction(ctx context.Context, params InteractionRe
 	}
 }
 
+// RequestCustomTool emits agent.custom_tool_use for a tool the user's
+// application runs (capability CustomTools) and waits for the platform's
+// agent.custom_tool_result. It returns the call's event id with the result so
+// the agent can reference it. The turn stays open while it waits: do not end
+// it, and do not emit session.status_idle. When ctx ends first it returns
+// ctx.Err() and a later result answers accepted=false; to give up on a call
+// the agent emits a failed AgentToolResultEvent naming the returned id
+// (empty when the event could not be emitted). Use ctx with a timeout for an
+// executor-side limit.
+func (t *AgentTurn) RequestCustomTool(ctx context.Context, name string, input map[string]any) (string, AgentCustomToolResultParams, error) {
+	s := t.session
+	id := t.NewEventID()
+	answer := make(chan AgentCustomToolResultParams, 1)
+	// Register before emitting: the platform may answer as soon as the
+	// event is acknowledged.
+	s.mu.Lock()
+	s.customTools[id] = answer
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.customTools, id)
+		s.customDone[id] = true
+		s.mu.Unlock()
+	}()
+	if _, err := t.EmitWithID(id, AgentCustomToolUseEvent{Type: AgentEventTypeAgentCustomToolUse, Name: name, Input: input}); err != nil {
+		return "", AgentCustomToolResultParams{}, err
+	}
+	select {
+	case result := <-answer:
+		return id, result, nil
+	case <-ctx.Done():
+		return id, AgentCustomToolResultParams{}, ctx.Err()
+	}
+}
+
 // CancelInteraction withdraws an open interaction, for example after the
 // user answered it in the local UI (InteractionCancelReasonResolvedLocally).
 // A later interaction.response for it answers accepted=false.
@@ -262,6 +301,7 @@ func (r *agentRuntime) session(id string, create bool) (*agentSession, error) {
 	s := &agentSession{
 		runtime: r, id: id, nextSeq: 1, wake: make(chan struct{}, 1), drained: drained,
 		results: map[string]TurnStartResult{}, pending: map[string]chan InteractionResponseParams{}, answered: map[string]bool{},
+		customTools: map[string]chan AgentCustomToolResultParams{}, customDone: map[string]bool{},
 	}
 	r.sessions[id] = s
 	c := r.client
@@ -442,6 +482,22 @@ func (r *agentRuntime) interactionResponse(_ context.Context, params Interaction
 	s.answered[params.InteractionID] = true
 	waiter <- params
 	return InteractionResponseResult{Accepted: true}, nil
+}
+
+func (r *agentRuntime) customToolResult(_ context.Context, params AgentCustomToolResultParams) (CustomToolResultResult, error) {
+	s, _ := r.session(params.SessionID, false)
+	if s == nil {
+		return CustomToolResultResult{Accepted: false}, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	waiter, open := s.customTools[params.ToolUseID]
+	if !open || s.customDone[params.ToolUseID] {
+		return CustomToolResultResult{Accepted: false}, nil
+	}
+	s.customDone[params.ToolUseID] = true
+	waiter <- params
+	return CustomToolResultResult{Accepted: true}, nil
 }
 
 // --- outbox ---

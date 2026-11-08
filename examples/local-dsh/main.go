@@ -39,7 +39,8 @@ import (
 func main() {
 	baseURL := flag.String("base-url", "", "BMA executor base URL")
 	machineID := flag.String("machine-id", "", "BYO machine id (mch_...); empty uses the legacy token path")
-	agent := flag.String("agent", "", "bma-dsh-acp executable, or a .mjs bundle run with node")
+	agent := flag.String("agent", "", "absolute path of the bma-dsh-acp executable, or of its .mjs bundle (with -node)")
+	node := flag.String("node", "", "absolute path of node, to run a .mjs bundle")
 	modelBase := flag.String("model-base-url", "", "OpenAI-compatible model endpoint ending in /v1")
 	model := flag.String("model", "", "model id sent upstream")
 	workRoot := flag.String("work-root", filepath.Join(os.TempDir(), "bma-local-dsh"), "session workspaces and allowed cwd root")
@@ -55,7 +56,7 @@ func main() {
 	}
 	command := []string{*agent}
 	if strings.HasSuffix(*agent, ".mjs") {
-		command = []string{"node", *agent}
+		command = []string{*node, *agent}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

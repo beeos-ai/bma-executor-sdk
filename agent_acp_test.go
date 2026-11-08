@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -174,6 +176,19 @@ func TestACPAgentCapabilityDeclaresDSHHarness(t *testing.T) {
 	}
 }
 
+func TestACPAgentRefusesARelativeCommand(t *testing.T) {
+	core, err := NewCore(CoreOptions{WorkRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.Close()
+	_, err = NewACPAgent(context.Background(), ACPAgentOptions{Command: []string{"bma-dsh-acp"}, Core: core, StateDir: t.TempDir(),
+		Upstream: ACPModelUpstream{BaseURL: "http://127.0.0.1:1/v1"}})
+	if err == nil || !strings.Contains(err.Error(), "absolute path") {
+		t.Fatalf("relative command: %v", err)
+	}
+}
+
 func TestACPAgentStreamsAndCommitsMessages(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -206,6 +221,9 @@ func TestACPAgentStreamsAndCommitsMessages(t *testing.T) {
 }
 
 func TestACPAgentToolPermissionAndExecution(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the scripted bash command is POSIX shell")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	f := startACPFixture(t, ctx, ACPAgentOptions{})
@@ -731,13 +749,20 @@ func (a *ACPAgent) proxyStatusForTest(t *testing.T, sessionID string) int {
 // (the SEA binary, or the .mjs bundle run with node). The model is a
 // scripted OpenAI-compatible upstream: a bash call, then a final text.
 func TestACPAgentWithBmaDshAcp(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the scripted bash command is POSIX shell")
+	}
 	bin := os.Getenv("BMA_DSH_ACP_BIN")
 	if bin == "" {
 		t.Skip("BMA_DSH_ACP_BIN is not set")
 	}
 	command := []string{bin}
 	if strings.HasSuffix(bin, ".mjs") {
-		command = []string{"node", bin}
+		node, err := exec.LookPath("node") // the test resolves it; ACPAgent itself never looks on PATH
+		if err != nil {
+			t.Skip("node not found for the .mjs bundle")
+		}
+		command = []string{node, bin}
 	}
 	var mu sync.Mutex
 	var tools [][]string

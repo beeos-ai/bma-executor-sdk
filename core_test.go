@@ -19,6 +19,10 @@ import (
 // BMA_TEST_MCP_SERVER=1, so the supervisor is tested against a real process,
 // and as a fake ACP agent with BMA_ACP_FAKE_AGENT=1 (agent_acp_test.go).
 func TestMain(m *testing.M) {
+	if mode := os.Getenv("BMA_TEST_HELPER"); mode != "" {
+		runTestHelper(mode)
+		return
+	}
 	if os.Getenv("BMA_TEST_MCP_SERVER") == "1" {
 		serveFakeMCP()
 		return

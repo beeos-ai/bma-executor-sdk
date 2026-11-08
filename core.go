@@ -50,8 +50,10 @@ var deniedEnv = map[string]bool{
 }
 
 // baseEnv is the only executor environment a bash tool or process inherits;
-// everything else comes from the request or CoreOptions.Env.
-var baseEnv = []string{"PATH", "HOME", "USER", "LANG", "TMPDIR"}
+// everything else comes from the request or CoreOptions.Env. On Windows it
+// also carries the variables the system needs to run programs (see
+// processBaseEnv).
+var baseEnv = processBaseEnv(runtime.GOOS)
 
 // mcpBaseEnv is what a stdio MCP server inherits from the executor: the
 // official MCP SDKs' default list (getDefaultEnvironment) without the
@@ -192,10 +194,13 @@ type coreKey struct{ brain, session string }
 type CoreSession struct {
 	key       coreKey
 	workspace string
-	client    *Client
-	params    SessionAssignParams
-	ctx       context.Context
-	cancel    context.CancelFunc
+	// workRoot is CoreOptions.WorkRoot: a cwd equal to it means "the
+	// session's workspace" (see ResolveCwd).
+	workRoot string
+	client   *Client
+	params   SessionAssignParams
+	ctx      context.Context
+	cancel   context.CancelFunc
 
 	mu      sync.Mutex
 	stopped bool
@@ -509,7 +514,7 @@ func (c *Core) assign(brain string, client *Client, params SessionAssignParams) 
 	// Sessions outlive one connection: their context is not the request's.
 	ctx, cancel := context.WithCancel(context.Background())
 	session := &CoreSession{
-		key: key, workspace: c.workspace(brain, params.SessionID), client: client, params: params,
+		key: key, workspace: c.workspace(brain, params.SessionID), workRoot: c.opts.WorkRoot, client: client, params: params,
 		ctx: ctx, cancel: cancel, values: map[any]any{},
 	}
 	c.sessions[key] = session
@@ -772,8 +777,14 @@ func (s *CoreSession) resolve(path string) (string, error) {
 
 // ResolveCwd returns the real directory for a working directory request: a
 // relative cwd is under the workspace, an absolute one must resolve (through
-// symlinks) under it.
+// symlinks) under it. An absolute cwd that is exactly the executor work root
+// (what a machine's configured cwd is, for example C:\bma\work) is the
+// session's workspace, since the work root holds every session's workspace
+// and is no place to run a command.
 func (s *CoreSession) ResolveCwd(cwd string) (string, error) {
+	if cwd != "" && filepath.IsAbs(cwd) && s.isWorkRoot(cwd) {
+		cwd = ""
+	}
 	rootReal, err := filepath.EvalSymlinks(s.workspace)
 	if err != nil {
 		return "", fmt.Errorf("work root: %w", err)
@@ -797,6 +808,29 @@ func (s *CoreSession) ResolveCwd(cwd string) (string, error) {
 	return targetReal, nil
 }
 
+// isWorkRoot reports whether the absolute path names the work root itself,
+// compared on real paths (symlinks, 8.3 short names and drive-letter or file
+// name case resolve alike on Windows).
+func (s *CoreSession) isWorkRoot(path string) bool {
+	if s.workRoot == "" {
+		return false
+	}
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	root, err := filepath.EvalSymlinks(s.workRoot)
+	if err != nil {
+		return false
+	}
+	targetInfo, err := os.Stat(target)
+	if err != nil {
+		return false
+	}
+	rootInfo, err := os.Stat(root)
+	return err == nil && os.SameFile(targetInfo, rootInfo)
+}
+
 // Env builds a bash or process environment: baseEnv from the executor, the
 // request env (bounded, loader and DenyEnv variables rejected), then
 // CoreOptions.Env.
@@ -808,7 +842,7 @@ func (c *Core) Env(explicit map[string]string) ([]string, error) {
 	values := map[string]string{}
 	for _, key := range baseEnv {
 		if value, ok := os.LookupEnv(key); ok && !c.opts.DenyEnv(key) {
-			values[key] = value
+			setEnvValue(values, key, value, envCaseInsensitive)
 		}
 	}
 	for key, value := range explicit {
@@ -819,13 +853,13 @@ func (c *Core) Env(explicit map[string]string) ([]string, error) {
 			return nil, fmt.Errorf("env %s is not allowed", key)
 		}
 		total += len(key) + len(value)
-		values[key] = value
+		setEnvValue(values, key, value, envCaseInsensitive)
 	}
 	if total > maxEnvTotalBytes {
 		return nil, fmt.Errorf("env exceeds %d bytes", maxEnvTotalBytes)
 	}
 	for key, value := range c.opts.Env {
-		values[key] = value
+		setEnvValue(values, key, value, envCaseInsensitive)
 	}
 	if runAs := c.opts.RunAs; runAs != nil {
 		setOrDrop(values, "HOME", runAs.Home)
@@ -925,7 +959,7 @@ func (c *Core) runShell(ctx context.Context, session *CoreSession, input ToolInp
 	stdout := &cappedBuffer{limit: c.opts.MaxOutputBytes}
 	stderr := &cappedBuffer{limit: c.opts.MaxOutputBytes}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	runErr := cmd.Run()
+	runErr := runCommand(cmd)
 	execution := shellExecution{
 		Stdout: stdout.buf.String(), Stderr: stderr.buf.String(), Truncated: stdout.truncated || stderr.truncated,
 	}
@@ -940,6 +974,18 @@ func (c *Core) runShell(ctx context.Context, session *CoreSession, input ToolInp
 		return execution, fmt.Errorf("spawn bash: %w", runErr)
 	}
 	return execution, nil
+}
+
+// runCommand runs cmd to completion in its own process tree. What the
+// command left running is not ended, as a POSIX process group's orphans are
+// not.
+func runCommand(cmd *exec.Cmd) error {
+	tree, err := startCommand(cmd)
+	if err != nil {
+		return err
+	}
+	defer tree.release()
+	return cmd.Wait()
 }
 
 // bashResult returns stdout, stderr and exit_code blocks inline. When they do
@@ -1312,12 +1358,14 @@ func (c *Core) runMCPOnce(client *Client, session *CoreSession, server MCPServer
 	}
 	stderr := &cappedBuffer{limit: 8 * 1024}
 	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
+	tree, err := startCommand(cmd)
+	if err != nil {
 		return err
 	}
 	defer func() {
 		cancel()
 		_ = cmd.Wait()
+		tree.close()
 		if stderr.buf.Len() > 0 {
 			c.log(LogDebug, "mcp server "+server.ServerKey+" stderr: "+stderr.String(), nil)
 		}

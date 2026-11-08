@@ -2,13 +2,9 @@
 
 ## Unreleased
 
-Additive. Contract 1.3.0 (`make contract-sdk`, BMA executor-agent-harnesses).
-
-- **Contract 1.3.0:** `AgentCapability.harnesses[]` (every hosted agent;
-  the single `harness` is deprecated) and `AgentTurnConfig.harness` (the
-  agent a turn runs on). The snapshot also brings the 1.2.0 custom tool
-  types (`agent.custom_tool_use`, `agent.custom_tool_result`) to all languages;
-  the Go harness accepts `agent.custom_tool_use` events.
+- **Contract 1.3.0 (additive, `make contract-sdk` from BMA feat/executor-agent-harnesses):**
+  `AgentCapability.harnesses[]` (every hosted agent; the single `harness` is
+  deprecated) and `AgentTurnConfig.harness` (the agent a turn runs on).
 - **Go `ACPAgent`:** an `AgentHandler` that hosts a local brain over the Agent
   Client Protocol (bma-dsh-acp, ADR-0027): one agent process for all sessions,
   token deltas and durable messages, `agent.tool_use` / `agent.tool_result`,
@@ -17,6 +13,61 @@ Additive. Contract 1.3.0 (`make contract-sdk`, BMA executor-agent-harnesses).
   model proxy (placeholder key, running-turn and tool-catalog gate), cancel
   with a kill after `CancelGrace`, `max_tokens` as `output_limit_reached`,
   `session/load` from `executor_session_ref`. Example: `examples/local-dsh`.
+- **Contract sync + agent.custom_tool_result (Go/TS/Python):** `make contract-sdk` is synced to
+  beeos-managed-agents main (lock `source_commit` is a clean commit). New: capability
+  `agent.custom_tools`, event `agent.custom_tool_use`, request `agent.custom_tool_result`.
+  Executor side: `AgentTurn.RequestCustomTool` (Go) / `requestCustomTool` (TS) /
+  `request_custom_tool` (Python) emits the event and waits for the result; a result for an
+  unknown, answered, timed-out or canceled call answers `accepted=false`. Harness side:
+  `Executor.RespondCustomToolResult` / `respondCustomToolResult` / `respond_custom_tool_result`;
+  `agent.custom_tool_use` is accepted as an agent event. Additive.
+- **Note:** main's contract does not carry the `AgentErrorCode` stop code table yet
+  (beeos-managed-agents#643 is unmerged), so the generated `AgentErrorCode` constants added by #25
+  are absent after this sync; nothing in the SDK uses them. Run `make contract-sdk` again after
+  #643 merges to restore them.
+
+Windows executor gaps (additive; no contract change, no change to the minimum
+supported runtimes).
+
+- **Go, Windows (G1):** bash tools and processes inherit the variables Windows
+  programs need (`SystemRoot`, `windir`, `ComSpec`, `PATHEXT`, `TEMP`/`TMP`,
+  `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `ProgramFiles*`, ...) in addition
+  to `PATH`/`HOME`/`USER`/`LANG`/`TMPDIR`. `DenyEnv` still applies, a request's
+  env overrides an inherited name case-insensitively, and stdio MCP servers
+  keep the narrower `mcpBaseEnv`.
+- **Go, Windows (G2):** a `cmd.exe /c <command>` (the bash tool and a
+  process.start argv of `cmd.exe /d /s /c <command>`) is started with the
+  command line verbatim (`SysProcAttr.CmdLine`, with `/s`), so quotes and `$`
+  in a PowerShell `-Command` survive.
+- **Go, Windows (G4):** every bash tool, process and stdio MCP server runs in
+  its own Job Object (`KILL_ON_JOB_CLOSE`; created suspended, assigned, then
+  resumed). Cancellation, a timeout, `process.terminate` and the end of the
+  session end the whole process tree, including children a process left
+  behind after it exited.
+- **Go, Windows (G5):** `process.interrupt` sends a console `CTRL_BREAK` to the
+  command's process group (the executor creates a hidden console when it has
+  none); `process.terminate` asks the same way and kills the tree after
+  `grace_ms`. Exits are reported as `exit_signal` `SIGINT`/`SIGTERM`/`SIGKILL`.
+- **Go, Windows (G3):** `process.start` `io_mode` `pty` runs on a ConPTY
+  pseudo console (Windows 10 1809+; `process.pty` is advertised only where it
+  exists), inside the process's Job Object. `process.write` is the terminal's
+  input, `process.interrupt` writes `^C`, output is one merged stream that
+  ends with EOF when the process does.
+- **Go, Windows (G6):** session files work on Windows: a changed mounted file
+  replaces its read-only (0444 = read-only attribute) predecessor, stale
+  read-only mounts are removed, outputs are collected as before. New
+  `NewFileTransferer()` (`ProcessOptions.FileTransfer`) serves `process.start`
+  `file_transfer` on a machine-scoped executor like bmad does (upload and
+  download via `/api/v1/daemon/processes/{id}/file`, atomic replace that keeps
+  the destination's permissions, `~` expands to the home directory).
+  `ProcessContext.Client` (additive) is the connection a process came
+  through.
+- **Go (G7):** an absolute cwd equal to `CoreOptions.WorkRoot` (a machine's
+  configured cwd such as `C:\bma\work`) now means the session's workspace
+  instead of being refused with `cwd must be under the executor work root`;
+  other directories stay confined. Paths compare as real paths, so symlinks,
+  8.3 names and drive-letter case do not matter on Windows.
+- **CI:** the Go suite runs on `windows-latest`.
 
 ## 1.2.0
 
