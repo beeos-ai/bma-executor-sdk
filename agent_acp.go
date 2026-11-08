@@ -128,6 +128,8 @@ type ACPInteractionEvent struct {
 	SessionID     string
 	InteractionID string
 	ToolName      string
+	// ToolInput is the tool call's input (Phase "requested" only).
+	ToolInput map[string]any
 	// Outcome is the platform answer when Phase is "ended" (allow, deny,
 	// expired, canceled), or "withdrawn" when the turn ended first.
 	Outcome string
@@ -657,7 +659,7 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 		}
 		toolUseID := t.toolUse(p.ToolCall.ToolCallID, p.ToolCall.Title, p.ToolCall.RawInput, "ask")
 		interactionID := approvalID(base.SessionID, p.ToolCall.ToolCallID)
-		a.interaction(ACPInteractionEvent{Phase: "requested", SessionID: base.SessionID, InteractionID: interactionID, ToolName: p.ToolCall.Title})
+		a.interaction(ACPInteractionEvent{Phase: "requested", SessionID: base.SessionID, InteractionID: interactionID, ToolName: p.ToolCall.Title, ToolInput: p.ToolCall.RawInput})
 		answer, err := t.turn.RequestInteraction(ctx, InteractionRequestParams{
 			Kind: InteractionKindPermission, InteractionID: interactionID,
 			ToolUseID: toolUseID, ToolName: p.ToolCall.Title, ToolInput: p.ToolCall.RawInput, Scopes: []string{InteractionScopeOnce},

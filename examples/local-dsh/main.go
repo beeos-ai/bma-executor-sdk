@@ -66,7 +66,7 @@ func main() {
 	}
 	onInteraction := func(e bmaexecutor.ACPInteractionEvent) {
 		emit(map[string]any{"level": "info", "msg": "interaction " + e.Phase, "interaction_id": e.InteractionID,
-			"session_id": e.SessionID, "tool_name": e.ToolName, "outcome": e.Outcome})
+			"session_id": e.SessionID, "tool_name": e.ToolName, "tool_input": e.ToolInput, "outcome": e.Outcome})
 	}
 
 	core, err := bmaexecutor.NewCore(bmaexecutor.CoreOptions{WorkRoot: *workRoot, OnLog: logf})

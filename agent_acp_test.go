@@ -831,14 +831,14 @@ func TestACPAgentOnInteractionReportsTheSameApproval(t *testing.T) {
 	f.start(t, ctx, "sesn_o", "turn_1", "run")
 	f.platform.waitFor(t, "permission", func() bool { return len(f.platform.interactions) == 1 })
 	id := f.platform.interactions[0].InteractionID
-	if e := got(); len(e) != 1 || e[0] != (ACPInteractionEvent{Phase: "requested", SessionID: "sesn_o", InteractionID: id, ToolName: "bash"}) {
+	if e := got(); len(e) != 1 || e[0].Phase != "requested" || e[0].SessionID != "sesn_o" || e[0].InteractionID != id || e[0].ToolName != "bash" || e[0].ToolInput["command"] != "echo hi > out.txt && cat out.txt" {
 		t.Fatalf("requested = %+v, platform id %s", e, id)
 	}
 	if _, err := f.executor.RespondInteraction(ctx, InteractionResponseParams{SessionID: "sesn_o", InteractionID: id, Outcome: InteractionOutcomeAllow}); err != nil {
 		t.Fatal(err)
 	}
 	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
-	if e := got(); len(e) != 2 || e[1] != (ACPInteractionEvent{Phase: "ended", SessionID: "sesn_o", InteractionID: id, ToolName: "bash", Outcome: InteractionOutcomeAllow}) {
+	if e := got(); len(e) != 2 || e[1].Phase != "ended" || e[1].InteractionID != id || e[1].Outcome != InteractionOutcomeAllow {
 		t.Fatalf("ended = %+v", e)
 	}
 
