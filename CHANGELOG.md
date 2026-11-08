@@ -42,6 +42,20 @@ supported runtimes).
   exists), inside the process's Job Object. `process.write` is the terminal's
   input, `process.interrupt` writes `^C`, output is one merged stream that
   ends with EOF when the process does.
+- **Go, Windows (G6):** session files work on Windows: a changed mounted file
+  replaces its read-only (0444 = read-only attribute) predecessor, stale
+  read-only mounts are removed, outputs are collected as before. New
+  `NewFileTransferer()` (`ProcessOptions.FileTransfer`) serves `process.start`
+  `file_transfer` on a machine-scoped executor like bmad does (upload and
+  download via `/api/v1/daemon/processes/{id}/file`, atomic replace that keeps
+  the destination's permissions, `~` expands to the home directory).
+  `ProcessContext.Client` (additive) is the connection a process came
+  through.
+- **Go (G7):** an absolute cwd equal to `CoreOptions.WorkRoot` (a machine's
+  configured cwd such as `C:\bma\work`) now means the session's workspace
+  instead of being refused with `cwd must be under the executor work root`;
+  other directories stay confined. Paths compare as real paths, so symlinks,
+  8.3 names and drive-letter case do not matter on Windows.
 - **CI:** the Go suite runs on `windows-latest`.
 
 ## 1.2.0

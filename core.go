@@ -194,10 +194,13 @@ type coreKey struct{ brain, session string }
 type CoreSession struct {
 	key       coreKey
 	workspace string
-	client    *Client
-	params    SessionAssignParams
-	ctx       context.Context
-	cancel    context.CancelFunc
+	// workRoot is CoreOptions.WorkRoot: a cwd equal to it means "the
+	// session's workspace" (see ResolveCwd).
+	workRoot string
+	client   *Client
+	params   SessionAssignParams
+	ctx      context.Context
+	cancel   context.CancelFunc
 
 	mu      sync.Mutex
 	stopped bool
@@ -511,7 +514,7 @@ func (c *Core) assign(brain string, client *Client, params SessionAssignParams) 
 	// Sessions outlive one connection: their context is not the request's.
 	ctx, cancel := context.WithCancel(context.Background())
 	session := &CoreSession{
-		key: key, workspace: c.workspace(brain, params.SessionID), client: client, params: params,
+		key: key, workspace: c.workspace(brain, params.SessionID), workRoot: c.opts.WorkRoot, client: client, params: params,
 		ctx: ctx, cancel: cancel, values: map[any]any{},
 	}
 	c.sessions[key] = session
@@ -774,8 +777,14 @@ func (s *CoreSession) resolve(path string) (string, error) {
 
 // ResolveCwd returns the real directory for a working directory request: a
 // relative cwd is under the workspace, an absolute one must resolve (through
-// symlinks) under it.
+// symlinks) under it. An absolute cwd that is exactly the executor work root
+// (what a machine's configured cwd is, for example C:\bma\work) is the
+// session's workspace, since the work root holds every session's workspace
+// and is no place to run a command.
 func (s *CoreSession) ResolveCwd(cwd string) (string, error) {
+	if cwd != "" && filepath.IsAbs(cwd) && s.isWorkRoot(cwd) {
+		cwd = ""
+	}
 	rootReal, err := filepath.EvalSymlinks(s.workspace)
 	if err != nil {
 		return "", fmt.Errorf("work root: %w", err)
@@ -797,6 +806,29 @@ func (s *CoreSession) ResolveCwd(cwd string) (string, error) {
 		return "", errors.New("cwd must be under the executor work root")
 	}
 	return targetReal, nil
+}
+
+// isWorkRoot reports whether the absolute path names the work root itself,
+// compared on real paths (symlinks, 8.3 short names and drive-letter or file
+// name case resolve alike on Windows).
+func (s *CoreSession) isWorkRoot(path string) bool {
+	if s.workRoot == "" {
+		return false
+	}
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	root, err := filepath.EvalSymlinks(s.workRoot)
+	if err != nil {
+		return false
+	}
+	targetInfo, err := os.Stat(target)
+	if err != nil {
+		return false
+	}
+	rootInfo, err := os.Stat(root)
+	return err == nil && os.SameFile(targetInfo, rootInfo)
 }
 
 // Env builds a bash or process environment: baseEnv from the executor, the

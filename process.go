@@ -74,6 +74,9 @@ type ProcessContext struct {
 	// Client.SessionContext, to read the session's metadata.
 	AgentSessionID string
 	Metadata       map[string]string
+	// Client is the connection of the brain that started the process (for
+	// machine-token requests such as a file transfer).
+	Client *Client
 }
 
 // LaunchRequest is one command process or package install about to start.
@@ -551,7 +554,7 @@ func (p *processes) prepare(ctx context.Context, req Request, params ProcessStar
 	session := req.Session
 	plan := launchPlan{process: ProcessContext{
 		SessionID: session.ID(), ProcessID: params.ProcessID,
-		AgentSessionID: params.Metadata[MetadataAgentSessionID], Metadata: params.Metadata,
+		AgentSessionID: params.Metadata[MetadataAgentSessionID], Metadata: params.Metadata, Client: req.Client,
 	}}
 	command := params.FileTransfer == nil && params.PackageInstall == nil
 	if command {
