@@ -442,3 +442,23 @@ func TestWindowsConPTYTerminateEndsTheProcessTree(t *testing.T) {
 	}
 	requireDead(t, child)
 }
+
+// TestWindowsConPTYDiagnostics logs what a few commands produce on a pseudo console.
+func TestWindowsConPTYDiagnostics(t *testing.T) {
+	w := newWinProc(t, CoreOptions{}, ProcessOptions{})
+	for i, argv := range [][]string{
+		{"cmd.exe", "/d", "/s", "/c", "echo hello-from-cmd"},
+		{testExecutable(t)},
+	} {
+		id := "diag" + strconv.Itoa(i)
+		state, err := w.start(t, ProcessStartParams{ProcessID: id, Argv: argv, IOMode: IOModePTY, Env: helperEnv("isatty"), WaitMS: 20000})
+		t.Logf("%v: start %+v err %v", argv, state, err)
+		time.Sleep(2 * time.Second)
+		r := w.read(t, id, StreamStdout, 0, 3000)
+		exit := -999
+		if r.ExitCode != nil {
+			exit = *r.ExitCode
+		}
+		t.Logf("%v: state %s exit %d output %q", argv, r.State, exit, decodeData(t, r))
+	}
+}
