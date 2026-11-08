@@ -9,7 +9,7 @@
   Client Protocol (bma-dsh-acp, ADR-0027): one agent process for all sessions,
   token deltas and durable messages, `agent.tool_use` / `agent.tool_result`,
   permission requests as platform interactions with the deterministic
-  `appr_` id, tools run in `Core` in the turn's working directory, a loopback
+  `appr_` id (sha256 of session, turn and call), tools run in `Core` in the turn's working directory, a loopback
   model proxy (placeholder key, running-turn and tool-catalog gate), cancel
   with a kill after `CancelGrace`, `max_tokens` as `output_limit_reached`,
   `session/load` from `executor_session_ref`. Example: `examples/local-dsh`.
