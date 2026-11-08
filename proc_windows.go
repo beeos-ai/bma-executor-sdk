@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"syscall"
 	"time"
 )
 
@@ -30,10 +31,26 @@ func setProcessGroup(cmd *exec.Cmd) {
 
 func setProcessGroupID(*exec.Cmd) {}
 
+// shellCommand runs command with cmd.exe: `cmd.exe /d /s /c "<command>"`
+// with the command line passed verbatim (see windowsCommandLine).
 func shellCommand(ctx context.Context, command string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "cmd", "/C", command)
+	cmd := exec.CommandContext(ctx, "cmd", "/d", "/s", "/c", command)
+	setCommandLine(cmd)
 	setProcessGroup(cmd)
 	return cmd
+}
+
+// setCommandLine passes cmd.exe's command line verbatim; Go's argv quoting
+// breaks quotes and $ in what cmd hands to the program it runs.
+func setCommandLine(cmd *exec.Cmd) {
+	line, ok := windowsCommandLine(cmd.Args)
+	if !ok {
+		return
+	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CmdLine = line
 }
 
 // Windows has no process-group signals; interrupt is unsupported and

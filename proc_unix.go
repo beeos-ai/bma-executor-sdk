@@ -43,6 +43,9 @@ func setProcessGroupID(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
+// setCommandLine is a Windows concern (cmd.exe quoting).
+func setCommandLine(*exec.Cmd) {}
+
 // shellCommand runs command with a login bash (sh when bash is missing).
 func shellCommand(ctx context.Context, command string) *exec.Cmd {
 	shell := "bash"

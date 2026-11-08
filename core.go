@@ -50,8 +50,10 @@ var deniedEnv = map[string]bool{
 }
 
 // baseEnv is the only executor environment a bash tool or process inherits;
-// everything else comes from the request or CoreOptions.Env.
-var baseEnv = []string{"PATH", "HOME", "USER", "LANG", "TMPDIR"}
+// everything else comes from the request or CoreOptions.Env. On Windows it
+// also carries the variables the system needs to run programs (see
+// processBaseEnv).
+var baseEnv = processBaseEnv(runtime.GOOS)
 
 // mcpBaseEnv is what a stdio MCP server inherits from the executor: the
 // official MCP SDKs' default list (getDefaultEnvironment) without the
@@ -808,7 +810,7 @@ func (c *Core) Env(explicit map[string]string) ([]string, error) {
 	values := map[string]string{}
 	for _, key := range baseEnv {
 		if value, ok := os.LookupEnv(key); ok && !c.opts.DenyEnv(key) {
-			values[key] = value
+			setEnvValue(values, key, value, envCaseInsensitive)
 		}
 	}
 	for key, value := range explicit {
@@ -819,13 +821,13 @@ func (c *Core) Env(explicit map[string]string) ([]string, error) {
 			return nil, fmt.Errorf("env %s is not allowed", key)
 		}
 		total += len(key) + len(value)
-		values[key] = value
+		setEnvValue(values, key, value, envCaseInsensitive)
 	}
 	if total > maxEnvTotalBytes {
 		return nil, fmt.Errorf("env exceeds %d bytes", maxEnvTotalBytes)
 	}
 	for key, value := range c.opts.Env {
-		values[key] = value
+		setEnvValue(values, key, value, envCaseInsensitive)
 	}
 	if runAs := c.opts.RunAs; runAs != nil {
 		setOrDrop(values, "HOME", runAs.Home)
