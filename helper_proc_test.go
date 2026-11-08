@@ -21,6 +21,7 @@ import (
 //	interrupt  prints "ready", waits for an interrupt, prints "interrupted", exits 0.
 //	isatty     prints tty=true when stdout is a terminal.
 //	cua        a fake cua-driver: `call <tool> <json> [--screenshot-out-file f]`.
+//	rawinput   (Windows) reads one byte from a raw console input, prints "got=<byte>".
 //	echo       copies a line from stdin to stdout, prefixed "echo:".
 func runTestHelper(mode string) {
 	switch mode {
@@ -49,6 +50,11 @@ func runTestHelper(mode string) {
 		fmt.Println("ready")
 		<-ch
 		fmt.Println("interrupted")
+	case "rawinput":
+		if helperRawInput == nil {
+			os.Exit(2)
+		}
+		helperRawInput()
 	case "isatty":
 		info, err := os.Stdout.Stat()
 		fmt.Printf("tty=%v\n", err == nil && info.Mode()&os.ModeCharDevice != 0)
@@ -115,3 +121,6 @@ func runFakeCua() {
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(result)
 }
+
+// helperRawInput is set on Windows (helper_windows_test.go).
+var helperRawInput func()

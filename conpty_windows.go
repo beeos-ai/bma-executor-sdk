@@ -188,8 +188,15 @@ func startConPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
 		*(*unsafe.Pointer)(unsafe.Pointer(&hpc)), unsafe.Sizeof(hpc)); err != nil {
 		return fail(err)
 	}
+	// STARTF_USESTDHANDLES with invalid handles makes the child use the pseudo
+	// console even when the executor's own standard handles are redirected;
+	// without it such a child inherits them and its output bypasses the
+	// terminal (wezterm and Windows Terminal do the same).
 	startup := &windows.StartupInfoEx{
-		StartupInfo:             windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfoEx{}))},
+		StartupInfo: windows.StartupInfo{
+			Cb: uint32(unsafe.Sizeof(windows.StartupInfoEx{})), Flags: windows.STARTF_USESTDHANDLES,
+			StdInput: windows.InvalidHandle, StdOutput: windows.InvalidHandle, StdErr: windows.InvalidHandle,
+		},
 		ProcThreadAttributeList: attributes.List(),
 	}
 
