@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+Additive. Contract 1.3.0 (`make contract-sdk`, BMA executor-agent-harnesses).
+
+- **Contract 1.3.0:** `AgentCapability.harnesses[]` (every hosted agent;
+  the single `harness` is deprecated) and `AgentTurnConfig.harness` (the
+  agent a turn runs on). The snapshot also brings the 1.2.0 custom tool
+  types (`agent.custom_tool_use`, `agent.custom_tool_result`) to all languages;
+  the Go harness accepts `agent.custom_tool_use` events.
+- **Go `ACPAgent`:** an `AgentHandler` that hosts a local brain over the Agent
+  Client Protocol (bma-dsh-acp, ADR-0027): one agent process for all sessions,
+  token deltas and durable messages, `agent.tool_use` / `agent.tool_result`,
+  permission requests as platform interactions with the deterministic
+  `appr_` id, tools run in `Core` in the turn's working directory, a loopback
+  model proxy (placeholder key, running-turn and tool-catalog gate), cancel
+  with a kill after `CancelGrace`, `max_tokens` as `output_limit_reached`,
+  `session/load` from `executor_session_ref`. Example: `examples/local-dsh`.
+
 ## 1.2.0
 
 Additive; no breaking change ([MIGRATION](MIGRATION.md#120)). Contract 1.2.0

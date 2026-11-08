@@ -16,10 +16,15 @@ import (
 )
 
 // TestMain doubles as a minimal stdio MCP server when re-executed with
-// BMA_TEST_MCP_SERVER=1, so the supervisor is tested against a real process.
+// BMA_TEST_MCP_SERVER=1, so the supervisor is tested against a real process,
+// and as a fake ACP agent with BMA_ACP_FAKE_AGENT=1 (agent_acp_test.go).
 func TestMain(m *testing.M) {
 	if os.Getenv("BMA_TEST_MCP_SERVER") == "1" {
 		serveFakeMCP()
+		return
+	}
+	if os.Getenv("BMA_ACP_FAKE_AGENT") == "1" {
+		fakeACPAgent()
 		return
 	}
 	os.Exit(m.Run())
