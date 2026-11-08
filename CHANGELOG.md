@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Contract sync + agent.custom_tool_result (Go/TS/Python):** `make contract-sdk` is synced to
+  beeos-managed-agents main (lock `source_commit` is a clean commit). New: capability
+  `agent.custom_tools`, event `agent.custom_tool_use`, request `agent.custom_tool_result`.
+  Executor side: `AgentTurn.RequestCustomTool` (Go) / `requestCustomTool` (TS) /
+  `request_custom_tool` (Python) emits the event and waits for the result; a result for an
+  unknown, answered, timed-out or canceled call answers `accepted=false`. Harness side:
+  `Executor.RespondCustomToolResult` / `respondCustomToolResult` / `respond_custom_tool_result`;
+  `agent.custom_tool_use` is accepted as an agent event. Additive.
+- **Note:** main's contract does not carry the `AgentErrorCode` stop code table yet
+  (beeos-managed-agents#643 is unmerged), so the generated `AgentErrorCode` constants added by #25
+  are absent after this sync; nothing in the SDK uses them. Run `make contract-sdk` again after
+  #643 merges to restore them.
+
 Windows executor gaps (additive; no contract change, no change to the minimum
 supported runtimes).
 

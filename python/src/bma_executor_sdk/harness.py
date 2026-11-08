@@ -22,6 +22,7 @@ from urllib.parse import parse_qsl, urlsplit
 from ._rpc import ExecutorError, NotConnectedError, Peer, RPCError, rpc_error
 from .client import DEFAULT_REQUEST_TIMEOUT, PROTOCOL_V1, PROTOCOL_V11, LogEvent
 from .generated import (
+    METHOD_AGENT_CUSTOM_TOOL_RESULT,
     METHOD_EXECUTOR_CAPABILITIES_UPDATE,
     METHOD_EXECUTOR_CLOSE,
     METHOD_EXECUTOR_DRAIN,
@@ -44,7 +45,9 @@ from .generated import (
     METHOD_TURN_START,
     Ack,
     AgentCapability,
+    AgentCustomToolResultParams,
     BashInput,
+    CustomToolResultResult,
     EditInput,
     ExecutorDrainResult,
     ExecutorInfo,
@@ -462,6 +465,12 @@ class Executor:
         """Deliver the platform's answer; accepted=false means the executor no
         longer waits for it."""
         return await self._call(METHOD_INTERACTION_RESPONSE, params)
+
+    async def respond_custom_tool_result(self, params: AgentCustomToolResultParams) -> CustomToolResultResult:
+        """Deliver the user's result for an agent.custom_tool_use;
+        accepted=false means the executor no longer waits (mark the platform's
+        copy stale)."""
+        return await self._call(METHOD_AGENT_CUSTOM_TOOL_RESULT, params)
 
 
 class HarnessToolSlot(Generic[_I]):

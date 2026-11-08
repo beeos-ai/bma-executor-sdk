@@ -36,13 +36,15 @@ func TestAgentConformanceFixtures(t *testing.T) {
 		MethodTurnCancel: func() any { return &TurnCancelParams{} }, MethodSessionClose: func() any { return &SessionCloseParams{} },
 		MethodSessionEventDelta: func() any { return &SessionEventDeltaParams{} }, MethodInteractionRequest: func() any { return &InteractionRequestParams{} },
 		MethodInteractionResponse: func() any { return &InteractionResponseParams{} }, MethodInteractionCancel: func() any { return &InteractionCancelParams{} },
-		MethodSessionEvent: func() any { return &agentSessionEventParams{} },
+		MethodAgentCustomToolResult: func() any { return &AgentCustomToolResultParams{} },
+		MethodSessionEvent:          func() any { return &agentSessionEventParams{} },
 	}
 	results := map[string]func() any{
 		MethodTurnStart: func() any { return &TurnStartResult{} }, MethodTurnInput: func() any { return &Ack{} },
 		MethodTurnCancel: func() any { return &TurnCancelResult{} }, MethodSessionClose: func() any { return &SessionCloseResult{} },
 		MethodInteractionRequest: func() any { return &InteractionRequestResult{} }, MethodInteractionResponse: func() any { return &InteractionResponseResult{} },
 		MethodInteractionCancel: func() any { return &Ack{} }, MethodSessionEvent: func() any { return &agentSessionEventResult{} },
+		MethodAgentCustomToolResult: func() any { return &CustomToolResultResult{} },
 	}
 	harness := NewHarness(HarnessOptions{Agent: newRecordingPlatform()})
 	covered := map[string]bool{}

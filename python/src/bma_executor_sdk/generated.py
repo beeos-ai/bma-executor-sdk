@@ -16,7 +16,7 @@ class Ack(TypedDict):
     accepted: bool
 
 class AgentCapability(TypedDict):
-    """agent capability. Present with enabled=true when the executor runs a complete agent and accepts turn.start, turn.input, turn.cancel, session.close and interaction.response."""
+    """agent capability. Present with enabled=true when the executor runs a complete agent and accepts turn.start, turn.input, turn.cancel, session.close and interaction.response (and agent.custom_tool_result when custom_tools is true)."""
     enabled: bool
     models: NotRequired[list[AgentModel]]
     permission_modes: NotRequired[list[str]]
@@ -25,7 +25,14 @@ class AgentCapability(TypedDict):
     max_sessions: NotRequired[int]
     turn_resume: NotRequired[bool]
     platform_credentials: NotRequired[list[Literal["brain_tools", "harness_model"]]]
+    custom_tools: NotRequired[bool]
     harness: NotRequired[AgentHarnessCapability]
+
+class AgentCustomToolUseEvent(TypedDict):
+    """A custom tool the local agent is calling: a tool the user's application runs and answers (capability agent.custom_tools). Its event_id is the tool_use_id. The platform shows the session as waiting (session.status_idle with stop_reason requires_action naming the event) and delivers the user's result with agent.custom_tool_result. The turn stays open while the executor waits: the executor does not send session.status_idle for it. If its own timeout passes first, the executor ends the call with a failed agent.tool_result naming this event."""
+    type: Literal["agent.custom_tool_use"]
+    name: str
+    input: dict[str, Any]
 
 class AgentErrorInfo(TypedDict):
     """Typed session error."""
@@ -38,6 +45,7 @@ class AgentEventType(str, Enum):
     AgentThinking = "agent.thinking"
     AgentToolUse = "agent.tool_use"
     AgentToolResult = "agent.tool_result"
+    AgentCustomToolUse = "agent.custom_tool_use"
     AgentMcpToolUse = "agent.mcp_tool_use"
     AgentMcpToolResult = "agent.mcp_tool_result"
     SessionStatusRunning = "session.status_running"
@@ -216,6 +224,10 @@ class Cursors(TypedDict):
     """Per-stream byte cursors."""
     stdout: int
     stderr: int
+
+class CustomToolResultResult(TypedDict):
+    """agent.custom_tool_result result. accepted=true: the executor took the result for the call it was waiting on. accepted=false: it no longer waits (unknown tool_use_id, already answered, timed out, or canceled with its turn); the platform marks its copy stale and does not send it again."""
+    accepted: bool
 
 class DisplayCapability(TypedDict):
     """v1.1 display object. v1 sent a boolean; the server accepts both."""
@@ -726,6 +738,7 @@ class SessionEventType(str, Enum):
     AgentMessage = "agent.message"
     AgentThinking = "agent.thinking"
     AgentToolUse = "agent.tool_use"
+    AgentCustomToolUse = "agent.custom_tool_use"
     AgentMcpToolUse = "agent.mcp_tool_use"
     AgentMcpToolResult = "agent.mcp_tool_result"
     SessionStatusRunning = "session.status_running"
@@ -913,7 +926,7 @@ class WriteInput(TypedDict):
     path: str
     content: str
 
-AgentEvent = AgentMessageEvent | AgentThinkingEvent | AgentToolUseEvent | AgentToolResultEvent | AgentMcpToolUseEvent | AgentMcpToolResultEvent | SessionStatusRunningEvent | SessionStatusIdleEvent | SessionErrorEvent
+AgentEvent = AgentMessageEvent | AgentThinkingEvent | AgentToolUseEvent | AgentToolResultEvent | AgentCustomToolUseEvent | AgentMcpToolUseEvent | AgentMcpToolResultEvent | SessionStatusRunningEvent | SessionStatusIdleEvent | SessionErrorEvent
 
 JsonRpcId = str
 
@@ -1192,6 +1205,13 @@ class InteractionResponseParams(TypedDict):
     answers: NotRequired[list[str]]
     responder: NotRequired[InteractionResponder]
 
+class AgentCustomToolResultParams(TypedDict):
+    "Params object of agent.custom_tool_result."
+    session_id: str
+    tool_use_id: str
+    content: list[ContentBlock]
+    is_error: NotRequired[bool]
+
 class InteractionCancelParams(TypedDict):
     "Params object of interaction.cancel."
     session_id: str
@@ -1250,6 +1270,7 @@ METHOD_SESSION_CLOSE = "session.close"
 METHOD_SESSION_EVENT_DELTA = "session.event_delta"
 METHOD_INTERACTION_REQUEST = "interaction.request"
 METHOD_INTERACTION_RESPONSE = "interaction.response"
+METHOD_AGENT_CUSTOM_TOOL_RESULT = "agent.custom_tool_result"
 METHOD_INTERACTION_CANCEL = "interaction.cancel"
 
 METHODS: dict[str, MethodSpec] = {
@@ -1290,5 +1311,6 @@ METHODS: dict[str, MethodSpec] = {
     "session.event_delta": MethodSpec(name="session.event_delta", direction="executor-to-harness", kind="notification", since="bma.executor.v1.1", params_type="SessionEventDeltaParams", result_type=None, capability="agent", idempotent_by=None),
     "interaction.request": MethodSpec(name="interaction.request", direction="executor-to-harness", kind="request", since="bma.executor.v1.1", params_type="InteractionRequestParams", result_type="InteractionRequestResult", capability="agent", idempotent_by="interaction_id"),
     "interaction.response": MethodSpec(name="interaction.response", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="InteractionResponseParams", result_type="InteractionResponseResult", capability="agent", idempotent_by="interaction_id"),
+    "agent.custom_tool_result": MethodSpec(name="agent.custom_tool_result", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="AgentCustomToolResultParams", result_type="CustomToolResultResult", capability="agent", idempotent_by="tool_use_id"),
     "interaction.cancel": MethodSpec(name="interaction.cancel", direction="executor-to-harness", kind="request", since="bma.executor.v1.1", params_type="InteractionCancelParams", result_type="Ack", capability="agent", idempotent_by="interaction_id"),
 }

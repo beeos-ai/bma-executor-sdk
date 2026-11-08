@@ -29,6 +29,8 @@ import {
   type InteractionRequestResult,
   type InteractionResponseParams,
   type InteractionResponseResult,
+  type AgentCustomToolResultParams,
+  type CustomToolResultResult,
   type SessionAssignParams,
   type SessionAssignResult,
   type SessionCloseParams,
@@ -477,6 +479,11 @@ export class HarnessExecutor {
   respondInteraction(params: InteractionResponseParams): Promise<InteractionResponseResult> {
     return this.call('interaction.response', params)
   }
+
+  /** Delivers the user's result for an agent.custom_tool_use; accepted=false means the executor no longer waits (mark the platform's copy stale). */
+  respondCustomToolResult(params: AgentCustomToolResultParams): Promise<CustomToolResultResult> {
+    return this.call('agent.custom_tool_result', params)
+  }
 }
 
 interface ToolCallRecord {
@@ -710,6 +717,7 @@ const AGENT_EVENT_TYPES = new Set([
   'agent.thinking',
   'agent.tool_use',
   'agent.tool_result',
+  'agent.custom_tool_use',
   'agent.mcp_tool_use',
   'agent.mcp_tool_result',
   'session.status_running',

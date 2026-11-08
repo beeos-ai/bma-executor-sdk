@@ -46,6 +46,7 @@
         "agent.message",
         "agent.thinking",
         "agent.tool_use",
+        "agent.custom_tool_use",
         "agent.mcp_tool_use",
         "agent.mcp_tool_result",
         "session.status_running",
