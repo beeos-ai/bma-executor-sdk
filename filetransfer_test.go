@@ -20,7 +20,8 @@ type fakeFileEndpoint struct {
 }
 
 func (f *fakeFileEndpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Authorization") != "Bearer mtok" || r.URL.Path != "/api/v1/daemon/processes/prc_1/file" {
+	if r.Header.Get("Authorization") != "Bearer mtok" ||
+		!strings.HasPrefix(r.URL.Path, "/api/v1/daemon/processes/prc_") || !strings.HasSuffix(r.URL.Path, "/file") {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}

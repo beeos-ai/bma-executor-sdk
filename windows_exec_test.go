@@ -536,7 +536,7 @@ func TestWindowsFileTransferProcess(t *testing.T) {
 	transfer := func(id, direction, path string) ProcessState {
 		t.Helper()
 		state, err := w.start(t, ProcessStartParams{
-			ProcessID: id, WaitMS: 60000, Stdin: StdinClosed, FileTransfer: &ProcessFileTransfer{Direction: direction, LocalPath: path},
+			ProcessID: "prc_" + id, WaitMS: 60000, Stdin: StdinClosed, FileTransfer: &ProcessFileTransfer{Direction: direction, LocalPath: path},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -545,7 +545,7 @@ func TestWindowsFileTransferProcess(t *testing.T) {
 	}
 	state := transfer("up", FileTransferUpload, source)
 	if state.State != ProcessExited || state.FileTransfer == nil || state.FileTransfer.Digest != digestOf([]byte("deliverable")) {
-		t.Fatalf("upload = %+v (%+v)", state, state.FileTransfer)
+		t.Fatalf("upload = %+v (%+v) output %q", state, state.FileTransfer, w.output(t, "prc_up"))
 	}
 	if endpoint.filename != "report one.txt" {
 		t.Fatalf("uploaded filename = %q", endpoint.filename)
