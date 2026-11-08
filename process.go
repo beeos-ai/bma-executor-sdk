@@ -74,6 +74,9 @@ type ProcessContext struct {
 	// Client.SessionContext, to read the session's metadata.
 	AgentSessionID string
 	Metadata       map[string]string
+	// Client is the connection of the brain that started the process (for
+	// machine-token requests such as a file transfer).
+	Client *Client
 }
 
 // LaunchRequest is one command process or package install about to start.
@@ -259,7 +262,7 @@ func (s *stream) append(p []byte) {
 type process struct {
 	id        string
 	specHash  string
-	cmd       *exec.Cmd
+	tree      *processTree
 	pid       int
 	startedAt time.Time
 
@@ -306,7 +309,7 @@ func (p *process) signal(sig processSignal) error {
 		p.cancel(name)
 		return nil
 	}
-	return signalGroup(p.cmd.Process, sig)
+	return p.tree.signal(sig)
 }
 
 // notifyLocked wakes every waiting read. Callers hold p.mu.
@@ -551,7 +554,7 @@ func (p *processes) prepare(ctx context.Context, req Request, params ProcessStar
 	session := req.Session
 	plan := launchPlan{process: ProcessContext{
 		SessionID: session.ID(), ProcessID: params.ProcessID,
-		AgentSessionID: params.Metadata[MetadataAgentSessionID], Metadata: params.Metadata,
+		AgentSessionID: params.Metadata[MetadataAgentSessionID], Metadata: params.Metadata, Client: req.Client,
 	}}
 	command := params.FileTransfer == nil && params.PackageInstall == nil
 	if command {
@@ -777,12 +780,9 @@ func spawn(params ProcessStartParams, cwd string, env []string, runAs *RunAs) (*
 	cmd := exec.Command(params.Argv[0], params.Argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = env
+	setCommandLine(cmd)
 	if params.IOMode == IOModePTY {
-		master, err := startPTY(cmd, runAs)
-		if err != nil {
-			return nil, fmt.Errorf("spawn %s on a pty: %w", params.Argv[0], err)
-		}
-		return ptyProcess(params, cmd, master), nil
+		return spawnPTY(params, cmd, runAs)
 	}
 	setProcessGroupID(cmd)
 	setCredential(cmd, runAs)
@@ -811,7 +811,8 @@ func spawn(params ProcessStartParams, cwd string, env []string, runAs *RunAs) (*
 			return nil, err
 		}
 	}
-	if err := cmd.Start(); err != nil {
+	tree, err := startCommand(cmd)
+	if err != nil {
 		for _, f := range []*os.File{stdoutR, stdoutW, stderrR, stderrW} {
 			if f != nil {
 				_ = f.Close()
@@ -824,7 +825,7 @@ func spawn(params ProcessStartParams, cwd string, env []string, runAs *RunAs) (*
 	if stderrW != nil {
 		_ = stderrW.Close()
 	}
-	proc := newCommandProcess(params.ProcessID, cmd)
+	proc := newCommandProcess(params.ProcessID, cmd, tree)
 	proc.stdin, proc.stdinClosed = stdin, stdin == nil
 	go proc.pump(stdoutR, func(p *process) *stream { return &p.stdout })
 	if merge {
@@ -836,30 +837,24 @@ func spawn(params ProcessStartParams, cwd string, env []string, runAs *RunAs) (*
 	return proc, nil
 }
 
-func newCommandProcess(id string, cmd *exec.Cmd) *process {
+func newCommandProcess(id string, cmd *exec.Cmd, tree *processTree) *process {
+	return newProcess(id, cmd.Process.Pid, tree, func() (int, string) {
+		_ = cmd.Wait()
+		return tree.exit(cmd.ProcessState)
+	})
+}
+
+// newProcess is a running process; wait blocks until it ends and returns its
+// exit code or signal name.
+func newProcess(id string, pid int, tree *processTree, wait func() (int, string)) *process {
 	return &process{
-		id: id, cmd: cmd, pid: cmd.Process.Pid, startedAt: time.Now(),
+		id: id, tree: tree, pid: pid, startedAt: time.Now(),
 		changed: make(chan struct{}), applied: map[string]bool{},
-		state: ProcessRunning, exited: make(chan struct{}),
-		wait: func() (int, string) {
-			_ = cmd.Wait()
-			return exitStatus(cmd.ProcessState)
-		},
+		state: ProcessRunning, exited: make(chan struct{}), wait: wait,
 	}
 }
 
-// spawnPTY runs the command on a pseudo-terminal. Output is one stream (the
-// terminal merges stderr), so the process reports stderr "merge".
-func ptyProcess(params ProcessStartParams, cmd *exec.Cmd, master *os.File) *process {
-	proc := newCommandProcess(params.ProcessID, cmd)
-	proc.stdin, proc.pty = master, true
-	proc.stderrMode = StderrMerge
-	proc.stderr.eof = true
-	go proc.pump(master, func(p *process) *stream { return &p.stdout })
-	return proc
-}
-
-func (p *process) pump(r *os.File, pick func(*process) *stream) {
+func (p *process) pump(r io.ReadCloser, pick func(*process) *stream) {
 	defer func() { _ = r.Close() }()
 	chunk := make([]byte, 32*1024)
 	for {
@@ -915,6 +910,9 @@ func (t *processTable) retainEndedLocked() {
 	for i, e := range all {
 		if len(all)-i > maxRetainedEnded {
 			delete(t.processes, e.p.id)
+			if e.p.tree != nil {
+				e.p.tree.release()
+			}
 			retained -= e.bytes
 			continue
 		}
@@ -1210,6 +1208,9 @@ func (t *processTable) terminateAll(grace time.Duration) {
 		go func() {
 			defer wg.Done()
 			terminate(p, grace)
+			if p.tree != nil {
+				p.tree.killAll()
+			}
 		}()
 	}
 	wg.Wait()

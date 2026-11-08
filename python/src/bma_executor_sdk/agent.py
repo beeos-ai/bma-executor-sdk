@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from ._rpc import ClientStoppedError, ExecutorError, NotConnectedError, RPCError, rpc_error
 from .generated import (
+    METHOD_AGENT_CUSTOM_TOOL_RESULT,
     METHOD_INTERACTION_CANCEL,
     METHOD_INTERACTION_REQUEST,
     METHOD_INTERACTION_RESPONSE,
@@ -32,6 +33,7 @@ from .generated import (
     METHOD_TURN_INPUT,
     METHOD_TURN_START,
     AgentCapability,
+    AgentCustomToolResultParams,
     AgentEventType,
     ConnectionState,
     InteractionCancelParams,
@@ -171,6 +173,26 @@ class AgentTurn:
         finally:
             s.pending.pop(interaction_id, None)
 
+    async def request_custom_tool(self, name: str, tool_input: dict[str, Any]) -> tuple[str, AgentCustomToolResultParams]:
+        """Emit agent.custom_tool_use for a tool the user's application runs
+        (capability custom_tools) and wait for agent.custom_tool_result.
+        Returns the call's event id (the tool_use_id) and the result. The turn
+        stays open while it waits. When the task is canceled the wait raises
+        CancelledError and a later result answers accepted=false; to give up
+        on a call the agent emits a failed agent.tool_result naming the id
+        (wrap the call in asyncio.timeout for an executor-side limit)."""
+        s = self._session
+        tool_use_id = self.new_event_id()
+        answer: asyncio.Future[AgentCustomToolResultParams] = asyncio.get_running_loop().create_future()
+        # Register before emitting: the platform may answer as soon as the event is acknowledged.
+        s.custom_tools[tool_use_id] = answer
+        try:
+            self.emit_with_id(tool_use_id, {"type": "agent.custom_tool_use", "name": name, "input": tool_input})
+            return tool_use_id, await asyncio.shield(answer)
+        finally:
+            s.custom_tools.pop(tool_use_id, None)
+            s.custom_done.add(tool_use_id)
+
     async def cancel_interaction(self, interaction_id: str, reason: str) -> None:
         """Withdraw an open interaction, for example after the user answered it
         locally (reason resolved_locally)."""
@@ -189,6 +211,7 @@ class _AgentRuntime:
             METHOD_TURN_CANCEL: self.turn_cancel,
             METHOD_SESSION_CLOSE: self.session_close,
             METHOD_INTERACTION_RESPONSE: self.interaction_response,
+            METHOD_AGENT_CUSTOM_TOOL_RESULT: self.custom_tool_result,
         }
 
     def session(self, session_id: str, create: bool) -> _AgentSession | None:
@@ -325,6 +348,18 @@ class _AgentRuntime:
         waiter.set_result(params)
         return {"accepted": True}
 
+    async def custom_tool_result(self, params: AgentCustomToolResultParams) -> dict[str, bool]:
+        s = self.session(params.get("session_id", ""), False)
+        if s is None:
+            return {"accepted": False}
+        tool_use_id = params.get("tool_use_id", "")
+        waiter = s.custom_tools.get(tool_use_id)
+        if waiter is None or tool_use_id in s.custom_done or waiter.done():
+            return {"accepted": False}
+        s.custom_done.add(tool_use_id)
+        waiter.set_result(params)
+        return {"accepted": True}
+
 
 def _cancel_turn(turn: AgentTurn) -> None:
     turn._canceled = True  # noqa: SLF001
@@ -353,6 +388,8 @@ class _AgentSession:
         self.turn: AgentTurn | None = None
         self.results: dict[str, TurnStartResult] = {}
         self.pending: dict[str, asyncio.Future[InteractionResponseParams]] = {}
+        self.custom_tools: dict[str, asyncio.Future[AgentCustomToolResultParams]] = {}
+        self.custom_done: set[str] = set()
         self.answered: set[str] = set()
         self.sender: asyncio.Task[Any] | None = None
 

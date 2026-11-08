@@ -90,7 +90,10 @@ type ACPModelUpstream struct {
 
 // ACPAgentOptions configures NewACPAgent.
 type ACPAgentOptions struct {
-	// Command is the agent's argv, for example {"/opt/bma/bma-dsh-acp"} or {"node", "bma-dsh-acp.mjs"}.
+	// Command is the agent's argv, for example {"/opt/bma/bma-dsh-acp"} or
+	// {"/opt/bma/node", "/opt/bma/bma-dsh-acp.mjs"}. Command[0] must be an
+	// absolute path: the agent is never looked up on PATH (a user's own dsh
+	// there must not be started by mistake).
 	Command []string
 	// Env adds KEY=VALUE entries to the agent's environment (PATH, HOME, USER, LANG and TMPDIR come from the executor).
 	Env []string
@@ -159,6 +162,9 @@ type acpTurn struct {
 func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 	if len(opts.Command) == 0 || opts.Core == nil || opts.StateDir == "" {
 		return nil, errors.New("bmaexecutor: ACPAgentOptions.Command, Core and StateDir are required")
+	}
+	if !filepath.IsAbs(opts.Command[0]) {
+		return nil, fmt.Errorf("bmaexecutor: ACPAgentOptions.Command[0] must be an absolute path, got %q (no PATH lookup)", opts.Command[0])
 	}
 	if opts.Upstream.BaseURL == "" {
 		return nil, errors.New("bmaexecutor: ACPAgentOptions.Upstream.BaseURL is required")
@@ -787,6 +793,7 @@ func (t *acpTurn) commit(messageID, kind, text string) {
 type acpProcess struct {
 	agent  *ACPAgent
 	cmd    *exec.Cmd
+	tree   *processTree
 	stdin  io.WriteCloser
 	wmu    sync.Mutex
 	stderr *tailBuffer
@@ -899,12 +906,15 @@ func (a *ACPAgent) startProcess(ctx context.Context) (*acpProcess, error) {
 	p := &acpProcess{agent: a, cmd: cmd, stdin: stdin, stderr: &tailBuffer{max: 16 << 10},
 		waiting: map[int64]chan acpWire{}, inflight: map[string]context.CancelFunc{}, done: make(chan struct{})}
 	cmd.Stderr = p.stderr
-	if err := cmd.Start(); err != nil {
+	tree, err := startCommand(cmd)
+	if err != nil {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
+	p.tree = tree
 	go p.readLoop(stdout)
 	go func() {
 		err := cmd.Wait()
+		tree.close() // nothing the agent started outlives it
 		p.mu.Lock()
 		p.exitErr = err
 		waiting := p.waiting
@@ -956,11 +966,11 @@ func (p *acpProcess) kill(grace time.Duration) {
 		return
 	}
 	_ = p.stdin.Close()
-	_ = signalGroup(p.cmd.Process, signalTerminate)
+	_ = p.tree.signal(signalTerminate)
 	select {
 	case <-p.done:
 	case <-time.After(grace):
-		_ = signalGroup(p.cmd.Process, signalKill)
+		_ = p.tree.signal(signalKill)
 		<-p.done
 	}
 }

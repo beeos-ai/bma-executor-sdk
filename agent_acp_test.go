@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -171,6 +172,19 @@ func TestACPAgentCapabilityDeclaresDSHHarness(t *testing.T) {
 	}
 	if capability.TurnResume || !contains(capability.InteractionKinds, InteractionKindPermission) || !contains(capability.PermissionModes, "accept_edits") {
 		t.Fatalf("capability = %+v", capability)
+	}
+}
+
+func TestACPAgentRefusesARelativeCommand(t *testing.T) {
+	core, err := NewCore(CoreOptions{WorkRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.Close()
+	_, err = NewACPAgent(context.Background(), ACPAgentOptions{Command: []string{"bma-dsh-acp"}, Core: core, StateDir: t.TempDir(),
+		Upstream: ACPModelUpstream{BaseURL: "http://127.0.0.1:1/v1"}})
+	if err == nil || !strings.Contains(err.Error(), "absolute path") {
+		t.Fatalf("relative command: %v", err)
 	}
 }
 
@@ -737,7 +751,11 @@ func TestACPAgentWithBmaDshAcp(t *testing.T) {
 	}
 	command := []string{bin}
 	if strings.HasSuffix(bin, ".mjs") {
-		command = []string{"node", bin}
+		node, err := exec.LookPath("node") // the test resolves it; ACPAgent itself never looks on PATH
+		if err != nil {
+			t.Skip("node not found for the .mjs bundle")
+		}
+		command = []string{node, bin}
 	}
 	var mu sync.Mutex
 	var tools [][]string

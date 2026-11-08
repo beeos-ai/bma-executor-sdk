@@ -5,6 +5,7 @@ package bmaexecutor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -42,6 +43,36 @@ func setProcessGroup(cmd *exec.Cmd) {
 func setProcessGroupID(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
+
+// processTree is the process group of one started command.
+type processTree struct{ process *os.Process }
+
+// startCommand starts cmd (already in its own process group, see
+// setProcessGroup/setProcessGroupID).
+func startCommand(cmd *exec.Cmd) (*processTree, error) {
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return &processTree{process: cmd.Process}, nil
+}
+
+func (t *processTree) signal(sig processSignal) error { return signalGroup(t.process, sig) }
+
+func (t *processTree) exit(state *os.ProcessState) (int, string) { return exitStatus(state) }
+
+// killAll is a no-op: a group's leftovers outlive an ended command, as they
+// always did on POSIX.
+func (t *processTree) killAll() {}
+
+// close is a no-op: context cancellation already killed the group, and the
+// group id may be recycled once its leader was reaped.
+func (t *processTree) close() {}
+
+// release leaves the group's remaining processes running.
+func (t *processTree) release() {}
+
+// setCommandLine is a Windows concern (cmd.exe quoting).
+func setCommandLine(*exec.Cmd) {}
 
 // shellCommand runs command with a login bash (sh when bash is missing).
 func shellCommand(ctx context.Context, command string) *exec.Cmd {
@@ -92,6 +123,21 @@ func signalName(signal syscall.Signal) string {
 	default:
 		return "SIG" + strconv.Itoa(int(signal))
 	}
+}
+
+// spawnPTY runs the command on a pseudo-terminal. Output is one stream (the
+// terminal merges stderr), so the process reports stderr "merge".
+func spawnPTY(params ProcessStartParams, cmd *exec.Cmd, runAs *RunAs) (*process, error) {
+	master, err := startPTY(cmd, runAs)
+	if err != nil {
+		return nil, fmt.Errorf("spawn %s on a pty: %w", params.Argv[0], err)
+	}
+	proc := newCommandProcess(params.ProcessID, cmd, &processTree{process: cmd.Process})
+	proc.stdin, proc.pty = master, true
+	proc.stderrMode = StderrMerge
+	proc.stderr.eof = true
+	go proc.pump(master, func(p *process) *stream { return &p.stdout })
+	return proc, nil
 }
 
 // startPTY runs cmd on a new 24x80 pseudo-terminal. The child leads its own

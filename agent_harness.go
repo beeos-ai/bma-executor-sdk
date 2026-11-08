@@ -67,7 +67,7 @@ func (l *agentLedger) lock(sessionID string) *sync.Mutex {
 
 var agentEventTypes = map[string]bool{
 	AgentEventTypeAgentMessage: true, AgentEventTypeAgentThinking: true, AgentEventTypeAgentToolUse: true,
-	AgentEventTypeAgentToolResult: true, AgentEventTypeAgentMcpToolUse: true, AgentEventTypeAgentMcpToolResult: true, AgentEventTypeAgentCustomToolUse: true,
+	AgentEventTypeAgentToolResult: true, AgentEventTypeAgentCustomToolUse: true, AgentEventTypeAgentMcpToolUse: true, AgentEventTypeAgentMcpToolResult: true,
 	AgentEventTypeSessionStatusRunning: true, AgentEventTypeSessionStatusIdle: true, AgentEventTypeSessionError: true,
 }
 
@@ -233,5 +233,15 @@ func (e *Executor) CloseAgentSession(ctx context.Context, params SessionClosePar
 func (e *Executor) RespondInteraction(ctx context.Context, params InteractionResponseParams) (InteractionResponseResult, error) {
 	var result InteractionResponseResult
 	err := e.call(ctx, MethodInteractionResponse, params, &result)
+	return result, err
+}
+
+// RespondCustomToolResult delivers the user's result for an
+// agent.custom_tool_use. accepted=false means the executor no longer waits
+// (unknown tool_use_id, answered already, timed out, or canceled with its
+// turn); mark the platform's copy stale and do not send it again.
+func (e *Executor) RespondCustomToolResult(ctx context.Context, params AgentCustomToolResultParams) (CustomToolResultResult, error) {
+	var result CustomToolResultResult
+	err := e.call(ctx, MethodAgentCustomToolResult, params, &result)
 	return result, err
 }

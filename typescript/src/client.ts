@@ -292,6 +292,7 @@ type ServedRequestMethod =
   | 'turn.cancel'
   | 'session.close'
   | 'interaction.response'
+  | 'agent.custom_tool_result'
 /** Harness-to-executor requests served with `onRequest`: process.*, terminal.*, skill.install, workspace.backup. */
 export type ExecutorRequestMethod = Exclude<HarnessToExecutorRequestMethod, ServedRequestMethod>
 export type RequestHandler<M extends ExecutorRequestMethod> = (
@@ -485,7 +486,7 @@ export class ExecutorClient {
     this.requestHandlers.set(method, handler as (params: unknown) => unknown)
   }
 
-  /** Advertises the agent capability and serves turn.*, session.close and interaction.response. Call before start. */
+  /** Advertises the agent capability and serves turn.*, session.close, interaction.response and agent.custom_tool_result. Call before start. */
   serveAgent(handler: AgentHandler, capability: Omit<AgentCapability, 'enabled'> = {}): void {
     this.agent = new AgentRuntime(this.agentHost(), handler, { ...capability, enabled: true })
   }

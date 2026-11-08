@@ -364,7 +364,7 @@ func (s *fileSession) removeStale(root *os.Root, want map[string]sessionFile) er
 		return err
 	}
 	for _, rel := range stale {
-		if err := root.Remove(rel); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := removeInRoot(root, rel); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		delete(s.mounts, rel)
@@ -442,7 +442,7 @@ func (s *fileSession) download(ctx context.Context, root *os.Root, rel string, f
 	if info, err := root.Lstat(rel); err == nil && info.IsDir() {
 		return fmt.Errorf("%s is a directory", rel)
 	}
-	if err := root.Rename(temporary, rel); err != nil {
+	if err := replaceInRoot(root, temporary, rel); err != nil {
 		return fmt.Errorf("place file: %w", err)
 	}
 	committed = true
