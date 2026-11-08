@@ -16,6 +16,7 @@ import (
 //	tree       starts a "sleep" grandchild, writes its pid to BMA_TEST_PIDFILE, sleeps.
 //	orphan     like tree, then exits at once.
 //	interrupt  prints "ready", waits for an interrupt, prints "interrupted", exits 0.
+//	isatty     prints tty=true when stdout is a terminal.
 //	echo       copies a line from stdin to stdout, prefixed "echo:".
 func runTestHelper(mode string) {
 	switch mode {
@@ -44,6 +45,9 @@ func runTestHelper(mode string) {
 		fmt.Println("ready")
 		<-ch
 		fmt.Println("interrupted")
+	case "isatty":
+		info, err := os.Stdout.Stat()
+		fmt.Printf("tty=%v\n", err == nil && info.Mode()&os.ModeCharDevice != 0)
 	case "echo":
 		var line string
 		_, _ = fmt.Scanln(&line)

@@ -31,13 +31,6 @@ const (
 // that it did not handle.
 const statusControlCExit = 0xC000013A
 
-// ptySupported reports whether process.start io_mode "pty" works here.
-const ptySupported = false
-
-func startPTY(*exec.Cmd, *RunAs) (*os.File, error) {
-	return nil, errors.New("io_mode=pty is not supported on windows")
-}
-
 // processTree is one started command and everything it spawns: a Job Object
 // with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (the Windows counterpart of the
 // POSIX process group), plus the console process group used for interrupts.
@@ -45,8 +38,11 @@ func startPTY(*exec.Cmd, *RunAs) (*os.File, error) {
 // process management: the process is created suspended, assigned to the job
 // and only then resumed, so no descendant escapes the job.
 type processTree struct {
-	job     windows.Handle
-	pid     uint32
+	job windows.Handle
+	pid uint32
+	// pty is the pseudo console of an io_mode=pty process, nil otherwise.
+	pty *conPTY
+
 	mu      sync.Mutex
 	process *os.Process
 	closed  bool
@@ -88,11 +84,19 @@ func (t *processTree) attach(pid int) error {
 		return fmt.Errorf("open process %d: %w", pid, err)
 	}
 	defer windows.CloseHandle(handle)
+	if err := t.assign(handle, pid); err != nil {
+		return err
+	}
+	return resumeProcess(handle)
+}
+
+// assign puts the process in the job.
+func (t *processTree) assign(handle windows.Handle, pid int) error {
 	if err := windows.AssignProcessToJobObject(t.job, handle); err != nil {
 		return fmt.Errorf("assign process %d to job: %w", pid, err)
 	}
 	t.pid = uint32(pid)
-	return resumeProcess(handle)
+	return nil
 }
 
 var ntResumeProcess = windows.NewLazySystemDLL("ntdll.dll").NewProc("NtResumeProcess")
@@ -166,6 +170,9 @@ func (t *processTree) signal(sig processSignal) error {
 }
 
 func (t *processTree) interruptLocked() error {
+	if t.pty != nil {
+		return t.pty.interrupt()
+	}
 	if t.pid == 0 {
 		return errors.New("process is not started")
 	}
@@ -178,13 +185,18 @@ func (t *processTree) exit(state *os.ProcessState) (int, string) {
 	if state == nil {
 		return -1, ""
 	}
+	return t.exitCode(uint32(state.ExitCode()))
+}
+
+// exitCode is exit for a raw Windows exit code.
+func (t *processTree) exitCode(raw uint32) (int, string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	code := state.ExitCode()
+	code := int(raw)
 	switch {
 	case t.killed:
 		return -1, "SIGKILL"
-	case uint32(code) == statusControlCExit:
+	case raw == statusControlCExit:
 		if t.sent == "" {
 			return -1, "SIGINT"
 		}
@@ -217,6 +229,9 @@ func (t *processTree) closeLocked() {
 	}
 	t.closed = true
 	_ = windows.CloseHandle(t.job) // KILL_ON_JOB_CLOSE ends what is left
+	if t.pty != nil {
+		t.pty.closeAsync()
+	}
 }
 
 // release lets what the command left running keep running (as a POSIX
