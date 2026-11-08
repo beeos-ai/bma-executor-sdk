@@ -60,6 +60,13 @@ supported runtimes).
   (`coordinate`, `start_coordinate`, `text`, `scroll_direction`,
   `scroll_amount`) plus `click_count`, `button`, `pid`, `window_id`. Go only;
   there is still no public `computer_*` tool slot in any language.
+- **Windows package:** `examples/windows-hand` is the machine executor for a
+  Windows machine (cmd.exe tool, processes, ConPTY, session files, file
+  transfers, optional Cua Driver). `packaging/windows` builds
+  `bma-windows-hand-<sha>-windows-amd64.zip` (`build.sh`, `install.ps1`
+  registers logon tasks, `uninstall.ps1`, checksums); CI keeps it as the
+  `bma-windows-hand` artifact and installs it on a runner. See
+  [docs/executor/windows.md](docs/executor/windows.md).
 - **CI:** the Go suite runs on `windows-latest`.
 
 ## 1.2.0

@@ -1,0 +1,6 @@
+Optional component: Cua Driver (https://github.com/trycua/cua), used only for
+computer use and only when installed separately with install.ps1
+-CuaDriverDir. This package does not contain it. Only the MIT-licensed driver
+is used: the OmniParser perception extension (AGPL-3.0-only) and the space
+daemon (FSL) are not installed or called. Telemetry is turned off (CUA_TELEMETRY=0).
+The driver's MIT license and copyright notice must stay with any copy you install.
