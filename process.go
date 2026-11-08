@@ -259,7 +259,7 @@ func (s *stream) append(p []byte) {
 type process struct {
 	id        string
 	specHash  string
-	cmd       *exec.Cmd
+	tree      *processTree
 	pid       int
 	startedAt time.Time
 
@@ -306,7 +306,7 @@ func (p *process) signal(sig processSignal) error {
 		p.cancel(name)
 		return nil
 	}
-	return signalGroup(p.cmd.Process, sig)
+	return p.tree.signal(sig)
 }
 
 // notifyLocked wakes every waiting read. Callers hold p.mu.
@@ -812,7 +812,8 @@ func spawn(params ProcessStartParams, cwd string, env []string, runAs *RunAs) (*
 			return nil, err
 		}
 	}
-	if err := cmd.Start(); err != nil {
+	tree, err := startCommand(cmd)
+	if err != nil {
 		for _, f := range []*os.File{stdoutR, stdoutW, stderrR, stderrW} {
 			if f != nil {
 				_ = f.Close()
@@ -825,7 +826,7 @@ func spawn(params ProcessStartParams, cwd string, env []string, runAs *RunAs) (*
 	if stderrW != nil {
 		_ = stderrW.Close()
 	}
-	proc := newCommandProcess(params.ProcessID, cmd)
+	proc := newCommandProcess(params.ProcessID, cmd, tree)
 	proc.stdin, proc.stdinClosed = stdin, stdin == nil
 	go proc.pump(stdoutR, func(p *process) *stream { return &p.stdout })
 	if merge {
@@ -837,14 +838,14 @@ func spawn(params ProcessStartParams, cwd string, env []string, runAs *RunAs) (*
 	return proc, nil
 }
 
-func newCommandProcess(id string, cmd *exec.Cmd) *process {
+func newCommandProcess(id string, cmd *exec.Cmd, tree *processTree) *process {
 	return &process{
-		id: id, cmd: cmd, pid: cmd.Process.Pid, startedAt: time.Now(),
+		id: id, tree: tree, pid: cmd.Process.Pid, startedAt: time.Now(),
 		changed: make(chan struct{}), applied: map[string]bool{},
 		state: ProcessRunning, exited: make(chan struct{}),
 		wait: func() (int, string) {
 			_ = cmd.Wait()
-			return exitStatus(cmd.ProcessState)
+			return tree.exit(cmd.ProcessState)
 		},
 	}
 }
@@ -852,7 +853,7 @@ func newCommandProcess(id string, cmd *exec.Cmd) *process {
 // spawnPTY runs the command on a pseudo-terminal. Output is one stream (the
 // terminal merges stderr), so the process reports stderr "merge".
 func ptyProcess(params ProcessStartParams, cmd *exec.Cmd, master *os.File) *process {
-	proc := newCommandProcess(params.ProcessID, cmd)
+	proc := newCommandProcess(params.ProcessID, cmd, &processTree{process: cmd.Process})
 	proc.stdin, proc.pty = master, true
 	proc.stderrMode = StderrMerge
 	proc.stderr.eof = true
@@ -916,6 +917,9 @@ func (t *processTable) retainEndedLocked() {
 	for i, e := range all {
 		if len(all)-i > maxRetainedEnded {
 			delete(t.processes, e.p.id)
+			if e.p.tree != nil {
+				e.p.tree.release()
+			}
 			retained -= e.bytes
 			continue
 		}
@@ -1211,6 +1215,9 @@ func (t *processTable) terminateAll(grace time.Duration) {
 		go func() {
 			defer wg.Done()
 			terminate(p, grace)
+			if p.tree != nil {
+				p.tree.killAll()
+			}
 		}()
 	}
 	wg.Wait()
