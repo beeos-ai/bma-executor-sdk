@@ -94,6 +94,78 @@ jobs:
           go vet ./...
           go test -count=1 ./...
 
+  # The installable Windows package (zip + install/uninstall scripts), kept as
+  # a build artifact for machine verification, and installed once on a runner.
+  windows-package:
+    name: Windows package (zip)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27"
+          cache-dependency-path: go.sum
+
+      - name: Build
+        run: packaging/windows/build.sh dist
+
+      - name: Keep the package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bma-windows-hand
+          path: dist/*.zip
+          retention-days: 30
+          if-no-files-found: error
+
+  windows-package-install:
+    name: Windows package install and uninstall
+    needs: windows-package
+    runs-on: windows-latest
+    steps:
+      - name: Download the package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bma-windows-hand
+          path: package
+
+      - name: Install, check, uninstall
+        shell: pwsh
+        run: |
+          $zip = (Get-ChildItem package\*.zip).FullName
+          Expand-Archive -LiteralPath $zip -DestinationPath expanded
+          Set-Location expanded\bma-windows-hand
+          .\windows-hand.exe -version
+          $sums = Get-Content SHA256SUMS | Where-Object { $_ -notmatch 'SHA256SUMS' }
+          foreach ($line in $sums) {
+            $hash, $name = $line -split '\s+\*?', 2
+            if ((Get-FileHash -Algorithm SHA256 $name).Hash -ne $hash.ToUpper()) { throw "checksum mismatch: $name" }
+          }
+          $dir = Join-Path $env:RUNNER_TEMP 'bma'
+          $token = 'ci-dummy-token-not-a-secret'
+          .\install.ps1 -BaseUrl https://executor.invalid -MachineToken $token -MachineId mch_ci -InstallDir $dir
+          foreach ($path in 'bin\windows-hand.exe', 'executor.env', 'work', 'files', 'logs') {
+            if (-not (Test-Path (Join-Path $dir $path))) { throw "missing $path" }
+          }
+          $task = Get-ScheduledTask -TaskName 'BMA Executor'
+          Write-Host ($task.Actions | Format-List | Out-String)
+          if ($task.Actions[0].Arguments -notmatch 'windows-hand.exe') { throw 'task does not run the executor' }
+          $acl = (Get-Acl (Join-Path $dir 'executor.env')).Access | ForEach-Object { $_.IdentityReference.Value }
+          Write-Host "executor.env readable by: $($acl -join ', ')"
+          if ($acl -contains 'BUILTIN\Users' -or $acl -contains 'Everyone') { throw 'executor.env is readable by everyone' }
+          # Run the installed executor without a platform: it must fail on the unreachable host, not crash.
+          $p = Start-Process -FilePath (Join-Path $dir 'bin\windows-hand.exe') -ArgumentList '-env-file', (Join-Path $dir 'executor.env') `
+            -PassThru -RedirectStandardError (Join-Path $dir 'logs\run.err') -RedirectStandardOutput (Join-Path $dir 'logs\run.out')
+          Start-Sleep -Seconds 8
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          Get-Content (Join-Path $dir 'logs\run.err') -ErrorAction SilentlyContinue | Select-Object -First 8
+          if ((Get-Content (Join-Path $dir 'logs\run.err') -Raw) -match $token) { throw 'the token was logged' }
+          .\uninstall.ps1 -InstallDir $dir -Purge
+          if (Get-ScheduledTask -TaskName 'BMA Executor' -ErrorAction SilentlyContinue) { throw 'task still registered' }
+          if (Test-Path $dir) { throw 'install dir still there' }
+
   # The Windows named pipe transport (npipe://) of the three SDKs. Only the
   # transport tests run here; the full suites run on ubuntu above.
   windows-named-pipe:
