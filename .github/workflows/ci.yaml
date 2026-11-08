@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   test:
-    name: Contract lock and SDK tests (${{ matrix.name }}: Go ${{ matrix.go }}, Node ${{ matrix.node }}, Python ${{ matrix.python }})
+    name: "Contract lock and SDK tests (${{ matrix.name }}: Go ${{ matrix.go }}, Node ${{ matrix.node }}, Python ${{ matrix.python }})"
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
