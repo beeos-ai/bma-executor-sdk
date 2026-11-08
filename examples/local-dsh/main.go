@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -43,6 +44,7 @@ func main() {
 	model := flag.String("model", "", "model id sent upstream")
 	workRoot := flag.String("work-root", filepath.Join(os.TempDir(), "bma-local-dsh"), "session workspaces and allowed cwd root")
 	state := flag.String("state", "", "agent state directory (default <work-root>/.state)")
+	lifeline := flag.Bool("stdin-lifeline", false, "exit when stdin closes (a supervising app passes a pipe, so its exit or crash stops this executor)")
 	flag.Parse()
 	token, key := os.Getenv("BMA_MACHINE_TOKEN"), os.Getenv("BMA_LOCAL_MODEL_KEY")
 	if *baseURL == "" || *agent == "" || *modelBase == "" || token == "" {
@@ -57,6 +59,13 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *lifeline {
+		go func() {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			emit(map[string]any{"level": "info", "msg": "stdin closed; stopping"})
+			stop()
+		}()
+	}
 	logf := func(e bmaexecutor.LogEvent) {
 		line := map[string]any{"level": e.Level, "msg": e.Message}
 		if e.Err != nil {
