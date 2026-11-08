@@ -284,6 +284,10 @@ class ScriptedAgent:
             await asyncio.sleep(60)
         if "fail" in text:
             raise RuntimeError("model unavailable")
+        if "custom" in text:
+            tool_use_id, result = await turn.request_custom_tool("lookup", {"q": "weather"})
+            turn.emit({"type": "agent.tool_result", "tool_use_id": tool_use_id, "content": result["content"], "is_error": result.get("is_error", False)})
+            return
         message_id = turn.new_event_id()
         await turn.delta(message_id, "agent.message", 0, "Working on: ")
         turn.emit_with_id(message_id, {"type": "agent.message", "content": [{"type": "text", "text": "Working on: " + text}]})
@@ -373,6 +377,34 @@ async def test_agent_turn_lifecycle(transport: str) -> None:
         closed = await executor.close_agent_session({"session_id": "ses_a", "reason": "archived"})  # type: ignore[typeddict-item]
         assert closed["closed"] is True and agent.closed == ["ses_a"]
         assert (await executor.close_agent_session({"session_id": "ses_a"}))["closed"] is False  # type: ignore[typeddict-item]
+
+
+async def test_agent_custom_tool_result() -> None:
+    async with agent_pair() as (harness, executor, client, platform, agent):
+        unknown: dict[str, Any] = {"session_id": "ses_none", "tool_use_id": "evt_x", "content": [{"type": "text", "text": "x"}]}
+        assert (await executor.respond_custom_tool_result(unknown))["accepted"] is False  # type: ignore[arg-type]
+
+        await executor.start_turn(turn_start("ses_t", "turn_t", "custom tool"))  # type: ignore[arg-type]
+        await platform.wait_for(lambda: any(e.type == "agent.custom_tool_use" for e in platform.events))
+        await asyncio.sleep(0.05)
+        assert idle_of(platform, "turn_t") is None  # the turn waits for the result
+        use = next(e for e in platform.events if e.type == "agent.custom_tool_use")
+        other = dict(unknown, session_id="ses_t", tool_use_id="evt_other")
+        assert (await executor.respond_custom_tool_result(other))["accepted"] is False  # type: ignore[arg-type]
+        answer: dict[str, Any] = {"session_id": "ses_t", "tool_use_id": use.event_id, "content": [{"type": "text", "text": "sunny"}], "is_error": True}
+        assert (await executor.respond_custom_tool_result(answer))["accepted"] is True  # type: ignore[arg-type]
+        assert (await executor.respond_custom_tool_result(answer))["accepted"] is False  # type: ignore[arg-type]
+        await platform.wait_for(lambda: idle_of(platform, "turn_t"))
+        types = [e.type for e in platform.events if e.session_id == "ses_t"]
+        assert types == ["session.status_running", "agent.custom_tool_use", "agent.tool_result", "session.status_idle"]
+
+        # A result that arrives after the turn was canceled is stale.
+        await executor.start_turn(turn_start("ses_t", "turn_u", "custom tool"))  # type: ignore[arg-type]
+        await platform.wait_for(lambda: sum(e.type == "agent.custom_tool_use" for e in platform.events) == 2)
+        second = [e for e in platform.events if e.type == "agent.custom_tool_use"][1]
+        assert (await executor.cancel_turn({"session_id": "ses_t", "turn_id": "turn_u"}))["canceled"] is True  # type: ignore[typeddict-item]
+        await platform.wait_for(lambda: idle_of(platform, "turn_u"))
+        assert (await executor.respond_custom_tool_result(dict(answer, tool_use_id=second.event_id)))["accepted"] is False  # type: ignore[arg-type]
 
 
 async def test_agent_events_resent_after_reconnect() -> None:

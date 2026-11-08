@@ -12,6 +12,8 @@ import {
   type MethodParamsMap,
   type MethodResultMap,
   type AgentCapability,
+  type AgentCustomToolResultParams,
+  type CustomToolResultResult,
   type AgentEvent,
   type ConnectionState,
   type EventDeltaType,
@@ -252,6 +254,44 @@ export class AgentTurn {
     }
   }
 
+  /**
+   * Emits agent.custom_tool_use for a tool the user's application runs
+   * (capability custom_tools) and waits for the platform's
+   * agent.custom_tool_result. Resolves with the call's event id (the
+   * tool_use_id) and the result. The turn stays open while it waits: do not
+   * end it. When signal aborts first it rejects and a later result answers
+   * accepted=false; to give up on a call the agent emits a failed
+   * agent.tool_result naming the id (use AbortSignal.timeout for an
+   * executor-side limit).
+   */
+  async requestCustomTool(
+    name: string,
+    input: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<{ toolUseId: string; result: AgentCustomToolResultParams }> {
+    const session = this.session
+    const toolUseId = this.newEventId()
+    const answer = deferred<AgentCustomToolResultParams>()
+    // Register before emitting: the platform may answer as soon as the event is acknowledged.
+    session.customTools.set(toolUseId, answer)
+    try {
+      this.emitWithId(toolUseId, { type: 'agent.custom_tool_use', name, input })
+      const waits: Array<Promise<AgentCustomToolResultParams>> = [answer.promise]
+      if (signal) {
+        waits.push(
+          new Promise((_resolve, reject) => {
+            if (signal.aborted) reject(signal.reason)
+            else signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+          }),
+        )
+      }
+      return { toolUseId, result: await Promise.race(waits) }
+    } finally {
+      session.customTools.delete(toolUseId)
+      session.customDone.add(toolUseId)
+    }
+  }
+
   /** Withdraws an open interaction, for example one the user answered locally (resolved_locally). */
   cancelInteraction(interactionId: string, reason: InteractionCancelReason): Promise<void> {
     return this.session.withdraw(interactionId, reason)
@@ -274,6 +314,9 @@ class AgentSession {
   readonly results = new Map<string, TurnStartResult>()
   readonly pending = new Map<string, Deferred<InteractionResponseParams>>()
   readonly answered = new Set<string>()
+  /** Waiters of agent.custom_tool_use by tool_use_id, and ids no longer waited on. */
+  readonly customTools = new Map<string, Deferred<AgentCustomToolResultParams>>()
+  readonly customDone = new Set<string>()
 
   constructor(
     readonly host: AgentHost,
@@ -406,6 +449,8 @@ export class AgentRuntime {
         return this.sessionClose(params as SessionCloseParams)
       case 'interaction.response':
         return Promise.resolve(this.interactionResponse(params as InteractionResponseParams))
+      case 'agent.custom_tool_result':
+        return Promise.resolve(this.customToolResult(params as AgentCustomToolResultParams))
       default:
         return undefined
     }
@@ -547,6 +592,16 @@ export class AgentRuntime {
     const waiter = session.pending.get(params.interaction_id)
     if (!waiter || session.answered.has(params.interaction_id)) return { accepted: false }
     session.answered.add(params.interaction_id)
+    waiter.resolve(params)
+    return { accepted: true }
+  }
+
+  private customToolResult(params: AgentCustomToolResultParams): CustomToolResultResult {
+    const session = this.session(params.session_id, false)
+    if (!session) return { accepted: false }
+    const waiter = session.customTools.get(params.tool_use_id)
+    if (!waiter || session.customDone.has(params.tool_use_id)) return { accepted: false }
+    session.customDone.add(params.tool_use_id)
     waiter.resolve(params)
     return { accepted: true }
   }

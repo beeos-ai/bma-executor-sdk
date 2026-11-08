@@ -12,7 +12,7 @@ type Ack struct {
 	Accepted bool `json:"accepted"`
 }
 
-// AgentCapability agent capability. Present with enabled=true when the executor runs a complete agent and accepts turn.start, turn.input, turn.cancel, session.close and interaction.response.
+// AgentCapability agent capability. Present with enabled=true when the executor runs a complete agent and accepts turn.start, turn.input, turn.cancel, session.close and interaction.response (and agent.custom_tool_result when custom_tools is true).
 type AgentCapability struct {
 	Enabled bool `json:"enabled"`
 	// Models the local agent can run. An empty list means the executor picks its own model and ignores AgentTurnConfig.model.
@@ -28,24 +28,21 @@ type AgentCapability struct {
 	// The executor keeps the state of its turns across a process restart. When it registers again without a session whose turn was running, the platform starts the same turn again in a new event epoch (turn.start with the same turn_id, input_id and executor_session_ref, then the turn.input the turn already received) and the executor continues the turn from its own state. Without it such a turn ends failed (session.error, session.status_idle retries_exhausted) and is not sent again: an executor without that state would run the turn again from its opening input and repeat tool calls whose effects already happened.
 	TurnResume bool `json:"turn_resume,omitempty"`
 	// Per-turn credentials the executor asks the platform to hand it in turn.start metadata: brain_tools (tools_mcp_url, tools_mcp_token: the session's tools endpoint) and harness_model (model_base_url, model_token: the session's model endpoint). A declaration only states what the executor can use; the platform decides by the executor's identity and hands them only to an executor registered as a platform service, never to a tenant executor. Tokens are computed for each turn.start, are valid until the turn ends, and are never stored.
-	PlatformCredentials []string                `json:"platform_credentials,omitempty"`
-	Harness             *AgentHarnessCapability `json:"harness,omitempty"`
+	PlatformCredentials []string `json:"platform_credentials,omitempty"`
+	// The executor runs custom tools defined by the platform agent: it emits agent.custom_tool_use for a call to one and waits for agent.custom_tool_result. Without it the platform never sends agent.custom_tool_result and answers a user.custom_tool_result for the session with an error.
+	CustomTools bool                    `json:"custom_tools,omitempty"`
+	Harness     *AgentHarnessCapability `json:"harness,omitempty"`
 }
 
-// AgentErrorCode values. Stop code table: the error types an agent executor reports for a turn that ended failed, so every agent (Go ACP harness, brain hosts, local desktop agents) says the same thing for the same cause. output_limit_reached: the model reply was cut at its output-token limit (ACP stopReason max_tokens, DSH max-tokens, finish_reason length). context_too_large: the conversation does not fit the model context window even after compaction. model_stream_idle: the model stream sent no data for the idle limit (default 90 s). agent_error: any other failure of the agent. agent_unavailable: the agent process is gone or did not answer a cancel in time. agent_auth_required: the agent needs credentials it does not have. agent_protocol_error: the agent rejected the request as malformed or unsupported. A code is the type of session.error; an executor whose SDK cannot set the type yet (structured_errors false) puts it first in the message as '<code>: <detail>', and the platform reads both forms. The platform keeps the code in error.code and projects a type outside the official session.error union to unknown_error; a platform may map a code to an official type itself (context_too_large to compaction_limit_reached_error, ADR-0010). Executors report only these values; a new cause adds a value here first.
-const (
-	AgentErrorCodeOutputLimitReached = "output_limit_reached"
-	AgentErrorCodeContextTooLarge    = "context_too_large"
-	AgentErrorCodeModelStreamIdle    = "model_stream_idle"
-	AgentErrorCodeAgentError         = "agent_error"
-	AgentErrorCodeAgentUnavailable   = "agent_unavailable"
-	AgentErrorCodeAgentAuthRequired  = "agent_auth_required"
-	AgentErrorCodeAgentProtocolError = "agent_protocol_error"
-)
+// AgentCustomToolUseEvent A custom tool the local agent is calling: a tool the user's application runs and answers (capability agent.custom_tools). Its event_id is the tool_use_id. The platform shows the session as waiting (session.status_idle with stop_reason requires_action naming the event) and delivers the user's result with agent.custom_tool_result. The turn stays open while the executor waits: the executor does not send session.status_idle for it. If its own timeout passes first, the executor ends the call with a failed agent.tool_result naming this event.
+type AgentCustomToolUseEvent struct {
+	Type  string         `json:"type"`
+	Name  string         `json:"name"`
+	Input map[string]any `json:"input"`
+}
 
 // AgentErrorInfo Typed session error.
 type AgentErrorInfo struct {
-	// An AgentErrorCode value; other strings are tolerated (objects accept unknown members) and projected as unknown_error.
 	Type    string `json:"type"`
 	Message string `json:"message,omitempty"`
 }
@@ -56,6 +53,7 @@ const (
 	AgentEventTypeAgentThinking        = "agent.thinking"
 	AgentEventTypeAgentToolUse         = "agent.tool_use"
 	AgentEventTypeAgentToolResult      = "agent.tool_result"
+	AgentEventTypeAgentCustomToolUse   = "agent.custom_tool_use"
 	AgentEventTypeAgentMcpToolUse      = "agent.mcp_tool_use"
 	AgentEventTypeAgentMcpToolResult   = "agent.mcp_tool_result"
 	AgentEventTypeSessionStatusRunning = "session.status_running"
@@ -280,6 +278,11 @@ const (
 type Cursors struct {
 	Stdout int64 `json:"stdout"`
 	Stderr int64 `json:"stderr"`
+}
+
+// CustomToolResultResult agent.custom_tool_result result. accepted=true: the executor took the result for the call it was waiting on. accepted=false: it no longer waits (unknown tool_use_id, already answered, timed out, or canceled with its turn); the platform marks its copy stale and does not send it again.
+type CustomToolResultResult struct {
+	Accepted bool `json:"accepted"`
 }
 
 // DisplayCapability v1.1 display object. v1 sent a boolean; the server accepts both.
@@ -923,6 +926,7 @@ const (
 	SessionEventTypeAgentMessage         = "agent.message"
 	SessionEventTypeAgentThinking        = "agent.thinking"
 	SessionEventTypeAgentToolUse         = "agent.tool_use"
+	SessionEventTypeAgentCustomToolUse   = "agent.custom_tool_use"
 	SessionEventTypeAgentMcpToolUse      = "agent.mcp_tool_use"
 	SessionEventTypeAgentMcpToolResult   = "agent.mcp_tool_result"
 	SessionEventTypeSessionStatusRunning = "session.status_running"
@@ -1205,6 +1209,7 @@ const (
 	MethodSessionEventDelta          = "session.event_delta"
 	MethodInteractionRequest         = "interaction.request"
 	MethodInteractionResponse        = "interaction.response"
+	MethodAgentCustomToolResult      = "agent.custom_tool_result"
 	MethodInteractionCancel          = "interaction.cancel"
 )
 
@@ -1247,6 +1252,7 @@ var Methods = map[string]MethodSpec{
 	MethodSessionEventDelta:          {Name: MethodSessionEventDelta, Direction: DirectionExecutorToHarness, Notification: true, Since: "bma.executor.v1.1", Capability: "agent", IdempotentBy: ""},
 	MethodInteractionRequest:         {Name: MethodInteractionRequest, Direction: DirectionExecutorToHarness, Notification: false, Since: "bma.executor.v1.1", Capability: "agent", IdempotentBy: "interaction_id"},
 	MethodInteractionResponse:        {Name: MethodInteractionResponse, Direction: DirectionHarnessToExecutor, Notification: false, Since: "bma.executor.v1.1", Capability: "agent", IdempotentBy: "interaction_id"},
+	MethodAgentCustomToolResult:      {Name: MethodAgentCustomToolResult, Direction: DirectionHarnessToExecutor, Notification: false, Since: "bma.executor.v1.1", Capability: "agent", IdempotentBy: "tool_use_id"},
 	MethodInteractionCancel:          {Name: MethodInteractionCancel, Direction: DirectionExecutorToHarness, Notification: false, Since: "bma.executor.v1.1", Capability: "agent", IdempotentBy: "interaction_id"},
 }
 
@@ -1586,6 +1592,16 @@ type InteractionResponseParams struct {
 	Responder *InteractionResponder `json:"responder,omitempty"`
 }
 
+// AgentCustomToolResultParams is the params object of agent.custom_tool_result.
+type AgentCustomToolResultParams struct {
+	SessionID string `json:"session_id"`
+	// The event_id of the agent.custom_tool_use this result answers.
+	ToolUseID string         `json:"tool_use_id"`
+	Content   []ContentBlock `json:"content"`
+	// The user's application reports the call failed; the content explains why.
+	IsError bool `json:"is_error,omitempty"`
+}
+
 // InteractionCancelParams is the params object of interaction.cancel.
 type InteractionCancelParams struct {
 	SessionID     string `json:"session_id"`
@@ -1671,6 +1687,8 @@ func NewParams(method string) any {
 		return new(InteractionRequestParams)
 	case MethodInteractionResponse:
 		return new(InteractionResponseParams)
+	case MethodAgentCustomToolResult:
+		return new(AgentCustomToolResultParams)
 	case MethodInteractionCancel:
 		return new(InteractionCancelParams)
 	}
@@ -1743,6 +1761,8 @@ func NewResult(method string) any {
 		return new(InteractionRequestResult)
 	case MethodInteractionResponse:
 		return new(InteractionResponseResult)
+	case MethodAgentCustomToolResult:
+		return new(CustomToolResultResult)
 	case MethodInteractionCancel:
 		return new(Ack)
 	}

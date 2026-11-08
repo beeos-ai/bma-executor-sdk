@@ -244,6 +244,7 @@
             "agent": {
               "enabled": true,
               "max_sessions": 8,
+              "custom_tools": true,
               "harness": {
                 "id": "dsh",
                 "version": "0.2.1-rc.5",
@@ -1315,6 +1316,34 @@
       }
     },
     {
+      "name": "agent.custom_tool_result request",
+      "method": "agent.custom_tool_result",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_custom_tool_result",
+        "method": "agent.custom_tool_result",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "tool_use_id": "evt_0005",
+          "content": [
+            {
+              "type": "text",
+              "text": "72F and sunny"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "agent.custom_tool_result result",
+      "method": "agent.custom_tool_result",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
       "name": "interaction.cancel request",
       "method": "interaction.cancel",
       "kind": "request",
@@ -1358,6 +1387,29 @@
             },
             "evaluated_permission": {
               "type": "ask"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "session.event agent custom tool use request",
+      "method": "session.event",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_session_event_custom",
+        "method": "session.event",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "event_id": "evt_0005",
+          "sequence": 5,
+          "event": {
+            "type": "agent.custom_tool_use",
+            "name": "get_weather",
+            "input": {
+              "city": "Paris"
             }
           }
         }
