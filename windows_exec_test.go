@@ -5,6 +5,8 @@ package bmaexecutor
 import (
 	"context"
 	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -441,4 +443,123 @@ func TestWindowsConPTYTerminateEndsTheProcessTree(t *testing.T) {
 		t.Fatalf("terminate = %+v", state)
 	}
 	requireDead(t, child)
+}
+
+func newWinSessionFiles(t *testing.T, daemon http.Handler, extra ProcessOptions) (winProc, *SessionFiles, string) {
+	t.Helper()
+	server := httptest.NewServer(daemon)
+	t.Cleanup(server.Close)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := NewSessionFiles(SessionFilesOptions{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra.SessionFiles = files
+	core := newTestCore(t, CoreOptions{})
+	if err := core.Register(NewProcessCapability(core, extra)); err != nil {
+		t.Fatal(err)
+	}
+	b, client := attachInProcess(t, core, "cloud", func(o *Options) { o.BaseURL, o.EnvironmentKey = server.URL, "mtok" })
+	_ = client
+	session := readySession(t, b, SessionAssignParams{SessionID: "sess_files", Lease: Lease{Token: "lease"}})
+	return winProc{executor: b.executor, session: session}, files, root
+}
+
+// TestWindowsSessionFiles (G6): uploads are mounted read-only and resynced
+// over (a read-only destination cannot be renamed over on Windows), stale
+// mounts are removed, and a command's outputs are collected.
+func TestWindowsSessionFiles(t *testing.T) {
+	daemon := &fakeDaemonFiles{
+		processes: map[string]string{"proc_1": "sesn_a", "proc_2": "sesn_a"},
+		mounts: map[string][]fakeMount{"sesn_a": {
+			{resourceID: "res_a", mountPath: "/mnt/session/uploads/data/a.txt", content: []byte("alpha")},
+			{resourceID: "res_b", mountPath: "/mnt/session/uploads/b.txt", content: []byte("bravo")},
+		}},
+	}
+	w, files, root := newWinSessionFiles(t, daemon, ProcessOptions{})
+	uploads, outputs := files.Dirs("sesn_a")
+	if uploads != filepath.Join(root, "sesn_a", "uploads") {
+		t.Fatalf("uploads = %s", uploads)
+	}
+	run := func(id, command string) {
+		t.Helper()
+		state, err := w.start(t, ProcessStartParams{
+			ProcessID: id, WaitMS: 60000, Stdin: StdinClosed, Argv: []string{"cmd.exe", "/d", "/s", "/c", command},
+			Metadata: map[string]string{MetadataAgentSessionID: "sesn_a"},
+		})
+		if err != nil || state.State != ProcessExited || state.ExitCode == nil || *state.ExitCode != 0 {
+			t.Fatalf("%s = %+v err %v output %q", id, state, err, w.output(t, id))
+		}
+	}
+	run("proc_1", `type "`+filepath.Join(uploads, "data", "a.txt")+`" && mkdir "`+filepath.Join(outputs, "sub")+`" && echo deliverable>"`+filepath.Join(outputs, "sub", "report.txt")+`"`)
+	if out := w.output(t, "proc_1"); !strings.Contains(out, "alpha") {
+		t.Fatalf("command saw %q", out)
+	}
+	info, err := os.Stat(filepath.Join(uploads, "data", "a.txt"))
+	if err != nil || info.Mode().Perm()&0o200 != 0 {
+		t.Fatalf("mounted file mode = %v (%v)", info, err)
+	}
+	// The read reporting the ended process uploaded the outputs.
+	got := daemon.uploaded()
+	if len(got) != 1 || got[0].path != "sub/report.txt" || strings.TrimSpace(got[0].content) != "deliverable" {
+		t.Fatalf("uploaded outputs = %+v", got)
+	}
+
+	// Next process: a.txt changed (replace over a read-only file), b.txt unmounted.
+	daemon.mu.Lock()
+	daemon.mounts["sesn_a"] = []fakeMount{{resourceID: "res_a", mountPath: "/mnt/session/uploads/data/a.txt", content: []byte("alpha two")}}
+	daemon.mu.Unlock()
+	run("proc_2", `type "`+filepath.Join(uploads, "data", "a.txt")+`"`)
+	if out := w.output(t, "proc_2"); !strings.Contains(out, "alpha two") {
+		t.Fatalf("second command saw %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(uploads, "b.txt")); !os.IsNotExist(err) {
+		t.Fatalf("unmounted file still there: %v", err)
+	}
+}
+
+// TestWindowsFileTransferProcess (G6): process.start file_transfer through
+// NewFileTransferer with Windows paths, a read-only destination included.
+func TestWindowsFileTransferProcess(t *testing.T) {
+	endpoint := &fakeFileEndpoint{download: []byte("from bma")}
+	w, _, _ := newWinSessionFiles(t, endpoint, ProcessOptions{FileTransfer: NewFileTransferer()})
+	dir := t.TempDir()
+	source := filepath.Join(dir, "report one.txt")
+	if err := os.WriteFile(source, []byte("deliverable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	transfer := func(id, direction, path string) ProcessState {
+		t.Helper()
+		state, err := w.start(t, ProcessStartParams{
+			ProcessID: id, WaitMS: 60000, Stdin: StdinClosed, FileTransfer: &ProcessFileTransfer{Direction: direction, LocalPath: path},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	state := transfer("up", FileTransferUpload, source)
+	if state.State != ProcessExited || state.FileTransfer == nil || state.FileTransfer.Digest != digestOf([]byte("deliverable")) {
+		t.Fatalf("upload = %+v (%+v)", state, state.FileTransfer)
+	}
+	if endpoint.filename != "report one.txt" {
+		t.Fatalf("uploaded filename = %q", endpoint.filename)
+	}
+	target := filepath.Join(dir, "download.txt")
+	if err := os.WriteFile(target, []byte("old"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	state = transfer("down", FileTransferDownload, target)
+	if state.State != ProcessExited || state.FileTransfer == nil || state.FileTransfer.Digest != digestOf([]byte("from bma")) {
+		t.Fatalf("download = %+v (%+v)", state, state.FileTransfer)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "from bma" {
+		t.Fatalf("downloaded content = %q", got)
+	}
+	if info, err := os.Stat(target); err != nil || info.Mode().Perm()&0o200 != 0 {
+		t.Fatalf("destination lost its read-only attribute: %v (%v)", info, err)
+	}
 }
