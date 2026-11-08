@@ -528,7 +528,10 @@ func (c *Client) setToolHandler(name string, handler toolHandler) {
 // enabled when a handler of the group is registered and the option does not
 // turn the group off (a ShellCapability / FilesCapability passed with
 // Enabled false; MCP's RegisteredTool.enabled), so nothing unimplemented is
-// advertised. computer_use stays off: its tools have no slot yet.
+// advertised. computer_use is advertised only when the option asks for it and
+// both computer_* tools have a handler (Core registers them for
+// CoreOptions.ComputerUse; there is no public slot until the contract defines
+// the tools' input members).
 func (c *Client) registeredCapabilities() Capabilities {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -552,7 +555,7 @@ func (c *Client) registeredCapabilities() Capabilities {
 	}
 	files.Enabled = files.Enabled && has(ToolNameRead, ToolNameWrite, ToolNameEdit, ToolNameGlob, ToolNameGrep, ToolNameListFiles)
 	capabilities.Shell, capabilities.Files = &shell, &files
-	capabilities.ComputerUse = false
+	capabilities.ComputerUse = capabilities.ComputerUse && has(ToolNameComputerObserve) && has(ToolNameComputerAction)
 	return capabilities
 }
 
