@@ -68,11 +68,18 @@ func newFakeUpstream(t *testing.T) *fakeUpstream {
 
 func startACPFixture(t *testing.T, ctx context.Context, opts ACPAgentOptions) *acpFixture {
 	t.Helper()
+	return startACPFixtureAt(t, ctx, opts, t.TempDir(), newRecordingPlatform(), nil)
+}
+
+// startACPFixtureAt starts an executor process (agent, core, client) on a
+// state root and a platform; calling it again with the same root and platform
+// is a restart of the executor process.
+func startACPFixtureAt(t *testing.T, ctx context.Context, opts ACPAgentOptions, root string, platform *recordingPlatform, hook func(context.Context, string)) *acpFixture {
+	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := t.TempDir()
 	work := filepath.Join(root, "work")
 	core, err := NewCore(CoreOptions{WorkRoot: work})
 	if err != nil {
@@ -97,8 +104,8 @@ func startACPFixture(t *testing.T, ctx context.Context, opts ACPAgentOptions) *a
 	if err != nil {
 		t.Fatal(err)
 	}
+	agent.hook = hook
 	t.Cleanup(func() { _ = agent.Close() })
-	platform := newRecordingPlatform()
 	harness := NewHarness(HarnessOptions{Agent: platform, RequestTimeout: 5 * time.Second})
 	server := httptest.NewServer(harness)
 	t.Cleanup(server.Close)
@@ -171,7 +178,7 @@ func TestACPAgentCapabilityDeclaresDSHHarness(t *testing.T) {
 		h.AgentName != "fake-dsh-acp" || h.Version != "9.9.9+dsh0.2.1-rc.5" || *capability.Harness != h {
 		t.Fatalf("harness = %+v", h)
 	}
-	if capability.TurnResume || !contains(capability.InteractionKinds, InteractionKindPermission) || !contains(capability.PermissionModes, "accept_edits") {
+	if !capability.TurnResume || !contains(capability.InteractionKinds, InteractionKindPermission) || !contains(capability.PermissionModes, "accept_edits") {
 		t.Fatalf("capability = %+v", capability)
 	}
 }
@@ -595,6 +602,11 @@ func fakeHandle(c *fakeConn, method string, raw json.RawMessage) (any, map[strin
 			Text string `json:"text"`
 		}
 		_ = json.Unmarshal(p.Prompt[0], &block)
+		if strings.HasPrefix(block.Text, "resume") {
+			inputID, _ := p.Meta.Bma["inputId"].(string)
+			policy, _ := p.Meta.Bma["toolPolicy"].(map[string]any)
+			return fakeResume(c, p.SessionID, inputID, policy["bash"] == "allow", block.Text == "resume-amnesia")
+		}
 		return fakePrompt(c, p.SessionID, block.Text)
 	}
 	return nil, map[string]any{"code": -32601, "message": "method not found"}
@@ -839,6 +851,43 @@ func TestACPAgentWithBmaDshAcp(t *testing.T) {
 	f.platform.mu.Unlock()
 	if deltas == 0 {
 		t.Fatal("no token deltas reached the platform")
+	}
+}
+
+func TestACPAgentOnInteractionReportsTheSameApproval(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var mu sync.Mutex
+	var seen []ACPInteractionEvent
+	got := func() []ACPInteractionEvent {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]ACPInteractionEvent(nil), seen...)
+	}
+	f := startACPFixture(t, ctx, ACPAgentOptions{OnInteraction: func(e ACPInteractionEvent) { mu.Lock(); seen = append(seen, e); mu.Unlock() }})
+	f.start(t, ctx, "sesn_o", "turn_1", "run")
+	f.platform.waitFor(t, "permission", func() bool { return len(f.platform.interactions) == 1 })
+	id := f.platform.interactions[0].InteractionID
+	if e := got(); len(e) != 1 || e[0].Phase != "requested" || e[0].SessionID != "sesn_o" || e[0].InteractionID != id || e[0].ToolName != "bash" || e[0].ToolInput["command"] != "echo hi > out.txt && cat out.txt" {
+		t.Fatalf("requested = %+v, platform id %s", e, id)
+	}
+	if _, err := f.executor.RespondInteraction(ctx, InteractionResponseParams{SessionID: "sesn_o", InteractionID: id, Outcome: InteractionOutcomeAllow}); err != nil {
+		t.Fatal(err)
+	}
+	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
+	if e := got(); len(e) != 2 || e[1].Phase != "ended" || e[1].InteractionID != id || e[1].Outcome != InteractionOutcomeAllow {
+		t.Fatalf("ended = %+v", e)
+	}
+
+	// A canceled turn withdraws the card too.
+	f.start(t, ctx, "sesn_o", "turn_2", "run", func(p *TurnStartParams) { p.ExecutorSessionRef = "sesn_o" })
+	f.platform.waitFor(t, "second permission", func() bool { return len(f.platform.interactions) == 2 })
+	if _, err := f.executor.CancelTurn(ctx, TurnCancelParams{SessionID: "sesn_o", TurnID: "turn_2"}); err != nil {
+		t.Fatal(err)
+	}
+	assertIdle(t, f.platform.waitIdle(t, "turn_2"), TurnOutcomeCanceled)
+	if e := got(); len(e) != 4 || e[3].Phase != "ended" || e[3].Outcome != "withdrawn" || e[3].InteractionID != f.platform.interactions[1].InteractionID {
+		t.Fatalf("withdrawn = %+v", e)
 	}
 }
 

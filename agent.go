@@ -98,6 +98,8 @@ type agentSession struct {
 
 type agentOutboxEvent struct {
 	params agentSessionEventParams
+	// onAck runs once the platform acknowledged the event.
+	onAck func()
 }
 
 // agentSessionEventParams is session.event with the agent members; the v1
@@ -157,6 +159,14 @@ func (t *AgentTurn) EmitWithID(eventID string, event any) (string, error) {
 		return "", errors.New("bmaexecutor: turn already ended")
 	}
 	return eventID, t.session.enqueue(t.params.TurnID, eventID, event)
+}
+
+// emitAcked is Emit that calls onAck when the platform acknowledged the event.
+func (t *AgentTurn) emitAcked(event any, onAck func()) error {
+	if t.ended.Load() {
+		return errors.New("bmaexecutor: turn already ended")
+	}
+	return t.session.enqueueAck(t.params.TurnID, t.NewEventID(), event, onAck)
 }
 
 // Delta streams a transient preview of the durable event eventID. It is
@@ -503,6 +513,11 @@ func (r *agentRuntime) customToolResult(_ context.Context, params AgentCustomToo
 // --- outbox ---
 
 func (s *agentSession) enqueue(turnID, eventID string, event any) error {
+	return s.enqueueAck(turnID, eventID, event, nil)
+}
+
+// enqueueAck is enqueue with a callback for the platform's acknowledgement.
+func (s *agentSession) enqueueAck(turnID, eventID string, event any, onAck func()) error {
 	raw, err := json.Marshal(event)
 	if err != nil {
 		return err
@@ -517,7 +532,7 @@ func (s *agentSession) enqueue(turnID, eventID string, event any) error {
 	if len(s.outbox) == 0 {
 		s.drained = make(chan struct{})
 	}
-	s.outbox = append(s.outbox, agentOutboxEvent{params: params})
+	s.outbox = append(s.outbox, agentOutboxEvent{params: params, onAck: onAck})
 	s.mu.Unlock()
 	s.signal()
 	return nil
@@ -577,6 +592,8 @@ func (s *agentSession) sendLoop() {
 			// A permanent rejection (invalid event, unknown session) cannot be
 			// fixed by resending; it is surfaced instead of blocking the session.
 			c.log(LogError, fmt.Sprintf("session.event %s rejected", head.params.EventID), err)
+		} else if head.onAck != nil {
+			head.onAck()
 		}
 		s.mu.Lock()
 		s.outbox = s.outbox[1:]

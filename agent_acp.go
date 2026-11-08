@@ -25,6 +25,11 @@ package bmaexecutor
 // the other running turns too (they fail); the next turn starts a new process
 // and loads its conversation (session/load with the executor_session_ref).
 //
+// TurnResume: when the executor process restarts, the platform starts the
+// in-flight turn again and ACPAgent continues it from the agent's durable
+// conversation and its own ledger of tool calls, approvals and acknowledged
+// events (agent_acp_resume.go); nothing that already happened is repeated.
+//
 // Tools run in the executor's Core, in the turn's working directory, so the
 // hands of a local brain are the same as for a platform brain. Model requests
 // go to a loopback proxy with a per-session placeholder key; the proxy
@@ -116,6 +121,26 @@ type ACPAgentOptions struct {
 	CancelGrace  time.Duration
 	KillGrace    time.Duration
 	OnLog        func(LogEvent)
+	// OnInteraction, when set, is told when an approval is asked of the
+	// platform and when it ends (answered on any client, expired or
+	// withdrawn), so a local UI can show the same card under the same id and
+	// drop it when it is settled elsewhere. It is a view only: the answer
+	// still comes from the platform. It must not block.
+	OnInteraction func(ACPInteractionEvent)
+}
+
+// ACPInteractionEvent is one step of a platform interaction asked by the local agent.
+type ACPInteractionEvent struct {
+	// Phase is "requested" or "ended".
+	Phase         string
+	SessionID     string
+	InteractionID string
+	ToolName      string
+	// ToolInput is the tool call's input (Phase "requested" only).
+	ToolInput map[string]any
+	// Outcome is the platform answer when Phase is "ended" (allow, deny,
+	// expired, canceled), or "withdrawn" when the turn ended first.
+	Outcome string
 }
 
 // ACPAgent hosts an ACP agent process; see the comment at the top of agent_acp.go.
@@ -127,7 +152,12 @@ type ACPAgent struct {
 	mu       sync.Mutex
 	proc     *acpProcess
 	sessions map[string]*acpSession
+	ledgers  map[string]*acpLedger // see agent_acp_resume.go
 	closed   bool
+
+	// hook, set by tests only, runs at named points of tool execution; it
+	// may block until ctx ends to stand in for a crash there.
+	hook func(ctx context.Context, point string)
 }
 
 type acpSession struct {
@@ -146,9 +176,11 @@ type acpRoute struct {
 }
 
 type acpTurn struct {
-	turn  *AgentTurn
-	ctx   context.Context
-	route acpRoute
+	agent  *ACPAgent
+	turn   *AgentTurn
+	ctx    context.Context
+	ledger *acpLedger
+	route  acpRoute
 
 	mu       sync.Mutex
 	messages map[string]string // messageId -> event id
@@ -230,6 +262,7 @@ func (a *ACPAgent) Capability() AgentCapability {
 	h := a.harness
 	return AgentCapability{
 		Enabled: true, PermissionModes: acpPermissionModes, InteractionKinds: []string{InteractionKindPermission},
+		TurnResume:  true,
 		MaxSessions: a.opts.MaxSessions, Harness: &h, Harnesses: []AgentHarnessCapability{a.harness},
 	}
 }
@@ -245,6 +278,12 @@ func (a *ACPAgent) Close() error {
 	}
 	a.proxy.close()
 	return nil
+}
+
+func (a *ACPAgent) interaction(e ACPInteractionEvent) {
+	if a.opts.OnInteraction != nil {
+		a.opts.OnInteraction(e)
+	}
 }
 
 func (a *ACPAgent) log(level LogLevel, message string, err error) {
@@ -319,6 +358,13 @@ func (a *ACPAgent) OpenTurn(ctx context.Context, params TurnStartParams) (TurnSt
 	a.mu.Lock()
 	s.cwd = cwd
 	a.mu.Unlock()
+	ledger, err := a.ledger(params.SessionID)
+	if err == nil {
+		_, err = ledger.begin(params.TurnID)
+	}
+	if err != nil {
+		return TurnStartResult{}, &RPCError{Code: CodeInternalError, Message: "turn state: " + err.Error()}
+	}
 	return TurnStartResult{
 		Accepted: true, TurnID: params.TurnID, ExecutorSessionRef: params.SessionID, Resumed: resumed,
 		Effective: AgentTurnConfig{Model: model, PermissionMode: mode, Cwd: cwd, Harness: a.harness.ID},
@@ -333,7 +379,11 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 	if s == nil || s.proc == nil {
 		return errors.New("the agent session is not open")
 	}
-	t := &acpTurn{turn: turn, ctx: ctx, route: a.route(params.Metadata), messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}}
+	ledger, err := a.ledger(params.SessionID)
+	if err != nil {
+		return err
+	}
+	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: a.route(params.Metadata), messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}}
 	a.mu.Lock()
 	s.turn = t
 	proc := s.proc
@@ -351,14 +401,14 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 			return fmt.Errorf("turn.start metadata.tool_policy must be a JSON object of tool: allow|ask|deny")
 		}
 	}
-	if err := a.prompt(ctx, proc, s.id, params.InputID, inputText(params.Input), policy); err != nil {
+	if err := a.runInput(ctx, proc, t, s.id, params.InputID, inputText(params.Input), policy); err != nil {
 		return err
 	}
 	// turn.input received while the turn ran: prompted in order, in the same turn.
 	for {
 		select {
 		case input := <-turn.Inputs():
-			if err := a.prompt(ctx, proc, s.id, input.InputID, inputText(input.Input), policy); err != nil {
+			if err := a.runInput(ctx, proc, t, s.id, input.InputID, inputText(input.Input), policy); err != nil {
 				return err
 			}
 		default:
@@ -381,10 +431,29 @@ func (a *ACPAgent) CloseSession(ctx context.Context, sessionID, _ string) error 
 		}
 	}
 	a.opts.Core.closeLocal(acpBrain, sessionID)
+	a.dropLedger(sessionID)
 	return nil
 }
 
 // --- turn helpers ---
+
+// runInput prompts the agent with one input unless an earlier process
+// already finished it: an input counts as finished when its prompt ended and
+// every event it produced is acknowledged by the platform. After a restart
+// the turn's inputs come again (turn.start, turn.input); the agent continues
+// the one it recorded without having finished it (same inputId).
+func (a *ACPAgent) runInput(ctx context.Context, proc *acpProcess, t *acpTurn, sessionID, inputID, text string, policy map[string]string) error {
+	if t.ledger.inputDone(inputID) {
+		return nil
+	}
+	if err := a.prompt(ctx, proc, sessionID, inputID, text, policy); err != nil {
+		return err
+	}
+	if err := t.turn.Flush(ctx); err != nil {
+		return err
+	}
+	return t.ledger.markInputDone(inputID)
+}
 
 func (a *ACPAgent) prompt(ctx context.Context, proc *acpProcess, sessionID, inputID, text string, policy map[string]string) error {
 	meta := map[string]any{"inputId": inputID}
@@ -639,16 +708,39 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 			return cancelled
 		}
 		toolUseID := t.toolUse(p.ToolCall.ToolCallID, p.ToolCall.Title, p.ToolCall.RawInput, "ask")
+		// An approval the platform already answered (before a restart) is not asked again.
+		switch t.ledger.call(p.ToolCall.ToolCallID).Decision {
+		case acpDecisionAllow:
+			return choose("allow_once"), nil
+		case acpDecisionDeny:
+			return choose("reject_once"), nil
+		}
+		interactionID := approvalID(base.SessionID, t.turn.Params().TurnID, p.ToolCall.ToolCallID)
+		a.interaction(ACPInteractionEvent{Phase: "requested", SessionID: base.SessionID, InteractionID: interactionID, ToolName: p.ToolCall.Title, ToolInput: p.ToolCall.RawInput})
 		answer, err := t.turn.RequestInteraction(ctx, InteractionRequestParams{
-			Kind: InteractionKindPermission, InteractionID: approvalID(base.SessionID, t.turn.Params().TurnID, p.ToolCall.ToolCallID),
+			Kind: InteractionKindPermission, InteractionID: interactionID,
 			ToolUseID: toolUseID, ToolName: p.ToolCall.Title, ToolInput: p.ToolCall.RawInput, Scopes: []string{InteractionScopeOnce},
 		})
+		outcome := string(answer.Outcome)
+		if err != nil {
+			outcome = "withdrawn"
+		}
+		a.interaction(ACPInteractionEvent{Phase: "ended", SessionID: base.SessionID, InteractionID: interactionID, ToolName: p.ToolCall.Title, Outcome: outcome})
+		decide := func(decision string) error {
+			return t.ledger.update(p.ToolCall.ToolCallID, func(c *acpCallState) { c.Decision = decision })
+		}
 		switch {
 		case err != nil:
 			return cancelled, nil
 		case answer.Outcome == InteractionOutcomeAllow:
+			if err := decide(acpDecisionAllow); err != nil {
+				return nil, &RPCError{Code: CodeInternalError, Message: "turn state: " + err.Error()}
+			}
 			return choose("allow_once"), nil
 		case answer.Outcome == InteractionOutcomeDeny:
+			if err := decide(acpDecisionDeny); err != nil {
+				return nil, &RPCError{Code: CodeInternalError, Message: "turn state: " + err.Error()}
+			}
 			return choose("reject_once"), nil
 		default: // expired, canceled
 			return cancelled, nil
@@ -665,7 +757,7 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 		if t == nil {
 			return map[string]any{"text": "no turn is running in this session", "isError": true}, nil
 		}
-		text, isError := a.runTool(ctx, base.SessionID, p.ToolCallID, p.Name, p.Input)
+		text, isError := a.runToolOnce(ctx, t.ledger, base.SessionID, p.ToolCallID, p.Name, p.Input)
 		return map[string]any{"text": text, "isError": isError}, nil
 	}
 	return nil, &RPCError{Code: CodeMethodNotFound, Message: "method not found: " + method}
@@ -751,12 +843,22 @@ func (t *acpTurn) update(u acpUpdate) {
 				content = append(content, ContentBlock{Type: ContentBlockTypeText, Text: b.Content.Text})
 			}
 		}
-		_, _ = t.turn.Emit(AgentToolResultEvent{Type: AgentEventTypeAgentToolResult, ToolUseID: toolUseID, Content: content, IsError: u.Status == "failed"})
+		_ = t.turn.emitAcked(AgentToolResultEvent{Type: AgentEventTypeAgentToolResult, ToolUseID: toolUseID, Content: content, IsError: u.Status == "failed"}, func() {
+			if err := t.ledger.update(u.ToolCallID, func(c *acpCallState) { c.Reported = true }); err != nil {
+				t.agent.log(LogWarn, "turn state: tool result of "+u.ToolCallID+" acknowledged but not recorded", err)
+			}
+			if t.agent.hook != nil {
+				t.agent.hook(t.ctx, "reported")
+			}
+		})
 	}
 }
 
 // toolUse emits agent.tool_use once per tool call and returns its event id.
 func (t *acpTurn) toolUse(callID, name string, input map[string]any, permission string) string {
+	if t.ledger.call(callID).Reported {
+		return "" // the platform already has this call's events (an earlier process)
+	}
 	t.mu.Lock()
 	if id := t.tools[callID]; id != "" {
 		t.mu.Unlock()
