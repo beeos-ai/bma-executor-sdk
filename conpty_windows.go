@@ -158,16 +158,7 @@ func startConPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
 		return nil, fmt.Errorf("create pty output pipe: %w", err)
 	}
 	var hpc windows.Handle
-	pcFlags := uint32(0)
-	switch os.Getenv("BMA_CONPTY_VARIANT") {
-	case "flag1", "flag1cpr":
-		pcFlags = 1
-	case "flag2":
-		pcFlags = 2
-	case "flag4":
-		pcFlags = 4
-	}
-	err = windows.CreatePseudoConsole(windows.Coord{X: ptyCols, Y: ptyRows}, inRead, outWrite, pcFlags, &hpc)
+	err = windows.CreatePseudoConsole(windows.Coord{X: ptyCols, Y: ptyRows}, inRead, outWrite, 0, &hpc)
 	// The pseudo console holds its own duplicates of its ends.
 	_ = windows.CloseHandle(inRead)
 	_ = windows.CloseHandle(outWrite)
@@ -197,8 +188,15 @@ func startConPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
 		*(*unsafe.Pointer)(unsafe.Pointer(&hpc)), unsafe.Sizeof(hpc)); err != nil {
 		return fail(err)
 	}
+	// STARTF_USESTDHANDLES with invalid handles makes the child use the pseudo
+	// console even when the executor's own standard handles are redirected;
+	// without it such a child inherits them and its output bypasses the
+	// terminal (wezterm and Windows Terminal do the same).
 	startup := &windows.StartupInfoEx{
-		StartupInfo:             windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfoEx{}))},
+		StartupInfo: windows.StartupInfo{
+			Cb: uint32(unsafe.Sizeof(windows.StartupInfoEx{})), Flags: windows.STARTF_USESTDHANDLES,
+			StdInput: windows.InvalidHandle, StdOutput: windows.InvalidHandle, StdErr: windows.InvalidHandle,
+		},
 		ProcThreadAttributeList: attributes.List(),
 	}
 
@@ -208,30 +206,8 @@ func startConPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
 	}
 	tree.pty = pty
 	var info windows.ProcessInformation
-	variant := os.Getenv("BMA_CONPTY_VARIANT") // TEMPORARY diagnostics
 	flags := uint32(windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_UNICODE_ENVIRONMENT | windows.CREATE_SUSPENDED)
-	if variant == "nosuspend" {
-		flags = uint32(windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_UNICODE_ENVIRONMENT)
-	}
-	if variant == "resize" {
-		_ = windows.ResizePseudoConsole(hpc, windows.Coord{X: ptyCols, Y: ptyRows})
-	}
-	if variant == "resizelate" {
-		go func() {
-			time.Sleep(400 * time.Millisecond)
-			_ = windows.ResizePseudoConsole(hpc, windows.Coord{X: ptyCols, Y: ptyRows})
-		}()
-	}
-	if variant == "flag1cpr" {
-		go func() { time.Sleep(200 * time.Millisecond); _, _ = pty.in.WriteString("\x1b[1;1R") }()
-	}
-	if variant == "cpr" {
-		_, _ = pty.in.WriteString("\x1b[1;1R")
-	}
-	if variant == "cprlate" {
-		go func() { time.Sleep(300 * time.Millisecond); _, _ = pty.in.WriteString("\x1b[1;1R") }()
-	}
-	if err := windows.CreateProcess(application, commandLine, nil, nil, variant == "inherit", flags, env, dir, &startup.StartupInfo, &info); err != nil {
+	if err := windows.CreateProcess(application, commandLine, nil, nil, false, flags, env, dir, &startup.StartupInfo, &info); err != nil {
 		tree.close()
 		_ = pty.out.Close()
 		return nil, err
@@ -244,9 +220,7 @@ func startConPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
 		_ = pty.out.Close()
 		return nil, err
 	}
-	if variant == "nosuspend" {
-		// no resume needed
-	} else if _, err := windows.ResumeThread(info.Thread); err != nil {
+	if _, err := windows.ResumeThread(info.Thread); err != nil {
 		_ = windows.TerminateProcess(info.Process, 1)
 		_ = windows.CloseHandle(info.Process)
 		_ = windows.CloseHandle(info.Thread)

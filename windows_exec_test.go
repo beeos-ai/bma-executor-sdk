@@ -442,23 +442,3 @@ func TestWindowsConPTYTerminateEndsTheProcessTree(t *testing.T) {
 	}
 	requireDead(t, child)
 }
-
-// TestWindowsConPTYDiagnostics logs what a command produces on a pseudo console per variant.
-func TestWindowsConPTYDiagnostics(t *testing.T) {
-	for _, variant := range []string{"resize", "resizelate"} {
-		t.Setenv("BMA_CONPTY_VARIANT", variant)
-		w := newWinProc(t, CoreOptions{}, ProcessOptions{})
-		id := "diag" + variant
-		_, err := w.start(t, ProcessStartParams{ProcessID: id, Argv: []string{"cmd.exe", "/d", "/s", "/c", "echo hello-from-cmd & ping -n 3 127.0.0.1 >nul"}, IOMode: IOModePTY})
-		var all strings.Builder
-		var cursor int64
-		var r ProcessReadResult
-		for i := 0; i < 12; i++ {
-			time.Sleep(500 * time.Millisecond)
-			r = w.read(t, id, StreamStdout, cursor, 50)
-			all.WriteString(decodeData(t, r))
-			cursor = r.NextCursor
-		}
-		t.Errorf("DIAG variant=%q err=%v state=%s output=%q", variant, err, r.State, all.String())
-	}
-}
