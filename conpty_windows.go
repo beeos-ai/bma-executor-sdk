@@ -158,7 +158,16 @@ func startConPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
 		return nil, fmt.Errorf("create pty output pipe: %w", err)
 	}
 	var hpc windows.Handle
-	err = windows.CreatePseudoConsole(windows.Coord{X: ptyCols, Y: ptyRows}, inRead, outWrite, 0, &hpc)
+	pcFlags := uint32(0)
+	switch os.Getenv("BMA_CONPTY_VARIANT") {
+	case "flag1", "flag1cpr":
+		pcFlags = 1
+	case "flag2":
+		pcFlags = 2
+	case "flag4":
+		pcFlags = 4
+	}
+	err = windows.CreatePseudoConsole(windows.Coord{X: ptyCols, Y: ptyRows}, inRead, outWrite, pcFlags, &hpc)
 	// The pseudo console holds its own duplicates of its ends.
 	_ = windows.CloseHandle(inRead)
 	_ = windows.CloseHandle(outWrite)
@@ -203,6 +212,12 @@ func startConPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
 	flags := uint32(windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_UNICODE_ENVIRONMENT | windows.CREATE_SUSPENDED)
 	if variant == "nosuspend" {
 		flags = uint32(windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_UNICODE_ENVIRONMENT)
+	}
+	if variant == "resize" {
+		_ = windows.ResizePseudoConsole(hpc, windows.Coord{X: ptyCols, Y: ptyRows})
+	}
+	if variant == "flag1cpr" {
+		go func() { time.Sleep(200 * time.Millisecond); _, _ = pty.in.WriteString("\x1b[1;1R") }()
 	}
 	if variant == "cpr" {
 		_, _ = pty.in.WriteString("\x1b[1;1R")

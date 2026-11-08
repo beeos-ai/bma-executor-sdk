@@ -445,7 +445,7 @@ func TestWindowsConPTYTerminateEndsTheProcessTree(t *testing.T) {
 
 // TestWindowsConPTYDiagnostics logs what a command produces on a pseudo console per variant.
 func TestWindowsConPTYDiagnostics(t *testing.T) {
-	for _, variant := range []string{"", "nosuspend", "inherit", "cpr", "cprlate"} {
+	for _, variant := range []string{"resize", "flag1", "flag1cpr", "flag2", "flag4"} {
 		t.Setenv("BMA_CONPTY_VARIANT", variant)
 		w := newWinProc(t, CoreOptions{}, ProcessOptions{})
 		id := "diag" + variant
