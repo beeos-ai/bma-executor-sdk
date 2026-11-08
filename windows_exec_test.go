@@ -3,10 +3,20 @@
 package bmaexecutor
 
 import (
+	"context"
 	"encoding/base64"
 	"strings"
 	"testing"
+	"time"
 )
+
+// winContext allows for a cold PowerShell start on a CI runner.
+func winContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
 
 // winProc is a core with the process capability behind a loopback harness
 // and one ready session, for the Windows execution tests.
@@ -30,14 +40,14 @@ func (w winProc) start(t *testing.T, params ProcessStartParams) (ProcessState, e
 	t.Helper()
 	params.SessionID = w.session.ID()
 	var state ProcessState
-	err := w.executor.Call(testContext(t), MethodProcessStart, params, &state)
+	err := w.executor.Call(winContext(t), MethodProcessStart, params, &state)
 	return state, err
 }
 
 func (w winProc) read(t *testing.T, id, stream string, cursor int64, waitMS int64) ProcessReadResult {
 	t.Helper()
 	var result ProcessReadResult
-	err := w.executor.Call(testContext(t), MethodProcessRead, ProcessReadParams{
+	err := w.executor.Call(winContext(t), MethodProcessRead, ProcessReadParams{
 		SessionID: w.session.ID(), ProcessID: id, Stream: stream, Cursor: cursor, WaitMS: waitMS,
 	}, &result)
 	if err != nil {
@@ -52,7 +62,7 @@ func (w winProc) output(t *testing.T, id string) string {
 	var out strings.Builder
 	var cursor int64
 	for {
-		r := w.read(t, id, StreamStdout, cursor, 10000)
+		r := w.read(t, id, StreamStdout, cursor, 30000)
 		raw, err := base64.StdEncoding.DecodeString(r.Data)
 		if err != nil {
 			t.Fatal(err)
@@ -93,7 +103,7 @@ func TestWindowsBashKeepsPowerShellDollarsAndQuotes(t *testing.T) {
 	core := newTestCore(t, CoreOptions{})
 	session := readySession(t, attachBrain(t, core, "local"), SessionAssignParams{SessionID: "sess_ps", Lease: Lease{Token: "lease"}})
 	command := `powershell -NoProfile -NonInteractive -Command "$x = 'dollar'; Write-Output \"[$x] $($x.Length)\""`
-	result, err := session.CallTool(testContext(t), ToolCallParams{Tool: ToolNameBash, Input: NewToolInput(ToolInput{Command: command})})
+	result, err := session.CallTool(winContext(t), ToolCallParams{Tool: ToolNameBash, Input: NewToolInput(ToolInput{Command: command})})
 	if err != nil || result.IsError || !strings.Contains(textOf(result), "[dollar] 6") {
 		t.Fatalf("bash powershell = %q err %v", textOf(result), err)
 	}
@@ -104,7 +114,7 @@ func TestWindowsBashKeepsPowerShellDollarsAndQuotes(t *testing.T) {
 func TestWindowsProcessStartCmdLineVerbatim(t *testing.T) {
 	w := newWinProc(t, CoreOptions{}, ProcessOptions{})
 	state, err := w.start(t, ProcessStartParams{
-		ProcessID: "ps", WaitMS: 30000, Stdin: StdinClosed,
+		ProcessID: "ps", WaitMS: 60000, Stdin: StdinClosed,
 		Argv: []string{"cmd.exe", "/d", "/s", "/c", `powershell -NoProfile -NonInteractive -Command "$v = 7; Write-Output \"v=$v\""`},
 	})
 	if err != nil || state.State != ProcessExited || state.ExitCode == nil || *state.ExitCode != 0 {
