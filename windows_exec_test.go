@@ -225,6 +225,11 @@ func TestWindowsTimeoutEndsTheProcessTree(t *testing.T) {
 	}
 	child := grandchildPID(t, pidfile)
 	r := w.read(t, "slow", StreamStdout, 0, 30000)
+	// The pipe can close a moment before the exit is recorded.
+	for deadline := time.Now().Add(30 * time.Second); r.State == ProcessRunning && time.Now().Before(deadline); {
+		time.Sleep(50 * time.Millisecond)
+		r = w.read(t, "slow", StreamStdout, r.NextCursor, 0)
+	}
 	if r.State != ProcessFailed || r.Reason != "timeout" {
 		t.Fatalf("read = %+v", r)
 	}
