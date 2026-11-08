@@ -216,6 +216,12 @@ func startConPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
 	if variant == "resize" {
 		_ = windows.ResizePseudoConsole(hpc, windows.Coord{X: ptyCols, Y: ptyRows})
 	}
+	if variant == "resizelate" {
+		go func() {
+			time.Sleep(400 * time.Millisecond)
+			_ = windows.ResizePseudoConsole(hpc, windows.Coord{X: ptyCols, Y: ptyRows})
+		}()
+	}
 	if variant == "flag1cpr" {
 		go func() { time.Sleep(200 * time.Millisecond); _, _ = pty.in.WriteString("\x1b[1;1R") }()
 	}
