@@ -92,6 +92,10 @@ type CoreOptions struct {
 	// 48 KiB, under the 64 KiB control frame). Larger output is uploaded as
 	// an artifact when UploadArtifacts is set, otherwise truncated.
 	InlineResultBytes int
+	// ComputerUse serves computer_observe and computer_action and advertises
+	// capabilities.computer_use (for example NewCuaDriver). Nil leaves
+	// computer use off: the harness then sends no computer_* tool.
+	ComputerUse ComputerUseBackend
 	// UploadArtifacts advertises the artifacts capability and offloads large
 	// bash results with Client.UploadArtifact. Only environment-scoped
 	// executors have an artifact store.
@@ -322,6 +326,7 @@ func (c *Core) Capabilities() Capabilities {
 		Files: &FilesCapability{Enabled: true, ReadRoots: []string{c.opts.WorkRoot}, WriteRoots: []string{c.opts.WorkRoot}},
 		MCP:   &MCPCapability{Stdio: true, SecretEnv: true, MaxServers: c.opts.MaxMCPServersPerSession},
 	}
+	capabilities.ComputerUse = c.opts.ComputerUse != nil
 	if c.opts.UploadArtifacts {
 		capabilities.Artifacts = &ArtifactCapability{Upload: true, MaxBytes: DefaultMaxArtifactBytes}
 	}
@@ -393,6 +398,13 @@ func (c *Core) Attach(brain string, client *Client) error {
 	client.Tools.Grep.Handle(func(ctx context.Context, _ GrepInput, tool ToolContext) (ToolOutput, error) {
 		return run(ctx, tool), nil
 	})
+	if c.opts.ComputerUse != nil {
+		computer := func(ctx context.Context, params ToolCallParams, _ func(string)) (ToolResultParams, error) {
+			return c.toolCall(ctx, brain, params), nil
+		}
+		client.setToolHandler(ToolNameComputerObserve, computer)
+		client.setToolHandler(ToolNameComputerAction, computer)
+	}
 	client.afterToolResult(func(params ToolCallParams) {
 		session := c.session(coreKey{brain, params.SessionID})
 		if session != nil && c.opts.EndAfterToolCall != nil && c.opts.EndAfterToolCall(session.params) {
@@ -685,11 +697,16 @@ func (c *Core) acceptToolCall(brain string, params ToolCallParams) error {
 	if c.session(coreKey{brain, params.SessionID}) == nil {
 		return &RPCError{Code: CodeSessionNotActive, Message: "session is not active"}
 	}
-	if !coreTools[params.Tool] {
+	if !coreTools[params.Tool] && !c.hasComputerTool(params.Tool) {
 		return &RPCError{Code: CodeCapabilityUnavailable, Message: "capability_unavailable",
 			Data: &JSONRPCErrorData{Capability: "tool:" + params.Tool}}
 	}
 	return nil
+}
+
+// hasComputerTool reports whether tool is a computer_* tool this core serves.
+func (c *Core) hasComputerTool(tool string) bool {
+	return c.opts.ComputerUse != nil && (tool == ToolNameComputerObserve || tool == ToolNameComputerAction)
 }
 
 func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams) ToolResultParams {
@@ -725,6 +742,12 @@ func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams
 			break
 		}
 		result, err = c.fileTool(session, params.Tool, input)
+	case ToolNameComputerObserve, ToolNameComputerAction:
+		if c.opts.ComputerUse == nil {
+			err = fmt.Errorf("capability_unavailable: tool %q is not supported", params.Tool)
+			break
+		}
+		result, err = c.computerTool(ctx, params)
 	default:
 		err = fmt.Errorf("capability_unavailable: tool %q is not supported", params.Tool)
 	}
