@@ -68,11 +68,18 @@ func newFakeUpstream(t *testing.T) *fakeUpstream {
 
 func startACPFixture(t *testing.T, ctx context.Context, opts ACPAgentOptions) *acpFixture {
 	t.Helper()
+	return startACPFixtureAt(t, ctx, opts, t.TempDir(), newRecordingPlatform(), nil)
+}
+
+// startACPFixtureAt starts an executor process (agent, core, client) on a
+// state root and a platform; calling it again with the same root and platform
+// is a restart of the executor process.
+func startACPFixtureAt(t *testing.T, ctx context.Context, opts ACPAgentOptions, root string, platform *recordingPlatform, hook func(context.Context, string)) *acpFixture {
+	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := t.TempDir()
 	work := filepath.Join(root, "work")
 	core, err := NewCore(CoreOptions{WorkRoot: work})
 	if err != nil {
@@ -97,8 +104,8 @@ func startACPFixture(t *testing.T, ctx context.Context, opts ACPAgentOptions) *a
 	if err != nil {
 		t.Fatal(err)
 	}
+	agent.hook = hook
 	t.Cleanup(func() { _ = agent.Close() })
-	platform := newRecordingPlatform()
 	harness := NewHarness(HarnessOptions{Agent: platform, RequestTimeout: 5 * time.Second})
 	server := httptest.NewServer(harness)
 	t.Cleanup(server.Close)
@@ -171,7 +178,7 @@ func TestACPAgentCapabilityDeclaresDSHHarness(t *testing.T) {
 		h.AgentName != "fake-dsh-acp" || h.Version != "9.9.9+dsh0.2.1-rc.5" || *capability.Harness != h {
 		t.Fatalf("harness = %+v", h)
 	}
-	if capability.TurnResume || !contains(capability.InteractionKinds, InteractionKindPermission) || !contains(capability.PermissionModes, "accept_edits") {
+	if !capability.TurnResume || !contains(capability.InteractionKinds, InteractionKindPermission) || !contains(capability.PermissionModes, "accept_edits") {
 		t.Fatalf("capability = %+v", capability)
 	}
 }
@@ -595,6 +602,11 @@ func fakeHandle(c *fakeConn, method string, raw json.RawMessage) (any, map[strin
 			Text string `json:"text"`
 		}
 		_ = json.Unmarshal(p.Prompt[0], &block)
+		if strings.HasPrefix(block.Text, "resume") {
+			inputID, _ := p.Meta.Bma["inputId"].(string)
+			policy, _ := p.Meta.Bma["toolPolicy"].(map[string]any)
+			return fakeResume(c, p.SessionID, inputID, policy["bash"] == "allow", block.Text == "resume-amnesia")
+		}
 		return fakePrompt(c, p.SessionID, block.Text)
 	}
 	return nil, map[string]any{"code": -32601, "message": "method not found"}

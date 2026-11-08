@@ -13,6 +13,24 @@
   model proxy (placeholder key, running-turn and tool-catalog gate), cancel
   with a kill after `CancelGrace`, `max_tokens` as `output_limit_reached`,
   `session/load` from `executor_session_ref`. Example: `examples/local-dsh`.
+- **Go `ACPAgent` for a supervising app:** `ACPAgentOptions.OnInteraction` tells
+  the app when an approval is asked of the platform and when it ends (answered
+  anywhere, expired, withdrawn), with the tool input, under the same `appr_` id;
+  `examples/local-dsh` writes these as JSON lines (registered, interaction
+  requested/ended) and takes `-stdin-lifeline` (exit when stdin closes, so the
+  app's exit or crash stops the executor).
+- **Go `ACPAgent` declares `turn_resume`:** after an executor restart the
+  platform starts the in-flight turn again (same `turn_id`, `executor_session_ref`);
+  ACPAgent loads the conversation (`session/load`) and the agent continues the
+  recorded input (same `inputId`). A per-session ledger under
+  `StateDir/executor-turns` makes the restart safe: a tool whose result is
+  recorded is not run again (the recorded result is returned), one that was
+  started without a result has an unknown outcome and is answered with an error
+  instead of running again, an approval the platform already answered is not
+  asked again and a pending one is asked again under the same `appr_` id, events
+  the platform already acknowledged (a reported `agent.tool_result`, a finished
+  input) are not emitted again. Tests kill the executor before the tool ran,
+  during a pending approval and after the tool ran, then restart it.
 - **Contract sync + agent.custom_tool_result (Go/TS/Python):** `make contract-sdk` is synced to
   beeos-managed-agents main (lock `source_commit` is a clean commit). New: capability
   `agent.custom_tools`, event `agent.custom_tool_use`, request `agent.custom_tool_result`.

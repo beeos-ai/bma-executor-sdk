@@ -43,6 +43,42 @@ func (c *Core) closeLocal(brain, sessionID string) {
 	c.stop(coreKey{brain, sessionID})
 }
 
+// runToolOnce runs a tool call at most once across executor restarts: the
+// ledger says "started" before the tool runs and "done" with its result
+// after. A call asked for again is answered from the ledger; one whose
+// start was recorded without a result has an unknown outcome and is not run
+// again.
+func (a *ACPAgent) runToolOnce(ctx context.Context, ledger *acpLedger, sessionID, callID, name string, in map[string]any) (string, bool) {
+	stateError := func(err error) (string, bool) { return "turn state: " + err.Error(), true }
+	switch call := ledger.call(callID); call.Phase {
+	case acpPhaseDone:
+		return call.Text, call.IsError
+	case acpPhaseStarted:
+		text := "The tool call was started before the executor restarted; whether it took effect is unknown, so it was not run again."
+		if err := ledger.update(callID, func(c *acpCallState) { c.Phase, c.Text, c.IsError = acpPhaseDone, text, true }); err != nil {
+			return stateError(err)
+		}
+		return text, true
+	}
+	if a.hook != nil {
+		a.hook(ctx, "tool:before")
+		if ctx.Err() != nil {
+			return "The tool call was cancelled.", true
+		}
+	}
+	if err := ledger.update(callID, func(c *acpCallState) { c.Phase = acpPhaseStarted }); err != nil {
+		return stateError(err)
+	}
+	text, isError := a.runTool(ctx, sessionID, callID, name, in)
+	if err := ledger.update(callID, func(c *acpCallState) { c.Phase, c.Text, c.IsError = acpPhaseDone, text, isError }); err != nil {
+		return stateError(err)
+	}
+	if a.hook != nil {
+		a.hook(ctx, "tool:after")
+	}
+	return text, isError
+}
+
 func (a *ACPAgent) runTool(ctx context.Context, sessionID, callID, name string, in map[string]any) (string, bool) {
 	if !coreTools[name] {
 		return fmt.Sprintf("tool %q is not available on this computer", name), true
