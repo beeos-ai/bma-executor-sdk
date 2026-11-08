@@ -443,22 +443,15 @@ func TestWindowsConPTYTerminateEndsTheProcessTree(t *testing.T) {
 	requireDead(t, child)
 }
 
-// TestWindowsConPTYDiagnostics logs what a few commands produce on a pseudo console.
+// TestWindowsConPTYDiagnostics logs what a command produces on a pseudo console per variant.
 func TestWindowsConPTYDiagnostics(t *testing.T) {
-	w := newWinProc(t, CoreOptions{}, ProcessOptions{})
-	for i, argv := range [][]string{
-		{"cmd.exe", "/d", "/s", "/c", "echo hello-from-cmd"},
-		{testExecutable(t)},
-	} {
-		id := "diag" + strconv.Itoa(i)
-		state, err := w.start(t, ProcessStartParams{ProcessID: id, Argv: argv, IOMode: IOModePTY, Env: helperEnv("isatty"), WaitMS: 20000})
-		t.Errorf("DIAG %v: start %+v err %v", argv, state, err)
-		time.Sleep(2 * time.Second)
-		r := w.read(t, id, StreamStdout, 0, 3000)
-		exit := -999
-		if r.ExitCode != nil {
-			exit = *r.ExitCode
-		}
-		t.Errorf("DIAG %v: state %s exit %d output %q", argv, r.State, exit, decodeData(t, r))
+	for _, variant := range []string{"", "nosuspend", "inherit", "cpr", "cprlate"} {
+		t.Setenv("BMA_CONPTY_VARIANT", variant)
+		w := newWinProc(t, CoreOptions{}, ProcessOptions{})
+		id := "diag" + variant
+		_, err := w.start(t, ProcessStartParams{ProcessID: id, Argv: []string{"cmd.exe", "/d", "/s", "/c", "echo hello-from-cmd & ping -n 3 127.0.0.1 >nul"}, IOMode: IOModePTY})
+		time.Sleep(1500 * time.Millisecond)
+		r := w.read(t, id, StreamStdout, 0, 100)
+		t.Errorf("DIAG variant=%q err=%v state=%s output=%q", variant, err, r.State, decodeData(t, r))
 	}
 }

@@ -199,8 +199,18 @@ func startConPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
 	}
 	tree.pty = pty
 	var info windows.ProcessInformation
+	variant := os.Getenv("BMA_CONPTY_VARIANT") // TEMPORARY diagnostics
 	flags := uint32(windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_UNICODE_ENVIRONMENT | windows.CREATE_SUSPENDED)
-	if err := windows.CreateProcess(application, commandLine, nil, nil, false, flags, env, dir, &startup.StartupInfo, &info); err != nil {
+	if variant == "nosuspend" {
+		flags = uint32(windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_UNICODE_ENVIRONMENT)
+	}
+	if variant == "cpr" {
+		_, _ = pty.in.WriteString("\x1b[1;1R")
+	}
+	if variant == "cprlate" {
+		go func() { time.Sleep(300 * time.Millisecond); _, _ = pty.in.WriteString("\x1b[1;1R") }()
+	}
+	if err := windows.CreateProcess(application, commandLine, nil, nil, variant == "inherit", flags, env, dir, &startup.StartupInfo, &info); err != nil {
 		tree.close()
 		_ = pty.out.Close()
 		return nil, err
@@ -213,7 +223,9 @@ func startConPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
 		_ = pty.out.Close()
 		return nil, err
 	}
-	if _, err := windows.ResumeThread(info.Thread); err != nil {
+	if variant == "nosuspend" {
+		// no resume needed
+	} else if _, err := windows.ResumeThread(info.Thread); err != nil {
 		_ = windows.TerminateProcess(info.Process, 1)
 		_ = windows.CloseHandle(info.Process)
 		_ = windows.CloseHandle(info.Thread)
