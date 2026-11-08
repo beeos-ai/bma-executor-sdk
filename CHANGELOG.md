@@ -29,6 +29,11 @@ supported runtimes).
   command's process group (the executor creates a hidden console when it has
   none); `process.terminate` asks the same way and kills the tree after
   `grace_ms`. Exits are reported as `exit_signal` `SIGINT`/`SIGTERM`/`SIGKILL`.
+- **Go, Windows (G3):** `process.start` `io_mode` `pty` runs on a ConPTY
+  pseudo console (Windows 10 1809+; `process.pty` is advertised only where it
+  exists), inside the process's Job Object. `process.write` is the terminal's
+  input, `process.interrupt` writes `^C`, output is one merged stream that
+  ends with EOF when the process does.
 - **CI:** the Go suite runs on `windows-latest`.
 
 ## 1.2.0

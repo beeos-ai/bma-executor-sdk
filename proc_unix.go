@@ -5,6 +5,7 @@ package bmaexecutor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -122,6 +123,21 @@ func signalName(signal syscall.Signal) string {
 	default:
 		return "SIG" + strconv.Itoa(int(signal))
 	}
+}
+
+// spawnPTY runs the command on a pseudo-terminal. Output is one stream (the
+// terminal merges stderr), so the process reports stderr "merge".
+func spawnPTY(params ProcessStartParams, cmd *exec.Cmd, runAs *RunAs) (*process, error) {
+	master, err := startPTY(cmd, runAs)
+	if err != nil {
+		return nil, fmt.Errorf("spawn %s on a pty: %w", params.Argv[0], err)
+	}
+	proc := newCommandProcess(params.ProcessID, cmd, &processTree{process: cmd.Process})
+	proc.stdin, proc.pty = master, true
+	proc.stderrMode = StderrMerge
+	proc.stderr.eof = true
+	go proc.pump(master, func(p *process) *stream { return &p.stdout })
+	return proc, nil
 }
 
 // startPTY runs cmd on a new 24x80 pseudo-terminal. The child leads its own

@@ -334,3 +334,113 @@ func decodeData(t *testing.T, r ProcessReadResult) string {
 	}
 	return string(raw)
 }
+
+func ptyStart(t *testing.T, w winProc, id, mode string, extra ...string) ProcessState {
+	t.Helper()
+	state, err := w.start(t, ProcessStartParams{ProcessID: id, Argv: []string{testExecutable(t)}, IOMode: IOModePTY, Env: helperEnv(mode, extra...)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// waitEnded reads until the process has ended and returns its last read.
+func (w winProc) waitEnded(t *testing.T, id string) ProcessReadResult {
+	t.Helper()
+	r := w.read(t, id, StreamStdout, 0, 30000)
+	for deadline := time.Now().Add(60 * time.Second); r.State == ProcessRunning && time.Now().Before(deadline); {
+		r = w.read(t, id, StreamStdout, r.NextCursor, 30000)
+	}
+	return r
+}
+
+// waitFor reads stdout until it contains want.
+func (w winProc) waitFor(t *testing.T, id, want string) {
+	t.Helper()
+	var seen strings.Builder
+	var cursor int64
+	for deadline := time.Now().Add(60 * time.Second); time.Now().Before(deadline); {
+		r := w.read(t, id, StreamStdout, cursor, 5000)
+		seen.WriteString(decodeData(t, r))
+		cursor = r.NextCursor
+		if strings.Contains(seen.String(), want) {
+			return
+		}
+		if r.EOF {
+			break
+		}
+	}
+	t.Fatalf("output never contained %q: %q", want, seen.String())
+}
+
+// TestWindowsConPTYAdvertisedAndATerminal (G3).
+func TestWindowsConPTYAdvertisedAndATerminal(t *testing.T) {
+	w := newWinProc(t, CoreOptions{}, ProcessOptions{})
+	if !ptySupported {
+		t.Fatal("ConPTY is not available on this runner")
+	}
+	state := ptyStart(t, w, "tty", "isatty")
+	if state.Stderr != StderrMerge {
+		t.Fatalf("state = %+v", state)
+	}
+	// Reading to EOF proves the pseudo console is closed after the process ends.
+	if out := w.output(t, "tty"); !strings.Contains(out, "tty=true") {
+		t.Fatalf("output = %q", out)
+	}
+	if r := w.waitEnded(t, "tty"); r.State != ProcessExited || r.ExitCode == nil || *r.ExitCode != 0 {
+		t.Fatalf("ended = %+v", r)
+	}
+}
+
+// TestWindowsConPTYInputAndOutput (G3): process.write reaches the terminal.
+func TestWindowsConPTYInputAndOutput(t *testing.T) {
+	w := newWinProc(t, CoreOptions{}, ProcessOptions{})
+	ptyStart(t, w, "echo", "echo")
+	var written ProcessWriteResult
+	if err := w.executor.Call(winContext(t), MethodProcessWrite, ProcessWriteParams{
+		SessionID: w.session.ID(), ProcessID: "echo", Data: base64.StdEncoding.EncodeToString([]byte("hello\r\n")),
+	}, &written); err != nil {
+		t.Fatal(err)
+	}
+	if out := w.output(t, "echo"); !strings.Contains(out, "echo:hello") {
+		t.Fatalf("output = %q", out)
+	}
+}
+
+// TestWindowsConPTYInterrupt (G3, G5): process.interrupt writes ^C into the
+// terminal's input. ConPTY turns it into CTRL_C for a program with processed
+// input; a program in raw mode (as here, so the test does not depend on the CI
+// runner's ctrl-c inheritance) reads the byte itself.
+func TestWindowsConPTYInterrupt(t *testing.T) {
+	w := newWinProc(t, CoreOptions{}, ProcessOptions{})
+	ptyStart(t, w, "int", "rawinput")
+	w.waitFor(t, "int", "ready")
+	var state ProcessState
+	if err := w.executor.Call(winContext(t), MethodProcessInterrupt,
+		ProcessSignalParams{SessionID: w.session.ID(), ProcessID: "int"}, &state); err != nil {
+		t.Fatal(err)
+	}
+	if out := w.output(t, "int"); !strings.Contains(out, "got=3") {
+		t.Fatalf("output = %q", out)
+	}
+	if r := w.waitEnded(t, "int"); r.State != ProcessExited || r.ExitCode == nil || *r.ExitCode != 0 {
+		t.Fatalf("ended = %+v", r)
+	}
+}
+
+// TestWindowsConPTYTerminateEndsTheProcessTree (G3, G4).
+func TestWindowsConPTYTerminateEndsTheProcessTree(t *testing.T) {
+	w := newWinProc(t, CoreOptions{}, ProcessOptions{})
+	pidfile := filepath.Join(t.TempDir(), "child.pid")
+	ptyStart(t, w, "tree", "tree", "BMA_TEST_PIDFILE", pidfile)
+	child := grandchildPID(t, pidfile)
+	var state ProcessState
+	if err := w.executor.Call(winContext(t), MethodProcessTerminate,
+		ProcessSignalParams{SessionID: w.session.ID(), ProcessID: "tree", GraceMS: ptr(int64(0))}, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.State != ProcessKilled {
+		t.Fatalf("terminate = %+v", state)
+	}
+	requireDead(t, child)
+}

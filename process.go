@@ -779,11 +779,7 @@ func spawn(params ProcessStartParams, cwd string, env []string, runAs *RunAs) (*
 	cmd.Env = env
 	setCommandLine(cmd)
 	if params.IOMode == IOModePTY {
-		master, err := startPTY(cmd, runAs)
-		if err != nil {
-			return nil, fmt.Errorf("spawn %s on a pty: %w", params.Argv[0], err)
-		}
-		return ptyProcess(params, cmd, master), nil
+		return spawnPTY(params, cmd, runAs)
 	}
 	setProcessGroupID(cmd)
 	setCredential(cmd, runAs)
@@ -839,29 +835,23 @@ func spawn(params ProcessStartParams, cwd string, env []string, runAs *RunAs) (*
 }
 
 func newCommandProcess(id string, cmd *exec.Cmd, tree *processTree) *process {
+	return newProcess(id, cmd.Process.Pid, tree, func() (int, string) {
+		_ = cmd.Wait()
+		return tree.exit(cmd.ProcessState)
+	})
+}
+
+// newProcess is a running process; wait blocks until it ends and returns its
+// exit code or signal name.
+func newProcess(id string, pid int, tree *processTree, wait func() (int, string)) *process {
 	return &process{
-		id: id, tree: tree, pid: cmd.Process.Pid, startedAt: time.Now(),
+		id: id, tree: tree, pid: pid, startedAt: time.Now(),
 		changed: make(chan struct{}), applied: map[string]bool{},
-		state: ProcessRunning, exited: make(chan struct{}),
-		wait: func() (int, string) {
-			_ = cmd.Wait()
-			return tree.exit(cmd.ProcessState)
-		},
+		state: ProcessRunning, exited: make(chan struct{}), wait: wait,
 	}
 }
 
-// spawnPTY runs the command on a pseudo-terminal. Output is one stream (the
-// terminal merges stderr), so the process reports stderr "merge".
-func ptyProcess(params ProcessStartParams, cmd *exec.Cmd, master *os.File) *process {
-	proc := newCommandProcess(params.ProcessID, cmd, &processTree{process: cmd.Process})
-	proc.stdin, proc.pty = master, true
-	proc.stderrMode = StderrMerge
-	proc.stderr.eof = true
-	go proc.pump(master, func(p *process) *stream { return &p.stdout })
-	return proc
-}
-
-func (p *process) pump(r *os.File, pick func(*process) *stream) {
+func (p *process) pump(r io.ReadCloser, pick func(*process) *stream) {
 	defer func() { _ = r.Close() }()
 	chunk := make([]byte, 32*1024)
 	for {
