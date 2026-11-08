@@ -1,6 +1,6 @@
 {
   "source_repository": "beeos-ai/beeos-managed-agents",
-  "source_commit": "b7e99cbf6de0ca495bf93b8b96a9d167f41d2c9f",
+  "source_commit": "b7e99cbf6de0ca495bf93b8b96a9d167f41d2c9f+dirty",
   "protocols": [
     "bma.executor.v1",
     "bma.executor.v1.1"
@@ -10,7 +10,7 @@
     "contracts/bma/executor/examples/conformance.json": "73b98af9be7842d18da9f09f6db671f4a268c297ea2180a38f53ab0dce6dd4b4",
     "contracts/bma/executor/executor.asyncapi.yaml": "3810468cbf51b47a48dca60ee4c2e74503b4b25dd6efd1872551c64f86a4851f",
     "contracts/bma/executor/executor.openrpc.yaml": "37c2e4e868d4c6eafa67e9896ce3e605cde092957aff08c0dfe77b329d4b344e",
-    "contracts/bma/executor/schemas/agent.json": "296df9422f495d37537c969a0cb92c54733e16ffbb0ec699f0400f0c76ebee51",
+    "contracts/bma/executor/schemas/agent.json": "0124660aa0d1197eb63842e44d9749270630b6c5d9e7c313b839e8d191ded8e9",
     "contracts/bma/executor/schemas/common.json": "0e9dad15395413cc4b87e13b596115202f2f3847e6eb7e87ac156386fc4ce5d7",
     "contracts/bma/executor/schemas/executor.json": "de704a5bc84d9d0529f3065c93bb0c34e47455c45da5b105a92083548384d1d4",
     "contracts/bma/executor/schemas/file.json": "ac0b9d2f097f5987b9e14b5d1fb1773aca2d2d744a368ca8ec84a8cd3f6bf491",
@@ -23,8 +23,8 @@
     "contracts/bma/executor/schemas/workspace.json": "4e8d0ebbab963c9f7f179125a96cb2b89fa79c6a03e3899a1b94c14bed54f5c0"
   },
   "generated": {
-    "generated.go": "28c367e2e05125958970a3e554a202793fef110ad1534ab4bcfc6645b3ce8608",
-    "python/src/bma_executor_sdk/generated.py": "1e2f83948de1e731b6a647089170b21bd5b2f92d8442b88a2e6b912146ef8f17",
-    "typescript/src/generated/executor.ts": "5493d6390a94ca369b9827cf234402dfd79feec2a3c9931408b011cbfe55f60b"
+    "generated.go": "566e13425d8d199e891e475f7ebce6f5c2f806ecfada6a65ad6726559391298e",
+    "python/src/bma_executor_sdk/generated.py": "da01e39163692c26ce2a135448acb1e559da5636cade115b83d6337dd3aff809",
+    "typescript/src/generated/executor.ts": "e95396539c241b1cf7d25e7011f0c4d41a41139ed61f0def1c1507c86133dbb4"
   }
 }

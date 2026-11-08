@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Contract (all three SDKs):** `make contract-sdk` syncs the `AgentErrorCode` stop code table
+  (`output_limit_reached`, `context_too_large`, `model_stream_idle`, `agent_error`,
+  `agent_unavailable`, `agent_auth_required`, `agent_protocol_error`) as generated constants
+  (Go `AgentErrorCode*`, TS `AgentErrorCode`, Python `AgentErrorCode`). Additive; no other contract change.
+
 Windows executor gaps (additive; no contract change, no change to the minimum
 supported runtimes).
 
