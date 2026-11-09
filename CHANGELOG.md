@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
 
 - **Behavior change, Go `ACPAgent` local `bash` (ADR-0029 T6):** `timeout` is
   now how long the call waits, not how long the command may live, as on the
