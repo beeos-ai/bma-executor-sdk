@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Go `ACPAgent`, Claude Code profile: prewarm.** `NewACPAgent` starts the
+  agent process as before and now also opens one throwaway session in the
+  background (scratch directory `StateDir/prewarm`, closed unused, never
+  prompted, so no model credit is spent), which takes the cold start of Claude
+  Code off the first real session. It never delays or fails registration; a
+  failure is logged (`agent prewarm failed`, LogWarn) and returned by the new
+  `ACPAgent.WaitPrewarm(ctx)`. `ACPAgentOptions.DisablePrewarm` turns it off.
+  Measured with the pinned claude-agent-acp on one machine: `turn.start` is
+  answered in ~1 ms (before: the whole session/new, 0.5 s to 4.6 s); the first
+  content event of the first turn comes ~0.2-0.26 s after `turn.start` (before:
+  0.57-4.64 s; without the prewarm, 0.35-0.7 s). The DSH profile has no
+  prewarm (its process is resident and its session/new is cheap).
 - **Behavior change, Go `ACPAgent`: `turn.start` is answered at once.** As the
   contract says ("answers as soon as the turn is accepted"), `OpenTurn` only
   validates (harness, permission mode, cwd, session capacity: still

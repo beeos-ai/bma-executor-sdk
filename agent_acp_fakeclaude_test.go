@@ -10,7 +10,7 @@ import (
 
 // fakeClaudeAgent speaks enough of claude-agent-acp for the gates. mode:
 // ok (set_mode works), stuck (the mode stays bypassPermissions), unpinned
-// (an unknown release), catalog (the init message lists a built-in tool).
+// (an unknown release), warmfail (the first session/new fails), catalog (the init message lists a built-in tool).
 func fakeClaudeAgent(mode string) {
 	out := bufio.NewWriter(os.Stdout)
 	var wmu sync.Mutex
@@ -24,6 +24,7 @@ func fakeClaudeAgent(mode string) {
 	update := func(update map[string]any) {
 		send(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "claude-session-1", "update": update}})
 	}
+	news := 0
 	canceled := make(chan struct{})
 	var cancelOnce sync.Once
 	in := bufio.NewScanner(os.Stdin)
@@ -53,6 +54,11 @@ func fakeClaudeAgent(mode string) {
 			reply(map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": true},
 				"agentInfo": map[string]any{"name": claudeAgentACPName, "version": version}})
 		case "session/new":
+			news++
+			if mode == "warmfail" && news == 1 { // the prewarm's session
+				send(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32603, "message": "scripted prewarm failure"}})
+				continue
+			}
 			reply(map[string]any{"sessionId": "claude-session-1", "modes": map[string]any{"currentModeId": "auto"}})
 		case "session/set_mode":
 			current := "default"

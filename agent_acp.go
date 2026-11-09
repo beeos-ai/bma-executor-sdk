@@ -166,6 +166,9 @@ type ACPAgentOptions struct {
 	// there, never to this machine's Core (fail closed). A turn without
 	// tools_mcp_* runs its tools here.
 	PlatformTools bool
+	// DisablePrewarm turns off the background prewarm of the Claude Code
+	// profile (see WaitPrewarm); the DSH profile has none.
+	DisablePrewarm bool
 	// HarnessID is the declared harness id (default "dsh").
 	HarnessID string
 	// Model is the model name the agent uses when the turn config has none (default Upstream.Model).
@@ -204,6 +207,7 @@ type ACPAgent struct {
 	proxy   *acpModelProxy
 	mcp     *acpToolServer // Claude Code profile: the platform tools as an MCP server
 	harness AgentHarnessCapability
+	warm    *acpPrewarm // Claude Code profile: the background prewarm, nil without
 
 	mu       sync.Mutex
 	proc     *acpProcess
@@ -427,6 +431,7 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 			AgentName: init.AgentInfo.Name, AgentVersion: init.AgentInfo.Version,
 			Streaming: "token", PermissionRelay: "full", SessionLoad: init.AgentCapabilities.LoadSession,
 		}
+		a.startPrewarm()
 		return a, nil
 	}
 	a.harness = AgentHarnessCapability{

@@ -23,6 +23,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -159,3 +161,88 @@ const (
 	acpInvalidParams  = -32602
 	acpMethodNotFound = -32601
 )
+
+// --- prewarm ---
+
+// Prewarm of the Claude Code profile. Starting Claude Code for the first time
+// in a process costs most of a second more than later sessions (measured: the
+// first session/new of a claude-agent-acp process ~1.1 s, the next ones
+// ~0.2 s), and without it the first turn after registration pays that. The
+// agent process itself is already running and initialized when NewACPAgent
+// returns (like bma-dsh-acp, which the platform keeps resident); NewACPAgent
+// also opens one throwaway session in the background, in a scratch directory
+// under StateDir with the same options a real session gets, and closes it
+// without ever prompting it (a prompt would spend the owner's model credit).
+//
+// A real session is not made ahead of time and adopted later: a Claude Code
+// session fixes its working directory, system prompt and tool-server credential
+// when it is created, and those belong to the platform session that has not
+// arrived yet. So the gain is the cold start, not session/new itself.
+//
+// The prewarm never delays or fails registration: it runs after NewACPAgent
+// returns. A failure is logged at LogWarn ("agent prewarm failed") and is
+// returned by WaitPrewarm; the first turn then opens its session as it would
+// have anyway.
+
+// WaitPrewarm waits for the background prewarm of NewACPAgent and returns its
+// error. It returns nil at once when the profile has no prewarm
+// (ACPProfileDSH) or ACPAgentOptions.DisablePrewarm is set.
+func (a *ACPAgent) WaitPrewarm(ctx context.Context) error {
+	if a.warm == nil {
+		return nil
+	}
+	select {
+	case <-a.warm.done:
+		return a.warm.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+type acpPrewarm struct {
+	done chan struct{}
+	err  error
+}
+
+func (a *ACPAgent) startPrewarm() {
+	if !a.claude() || a.opts.DisablePrewarm {
+		return
+	}
+	a.warm = &acpPrewarm{done: make(chan struct{})}
+	go func() {
+		defer close(a.warm.done)
+		ctx, cancel := context.WithTimeout(context.Background(), acpOpenTimeout)
+		defer cancel()
+		began := time.Now()
+		if a.warm.err = a.prewarmSession(ctx); a.warm.err != nil {
+			a.log(LogWarn, "agent prewarm failed; the first turn opens its session itself", a.warm.err)
+			return
+		}
+		a.log(LogInfo, fmt.Sprintf("agent prewarmed in %s", time.Since(began).Round(time.Millisecond)), nil)
+	}()
+}
+
+// prewarmSession opens a Claude Code session and closes it unused.
+func (a *ACPAgent) prewarmSession(ctx context.Context) error {
+	proc, err := a.ensureProcess(ctx)
+	if err != nil {
+		return err
+	}
+	cwd := filepath.Join(a.opts.StateDir, "prewarm")
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		return err
+	}
+	if runAs := a.opts.Core.opts.RunAs; runAs != nil {
+		if err := os.Chown(cwd, int(runAs.UID), int(runAs.GID)); err != nil {
+			return err
+		}
+	}
+	s := &acpSession{id: "prewarm", placeholder: "bma-prewarm-" + fmt.Sprint(time.Now().UnixNano())}
+	if err := a.openClaudeSession(ctx, proc, s, TurnStartParams{}, cwd, a.systemPrompt(cwd, "", nil)); err != nil {
+		return err
+	}
+	if err := proc.call(ctx, "session/close", map[string]any{"sessionId": s.wire()}, nil); err != nil {
+		a.log(LogDebug, "acp session/close of the prewarm session", err)
+	}
+	return nil
+}
