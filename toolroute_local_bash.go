@@ -99,32 +99,55 @@ func (b *acpBackground) killAll() {
 	}
 }
 
-// runBash runs one bash call of the agent in the session's workspace. The
-// call's own ctx ends with the call (the turn's cancel or deadline); the
-// route's turn decides the fate of a command left in the background.
-func (r *LocalToolRoute) runBash(ctx context.Context, callID string, in map[string]any) (string, bool, *RouteBackground) {
+// bashPlan is a bash call ready to run: how its command starts and the
+// session workspace (where its output file goes), or why it cannot run.
+type bashPlan struct {
+	launch    toolLaunch
+	workspace string
+	failure   string
+}
+
+// prepareBash resolves where and how a bash call's command starts, through
+// CoreOptions.Launch when the Core has one. A refusal of the hook is the
+// call's answer (not_forwarded); a call that cannot run otherwise fails when
+// run (plan.failure), as before the hook existed.
+func (r *LocalToolRoute) prepareBash(ctx context.Context, callID string, in map[string]any) (bashPlan, *RouteResult) {
 	command, _ := in["command"].(string)
 	if command == "" {
-		return "bash requires command", true, nil
+		return bashPlan{failure: "bash requires command"}, nil
+	}
+	session := r.core.session(coreKey{acpBrain, r.sessionID})
+	if session == nil {
+		return bashPlan{failure: "session_not_active: the session is not open"}, nil
+	}
+	process := ProcessContext{SessionID: r.sessionID, AgentSessionID: r.sessionID}
+	launch, err := r.core.launchTool(ctx, session, process, callID, command, "", nil)
+	if err != nil {
+		if code, detail, ok := launchRefusal(err); ok {
+			return bashPlan{}, refused(code, detail)
+		}
+		return bashPlan{failure: err.Error()}, nil
+	}
+	workspace, err := session.ResolveCwd("")
+	if err != nil {
+		return bashPlan{failure: err.Error()}, nil
+	}
+	return bashPlan{launch: launch, workspace: workspace}, nil
+}
+
+// runBash runs one prepared bash call of the agent. The call's own ctx ends
+// with the call (the turn's cancel or deadline); the route's turn decides the
+// fate of a command left in the background.
+func (r *LocalToolRoute) runBash(ctx context.Context, callID string, in map[string]any, plan bashPlan) (string, bool, *RouteBackground) {
+	if plan.failure != "" {
+		return plan.failure, true, nil
 	}
 	timeout := acpBashDefaultTimeout
 	if ms, ok := in["timeout"].(float64); ok && ms > 0 {
 		timeout = min(time.Duration(ms)*time.Millisecond, acpBashMaxTimeout)
 	}
 	onTimeoutKill := in["on_timeout"] == "kill"
-	session := r.core.session(coreKey{acpBrain, r.sessionID})
-	if session == nil {
-		return "session_not_active: the session is not open", true, nil
-	}
-	cwd, err := session.ResolveCwd("")
-	if err != nil {
-		return err.Error(), true, nil
-	}
-	env, err := r.core.Env(nil)
-	if err != nil {
-		return err.Error(), true, nil
-	}
-	output, err := r.bashOutputFile(cwd, callID)
+	output, err := r.bashOutputFile(plan.workspace, callID)
 	if err != nil {
 		return "spawn bash: " + err.Error(), true, nil
 	}
@@ -139,9 +162,9 @@ func (r *LocalToolRoute) runBash(ctx context.Context, callID string, in map[stri
 		}
 	}
 	// The command is not tied to the call's ctx: it may outlive the call.
-	cmd := shellCommand(context.Background(), command)
+	cmd := toolCommand(context.Background(), plan.launch.argv)
 	setCredential(cmd, r.core.opts.RunAs)
-	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = cwd, env, out, out
+	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = plan.launch.dir, plan.launch.env, out, out
 	tree, err := startCommand(cmd)
 	if err != nil {
 		return "spawn bash: " + err.Error(), true, nil

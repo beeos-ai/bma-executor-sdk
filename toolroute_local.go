@@ -44,7 +44,12 @@ import (
 // the session's Workspace, through the Core's file roots. bash waits at most
 // its timeout (and 55 s) and leaves a command that outlives the wait running:
 // the call then answers with its pid and the file its output goes to
-// (RouteResult.Background), like the platform gateway.
+// (RouteResult.Background), like the platform gateway. When the Core has a
+// CoreOptions.Launch hook, every bash command starts through it, as a
+// process.start does; a command it refuses did not run: the call is
+// not_forwarded with the hook's reason as Code (spawn_failed for a plain
+// error). That answer is recorded like a result (the same call id is answered
+// with it again), as the platform gateway records what the hands answered.
 //
 // A LocalToolRoute is bound to one turn of one session and is safe for
 // concurrent use. ACPAgent uses it for the turns whose hands are this machine.
@@ -337,6 +342,22 @@ func (r *LocalToolRoute) runOnce(ctx context.Context, c RouteCall) *RouteResult 
 			return &RouteResult{Outcome: RouteOutcomeNotForwarded, Code: "canceled", Text: "canceled: The tool call was cancelled.", IsError: true}
 		}
 	}
+	// A bash command passes CoreOptions.Launch before it is marked started. A
+	// refusal is the hands' answer: it is recorded and replayed, as the
+	// platform gateway replays what the hands answered.
+	var plan bashPlan
+	if c.Name == ToolNameBash {
+		var refusal *RouteResult
+		if plan, refusal = r.prepareBash(ctx, c.ID, c.Input); refusal != nil {
+			r.logf(LogWarn, fmt.Sprintf("tool call %s (%s) of session %s refused by the launch hook: %s", c.ID, c.Name, r.sessionID, refusal.Text))
+			if err := ledger.update(c.ID, func(s *acpCallState) {
+				s.Phase, s.Text, s.IsError, s.Outcome, s.Code = acpPhaseDone, refusal.Text, true, refusal.Outcome, refusal.Code
+			}); err != nil {
+				return stateError(err)
+			}
+			return refusal
+		}
+	}
 	if err := ledger.update(c.ID, func(s *acpCallState) { s.Phase = acpPhaseStarted }); err != nil {
 		return stateError(err)
 	}
@@ -344,7 +365,7 @@ func (r *LocalToolRoute) runOnce(ctx context.Context, c RouteCall) *RouteResult 
 	var isError bool
 	var background *RouteBackground
 	if c.Name == ToolNameBash {
-		text, isError, background = r.runBash(ctx, c.ID, c.Input)
+		text, isError, background = r.runBash(ctx, c.ID, c.Input, plan)
 	} else {
 		text, isError = r.runTool(ctx, c.ID, c.Name, c.Input)
 	}

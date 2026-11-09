@@ -1095,12 +1095,6 @@ func (c *Core) runShell(ctx context.Context, launch toolLaunch) (shellExecution,
 	return execution, nil
 }
 
-// shellCommand runs command as a bash tool does (shellArgv), in its own
-// process group (tree on Windows) that ends with ctx.
-func shellCommand(ctx context.Context, command string) *exec.Cmd {
-	return toolCommand(ctx, shellArgv(command))
-}
-
 // toolCommand runs argv in its own process group (tree on Windows) that ends
 // with ctx.
 func toolCommand(ctx context.Context, argv []string) *exec.Cmd {
