@@ -45,6 +45,7 @@ var Calls = struct {
 	ToolResult         CallMethod[ToolResultParams, Ack]
 	InteractionRequest CallMethod[InteractionRequestParams, InteractionRequestResult]
 	InteractionCancel  CallMethod[InteractionCancelParams, Ack]
+	ModelTokenRefresh  CallMethod[ModelTokenRefreshParams, ModelTokenRefreshResult]
 }{
 	SessionReady:       CallMethod[SessionReadyParams, Ack]{Method: "session.ready"},
 	SessionEvent:       CallMethod[SessionEventParams, SessionEventResult]{Method: "session.event"},
@@ -52,6 +53,7 @@ var Calls = struct {
 	ToolResult:         CallMethod[ToolResultParams, Ack]{Method: "tool.result"},
 	InteractionRequest: CallMethod[InteractionRequestParams, InteractionRequestResult]{Method: "interaction.request"},
 	InteractionCancel:  CallMethod[InteractionCancelParams, Ack]{Method: "interaction.cancel"},
+	ModelTokenRefresh:  CallMethod[ModelTokenRefreshParams, ModelTokenRefreshResult]{Method: "model_token.refresh"},
 }
 
 // Notifications are the executor-to-harness notifications a client sends:
