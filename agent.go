@@ -16,6 +16,19 @@ const (
 	agentCloseFlushWait = 30 * time.Second
 )
 
+// AgentError is an error of RunTurn that names its cause with one of the
+// contract's AgentErrorCode values (AgentErrorCodeAgentUnavailable,
+// AgentErrorCodeAgentAuthRequired, ...): the turn ends failed with
+// session.error of that type, so every agent says the same thing for the same
+// cause. Any other error ends the turn with AgentErrorCodeAgentError.
+type AgentError struct {
+	// Code is an AgentErrorCode value.
+	Code    string
+	Message string
+}
+
+func (e *AgentError) Error() string { return e.Message }
+
 // ErrAgentSessionClosed is returned by AgentTurn methods after session.close.
 var ErrAgentSessionClosed = errors.New("bmaexecutor: agent session closed")
 
@@ -27,7 +40,12 @@ var ErrAgentSessionClosed = errors.New("bmaexecutor: agent session closed")
 type AgentHandler interface {
 	// OpenTurn decides whether to accept a turn.start and reports the
 	// configuration the agent will actually apply. It runs before turn.start
-	// is answered, so it must not do the turn's work. An *RPCError keeps its
+	// is answered, and the platform answers turn.start with a timeout, so it
+	// must be quick: refuse what can be refused for certain (unknown
+	// harness, a cwd outside the allowed roots) and leave anything slow, such as
+	// starting a process or opening the local conversation, to RunTurn, whose
+	// failure ends the turn with session.error (AgentError picks its type) and
+	// whose canceled ctx ends it canceled. An *RPCError keeps its
 	// code (for example -32001 for a cwd outside the allowed roots).
 	OpenTurn(ctx context.Context, params TurnStartParams) (TurnStartResult, error)
 	// RunTurn does the turn's work and returns when the turn is over. ctx is
@@ -459,7 +477,11 @@ func (r *agentRuntime) runTurn(ctx context.Context, turn *AgentTurn) {
 		outcome = TurnOutcomeCanceled
 	case err != nil:
 		outcome = TurnOutcomeFailed
-		_ = s.enqueue(turnID, turn.NewEventID(), SessionErrorEvent{Type: AgentEventTypeSessionError, Error: AgentErrorInfo{Type: "agent_error", Message: err.Error()}})
+		code := AgentErrorCodeAgentError
+		if agentErr := (*AgentError)(nil); errors.As(err, &agentErr) && agentErr.Code != "" {
+			code = agentErr.Code
+		}
+		_ = s.enqueue(turnID, turn.NewEventID(), SessionErrorEvent{Type: AgentEventTypeSessionError, Error: AgentErrorInfo{Type: code, Message: err.Error()}})
 	}
 	_ = s.enqueue(turnID, turn.NewEventID(), SessionStatusIdleEvent{
 		Type: AgentEventTypeSessionStatusIdle, StopReason: StopReason{Type: StopReasonTypeEndTurn}, TurnOutcome: outcome,

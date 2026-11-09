@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **Behavior change, Go `ACPAgent`: `turn.start` is answered at once.** As the
+  contract says ("answers as soon as the turn is accepted"), `OpenTurn` only
+  validates (harness, permission mode, cwd, session capacity: still
+  `turn.start` errors) and the agent's session is opened first thing in
+  `RunTurn`. A failed open (agent process unavailable, a conversation to
+  resume that does not exist, the agent's refusal, a failed mode gate) is no
+  longer a `turn.start` error but ends the turn with `session.error` and
+  `session.status_idle` failed, typed with the contract's `AgentErrorCode`:
+  `agent_unavailable`, `agent_auth_required` (ACP -32000),
+  `agent_protocol_error` (-32602 / -32601, a tool catalog violation) or
+  `agent_error`. `turn.cancel` or the deadline during the open ends the turn
+  canceled immediately; the open still finishes and leaves its session for the
+  next turn. New `AgentError{Code, Message}`: a `RunTurn` error of that type
+  picks the `session.error` type (any other error stays `agent_error`).
+  `TurnStartResult.executor_session_ref` of the first turn of a Claude Code
+  session is empty (Claude Code names its session only after `session/new`,
+  and the id cannot be chosen); from the second turn on it is the real id.
 - **Go: the brain-side tool API is public (ADR-0029 S3):** `ToolRoute` (one
   method, `Call(ctx, RouteCall) *RouteResult`), `RouteCall` (`ID`, `ToolUseID`,
   `Name`, `Input`, `ApprovalID`), `RouteResult` with the `RouteOutcome*`

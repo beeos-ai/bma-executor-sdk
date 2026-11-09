@@ -5,6 +5,7 @@ package bmaexecutor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -386,9 +387,13 @@ func TestClaudeCodeProfileRefusesATurnWhoseModeIsNotDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = agent.OpenTurn(ctx, TurnStartParams{SessionID: "sesn_f", TurnID: "turn_1", InputID: "in_1", Config: &AgentTurnConfig{}})
-	if err == nil || !strings.Contains(err.Error(), "mode_not_default") {
-		t.Fatalf("OpenTurn err = %v", err)
+	if _, err = agent.OpenTurn(ctx, TurnStartParams{SessionID: "sesn_f", TurnID: "turn_1", InputID: "in_1", Config: &AgentTurnConfig{}}); err != nil {
+		t.Fatalf("OpenTurn: %v (the session is opened after turn.start is answered)", err)
+	}
+	var agentErr *AgentError
+	err = agent.openSession(ctx, agent.session("sesn_f"))
+	if !errors.As(err, &agentErr) || agentErr.Code != AgentErrorCodeAgentError || !strings.Contains(err.Error(), "mode_not_default") {
+		t.Fatalf("openSession err = %v", err)
 	}
 	// A mode that is default afterwards is accepted.
 	agent2, err := startFakeClaude(t, ctx, "ok")
@@ -397,6 +402,9 @@ func TestClaudeCodeProfileRefusesATurnWhoseModeIsNotDefault(t *testing.T) {
 	}
 	if _, err := agent2.OpenTurn(ctx, TurnStartParams{SessionID: "sesn_f", TurnID: "turn_1", InputID: "in_1", Config: &AgentTurnConfig{}}); err != nil {
 		t.Fatalf("OpenTurn: %v", err)
+	}
+	if err := agent2.openSession(ctx, agent2.session("sesn_f")); err != nil {
+		t.Fatalf("openSession: %v", err)
 	}
 	if s := agent2.sessions["sesn_f"]; s.agentID != "claude-session-1" || s.agentMode != "default" {
 		t.Fatalf("session = %+v", s)

@@ -233,6 +233,11 @@ type acpSession struct {
 	// the platform's), agentMode the permission mode the agent reported last.
 	agentID   string
 	agentMode string
+
+	// plan is what the latest turn.start asked for; opening is the open of the
+	// agent's session in flight (see openSession).
+	plan    acpOpenPlan
+	opening *acpOpening
 }
 
 // wire is the session id the agent knows the session by.
@@ -531,52 +536,21 @@ func (a *ACPAgent) OpenTurn(ctx context.Context, params TurnStartParams) (TurnSt
 	if a.claude() {
 		model = "" // Claude Code uses the model the node owner configured for it
 	}
-	proc, err := a.ensureProcess(ctx)
-	if err != nil {
-		return TurnStartResult{}, &RPCError{Code: CodeResourceUnavailable, Message: "agent unavailable: " + err.Error(), Data: &JSONRPCErrorData{Retryable: true}}
-	}
+	// Opening the agent's session (session/new, which for Claude Code starts a
+	// Claude process) is not done here: turn.start is answered as soon as the
+	// turn is accepted (contract) and the open runs first thing in RunTurn,
+	// where a failure ends the turn with session.error and a cancel ends it
+	// canceled. Everything that can be refused cheaply and for certain is
+	// refused above.
 	s := a.session(params.SessionID)
-	resumed := params.ExecutorSessionRef != "" || s.proc == proc
-	if a.claude() {
-		if s.proc != proc {
-			if err := a.openClaudeSession(ctx, proc, s, params, cwd, a.systemPrompt(promptCwd, config.System, config.EnvironmentInfo)); err != nil {
-				return TurnStartResult{}, err
-			}
-		}
-		if err := a.claudeDefaultMode(ctx, proc, s); err != nil {
-			return TurnStartResult{}, err
-		}
-		a.mu.Lock()
-		s.mode = mode
-		a.mu.Unlock()
-	} else if s.proc != proc {
-		meta := map[string]any{"sessionId": params.SessionID, "systemPrompt": a.systemPrompt(promptCwd, config.System, config.EnvironmentInfo), "model": a.modelMeta(s, model, params.Metadata)}
-		var res acpSessionResponse
-		if params.ExecutorSessionRef != "" {
-			err = proc.call(ctx, "session/load", map[string]any{"sessionId": params.ExecutorSessionRef, "cwd": cwd, "mcpServers": []any{}, "_meta": map[string]any{acpMetaKey: meta}}, &res)
-			var acpErr *acpError
-			if errors.As(err, &acpErr) && acpErr.Code == CodeNotFound {
-				return TurnStartResult{}, &RPCError{Code: CodeNotFound, Message: "the local conversation " + params.ExecutorSessionRef + " was not found; it is not recreated"}
-			}
-		} else {
-			err = proc.call(ctx, "session/new", map[string]any{"cwd": cwd, "mcpServers": []any{}, "_meta": map[string]any{acpMetaKey: meta}}, &res)
-		}
-		if err != nil {
-			return TurnStartResult{}, &RPCError{Code: CodeInternalError, Message: "agent session: " + err.Error()}
-		}
-		if violation := acpCatalogViolation(res.Meta.Bma.ToolCatalog); violation != "" {
-			return TurnStartResult{}, &RPCError{Code: CodeInternalError, Message: violation}
-		}
-		a.mu.Lock()
-		s.proc, s.mode = proc, "default"
-		a.mu.Unlock()
+	a.mu.Lock()
+	resumed := params.ExecutorSessionRef != "" || (s.proc != nil && s.proc.alive())
+	ref := s.wire()
+	if a.claude() && s.agentID == "" {
+		ref = params.ExecutorSessionRef // not known before session/new; see CHANGELOG
 	}
-	if !a.claude() && s.mode != mode {
-		if err := proc.call(ctx, "session/set_mode", map[string]any{"sessionId": params.SessionID, "modeId": mode}, nil); err != nil {
-			return TurnStartResult{}, &RPCError{Code: CodeInternalError, Message: "agent set_mode: " + err.Error()}
-		}
-		s.mode = mode
-	}
+	s.plan = acpOpenPlan{params: params, cwd: cwd, promptCwd: promptCwd, model: model, mode: mode, system: config.System, hands: config.EnvironmentInfo}
+	a.mu.Unlock()
 	if err := a.opts.Core.openLocal(acpBrain, params.SessionID, cwd); err != nil {
 		return TurnStartResult{}, err
 	}
@@ -591,7 +565,7 @@ func (a *ACPAgent) OpenTurn(ctx context.Context, params TurnStartParams) (TurnSt
 		return TurnStartResult{}, &RPCError{Code: CodeInternalError, Message: "turn state: " + err.Error()}
 	}
 	return TurnStartResult{
-		Accepted: true, TurnID: params.TurnID, ExecutorSessionRef: s.wire(), Resumed: resumed,
+		Accepted: true, TurnID: params.TurnID, ExecutorSessionRef: ref, Resumed: resumed,
 		Effective: AgentTurnConfig{Model: model, PermissionMode: mode, Cwd: promptCwd, Harness: a.harness.ID},
 	}, nil
 }
@@ -601,8 +575,11 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 	a.mu.Lock()
 	s := a.sessions[params.SessionID]
 	a.mu.Unlock()
-	if s == nil || s.proc == nil {
+	if s == nil {
 		return errors.New("the agent session is not open")
+	}
+	if err := a.openSession(ctx, s); err != nil {
+		return err
 	}
 	ledger, err := a.ledger(params.SessionID)
 	if err != nil {
@@ -637,6 +614,9 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 	s.turn = t
 	proc := s.proc
 	a.mu.Unlock()
+	if proc == nil {
+		return &AgentError{Code: AgentErrorCodeAgentUnavailable, Message: "the agent session is not open"}
+	}
 	defer func() {
 		a.mu.Lock()
 		if s.turn == t {
