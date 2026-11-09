@@ -21,7 +21,7 @@ export interface AgentCapability {
   max_sessions?: number
   /** The executor keeps the state of its turns across a process restart. When it registers again without a session whose turn was running, the platform starts the same turn again in a new event epoch (turn.start with the same turn_id, input_id and executor_session_ref, then the turn.input the turn already received) and the executor continues the turn from its own state. Without it such a turn ends failed (session.error, session.status_idle retries_exhausted) and is not sent again: an executor without that state would run the turn again from its opening input and repeat tool calls whose effects already happened. */
   turn_resume?: boolean
-  /** Per-turn credentials the executor asks the platform to hand it in turn.start metadata: brain_tools (tools_mcp_url, tools_mcp_token: the session's tools endpoint) and harness_model (model_base_url, model_token: the session's model endpoint). A declaration only states what the executor can use; the platform decides by the executor's identity and hands them only to an executor registered as a platform service, never to a tenant executor. Tokens are computed for each turn.start, are valid until the turn ends, and are never stored. */
+  /** Per-turn credentials the executor asks the platform to hand it in turn.start metadata: brain_tools (tools_mcp_url, tools_mcp_token: the session's tools endpoint) and harness_model (model_base_url, model_token: the session's model endpoint; optionally model_context_window and model_max_output_tokens, positive integer strings: the resolved model's context window and output ceiling, absent when the platform has no catalog entry for the model, in which case the executor uses its own defaults). A declaration only states what the executor can use; the platform decides by the executor's identity and hands them only to an executor registered as a platform service, never to a tenant executor. Tokens are computed for each turn.start, are valid until the turn ends, and are never stored. */
   platform_credentials?: Array<'brain_tools' | 'harness_model'>
   /** The executor runs custom tools defined by the platform agent: it emits agent.custom_tool_use for a call to one and waits for agent.custom_tool_result. Without it the platform never sends agent.custom_tool_result and answers a user.custom_tool_result for the session with an error. */
   custom_tools?: boolean
@@ -38,8 +38,28 @@ export interface AgentCustomToolUseEvent {
   input: Record<string, unknown>
 }
 
+/** Stop code table: the error types an agent executor reports for a turn that ended failed, so every agent (Go ACP harness, brain hosts, local desktop agents) says the same thing for the same cause. output_limit_reached: the model reply was cut at its output-token limit (ACP stopReason max_tokens, DSH max-tokens, finish_reason length). context_too_large: the conversation does not fit the model context window even after compaction. model_stream_idle: the model stream sent no data for the idle limit (default 90 s). agent_error: any other failure of the agent. agent_unavailable: the agent process is gone or did not answer a cancel in time. agent_auth_required: the agent needs credentials it does not have. agent_protocol_error: the agent rejected the request as malformed or unsupported. A code is the type of session.error; an executor whose SDK cannot set the type yet (structured_errors false) puts it first in the message as '<code>: <detail>', and the platform reads both forms. The platform keeps the code in error.code and projects a type outside the official session.error union to unknown_error; a platform may map a code to an official type itself (context_too_large to compaction_limit_reached_error, ADR-0010). Executors report only these values; a new cause adds a value here first. */
+export type AgentErrorCode =
+  | 'output_limit_reached'
+  | 'context_too_large'
+  | 'model_stream_idle'
+  | 'agent_error'
+  | 'agent_unavailable'
+  | 'agent_auth_required'
+  | 'agent_protocol_error'
+export const AgentErrorCode = {
+  OutputLimitReached: 'output_limit_reached',
+  ContextTooLarge: 'context_too_large',
+  ModelStreamIdle: 'model_stream_idle',
+  AgentError: 'agent_error',
+  AgentUnavailable: 'agent_unavailable',
+  AgentAuthRequired: 'agent_auth_required',
+  AgentProtocolError: 'agent_protocol_error',
+} as const
+
 /** Typed session error. */
 export interface AgentErrorInfo {
+  /** An AgentErrorCode value; other strings are tolerated (objects accept unknown members) and projected as unknown_error. */
   type: string
   message?: string
 }
@@ -539,7 +559,7 @@ export interface InteractionQuestionOption {
   label: string
 }
 
-/** interaction.request result. Idempotent by interaction_id: a repeat returns the same platform interaction. */
+/** interaction.request result. Idempotent by interaction_id: a repeat returns the same platform interaction. platform_interaction_id equals interaction_id when that is an appr_ plus 24 lower-case hex id (adopted); otherwise it is the platform-assigned int_ id. */
 export interface InteractionRequestResult {
   accepted: boolean
   platform_interaction_id: string
@@ -620,7 +640,7 @@ export interface JsonRpcErrorData {
   detail?: string
   /** Missing capability for -32012, for example "tool:read" or "process.pty". */
   capability?: string
-  /** Machine-readable cause; an open set that the harness passes through unchanged (process.start: the tool result error_code and the process state reason; turn.start: the session.error code). Recommended values: workspace_unavailable, workspace_boundary, workspace_read_only, session_rejected, local_confirmation_denied, local_confirmation_expired, spawn_failed / process_id_spec_mismatch for process.start, and capability_missing for executor.register. Receivers must accept values they do not know. */
+  /** Machine-readable cause; an open set that the harness passes through unchanged (process.start: the tool result error_code and the process state reason; turn.start: the session.error code). Recommended values: workspace_unavailable, workspace_boundary, workspace_read_only, session_rejected, local_confirmation_denied, local_confirmation_expired, spawn_failed / process_id_spec_mismatch for process.start, capability_missing for executor.register, and turn_inactive / forbidden / model_token_unavailable for model_token.refresh. Receivers must accept values they do not know. */
   reason?: string
   /** bma.terminal.v1 error code for a failed terminal.* call. */
   terminal_code?: string
@@ -819,6 +839,16 @@ export const McpTransportType = {
   Stdio: 'stdio',
   Http: 'http',
 } as const
+
+/** model_token.refresh result: the credential for the turn's next model calls, in the form of the turn.start metadata model_base_url and model_token. */
+export interface ModelTokenRefreshResult {
+  /** Bearer token for model_base_url. Valid until expires_at. */
+  model_token: string
+  /** Base URL the token is for (an OpenAI / Anthropic base URL path). */
+  model_base_url: string
+  /** RFC 3339 time the token stops being accepted. */
+  expires_at: string
+}
 
 /** Package manager for process.start package_install. */
 export type PackageManager = 'apt' | 'pip' | 'npm'
@@ -1298,6 +1328,8 @@ export interface SessionEventParams {
   event_id?: string
   /** Agent sessions; starts at 1 and increases by 1 per durable event within the session. */
   sequence?: number
+  /** Agent sessions; optional key the executor keeps for this event across process restarts (its outbox entry id, for example). A new executor epoch renumbers sequence and suffixes event_id, so only this key lets the harness recognize an event it stored just before the executor crashed. The harness acknowledges an event whose key the session already stored as a duplicate (sequence advanced, nothing added to the session log), in any epoch. Without it an event resent in a new epoch is stored again (at-least-once). */
+  idempotency_key?: string
   event: SessionEvent
 }
 
@@ -1554,7 +1586,7 @@ export interface SessionEventDeltaParams {
 export interface InteractionRequestParams {
   session_id: string
   turn_id: string
-  /** Executor-assigned, unique within the session. */
+  /** Executor-assigned, unique within the session and stable for the same tool call or question across executor and brain restarts (derive it from the session, the turn and the call, for example appr_ + the first 24 hex chars of sha256(session_id, NUL, turn_id, NUL, call_id); the turn is part of it because some providers reuse call ids such as call_0 in every turn), so a restarted executor asks again with the same id and gets the same platform interaction, and an answer given while it was offline, back. The platform interaction is the one card every client of the session shows; a local UI shows the same interaction rather than a separate local prompt. */
   interaction_id: string
   kind: InteractionKind
   /** Required for permission. */
@@ -1599,6 +1631,14 @@ export interface InteractionCancelParams {
   reason: InteractionCancelReason
 }
 
+/** Params object of model_token.refresh. */
+export interface ModelTokenRefreshParams {
+  /** Platform session id of the turn. */
+  session_id: string
+  /** Platform id of the running turn the token is for. */
+  turn_id: string
+}
+
 /** Every executor protocol method. */
 export type MethodName =
   | 'executor.register'
@@ -1640,6 +1680,7 @@ export type MethodName =
   | 'interaction.response'
   | 'agent.custom_tool_result'
   | 'interaction.cancel'
+  | 'model_token.refresh'
 export type ExecutorToHarnessRequestMethod =
   | 'executor.register'
   | 'executor.heartbeat'
@@ -1650,6 +1691,7 @@ export type ExecutorToHarnessRequestMethod =
   | 'tool.result'
   | 'interaction.request'
   | 'interaction.cancel'
+  | 'model_token.refresh'
 export type ExecutorToHarnessNotificationMethod =
   | 'executor.capabilities.update'
   | 'executor.close'
@@ -1724,6 +1766,7 @@ export interface MethodParamsMap {
   'interaction.response': InteractionResponseParams
   'agent.custom_tool_result': AgentCustomToolResultParams
   'interaction.cancel': InteractionCancelParams
+  'model_token.refresh': ModelTokenRefreshParams
 }
 
 export interface MethodResultMap {
@@ -1760,6 +1803,7 @@ export interface MethodResultMap {
   'interaction.response': InteractionResponseResult
   'agent.custom_tool_result': CustomToolResultResult
   'interaction.cancel': Ack
+  'model_token.refresh': ModelTokenRefreshResult
 }
 
 /** since is the first protocol that has the method; capability is the capability bit the harness checks before sending it. */
@@ -2084,5 +2128,13 @@ export const methods: Readonly<Record<MethodName, MethodSpec>> = {
     since: 'bma.executor.v1.1',
     capability: 'agent',
     idempotentBy: 'interaction_id',
+  },
+  'model_token.refresh': {
+    name: 'model_token.refresh',
+    direction: 'executor-to-harness',
+    kind: 'request',
+    since: 'bma.executor.v1.1',
+    capability: 'agent',
+    idempotentBy: null,
   },
 }

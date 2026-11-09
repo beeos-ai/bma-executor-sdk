@@ -37,6 +37,7 @@ func TestAgentConformanceFixtures(t *testing.T) {
 		MethodSessionEventDelta: func() any { return &SessionEventDeltaParams{} }, MethodInteractionRequest: func() any { return &InteractionRequestParams{} },
 		MethodInteractionResponse: func() any { return &InteractionResponseParams{} }, MethodInteractionCancel: func() any { return &InteractionCancelParams{} },
 		MethodAgentCustomToolResult: func() any { return &AgentCustomToolResultParams{} },
+		MethodModelTokenRefresh:     func() any { return &ModelTokenRefreshParams{} },
 		MethodSessionEvent:          func() any { return &agentSessionEventParams{} },
 	}
 	results := map[string]func() any{
@@ -45,6 +46,7 @@ func TestAgentConformanceFixtures(t *testing.T) {
 		MethodInteractionRequest: func() any { return &InteractionRequestResult{} }, MethodInteractionResponse: func() any { return &InteractionResponseResult{} },
 		MethodInteractionCancel: func() any { return &Ack{} }, MethodSessionEvent: func() any { return &agentSessionEventResult{} },
 		MethodAgentCustomToolResult: func() any { return &CustomToolResultResult{} },
+		MethodModelTokenRefresh:     func() any { return &ModelTokenRefreshResult{} },
 	}
 	harness := NewHarness(HarnessOptions{Agent: newRecordingPlatform()})
 	covered := map[string]bool{}

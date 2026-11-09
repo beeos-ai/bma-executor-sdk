@@ -369,6 +369,18 @@ methods:
         schema:
           type: integer
           minimum: 1
+      - name: idempotency_key
+        required: false
+        description: Agent sessions; optional key the executor keeps for this event across process
+          restarts (its outbox entry id, for example). A new executor epoch renumbers sequence and
+          suffixes event_id, so only this key lets the harness recognize an event it stored just
+          before the executor crashed. The harness acknowledges an event whose key the session
+          already stored as a duplicate (sequence advanced, nothing added to the session log), in
+          any epoch. Without it an event resent in a new epoch is stored again (at-least-once).
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 200
       - name: event
         required: true
         schema:
@@ -1521,6 +1533,13 @@ methods:
       interaction.response later. Idempotent by interaction_id. A permission request references the
       agent.tool_use event in tool_use_id, sent earlier with evaluated_permission ask. The executor
       keeps local authority; it may still deny, and it treats expires_at as a local deny.
+      An interaction_id of the form appr_ plus 24 lower-case hex digits (the deterministic approval
+      id) is adopted as the platform interaction id; the interactions API, its card and the session
+      stream use it, platform_interaction_id equals it, and a repeat of it (after an executor
+      restart too) names the same interaction, never a second card. The same id for another
+      tool_use_id (within one executor epoch) or another kind is refused with error conflict
+      (-32013) and the stored interaction is left unchanged. An interaction_id of any other form is
+      only the executor's key; the platform assigns its own id (int_...) and returns it.
     tags:
       - name: agent
     x-bma-direction: executor-to-harness
@@ -1540,7 +1559,15 @@ methods:
           type: string
       - name: interaction_id
         required: true
-        description: Executor-assigned, unique within the session.
+        description: Executor-assigned, unique within the session and stable for the same tool call
+          or question across executor and brain restarts (derive it from the session, the turn
+          and the call, for example appr_ + the first 24 hex chars of sha256(session_id, NUL,
+          turn_id, NUL, call_id); the turn is part of it because some providers reuse call ids
+          such as call_0 in every turn), so a restarted
+          executor asks again with the same id and gets the same platform interaction, and an
+          answer given while it was offline, back. The platform interaction is the one card every
+          client of the session shows; a local UI shows the same interaction rather than a
+          separate local prompt.
         schema:
           type: string
       - name: kind
@@ -1723,6 +1750,50 @@ methods:
         $ref: schemas/common.json#/$defs/Ack
     errors:
       - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/InternalError"
+  - name: model_token.refresh
+    summary: Fetch a fresh model token for a running turn.
+    description: >-
+      Executor to harness request (capability agent). A brain started by turn.start with a model
+      credential (metadata model_token, valid 1 hour) calls it before the token expires (the
+      reference executors do so when less than 10 minutes remain) and joins model_base_url with
+      the new model_token for its next model calls; the old token stays valid until it expires.
+      The platform signs a new token only while the turn is active (pending, running or
+      rescheduling) and the turn belongs to a session routed to this executor's machine, so a
+      turn that ended, was canceled or failed gets no further tokens: this is how the platform
+      revokes model access per turn (a token already issued runs out its own expiry). Each call
+      returns a new token; calls are not idempotent and a repeat is harmless. Errors carry
+      data.reason: turn_inactive (-32007: the turn is not active), forbidden (-32001: the session
+      or turn is unknown, belongs to another executor, or this executor is not entitled to
+      platform credentials), model_token_unavailable (-32012: the platform issues no such token).
+      A harness without the method answers -32601; the executor then keeps the token it has.
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        description: Platform session id of the turn.
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        description: Platform id of the running turn the token is for.
+        schema:
+          type: string
+    result:
+      name: ModelTokenRefreshResult
+      schema:
+        $ref: schemas/agent.json#/$defs/ModelTokenRefreshResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/CapabilityUnavailable"
       - $ref: "#/components/errors/InternalError"
 components:
   errors:

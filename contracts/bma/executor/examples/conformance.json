@@ -1367,6 +1367,30 @@
       }
     },
     {
+      "name": "model_token.refresh request",
+      "method": "model_token.refresh",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_model_token_refresh",
+        "method": "model_token.refresh",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT"
+        }
+      }
+    },
+    {
+      "name": "model_token.refresh result",
+      "method": "model_token.refresh",
+      "kind": "result",
+      "result": {
+        "model_token": "bma_cap_v1.example-payload.example-mac",
+        "model_base_url": "https://executor.example.com/v1/machines/mch_example/proxy/v1",
+        "expires_at": "2026-11-08T15:23:50Z"
+      }
+    },
+    {
       "name": "session.event agent request",
       "method": "session.event",
       "kind": "request",
@@ -1434,6 +1458,29 @@
               "type": "end_turn"
             },
             "turn_outcome": "completed"
+          }
+        }
+      }
+    },
+    {
+      "name": "session.event agent typed error request",
+      "method": "session.event",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_session_event_error",
+        "method": "session.event",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "event_id": "evt_0008",
+          "sequence": 8,
+          "event": {
+            "type": "session.error",
+            "error": {
+              "type": "output_limit_reached",
+              "message": "the model reply was cut at its output limit (8192 tokens); ask for a shorter answer, or to continue"
+            }
           }
         }
       }
