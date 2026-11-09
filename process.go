@@ -79,9 +79,20 @@ type ProcessContext struct {
 	Client *Client
 }
 
-// LaunchRequest is one command process or package install about to start.
+// LaunchRequest is one command process, package install or bash tool command
+// about to start.
 type LaunchRequest struct {
+	// ProcessContext is the process.start's. For a bash tool (Tool set),
+	// SessionID is the tool call's session and ProcessID is empty (a tool call
+	// is no process.* process); a tool.call fills AgentSessionID, Metadata and
+	// Client from the session.assign, a LocalToolRoute (ACPAgent) sets
+	// AgentSessionID to its session and has no Metadata or Client.
 	ProcessContext
+	// Tool is "bash" when a bash tool call is about to start its command
+	// (CoreOptions.Launch), "" for process.start. ToolCallID is then the
+	// call's id.
+	Tool       string
+	ToolCallID string
 	// PackageInstall is set for a process.start package_install and nil for
 	// a command. Argv, Cwd and Env are then the installer's fixed command
 	// (PackageInstallCommand): the hook may wrap it, change its environment
@@ -119,6 +130,14 @@ type LaunchSpec struct {
 // and change the environment. Returning an error refuses the start: an
 // *RPCError (NewReasonError) is answered as is, so the harness sees its
 // data.reason; any other error is answered as spawn_failed.
+//
+// As CoreOptions.Launch it is called once per bash tool call, before its
+// command starts (Core's tool.call and LocalToolRoute, so ACPAgent's own
+// tools). Argv is then the shell command (bash -lc <command>; cmd.exe /d /s
+// /c <command> on Windows). A refusal ends the call with an error result
+// "<reason>: <message>" (the route's Code is the reason) and nothing starts.
+// Use the same function for both options to give the brain's own commands
+// and process.* one admission check and one sandbox.
 type LaunchFunc func(ctx context.Context, req LaunchRequest) (LaunchSpec, error)
 
 // GitCredentialGranter backs process.start git_credentials: Grant returns the
@@ -620,7 +639,13 @@ func (p *processes) prepare(ctx context.Context, req Request, params ProcessStar
 // launch runs the Launch hook and maps its error: an *RPCError is answered
 // as is, any other error is spawn_failed.
 func (p *processes) launch(ctx context.Context, req LaunchRequest) (LaunchSpec, error) {
-	spec, err := p.opts.Launch(ctx, req)
+	return runLaunch(ctx, p.opts.Launch, req)
+}
+
+// runLaunch runs a Launch hook and maps its error: an *RPCError is returned
+// as is, any other error is spawn_failed.
+func runLaunch(ctx context.Context, launch LaunchFunc, req LaunchRequest) (LaunchSpec, error) {
+	spec, err := launch(ctx, req)
 	if err != nil {
 		var rpcErr *RPCError
 		if errors.As(err, &rpcErr) {

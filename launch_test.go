@@ -243,3 +243,87 @@ func TestLaunchRunsOncePerPackageInstall(t *testing.T) {
 	_, err := h.start(t, installParams("pkg_rel", "jq"))
 	requireCode(t, err, CodeInternalError)
 }
+
+// CoreOptions.Launch: a bash tool.call goes through the hook like a
+// process.start. It sees the session, the call and the shell argv, and its
+// directory, argv and environment are what runs.
+func TestCoreLaunchWrapsABashToolCall(t *testing.T) {
+	ctx := testContext(t)
+	folder, err := filepath.EvalSymlinks(t.TempDir()) // outside the session workspace
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := &launchRecorder{launch: func(req LaunchRequest) (LaunchSpec, error) {
+		argv := append([]string{"sh", "-c", `echo wrapped; exec "$@"`, "wrapper"}, req.Argv...)
+		return LaunchSpec{Dir: folder, Argv: argv, Env: append(slices.Clone(req.Env), "LAUNCH_ROOT="+folder)}, nil
+	}}
+	core := newTestCore(t, CoreOptions{Launch: recorder.hook})
+	session := readySession(t, attachBrain(t, core, "local"), SessionAssignParams{SessionID: "sess_launch",
+		Metadata: map[string]string{MetadataAgentSessionID: "sesn_l", "app_ref": "ws_7"}})
+	result, err := session.CallTool(ctx, ToolCallParams{ToolCallID: "call_1", Tool: ToolNameBash,
+		Input: NewToolInput(ToolInput{Command: "pwd; echo $LAUNCH_ROOT $FOO", Env: map[string]string{"FOO": "bar"}})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := textOf(result), "wrapped\n"+folder+"\n"+folder+" bar\n"; result.IsError || !strings.HasPrefix(got, want) {
+		t.Fatalf("bash = %+v %q, want prefix %q", result, got, want)
+	}
+	calls := recorder.calls()
+	if len(calls) != 1 {
+		t.Fatalf("launch calls = %+v", calls)
+	}
+	req := calls[0]
+	if req.Tool != ToolNameBash || req.ToolCallID != "call_1" || req.ProcessID != "" || req.SessionID != "sess_launch" ||
+		req.AgentSessionID != "sesn_l" || req.Metadata["app_ref"] != "ws_7" || req.Client == nil || req.Cwd != "" ||
+		!slices.Equal(req.Argv, shellArgv("pwd; echo $LAUNCH_ROOT $FOO")) || !slices.Contains(req.Env, "FOO=bar") {
+		t.Fatalf("launch request = %+v", req)
+	}
+	if info, err := os.Stat(req.DefaultCwd); err != nil || !info.IsDir() {
+		t.Fatalf("default cwd %q: %v", req.DefaultCwd, err)
+	}
+	// File tools do not go through the hook.
+	if result, err := session.CallTool(ctx, ToolCallParams{ToolCallID: "call_2", Tool: ToolNameWrite,
+		Input: NewToolInput(ToolInput{Path: "a.txt", Content: "x"})}); err != nil || result.IsError {
+		t.Fatalf("write = %+v, %v", result, err)
+	}
+	if calls := recorder.calls(); len(calls) != 1 {
+		t.Fatalf("a file tool called Launch: %+v", calls)
+	}
+}
+
+// A refused bash tool.call fails with the hook's reason and starts nothing.
+func TestCoreLaunchRefusesABashToolCall(t *testing.T) {
+	ctx := testContext(t)
+	recorder := &launchRecorder{launch: func(req LaunchRequest) (LaunchSpec, error) {
+		if req.ToolCallID == "call_plain" {
+			return LaunchSpec{}, errors.New("wrapper missing")
+		}
+		return LaunchSpec{}, NewReasonError(CodeForbidden, ReasonWorkspaceBoundary, "outside the granted folder")
+	}}
+	core := newTestCore(t, CoreOptions{Launch: recorder.hook})
+	session := readySession(t, attachBrain(t, core, "local"), SessionAssignParams{SessionID: "sess_refuse"})
+	call := func(id string) ToolResultParams {
+		t.Helper()
+		result, err := session.CallTool(ctx, ToolCallParams{ToolCallID: id, Tool: ToolNameBash,
+			Input: NewToolInput(ToolInput{Command: "touch started"})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	if result := call("call_denied"); result.Outcome != ToolOutcomeFailed || !result.IsError ||
+		textOf(result) != "workspace_boundary: outside the granted folder" {
+		t.Fatalf("refused = %+v %q", result, textOf(result))
+	}
+	if result := call("call_plain"); result.Outcome != ToolOutcomeFailed ||
+		!strings.HasPrefix(textOf(result), "spawn_failed: launch: wrapper missing") {
+		t.Fatalf("plain hook error = %+v %q", result, textOf(result))
+	}
+	if _, err := os.Stat(filepath.Join(core.opts.WorkRoot, "local", "sess_refuse", "started")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused command ran: %v", err)
+	}
+	recorder.launch = func(LaunchRequest) (LaunchSpec, error) { return LaunchSpec{Dir: "relative"}, nil }
+	if result := call("call_rel"); result.Outcome != ToolOutcomeFailed || !strings.HasPrefix(textOf(result), "spawn_failed: ") {
+		t.Fatalf("relative dir = %+v %q", result, textOf(result))
+	}
+}

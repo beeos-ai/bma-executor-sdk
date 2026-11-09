@@ -11,12 +11,14 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -115,6 +117,13 @@ type CoreOptions struct {
 	// (read/write/edit/glob/grep) run inside the executor and would bypass
 	// that boundary, so they are refused. Unix only.
 	RunAs *RunAs
+	// Launch runs before each bash tool command starts (tool.call and
+	// LocalToolRoute, so also ACPAgent's own tools), with the semantics of
+	// ProcessOptions.Launch: it may change the directory, argv and
+	// environment, or refuse the start; see LaunchFunc. File tools run inside
+	// the executor and do not call it (they stay within the session
+	// workspace). Nil starts commands as before.
+	Launch LaunchFunc
 	// EndAfterToolCall marks sessions that carry exactly one tool call: the
 	// core ends them (session.ended "completed") after the result is
 	// delivered. BMA's durable selfhost queue assigns such sessions.
@@ -957,7 +966,14 @@ func (c *Core) bash(ctx context.Context, session *CoreSession, params ToolCallPa
 		ctx, cancel = context.WithTimeout(ctx, c.opts.BashTimeout)
 		defer cancel()
 	}
-	execution, err := c.runShell(ctx, session, input)
+	launch, err := c.launchTool(ctx, session, sessionProcessContext(session), params.ToolCallID, input.Command, input.Cwd, input.Env)
+	if err != nil {
+		if code, detail, refused := launchRefusal(err); refused {
+			return failedToolResult(params, code+": "+detail)
+		}
+		return failedToolResult(params, err.Error())
+	}
+	execution, err := c.runShell(ctx, launch)
 	switch {
 	case errors.Is(ctx.Err(), context.Canceled):
 		return ToolResultParams{Outcome: ToolOutcomeCanceled, IsError: true,
@@ -970,19 +986,95 @@ func (c *Core) bash(ctx context.Context, session *CoreSession, params ToolCallPa
 	return c.bashResult(ctx, session, params, execution)
 }
 
-func (c *Core) runShell(ctx context.Context, session *CoreSession, input ToolInput) (shellExecution, error) {
-	cwd, err := session.ResolveCwd(input.Cwd)
-	if err != nil {
-		return shellExecution{}, err
+// toolLaunch is how a bash tool's command starts: in dir with argv and env,
+// the CoreOptions.Launch hook's changes applied.
+type toolLaunch struct {
+	dir       string
+	argv, env []string
+}
+
+// launchError is a Launch hook's refusal of a bash tool command (an
+// *RPCError), as opposed to a bad cwd or env of the call.
+type launchError struct{ err *RPCError }
+
+func (e *launchError) Error() string { return e.err.Error() }
+func (e *launchError) Unwrap() error { return e.err }
+
+// launchRefusal reports whether err is a Launch hook's refusal, with the
+// code (data.reason, else spawn_failed) and detail a tool result carries.
+func launchRefusal(err error) (code, detail string, ok bool) {
+	var refusal *launchError
+	if !errors.As(err, &refusal) {
+		return "", "", false
 	}
-	env, err := c.Env(input.Env)
-	if err != nil {
-		return shellExecution{}, err
+	code = ReasonSpawnFailed
+	if data := refusal.err.Data; data != nil && data.Reason != "" {
+		code = data.Reason
 	}
-	cmd := shellCommand(ctx, input.Command)
+	return code, refusal.err.Message, true
+}
+
+// sessionProcessContext is the ProcessContext of a bash tool call of a
+// harness session: its id, the session.assign metadata and client.
+func sessionProcessContext(session *CoreSession) ProcessContext {
+	metadata := session.params.Metadata
+	return ProcessContext{SessionID: session.ID(), AgentSessionID: metadata[MetadataAgentSessionID],
+		Metadata: maps.Clone(metadata), Client: session.client}
+}
+
+// launchTool prepares the command of a bash tool call: the shell argv of
+// command, the environment (Env over explicit) and cwd resolved in the
+// session workspace, then CoreOptions.Launch (when set) as process.start runs
+// ProcessOptions.Launch: it may change dir, argv and env, or refuse (a
+// *launchError). A bad cwd or env is a plain error.
+func (c *Core) launchTool(ctx context.Context, session *CoreSession, process ProcessContext, callID, command, cwd string,
+	explicit map[string]string) (toolLaunch, error) {
+	launch := toolLaunch{argv: shellArgv(command)}
+	var err error
+	if c.opts.Launch == nil {
+		if launch.dir, err = session.ResolveCwd(cwd); err != nil {
+			return toolLaunch{}, err
+		}
+		launch.env, err = c.Env(explicit)
+		return launch, err
+	}
+	if launch.env, err = c.Env(explicit); err != nil {
+		return toolLaunch{}, err
+	}
+	env := launch.env
+	defaultCwd, err := session.ResolveCwd("")
+	if err != nil {
+		return toolLaunch{}, err
+	}
+	spec, err := runLaunch(ctx, c.opts.Launch, LaunchRequest{
+		ProcessContext: process, Tool: ToolNameBash, ToolCallID: callID,
+		Argv: slices.Clone(launch.argv), Cwd: cwd, DefaultCwd: defaultCwd, Env: slices.Clone(env),
+	})
+	if err != nil {
+		return toolLaunch{}, &launchError{err.(*RPCError)}
+	}
+	if len(spec.Argv) > 0 {
+		launch.argv = spec.Argv
+	}
+	if spec.Env != nil {
+		launch.env = spec.Env
+	}
+	switch {
+	case spec.Dir != "" && !filepath.IsAbs(spec.Dir):
+		return toolLaunch{}, &launchError{spawnFailed(fmt.Errorf("launch: dir %q is not absolute", spec.Dir))}
+	case spec.Dir != "":
+		launch.dir = spec.Dir
+	default:
+		launch.dir, err = session.ResolveCwd(cwd)
+	}
+	return launch, err
+}
+
+func (c *Core) runShell(ctx context.Context, launch toolLaunch) (shellExecution, error) {
+	cmd := toolCommand(ctx, launch.argv)
 	setCredential(cmd, c.opts.RunAs)
-	cmd.Dir = cwd
-	cmd.Env = env
+	cmd.Dir = launch.dir
+	cmd.Env = launch.env
 	stdout := &cappedBuffer{limit: c.opts.MaxOutputBytes}
 	stderr := &cappedBuffer{limit: c.opts.MaxOutputBytes}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
