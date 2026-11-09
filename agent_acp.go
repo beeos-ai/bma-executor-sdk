@@ -260,6 +260,8 @@ type acpTurn struct {
 	ledger *acpLedger
 	route  acpRoute
 	turnID string
+	// toolRoute runs the agent's tool calls (always the local one for now).
+	toolRoute toolRoute
 	// policy is the effective permission of each tool (see acpEffectivePolicy);
 	// the executor enforces it, whatever the agent does.
 	policy map[string]string
@@ -493,6 +495,7 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 	a.mu.Lock()
 	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: acpEffectivePolicy(s.mode, overrides),
 		messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}}
+	t.toolRoute = localToolRoute{agent: a, turn: t}
 	s.turn = t
 	proc := s.proc
 	a.mu.Unlock()
@@ -864,7 +867,7 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 		}
 		result := refused("stale_turn", "no turn of this session is running in this agent process")
 		if t != nil {
-			result = a.runToolOnce(ctx, t, base.SessionID, p.ToolCallID, p.Name, p.Input)
+			result = t.toolRoute.call(ctx, routedCall{SessionID: base.SessionID, CallID: p.ToolCallID, Name: p.Name, Input: p.Input})
 		}
 		return map[string]any{"text": result.Text, "isError": result.IsError, "outcome": result.Outcome, "errorCode": result.Code}, nil
 	}

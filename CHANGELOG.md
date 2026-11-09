@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Go tool route seam (ADR-0029 S1, internal, no API or protocol change):**
+  `ACPAgent` now sends every local tool call through an unexported `toolRoute`
+  (`localToolRoute`: the executor's re-check, the turn ledger and `Core`, same
+  behavior as before). `platformToolRoute` is a second implementation that
+  calls the platform's execute-only tool gateway (MCP Streamable HTTP, ADR-0005
+  `_meta` keys, three-state outcome, idempotency key, in-memory credential); it
+  is not wired into any configuration. A conformance suite (T1–T11) runs the
+  same cases against both routes. Known gap: the local `Core` kills a bash
+  command at its timeout instead of leaving it running with `pid` and
+  `output_file`.
+
 - **Go `ACPAgent` re-checks every local tool call itself (ADR-0005 gateway
   semantics, security fix):** a brain that calls `_bma/tools/call` without
   `session/request_permission` no longer gets the tool run. Before a tool runs
