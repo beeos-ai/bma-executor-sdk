@@ -191,6 +191,30 @@ client.ServeAgent(myAgent, bmaexecutor.AgentCapability{
 
 The harness side is `HarnessOptions.Agent` (`AgentPlatform`) plus `Executor.StartTurn`, `SendTurnInput`, `CancelTurn`, `CloseAgentSession` and `RespondInteraction`. The BMA platform side is in preview: the binding of an agent to the machine is made by the BMA team (the public `/v1` API has no route for it yet); its sessions accept text input only. See [agent capability](docs/executor/agent-capability.md#7-platform-preview).
 
+### Writing your own brain or hands (Go, ADR-0029)
+
+A third-party **brain** implements `AgentHandler` and depends on this SDK and the contract only; a third-party **hands** is a `Core` (or your own tool handlers) behind a `Client`. Minimal, runnable skeletons: [`examples/third-party-brain`](examples/third-party-brain/main.go) and [`examples/third-party-hand`](examples/third-party-hand/main.go), each with a test that runs it against the SDK's `Harness`.
+
+The brain's tools go through `AgentTurn.Tools()`:
+
+```go
+func (b myBrain) RunTurn(ctx context.Context, turn *bmaexecutor.AgentTurn) error {
+	tools := turn.Tools() // nil: the hands are this machine - run your tools yourself
+	if tools == nil { /* local */ }
+	id := turn.ApprovalID(callID) // deterministic across reconnects and restarts
+	answer, _ := turn.RequestInteraction(ctx, bmaexecutor.InteractionRequestParams{InteractionID: id, /* ... */})
+	res := tools.Call(ctx, bmaexecutor.RouteCall{ID: callID, Name: "bash", Input: input, ApprovalID: answer.InteractionID})
+	// res.Outcome: RouteOutcomeExecuted | RouteOutcomeNotForwarded | RouteOutcomeUnknown
+	return nil
+}
+```
+
+Declare `AgentCapability.PlatformCredentials: []string{bmaexecutor.PlatformCredentialBrainTools}` so the platform may give this machine a session whose hands are elsewhere. With the platform's tools endpoint in `turn.start` metadata, `Tools()` is a `PlatformToolRoute` (every call goes through the platform's tool gateway; the token stays in memory and is refreshed with `tools_token.refresh`); a half credential gives a route that refuses every call (`tools_unavailable`), never a local run. `NewPlatformToolRoute` builds the same route from a credential you manage yourself. Every call needs a unique `RouteCall.ID`: it is the idempotency identity, so a call asked again after a restart is answered with the first result (`Replayed`) instead of running twice, and an outcome of `unknown` means it may have run.
+
+A hands' owner chooses what may use the machine: `Options.Labels` (placement filters, never an authorization) and `Options.RemoteBrain` (off by default; the platform cannot enable it).
+
+The local route (brain and hands on one computer) is `ACPAgent`'s and is not exported: a brain of your own that runs its tools itself on its own computer does not need it. The conformance suite stays in this repository.
+
 ### Brain and hands on different machines, and Claude Code (Go)
 
 `ACPAgent` (Go) hosts an ACP agent process as the brain of a session. Its tool calls go through one seam, the tool route:
@@ -202,7 +226,7 @@ Both routes behave the same (the conformance suite `toolroute_conformance_test.g
 
 `Options.Labels` and `Options.RemoteBrain` are the machine owner's local configuration (`ExecutorInfo.labels`, `Capabilities.remote_brain`). Labels only narrow where the platform may place sessions; `RemoteBrain` is off unless the owner turns it on here — it lets a brain on another machine use this one as its hands, and the platform has no way to switch it on.
 
-**Claude Code** (`ACPAgentOptions.Profile: bmaexecutor.ACPProfileClaudeCode`) hosts the official [claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp), unmodified, at a pinned release (`claudeAgentACPPins`; tested with npm `@agentclientprotocol/claude-agent-acp@0.101.0`, `testdata/claude-agent-acp/package-lock.json`). It uses only the node owner's own Claude credentials (their Claude Code login, or `ANTHROPIC_API_KEY` / a third-party provider's variables in `ACPAgentOptions.Env`); they never pass through BMA, the profile starts no model proxy and declares no `harness_model`. Its tools are the six platform tools, injected as an MCP server (`mcp__bma__bash`, ...) with Claude Code's own tools turned off (`tools: []`); the platform's policy and approvals apply as for every brain. Gates, all fail closed: `session/set_mode default` after every `session/new` and a check that the mode is `default` (otherwise the turn is refused); the tool list of Claude Code's init message must be the six platform tools plus the placeholder tools the pinned release is known to add (e.g. `DeferredToolPlaceholder`); a permission request for any other tool is rejected. A Claude Code brain does not declare `turn_resume`. See `examples/local-dsh -profile claude-code`.
+**Claude Code** (`ACPAgentOptions.Profile: bmaexecutor.ACPProfileClaudeCode`) hosts the official [claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp), unmodified, at a pinned release (`claudeAgentACPPins`; tested with npm `@agentclientprotocol/claude-agent-acp@0.101.0`, `testdata/claude-agent-acp/package-lock.json`). It uses only the node owner's own Claude credentials (their Claude Code login, or `ANTHROPIC_API_KEY` / a third-party provider's variables in `ACPAgentOptions.Env`); they never pass through BMA, the profile starts no model proxy and declares no `harness_model`. Its tools are the six platform tools, injected as an MCP server (`mcp__bma__bash`, ...) with Claude Code's own tools turned off (`tools: []`); the platform's policy and approvals apply as for every brain. Gates, all fail closed: `session/set_mode default` after every `session/new` and a check that the mode is `default` (otherwise the turn is refused); the tool list of Claude Code's init message must be the six platform tools plus the placeholder tools the pinned release is known to add (e.g. `DeferredToolPlaceholder`); a permission request for any other tool is rejected. A Claude Code brain does not declare `turn_resume`. `NewACPAgent` prewarms it (one throwaway session, never prompted; `WaitPrewarm`, `DisablePrewarm`), and `turn.start` is answered at once for every profile: the agent's session is opened after the answer, and a failed open ends the turn with a typed `session.error`. See `examples/local-dsh -profile claude-code`.
 
 TypeScript and Python have no equivalent: they have no ACP host and no execution core, and no `model_token.refresh` client either; the generated types carry the 1.4.0 members (`executor.labels`, `capabilities.remote_brain`, `tools_token.refresh`) for code that sets or calls them by hand.
 
@@ -215,6 +239,8 @@ Run from the repository root:
 | [`examples/local-brain`](examples/local-brain/main.go) | a local harness with a scripted "model" drives `Core` over loopback: bash, then the stdio [`echo-mcp`](examples/echo-mcp/main.go) server through the MCP channel | `go run ./examples/local-brain` |
 | [`examples/cloud-hand`](examples/cloud-hand/main.go) | the same `Core` as a hand for the BMA cloud harness | `BMA_BASE_URL=... BMA_ENVIRONMENT_ID=... BMA_ENVIRONMENT_KEY=... go run ./examples/cloud-hand -work-root ~/bma-work` |
 | [`examples/agentexecutor`](examples/agentexecutor/main.go) | the agent capability against a simulated platform, including a dropped connection | `go run ./examples/agentexecutor` |
+| [`examples/third-party-brain`](examples/third-party-brain/main.go) | the smallest brain: declares `brain_tools`, asks approval under `AgentTurn.ApprovalID`, sends the call through `AgentTurn.Tools()` to the platform's tool gateway | `BMA_MACHINE_TOKEN=... go run ./examples/third-party-brain -base-url ... -machine-id mch_...` |
+| [`examples/third-party-hand`](examples/third-party-hand/main.go) | the smallest hands: `Core` with the process capability, `Options.Labels`, `Options.RemoteBrain` | `BMA_MACHINE_TOKEN=... go run ./examples/third-party-hand -base-url ... -machine-id mch_... -labels team-a -remote-brain` |
 | [`examples/sandboxed-folder`](examples/sandboxed-folder/main.go) | a machine executor whose `Launch` hook reads the session context, checks the owner, picks the local folder for a metadata reference and wraps the command in macOS `sandbox-exec` | `BMA_BASE_URL=... BMA_MACHINE_TOKEN=... go run ./examples/sandboxed-folder -owner u_42 -folder ws_7=$HOME/projects/site` |
 
 ## Tests

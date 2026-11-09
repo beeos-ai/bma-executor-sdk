@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -397,11 +398,27 @@ func TestACPAgentProcessCrashFailsTheTurnAndUnknownSessionIsNotRecreated(t *test
 	f := startACPFixture(t, ctx, ACPAgentOptions{})
 	f.start(t, ctx, "sesn_x", "turn_1", "crash")
 	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeFailed)
-	_, err := f.executor.StartTurn(ctx, TurnStartParams{SessionID: "sesn_missing", TurnID: "turn_2", InputID: "in_2", ExecutorSessionRef: "sesn_missing",
-		Input: []AgentInputBlock{{Type: AgentInputBlockTypeText, Text: "hello"}}})
-	if err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("turn.start for a lost conversation = %v", err)
+	// The conversation to resume does not exist: turn.start is still accepted
+	// (the open runs after the answer); the turn then fails with session.error.
+	f.start(t, ctx, "sesn_missing", "turn_2", "hello", func(p *TurnStartParams) { p.ExecutorSessionRef = "sesn_missing" })
+	assertIdle(t, f.platform.waitIdle(t, "turn_2"), TurnOutcomeFailed)
+	if got := sessionErrors(f.platform, "turn_2"); len(got) != 1 || got[0].Type != AgentErrorCodeAgentError || !strings.Contains(got[0].Message, "not found") {
+		t.Fatalf("session.error of the lost conversation = %+v", got)
 	}
+}
+
+// sessionErrors are the session.error payloads of a turn.
+func sessionErrors(p *recordingPlatform, turnID string) []AgentErrorInfo {
+	var out []AgentErrorInfo
+	for _, e := range p.snapshot() {
+		if e.TurnID != turnID || e.Type != AgentEventTypeSessionError {
+			continue
+		}
+		var event SessionErrorEvent
+		_ = json.Unmarshal(e.Event, &event)
+		out = append(out, event.Error)
+	}
+	return out
 }
 
 func TestACPAgentRefusesForeignHarnessAndCwd(t *testing.T) {
@@ -629,6 +646,14 @@ func fakeHandle(c *fakeConn, method string, raw json.RawMessage) (any, map[strin
 			"agentInfo": map[string]any{"name": "fake-dsh-acp", "version": "9.9.9"},
 			"_meta":     map[string]any{"bma": map[string]any{"dsh": "0.2.1-rc.5", "tools": fakeTools, "streaming": "token", "permissionRelay": "full"}}}, nil
 	case "session/new", "session/load":
+		// BMA_ACP_FAKE_NEW_DELAY_MS makes opening a session slow, and
+		// BMA_ACP_FAKE_NEW_ERROR (an ACP error code) makes it fail.
+		if ms, _ := strconv.Atoi(os.Getenv("BMA_ACP_FAKE_NEW_DELAY_MS")); ms > 0 {
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+		}
+		if code, _ := strconv.Atoi(os.Getenv("BMA_ACP_FAKE_NEW_ERROR")); code != 0 {
+			return nil, map[string]any{"code": code, "message": "scripted failure"}
+		}
 		sid, _ := p.Meta.Bma["sessionId"].(string)
 		if method == "session/load" {
 			sid = p.SessionID

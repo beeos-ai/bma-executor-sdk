@@ -45,41 +45,8 @@ func (c *Core) closeLocal(brain, sessionID string) {
 	c.stop(coreKey{brain, sessionID})
 }
 
-// A tool call has the three outcomes of the platform's tool gateway
-// (ADR-0005): not_forwarded (refused, certainly not run, safe to ask again),
-// executed (it ran; IsError says the tool itself failed) and unknown (it may
-// have run, do not blindly retry).
-const (
-	acpToolNotForwarded = "not_forwarded"
-	acpToolExecuted     = "executed"
-	acpToolUnknown      = "unknown"
-)
-
-// acpToolResult is the answer to _bma/tools/call. The brain maps it to the
-// ACP tool_call_update (IsError: status failed) and the executor to the CMA
-// agent.tool_result (is_error); Text starts with "<Code>: " when the call
-// was refused or its outcome is unknown.
-type acpToolResult struct {
-	Outcome string
-	Code    string
-	Text    string
-	IsError bool
-	// Replayed: the answer was saved from an earlier call with the same id
-	// (not run again).
-	Replayed bool
-	// Background: a command left running when the call stopped waiting
-	// (platform route; the local Core has none).
-	Background *toolBackground
-}
-
-// toolBackground is a command still running after its call returned.
-type toolBackground struct {
-	PID        int
-	OutputFile string
-}
-
-func refused(code, detail string) *acpToolResult {
-	return &acpToolResult{Outcome: acpToolNotForwarded, Code: code, Text: code + ": " + detail, IsError: true}
+func refused(code, detail string) *RouteResult {
+	return &RouteResult{Outcome: RouteOutcomeNotForwarded, Code: code, Text: code + ": " + detail, IsError: true}
 }
 
 // acpEffectivePolicy is the permission of every tool of a turn: the mode's
@@ -119,7 +86,7 @@ func acpInputHash(input map[string]any) string {
 //     when there is none, approval_invalid when it does not match). The
 //     approval is for one call id; the ledger answers a repeated call with
 //     the first result instead of running it again.
-func (t *acpTurn) gate(sessionID, callID, name string, in map[string]any) *acpToolResult {
+func (t *acpTurn) gate(sessionID, callID, name string, in map[string]any) *RouteResult {
 	if t.ctx.Err() != nil || t.ledger.turnID() != t.turnID {
 		return refused("stale_turn", "the turn this tool call belongs to is over")
 	}
@@ -149,26 +116,26 @@ func (t *acpTurn) gate(sessionID, callID, name string, in map[string]any) *acpTo
 // start was recorded without a result has an unknown outcome and is not run
 // again. A call the gate refuses is not recorded: it did not run and may be
 // asked for again once approved.
-func (a *ACPAgent) runToolOnce(ctx context.Context, t *acpTurn, sessionID, callID, name string, in map[string]any) *acpToolResult {
+func (a *ACPAgent) runToolOnce(ctx context.Context, t *acpTurn, sessionID, callID, name string, in map[string]any) *RouteResult {
 	ledger := t.ledger
-	stateError := func(err error) *acpToolResult {
-		return &acpToolResult{Outcome: acpToolUnknown, Code: "turn_state", Text: "turn state: " + err.Error(), IsError: true}
+	stateError := func(err error) *RouteResult {
+		return &RouteResult{Outcome: RouteOutcomeUnknown, Code: "turn_state", Text: "turn state: " + err.Error(), IsError: true}
 	}
 	switch call := ledger.call(callID); call.Phase {
 	case acpPhaseDone:
 		outcome := call.Outcome
 		if outcome == "" {
-			outcome = acpToolExecuted
+			outcome = RouteOutcomeExecuted
 		}
-		return &acpToolResult{Outcome: outcome, Code: call.Code, Text: call.Text, IsError: call.IsError, Replayed: true}
+		return &RouteResult{Outcome: outcome, Code: call.Code, Text: call.Text, IsError: call.IsError, Replayed: true}
 	case acpPhaseStarted:
 		text := "outcome_unknown: the tool call was started before the executor restarted; whether it took effect is unknown, so it was not run again."
 		if err := ledger.update(callID, func(c *acpCallState) {
-			c.Phase, c.Text, c.IsError, c.Outcome, c.Code = acpPhaseDone, text, true, acpToolUnknown, "outcome_unknown"
+			c.Phase, c.Text, c.IsError, c.Outcome, c.Code = acpPhaseDone, text, true, RouteOutcomeUnknown, "outcome_unknown"
 		}); err != nil {
 			return stateError(err)
 		}
-		return &acpToolResult{Outcome: acpToolUnknown, Code: "outcome_unknown", Text: text, IsError: true}
+		return &RouteResult{Outcome: RouteOutcomeUnknown, Code: "outcome_unknown", Text: text, IsError: true}
 	}
 	if denied := t.gate(sessionID, callID, name, in); denied != nil {
 		a.log(LogWarn, fmt.Sprintf("tool call %s (%s) of session %s refused: %s", callID, name, sessionID, denied.Text), nil)
@@ -177,7 +144,7 @@ func (a *ACPAgent) runToolOnce(ctx context.Context, t *acpTurn, sessionID, callI
 	if a.hook != nil {
 		a.hook(ctx, "tool:before")
 		if ctx.Err() != nil {
-			return &acpToolResult{Outcome: acpToolNotForwarded, Code: "canceled", Text: "canceled: The tool call was cancelled.", IsError: true}
+			return &RouteResult{Outcome: RouteOutcomeNotForwarded, Code: "canceled", Text: "canceled: The tool call was cancelled.", IsError: true}
 		}
 	}
 	if err := ledger.update(callID, func(c *acpCallState) { c.Phase = acpPhaseStarted }); err != nil {
@@ -185,21 +152,21 @@ func (a *ACPAgent) runToolOnce(ctx context.Context, t *acpTurn, sessionID, callI
 	}
 	var text string
 	var isError bool
-	var background *toolBackground
+	var background *RouteBackground
 	if name == ToolNameBash {
 		text, isError, background = a.runBash(ctx, t, sessionID, callID, in)
 	} else {
 		text, isError = a.runTool(ctx, sessionID, callID, name, in)
 	}
 	if err := ledger.update(callID, func(c *acpCallState) {
-		c.Phase, c.Text, c.IsError, c.Outcome, c.Code = acpPhaseDone, text, isError, acpToolExecuted, ""
+		c.Phase, c.Text, c.IsError, c.Outcome, c.Code = acpPhaseDone, text, isError, RouteOutcomeExecuted, ""
 	}); err != nil {
 		return stateError(err)
 	}
 	if a.hook != nil {
 		a.hook(ctx, "tool:after")
 	}
-	return &acpToolResult{Outcome: acpToolExecuted, Text: text, IsError: isError, Background: background}
+	return &RouteResult{Outcome: RouteOutcomeExecuted, Text: text, IsError: isError, Background: background}
 }
 
 // runTool runs a file tool in Core (bash is runBash).

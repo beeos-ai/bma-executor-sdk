@@ -135,13 +135,13 @@ func (a *ACPAgent) openClaudeSession(ctx context.Context, proc *acpProcess, s *a
 		}
 		var acpErr *acpError
 		if errors.As(err, &acpErr) && acpErr.Code == CodeNotFound {
-			return &RPCError{Code: CodeNotFound, Message: "the local conversation " + ref + " was not found; it is not recreated"}
+			return &AgentError{Code: AgentErrorCodeAgentError, Message: "the local conversation " + ref + " was not found; it is not recreated"}
 		}
 	} else {
 		err = proc.call(ctx, "session/new", map[string]any{"cwd": cwd, "mcpServers": mcpServers, "_meta": meta}, &res)
 		if err == nil {
 			if res.SessionID == "" {
-				return &RPCError{Code: CodeInternalError, Message: "agent session: session/new answered without a sessionId"}
+				return &AgentError{Code: AgentErrorCodeAgentProtocolError, Message: "agent session: session/new answered without a sessionId"}
 			}
 			a.mu.Lock()
 			s.proc, s.agentID, s.agentMode = proc, res.SessionID, ""
@@ -149,7 +149,7 @@ func (a *ACPAgent) openClaudeSession(ctx context.Context, proc *acpProcess, s *a
 		}
 	}
 	if err != nil {
-		return &RPCError{Code: CodeInternalError, Message: "agent session: " + err.Error()}
+		return acpOpenError(proc, "agent session", err)
 	}
 	return nil
 }
@@ -173,14 +173,14 @@ func (a *ACPAgent) claudeDefaultMode(ctx context.Context, proc *acpProcess, s *a
 			a.mu.Lock()
 			s.agentMode = ""
 			a.mu.Unlock()
-			return &RPCError{Code: CodeInternalError, Message: "agent set_mode: " + err.Error()}
+			return acpOpenError(proc, "agent set_mode", err)
 		}
 	}
 	a.mu.Lock()
 	mode = s.agentMode
 	a.mu.Unlock()
 	if mode != "default" {
-		return &RPCError{Code: CodeInternalError, Message: fmt.Sprintf("mode_not_default: the agent's permission mode is %q, not default; the turn is refused", mode)}
+		return &AgentError{Code: AgentErrorCodeAgentError, Message: fmt.Sprintf("mode_not_default: the agent's permission mode is %q, not default; the turn is refused", mode)}
 	}
 	return nil
 }
@@ -474,7 +474,7 @@ func (s *acpToolServer) call(ctx context.Context, session *acpSession, callID, n
 	a.mu.Lock()
 	t, mode := session.turn, session.agentMode
 	a.mu.Unlock()
-	var result *acpToolResult
+	var result *RouteResult
 	switch {
 	case t == nil:
 		result = refused("stale_turn", "no turn of this session is running")

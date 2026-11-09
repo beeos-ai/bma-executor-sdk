@@ -69,7 +69,7 @@ type stubReply struct {
 	Outcome    string
 	Code       string
 	Replayed   bool
-	Background *toolBackground
+	Background *RouteBackground
 }
 
 const stubSession = "sesn_t1"
@@ -198,7 +198,7 @@ func (g *stubGateway) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func stubRefused(code, detail string) stubReply {
-	return stubReply{Outcome: acpToolNotForwarded, Code: code, Text: code + ": " + detail, IsError: true}
+	return stubReply{Outcome: RouteOutcomeNotForwarded, Code: code, Text: code + ": " + detail, IsError: true}
 }
 
 // toolsCall is the gateway: policy re-check, approval check, idempotency, then the hands.
@@ -220,7 +220,7 @@ func (g *stubGateway) toolsCall(reqCtx context.Context, name string, args, meta 
 		case k.done == nil:
 			g.mu.Unlock()
 			text := "outcome_unknown: the call was submitted to the machine and its end was not observed; it was not run again."
-			return stubReply{Outcome: acpToolUnknown, Code: "outcome_unknown", Text: text, IsError: true}, false
+			return stubReply{Outcome: RouteOutcomeUnknown, Code: "outcome_unknown", Text: text, IsError: true}, false
 		default:
 			done := k.done
 			g.mu.Unlock()
@@ -270,7 +270,7 @@ func (g *stubGateway) await(reqCtx context.Context, done chan struct{}, k *stubK
 		defer g.mu.Unlock()
 		return k.reply
 	case <-reqCtx.Done():
-		return stubReply{Outcome: acpToolUnknown, Code: "in_progress", Text: "in_progress: the call is still running", IsError: true}
+		return stubReply{Outcome: RouteOutcomeUnknown, Code: "in_progress", Text: "in_progress: the call is still running", IsError: true}
 	}
 }
 
@@ -281,7 +281,7 @@ func (g *stubGateway) execute(name string, args, meta map[string]any) stubReply 
 		return g.bash(args, meta)
 	}
 	text, isError := g.agent.runTool(g.turnCtx, stubSession, "gw", name, args)
-	return stubReply{Outcome: acpToolExecuted, Text: text, IsError: isError}
+	return stubReply{Outcome: RouteOutcomeExecuted, Text: text, IsError: isError}
 }
 
 // bash runs the command in its own process group; past the synchronous wait
@@ -302,14 +302,14 @@ func (g *stubGateway) bash(args, meta map[string]any) stubReply {
 	g.mu.Unlock()
 	out, err := os.Create(outFile)
 	if err != nil {
-		return stubReply{Outcome: acpToolNotForwarded, Code: "spawn_failed", Text: "spawn_failed: " + err.Error(), IsError: true}
+		return stubReply{Outcome: RouteOutcomeNotForwarded, Code: "spawn_failed", Text: "spawn_failed: " + err.Error(), IsError: true}
 	}
 	defer func() { _ = out.Close() }()
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir, cmd.Stdout, cmd.Stderr = g.workspace, out, out
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
-		return stubReply{Outcome: acpToolNotForwarded, Code: "spawn_failed", Text: "spawn_failed: " + err.Error(), IsError: true}
+		return stubReply{Outcome: RouteOutcomeNotForwarded, Code: "spawn_failed", Text: "spawn_failed: " + err.Error(), IsError: true}
 	}
 	pgid := cmd.Process.Pid
 	done := make(chan struct{})
@@ -327,12 +327,12 @@ func (g *stubGateway) bash(args, meta map[string]any) stubReply {
 	select {
 	case <-done:
 		if g.turnCtx.Err() != nil {
-			return stubReply{Outcome: acpToolExecuted, Text: "tool was canceled", IsError: true}
+			return stubReply{Outcome: RouteOutcomeExecuted, Text: "tool was canceled", IsError: true}
 		}
 		return g.bashReply(outFile, waitErr)
 	case <-timer.C:
-		return stubReply{Outcome: acpToolExecuted, Text: fmt.Sprintf("running in the background (pid %d), output in %s", pgid, outFile),
-			Background: &toolBackground{PID: pgid, OutputFile: outFile}}
+		return stubReply{Outcome: RouteOutcomeExecuted, Text: fmt.Sprintf("running in the background (pid %d), output in %s", pgid, outFile),
+			Background: &RouteBackground{PID: pgid, OutputFile: outFile}}
 	}
 }
 
@@ -346,5 +346,5 @@ func (g *stubGateway) bashReply(outFile string, err error) stubReply {
 	if len(raw) > 0 {
 		text = string(raw) + "\n" + text
 	}
-	return stubReply{Outcome: acpToolExecuted, Text: text}
+	return stubReply{Outcome: RouteOutcomeExecuted, Text: text}
 }

@@ -17,7 +17,7 @@ type boundRoute struct {
 	turnCtx context.Context
 }
 
-func (b boundRoute) call(ctx context.Context, c routedCall) *acpToolResult {
+func (b boundRoute) call(ctx context.Context, c routedCall) *RouteResult {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(b.turnCtx, cancel)()
@@ -99,7 +99,7 @@ func newPlatformRig(t *testing.T, toolPolicy map[string]string) *routeRig {
 	var mu sync.Mutex
 	approved := map[string]string{} // call id -> interaction id the brain presents
 	newRoute := func(token string) toolRoute {
-		return newPlatformToolRoute(platformToolRouteOptions{Endpoint: gw.server.URL, Token: token, TurnID: rigTurn,
+		return newPlatformToolRoute(PlatformToolRouteOptions{Endpoint: gw.server.URL, Token: token, TurnID: rigTurn,
 			ApprovalFor: func(callID string) string { mu.Lock(); defer mu.Unlock(); return approved[callID] }})
 	}
 	current := newRoute("tok-1")

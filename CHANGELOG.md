@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+- **Go `ACPAgent`, Claude Code profile: prewarm.** `NewACPAgent` starts the
+  agent process as before and now also opens one throwaway session in the
+  background (scratch directory `StateDir/prewarm`, closed unused, never
+  prompted, so no model credit is spent), which takes the cold start of Claude
+  Code off the first real session. It never delays or fails registration; a
+  failure is logged (`agent prewarm failed`, LogWarn) and returned by the new
+  `ACPAgent.WaitPrewarm(ctx)`. `ACPAgentOptions.DisablePrewarm` turns it off.
+  Measured with the pinned claude-agent-acp on one machine: `turn.start` is
+  answered in ~1 ms (before: the whole session/new, 0.5 s to 4.6 s); the first
+  content event of the first turn comes ~0.2-0.26 s after `turn.start` (before:
+  0.57-4.64 s; without the prewarm, 0.35-0.7 s). The DSH profile has no
+  prewarm (its process is resident and its session/new is cheap).
+- **Behavior change, Go `ACPAgent`: `turn.start` is answered at once.** As the
+  contract says ("answers as soon as the turn is accepted"), `OpenTurn` only
+  validates (harness, permission mode, cwd, session capacity: still
+  `turn.start` errors) and the agent's session is opened first thing in
+  `RunTurn`. A failed open (agent process unavailable, a conversation to
+  resume that does not exist, the agent's refusal, a failed mode gate) is no
+  longer a `turn.start` error but ends the turn with `session.error` and
+  `session.status_idle` failed, typed with the contract's `AgentErrorCode`:
+  `agent_unavailable`, `agent_auth_required` (ACP -32000),
+  `agent_protocol_error` (-32602 / -32601, a tool catalog violation) or
+  `agent_error`. `turn.cancel` or the deadline during the open ends the turn
+  canceled immediately; the open still finishes and leaves its session for the
+  next turn. New `AgentError{Code, Message}`: a `RunTurn` error of that type
+  picks the `session.error` type (any other error stays `agent_error`).
+  `TurnStartResult.executor_session_ref` of the first turn of a Claude Code
+  session is empty (Claude Code names its session only after `session/new`,
+  and the id cannot be chosen); from the second turn on it is the real id.
+- **Go: the brain-side tool API is public (ADR-0029 S3):** `ToolRoute` (one
+  method, `Call(ctx, RouteCall) *RouteResult`), `RouteCall` (`ID`, `ToolUseID`,
+  `Name`, `Input`, `ApprovalID`), `RouteResult` with the `RouteOutcome*`
+  constants and `RouteBackground`, `PlatformToolRoute` with
+  `NewPlatformToolRoute`, and on `AgentTurn`: `Tools()` (the platform route of
+  a turn that carries `tools_mcp_*`, a refusing route for a half credential,
+  nil when the hands are this machine) and `ApprovalID(callID)` (the
+  deterministic `appr_` interaction id). A third-party brain needs only the SDK
+  and the contract; two runnable skeletons with tests:
+  `examples/third-party-brain` and `examples/third-party-hand`. The local route
+  and the conformance suite stay internal. Previously unexported
+  (`acpToolResult`, `toolBackground`, `platformToolRoute`): no earlier release
+  exposed them.
 - **Behavior change, Go `ACPAgent` local `bash` (ADR-0029 T6):** `timeout` is
   now how long the call waits, not how long the command may live, as on the
   platform's tool gateway. A command that outlives the wait (at most 55 s, or

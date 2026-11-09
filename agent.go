@@ -16,6 +16,19 @@ const (
 	agentCloseFlushWait = 30 * time.Second
 )
 
+// AgentError is an error of RunTurn that names its cause with one of the
+// contract's AgentErrorCode values (AgentErrorCodeAgentUnavailable,
+// AgentErrorCodeAgentAuthRequired, ...): the turn ends failed with
+// session.error of that type, so every agent says the same thing for the same
+// cause. Any other error ends the turn with AgentErrorCodeAgentError.
+type AgentError struct {
+	// Code is an AgentErrorCode value.
+	Code    string
+	Message string
+}
+
+func (e *AgentError) Error() string { return e.Message }
+
 // ErrAgentSessionClosed is returned by AgentTurn methods after session.close.
 var ErrAgentSessionClosed = errors.New("bmaexecutor: agent session closed")
 
@@ -27,7 +40,12 @@ var ErrAgentSessionClosed = errors.New("bmaexecutor: agent session closed")
 type AgentHandler interface {
 	// OpenTurn decides whether to accept a turn.start and reports the
 	// configuration the agent will actually apply. It runs before turn.start
-	// is answered, so it must not do the turn's work. An *RPCError keeps its
+	// is answered, and the platform answers turn.start with a timeout, so it
+	// must be quick: refuse what can be refused for certain (unknown
+	// harness, a cwd outside the allowed roots) and leave anything slow, such as
+	// starting a process or opening the local conversation, to RunTurn, whose
+	// failure ends the turn with session.error (AgentError picks its type) and
+	// whose canceled ctx ends it canceled. An *RPCError keeps its
 	// code (for example -32001 for a cwd outside the allowed roots).
 	OpenTurn(ctx context.Context, params TurnStartParams) (TurnStartResult, error)
 	// RunTurn does the turn's work and returns when the turn is over. ctx is
@@ -127,6 +145,9 @@ type AgentTurn struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	ended   atomic.Bool
+
+	toolsOnce sync.Once
+	tools     ToolRoute
 }
 
 func (t *AgentTurn) SessionID() string       { return t.session.id }
@@ -153,6 +174,58 @@ func (t *AgentTurn) EnvironmentInfo() *EnvironmentInfo {
 		return nil
 	}
 	return t.params.Config.EnvironmentInfo
+}
+
+// Tools returns the route this turn's tool calls go through when the hands are
+// on another machine (ADR-0029), or nil when they are this machine.
+//
+// A turn started with the platform's tools endpoint (turn.start metadata
+// tools_mcp_url and tools_mcp_token, contract 1.4.0; the executor declared
+// AgentCapability.platform_credentials brain_tools) gets a PlatformToolRoute:
+// every call goes to the platform's tool gateway and none may run on this
+// machine. The token stays in memory and is replaced through
+// tools_token.refresh before it expires. One of the two metadata keys without
+// the other gives a route that refuses every call (tools_unavailable) instead
+// of nil, so a half credential never turns into a local run.
+//
+// nil means the turn carries no tools endpoint: the brain's tools run here, on
+// the brain's own account (ACPAgent does it through Core with its own
+// re-checks; a brain of your own runs them itself). The route is the same
+// value for every call of the turn.
+func (t *AgentTurn) Tools() ToolRoute {
+	t.toolsOnce.Do(func() {
+		md := t.params.Metadata
+		if !handsAreRemote(md) {
+			return
+		}
+		endpoint, token := md[metaToolsURL], md[metaToolsToken]
+		if endpoint == "" || token == "" {
+			t.tools = refusingRoute{detail: "turn.start metadata tools_mcp_url and tools_mcp_token must come together; the turn's tools are not run on this machine"}
+			return
+		}
+		// An unparsable or missing expiry is never refreshed (the platform did not say).
+		expiresAt, _ := time.Parse(time.RFC3339, md[metaToolsExpiresAt])
+		route, err := NewPlatformToolRoute(PlatformToolRouteOptions{
+			Endpoint: endpoint, Token: token, ExpiresAt: expiresAt, SessionID: t.session.id, TurnID: t.params.TurnID,
+			Refresh: t.RefreshToolsToken, OnLog: t.session.runtime.client.log,
+		})
+		if err != nil {
+			t.tools = refusingRoute{detail: "turn.start metadata tools_mcp_url is not usable: " + err.Error()}
+			return
+		}
+		t.tools = route
+	})
+	return t.tools
+}
+
+// ApprovalID is the interaction id to ask a tool call's approval under
+// (InteractionRequestParams.InteractionID) and to present with the call
+// (RouteCall.ApprovalID): "appr_" and 24 hex characters of sha256 over session,
+// turn and call id (ADR-0027). It is the same after a reconnect or an executor
+// restart, so the platform keeps one interaction per call and an approval
+// already answered is not asked again.
+func (t *AgentTurn) ApprovalID(callID string) string {
+	return approvalID(t.session.id, t.params.TurnID, callID)
 }
 
 // Inputs delivers turn.input messages in arrival order.
@@ -404,7 +477,11 @@ func (r *agentRuntime) runTurn(ctx context.Context, turn *AgentTurn) {
 		outcome = TurnOutcomeCanceled
 	case err != nil:
 		outcome = TurnOutcomeFailed
-		_ = s.enqueue(turnID, turn.NewEventID(), SessionErrorEvent{Type: AgentEventTypeSessionError, Error: AgentErrorInfo{Type: "agent_error", Message: err.Error()}})
+		code := AgentErrorCodeAgentError
+		if agentErr := (*AgentError)(nil); errors.As(err, &agentErr) && agentErr.Code != "" {
+			code = agentErr.Code
+		}
+		_ = s.enqueue(turnID, turn.NewEventID(), SessionErrorEvent{Type: AgentEventTypeSessionError, Error: AgentErrorInfo{Type: code, Message: err.Error()}})
 	}
 	_ = s.enqueue(turnID, turn.NewEventID(), SessionStatusIdleEvent{
 		Type: AgentEventTypeSessionStatusIdle, StopReason: StopReason{Type: StopReasonTypeEndTurn}, TurnOutcome: outcome,

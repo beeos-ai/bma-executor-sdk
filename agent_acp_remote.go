@@ -35,7 +35,7 @@ func (a *ACPAgent) remoteToolRoute(turn *AgentTurn) (func(*acpLedger) toolRoute,
 	// An unparsable or missing expiry is never refreshed (the platform did not say).
 	expiresAt, _ := time.Parse(time.RFC3339, md[metaToolsExpiresAt])
 	return func(ledger *acpLedger) toolRoute {
-		return newPlatformToolRoute(platformToolRouteOptions{
+		return newPlatformToolRoute(PlatformToolRouteOptions{
 			Endpoint: url, Token: token, ExpiresAt: expiresAt, TurnID: turn.TurnID(),
 			Refresh: turn.RefreshToolsToken, OnLog: a.log,
 			ApprovalFor: func(callID string) string {

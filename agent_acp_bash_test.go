@@ -48,7 +48,7 @@ func newBashRig(t *testing.T) *bashRig {
 	return &bashRig{agent: agent, turn: turn, cancel: cancel}
 }
 
-func (r *bashRig) background(t *testing.T, callID string) *toolBackground {
+func (r *bashRig) background(t *testing.T, callID string) *RouteBackground {
 	t.Helper()
 	got := r.turn.toolRoute.call(context.Background(), routedCall{SessionID: rigSession, CallID: callID, Name: "bash",
 		Input: map[string]any{"command": "sleep 30", "timeout": float64(200)}})
@@ -122,7 +122,7 @@ func TestLocalBashOnTimeoutKillStopsTheCommand(t *testing.T) {
 	rig := newBashRig(t)
 	got := rig.turn.toolRoute.call(context.Background(), routedCall{SessionID: rigSession, CallID: "c1", Name: "bash",
 		Input: map[string]any{"command": "echo $$ > pid.txt; sleep 30", "timeout": float64(300), "on_timeout": "kill"}})
-	if got.Outcome != acpToolExecuted || !got.IsError || got.Background != nil || !strings.Contains(got.Text, "timed out") {
+	if got.Outcome != RouteOutcomeExecuted || !got.IsError || got.Background != nil || !strings.Contains(got.Text, "timed out") {
 		t.Fatalf("answer = %+v", got)
 	}
 	pid := waitForPID(t, filepath.Join(rig.agent.opts.Core.workspace(acpBrain, rigSession), "pid.txt"))

@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func platformCall(t *testing.T, route toolRoute, ctx context.Context, id string) *acpToolResult {
+func platformCall(t *testing.T, route toolRoute, ctx context.Context, id string) *RouteResult {
 	t.Helper()
 	return route.call(ctx, routedCall{SessionID: rigSession, CallID: id, ToolUseID: "evt_1", Name: "bash", Input: wireInput(bashInput("true"))})
 }
@@ -23,7 +23,7 @@ func platformCall(t *testing.T, route toolRoute, ctx context.Context, id string)
 // _meta keys of ADR-0005.
 func TestPlatformToolRouteWire(t *testing.T) {
 	gw := newStubGateway(t, map[string]string{"bash": "ask"})
-	route := newPlatformToolRoute(platformToolRouteOptions{Endpoint: gw.server.URL, Token: "tok-1", TurnID: rigTurn, SyncWait: 2 * time.Second,
+	route := newPlatformToolRoute(PlatformToolRouteOptions{Endpoint: gw.server.URL, Token: "tok-1", TurnID: rigTurn, SyncWait: 2 * time.Second,
 		ApprovalFor: func(string) string { return "appr_x" }})
 	platformCall(t, route, context.Background(), "c1")
 	platformCall(t, route, context.Background(), "c2")
@@ -52,7 +52,7 @@ func TestPlatformToolRouteWire(t *testing.T) {
 func TestPlatformToolRouteReadsServerSentEvents(t *testing.T) {
 	gw := newStubGateway(t, map[string]string{"bash": "allow"})
 	gw.sse = true
-	route := newPlatformToolRoute(platformToolRouteOptions{Endpoint: gw.server.URL, Token: "tok-1", TurnID: rigTurn})
+	route := newPlatformToolRoute(PlatformToolRouteOptions{Endpoint: gw.server.URL, Token: "tok-1", TurnID: rigTurn})
 	wantExecuted(t, platformCall(t, route, context.Background(), "c1"))
 }
 
@@ -63,7 +63,7 @@ func TestPlatformToolRouteTransportFailures(t *testing.T) {
 	noErr(t, err)
 	addr := listener.Addr().String()
 	noErr(t, listener.Close())
-	down := newPlatformToolRoute(platformToolRouteOptions{Endpoint: "http://" + addr, Token: "tok-1", TurnID: rigTurn})
+	down := newPlatformToolRoute(PlatformToolRouteOptions{Endpoint: "http://" + addr, Token: "tok-1", TurnID: rigTurn})
 	wantRefused(t, platformCall(t, down, context.Background(), "c1"), "tools_unavailable")
 
 	dying := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -80,9 +80,9 @@ func TestPlatformToolRouteTransportFailures(t *testing.T) {
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
 	}))
 	t.Cleanup(dying.Close)
-	route := newPlatformToolRoute(platformToolRouteOptions{Endpoint: dying.URL, Token: "tok-1", TurnID: rigTurn})
+	route := newPlatformToolRoute(PlatformToolRouteOptions{Endpoint: dying.URL, Token: "tok-1", TurnID: rigTurn})
 	got := platformCall(t, route, context.Background(), "c1")
-	if got.Outcome != acpToolUnknown || got.Code != "transport_error" || !got.IsError {
+	if got.Outcome != RouteOutcomeUnknown || got.Code != "transport_error" || !got.IsError {
 		t.Fatalf("answer = %+v", got)
 	}
 }
@@ -91,9 +91,9 @@ func TestPlatformToolRouteTransportFailures(t *testing.T) {
 // the hands' process is the platform's to end, not the connection's.
 func TestPlatformToolRouteAbandonedCall(t *testing.T) {
 	gw := newStubGateway(t, map[string]string{"bash": "allow"})
-	route := newPlatformToolRoute(platformToolRouteOptions{Endpoint: gw.server.URL, Token: "tok-1", TurnID: rigTurn})
+	route := newPlatformToolRoute(PlatformToolRouteOptions{Endpoint: gw.server.URL, Token: "tok-1", TurnID: rigTurn})
 	ctx, cancel := context.WithCancel(context.Background())
-	answer := make(chan *acpToolResult, 1)
+	answer := make(chan *RouteResult, 1)
 	go func() {
 		answer <- route.call(ctx, routedCall{SessionID: rigSession, CallID: "c1", Name: "bash", Input: wireInput(bashInput("sleep 20 & echo $! > child.pid; wait"))})
 	}()
@@ -101,7 +101,7 @@ func TestPlatformToolRouteAbandonedCall(t *testing.T) {
 	cancel()
 	select {
 	case got := <-answer:
-		if got.Outcome != acpToolUnknown || got.Code != "canceled" {
+		if got.Outcome != RouteOutcomeUnknown || got.Code != "canceled" {
 			t.Fatalf("answer = %+v", got)
 		}
 	case <-time.After(3 * time.Second):
@@ -117,7 +117,7 @@ func TestPlatformToolRouteAbandonedCall(t *testing.T) {
 func TestPlatformToolRouteKeepsItsTokenToItself(t *testing.T) {
 	const token = "tok-secret-value"
 	gw := newStubGateway(t, map[string]string{"bash": "allow"})
-	route := newPlatformToolRoute(platformToolRouteOptions{Endpoint: gw.server.URL, Token: token, TurnID: rigTurn})
+	route := newPlatformToolRoute(PlatformToolRouteOptions{Endpoint: gw.server.URL, Token: token, TurnID: rigTurn})
 	got := platformCall(t, route, context.Background(), "c1") // refused: not the gateway's token
 	wantRefused(t, got, "stale_turn")
 	for _, text := range []string{got.Text, fmt.Sprintf("%v %+v %#v %s", route, route, route, route)} {
