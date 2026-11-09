@@ -17,6 +17,8 @@ from .generated import (
     InteractionCancelParams,
     InteractionRequestParams,
     InteractionRequestResult,
+    ModelTokenRefreshParams,
+    ModelTokenRefreshResult,
     ProcessListParams,
     ProcessListResult,
     ProcessReadParams,
@@ -68,6 +70,7 @@ __all__ = [
     "TOOL_RESULT",
     "INTERACTION_REQUEST",
     "INTERACTION_CANCEL",
+    "MODEL_TOKEN_REFRESH",
     "EXECUTOR_CAPABILITIES_UPDATE",
     "SESSION_STATUS",
     "TOOL_PROGRESS",
@@ -98,6 +101,7 @@ SESSION_ENDED: Call[SessionEndedParams, Ack] = Call("session.ended")
 TOOL_RESULT: Call[ToolResultParams, Ack] = Call("tool.result")
 INTERACTION_REQUEST: Call[InteractionRequestParams, InteractionRequestResult] = Call("interaction.request")
 INTERACTION_CANCEL: Call[InteractionCancelParams, Ack] = Call("interaction.cancel")
+MODEL_TOKEN_REFRESH: Call[ModelTokenRefreshParams, ModelTokenRefreshResult] = Call("model_token.refresh")
 
 # Executor-to-harness notifications a client sends with notify.
 EXECUTOR_CAPABILITIES_UPDATE: Notification[ExecutorCapabilitiesUpdateParams] = Notification("executor.capabilities.update")

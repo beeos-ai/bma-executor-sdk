@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Go `Client.RefreshModelToken(ctx, sessionID, turnID)`:** calls the contract's
+  `model_token.refresh` and returns the turn's fresh `model_token`,
+  `model_base_url` and `expires_at`; one attempt, the caller owns backoff.
 - **Contract 1.3.0 (additive, `make contract-sdk` from BMA feat/executor-agent-harnesses):**
   `AgentCapability.harnesses[]` (every hosted agent; the single `harness` is
   deprecated) and `AgentTurnConfig.harness` (the agent a turn runs on).
