@@ -28,19 +28,19 @@ import (
 //
 // The tool credential (session x turn x epoch) lives in memory only: it is
 // never written to the state directory, to a log, to an error text or by
-// String/%v.
+// String/%v. It is replaced before it expires (toolsCredential).
 //
-// It is not wired into ACPAgent: the default, and the only route a turn gets
-// today, is localToolRoute.
+// ACPAgent uses it for a turn whose turn.start metadata carries tools_mcp_*
+// (the hands are on another machine); any other turn gets localToolRoute.
 type platformToolRoute struct {
-	endpoint    string
+	cred        *toolsCredential
 	turnID      string
 	approvalFor func(callID string) string
 	syncWait    time.Duration
 	client      *http.Client
 
 	mu          sync.Mutex
-	token       string
+	endpoint    string // the endpoint the MCP session is open on
 	mcpSession  string
 	initialized bool
 	nextID      atomic.Int64
@@ -50,7 +50,13 @@ type platformToolRouteOptions struct {
 	// Endpoint is the gateway's MCP URL.
 	Endpoint string
 	// Token is the turn's tool credential.
-	Token  string
+	Token string
+	// ExpiresAt is when Token stops being accepted (zero: not said, never refreshed).
+	ExpiresAt time.Time
+	// Refresh replaces the credential before it expires (tools_token.refresh); nil: never refreshed.
+	Refresh func(ctx context.Context) (ToolsTokenRefreshResult, error)
+	// OnLog tells about a failed refresh (it is also retried; see toolsCredential).
+	OnLog  func(level LogLevel, message string, err error)
 	TurnID string
 	// ApprovalFor returns the interaction id of the user's approval of a call,
 	// or "" when there is none (ADR-0005: presented in _meta, checked by the gateway).
@@ -66,12 +72,103 @@ func newPlatformToolRoute(opts platformToolRouteOptions) *platformToolRoute {
 	if client == nil {
 		client = &http.Client{}
 	}
-	return &platformToolRoute{endpoint: opts.Endpoint, token: opts.Token, turnID: opts.TurnID,
+	cred := &toolsCredential{endpoint: opts.Endpoint, token: opts.Token, expiresAt: opts.ExpiresAt, refresh: opts.Refresh, log: opts.OnLog, now: time.Now}
+	return &platformToolRoute{cred: cred, endpoint: opts.Endpoint, turnID: opts.TurnID,
 		approvalFor: opts.ApprovalFor, syncWait: opts.SyncWait, client: client}
 }
 
+const (
+	// A tools token with at most this much time left is replaced through
+	// tools_token.refresh before the call that needs it (the token lives 1 h).
+	toolsTokenRefreshWindow  = 10 * time.Minute
+	toolsTokenRefreshTimeout = 10 * time.Second
+	// A failed refresh is tried again by a later call after a backoff
+	// doubling from toolsTokenRetryBase to toolsTokenRetryMax.
+	toolsTokenRetryBase = 5 * time.Second
+	toolsTokenRetryMax  = time.Minute
+)
+
+// toolsCredential is the tools endpoint and token of one turn, in memory only.
+// A failed refresh is never silent: it is logged with the attempt count and
+// the token's expiry, the current token keeps being used, and the next call
+// after the backoff tries again. A token that expires meanwhile is refused by
+// the gateway (the call is not_forwarded / stale_turn), never replaced by a
+// local run.
+type toolsCredential struct {
+	refresh func(context.Context) (ToolsTokenRefreshResult, error)
+	log     func(LogLevel, string, error)
+	now     func() time.Time
+
+	mu        sync.Mutex
+	endpoint  string
+	token     string
+	expiresAt time.Time
+	failures  int
+	retryAt   time.Time
+}
+
+// String and GoString keep the token out of %v, %+v, %s and %#v.
+func (c *toolsCredential) String() string   { return "toolsCredential" }
+func (c *toolsCredential) GoString() string { return "toolsCredential" }
+
+// peek returns what the credential is now, without refreshing.
+func (c *toolsCredential) peek() (string, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.endpoint, c.token
+}
+
+// current returns the endpoint and token to call with, refreshed first when
+// at most toolsTokenRefreshWindow is left.
+func (c *toolsCredential) current(ctx context.Context) (string, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	if c.refresh == nil || c.expiresAt.IsZero() || c.expiresAt.Sub(now) > toolsTokenRefreshWindow || now.Before(c.retryAt) {
+		return c.endpoint, c.token
+	}
+	ctx, cancel := context.WithTimeout(ctx, toolsTokenRefreshTimeout)
+	defer cancel()
+	result, err := c.refresh(ctx)
+	var expiresAt time.Time
+	if err == nil {
+		if expiresAt, err = time.Parse(time.RFC3339, result.ExpiresAt); err != nil || result.ToolsMCPToken == "" || result.ToolsMCPURL == "" {
+			err = fmt.Errorf("tools_token.refresh returned an unusable credential (token empty=%t, url empty=%t, expires_at %q)",
+				result.ToolsMCPToken == "", result.ToolsMCPURL == "", result.ExpiresAt)
+		}
+	}
+	if err != nil {
+		c.failures++
+		c.retryAt = now.Add(min(toolsTokenRetryBase<<(c.failures-1), toolsTokenRetryMax))
+		if c.log != nil {
+			c.log(LogError, fmt.Sprintf("tools token refresh failed (attempt %d, token expires %s); calling with the current token, next try after %s",
+				c.failures, c.expiresAt.Format(time.RFC3339), c.retryAt.Format(time.RFC3339)), err)
+		}
+		return c.endpoint, c.token
+	}
+	c.endpoint, c.token, c.expiresAt, c.failures, c.retryAt = result.ToolsMCPURL, result.ToolsMCPToken, expiresAt, 0, time.Time{}
+	if c.log != nil {
+		c.log(LogInfo, "tools token refreshed (expires "+expiresAt.Format(time.RFC3339)+")", nil)
+	}
+	return c.endpoint, c.token
+}
+
+// prepare refreshes the credential when it is due and reopens the MCP session
+// when the endpoint moved.
+func (r *platformToolRoute) prepare(ctx context.Context) {
+	endpoint, _ := r.cred.current(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if endpoint != r.endpoint {
+		r.endpoint, r.mcpSession, r.initialized = endpoint, "", false
+	}
+}
+
 // String keeps the credential out of %v / %+v / %s.
-func (r *platformToolRoute) String() string { return "platformToolRoute{" + r.endpoint + "}" }
+func (r *platformToolRoute) String() string {
+	endpoint, _ := r.cred.peek()
+	return "platformToolRoute{" + endpoint + "}"
+}
 
 // GoString keeps the credential out of %#v.
 func (r *platformToolRoute) GoString() string { return r.String() }
@@ -95,6 +192,7 @@ func platformIdempotencyKey(sessionID, turnID, callID string) string {
 }
 
 func (r *platformToolRoute) call(ctx context.Context, c routedCall) *acpToolResult {
+	r.prepare(ctx)
 	if err := r.ensureSession(ctx); err != nil {
 		return err.result // nothing of the call was sent
 	}
@@ -210,13 +308,14 @@ func (r *platformToolRoute) rpcLocked(ctx context.Context, method string, params
 	if err != nil {
 		return failure(acpToolNotForwarded, "invalid_tool_input", err.Error())
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.endpoint, bytes.NewReader(body))
+	endpoint, token := r.cred.peek()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return failure(acpToolNotForwarded, "tools_unavailable", "the tool gateway URL is unusable")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+r.token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	if r.initialized || method != "initialize" {
 		req.Header.Set("MCP-Protocol-Version", mcpProtocolVersion)
 	}

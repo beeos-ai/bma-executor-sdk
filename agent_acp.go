@@ -61,6 +61,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -80,6 +81,10 @@ const (
 	// platform_credentials entry for the per-turn model endpoint and token
 	// (turn.start metadata model_base_url, model_token, model_token_expires_at).
 	PlatformCredentialHarnessModel = "harness_model"
+	// PlatformCredentialBrainTools is the platform_credentials entry for the
+	// per-turn tools endpoint and token (turn.start metadata tools_mcp_url,
+	// tools_mcp_token, tools_mcp_token_expires_at), contract 1.4.0.
+	PlatformCredentialBrainTools = "brain_tools"
 
 	// acpModelTokenRefreshWindow: a platform model token with at most this
 	// much time left is replaced through model_token.refresh before the
@@ -101,6 +106,16 @@ const DefaultACPSystemPrompt = "You are an agent running on the user's computer 
 // acpPermissionModes are the session modes of bma-dsh-acp.
 var acpPermissionModes = []string{"default", "accept_edits"}
 
+// ACP profiles: which agent the ACPAgent hosts.
+const (
+	// ACPProfileDSH is bma-dsh-acp (ADR-0027), the default.
+	ACPProfileDSH = "dsh"
+	// ACPProfileClaudeCode is the official claude-agent-acp, unmodified (see
+	// agent_acp_claude.go). It uses only the node owner's own Claude
+	// credentials and never the platform's model endpoint.
+	ACPProfileClaudeCode = "claude-code"
+)
+
 // ACPModelUpstream is where model requests go when turn.start carries no
 // platform model endpoint: the node owner's own OpenAI-compatible endpoint.
 type ACPModelUpstream struct {
@@ -114,6 +129,14 @@ type ACPModelUpstream struct {
 
 // ACPAgentOptions configures NewACPAgent.
 type ACPAgentOptions struct {
+	// Profile selects the hosted agent: ACPProfileDSH (default) or
+	// ACPProfileClaudeCode. The Claude Code profile rejects PlatformModel and
+	// ignores Upstream and the platform's model credential: the agent talks to
+	// its model with the node owner's own credentials, which the owner
+	// configures for Claude Code itself (its login under HOME, or Env such as
+	// ANTHROPIC_API_KEY / a third-party provider's variables); the SDK never
+	// reads, forwards or logs them.
+	Profile string
 	// Command is the agent's argv, for example {"/opt/bma/bma-dsh-acp"} or
 	// {"/opt/bma/node", "/opt/bma/bma-dsh-acp.mjs"}. Command[0] must be an
 	// absolute path: the agent is never looked up on PATH (a user's own dsh
@@ -136,6 +159,13 @@ type ACPAgentOptions struct {
 	// machine of the platform does. Without Upstream a turn the platform
 	// hands no credential fails (session.error); it is never sent elsewhere.
 	PlatformModel bool
+	// PlatformTools declares platform_credentials brain_tools: this machine
+	// may be the brain of a session whose hands are on another machine
+	// (ADR-0029). The platform then hands the turn its tools endpoint and token
+	// (turn.start metadata tools_mcp_*) and every tool call of that turn goes
+	// there, never to this machine's Core (fail closed). A turn without
+	// tools_mcp_* runs its tools here.
+	PlatformTools bool
 	// HarnessID is the declared harness id (default "dsh").
 	HarnessID string
 	// Model is the model name the agent uses when the turn config has none (default Upstream.Model).
@@ -172,6 +202,7 @@ type ACPInteractionEvent struct {
 type ACPAgent struct {
 	opts    ACPAgentOptions
 	proxy   *acpModelProxy
+	mcp     *acpToolServer // Claude Code profile: the platform tools as an MCP server
 	harness AgentHarnessCapability
 
 	mu       sync.Mutex
@@ -179,6 +210,9 @@ type ACPAgent struct {
 	sessions map[string]*acpSession
 	ledgers  map[string]*acpLedger // see agent_acp_resume.go
 	closed   bool
+
+	// background holds the bash commands left running past their calls (agent_acp_bash.go).
+	background acpBackground
 
 	// hook, set by tests only, runs at named points of tool execution; it
 	// may block until ctx ends to stand in for a crash there.
@@ -190,8 +224,23 @@ type acpSession struct {
 	cwd         string
 	placeholder string
 	proc        *acpProcess // the process the session is open in
-	mode        string
-	turn        *acpTurn
+	// mode is the platform permission mode (default, accept_edits); for the
+	// DSH profile it is also the agent's session mode.
+	mode string
+	turn *acpTurn
+
+	// Claude Code profile: agentID is the agent's own session id (DSH uses
+	// the platform's), agentMode the permission mode the agent reported last.
+	agentID   string
+	agentMode string
+}
+
+// wire is the session id the agent knows the session by.
+func (s *acpSession) wire() string {
+	if s.agentID != "" {
+		return s.agentID
+	}
+	return s.id
 }
 
 // acpRoute is where a turn's model requests go: the platform's credential
@@ -260,8 +309,14 @@ type acpTurn struct {
 	ledger *acpLedger
 	route  acpRoute
 	turnID string
-	// toolRoute runs the agent's tool calls (always the local one for now).
+	// toolRoute runs the agent's tool calls: the platform's gateway when the
+	// turn carries tools_mcp_* (the hands are elsewhere), otherwise this machine.
 	toolRoute toolRoute
+	// completed: the turn ended without cancel or deadline. A bash command
+	// left in the background then lives on (agent_acp_bash.go).
+	completed atomic.Bool
+	// claude is the Claude Code profile's state (agent_acp_claude.go).
+	claude acpClaudeTurn
 	// policy is the effective permission of each tool (see acpEffectivePolicy);
 	// the executor enforces it, whatever the agent does.
 	policy map[string]string
@@ -282,11 +337,26 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 	if !filepath.IsAbs(opts.Command[0]) {
 		return nil, fmt.Errorf("bmaexecutor: ACPAgentOptions.Command[0] must be an absolute path, got %q (no PATH lookup)", opts.Command[0])
 	}
-	if opts.Upstream.BaseURL == "" && !opts.PlatformModel {
+	switch opts.Profile {
+	case "":
+		opts.Profile = ACPProfileDSH
+	case ACPProfileDSH, ACPProfileClaudeCode:
+	default:
+		return nil, fmt.Errorf("bmaexecutor: unknown ACPAgentOptions.Profile %q", opts.Profile)
+	}
+	if opts.Profile == ACPProfileClaudeCode {
+		if opts.PlatformModel {
+			return nil, errors.New("bmaexecutor: the Claude Code profile uses the node owner's own credentials; PlatformModel (harness_model) is not allowed")
+		}
+		opts.Upstream = ACPModelUpstream{}
+	} else if opts.Upstream.BaseURL == "" && !opts.PlatformModel {
 		return nil, errors.New("bmaexecutor: ACPAgentOptions.Upstream.BaseURL is required unless PlatformModel is set")
 	}
 	if opts.HarnessID == "" {
 		opts.HarnessID = "dsh"
+		if opts.Profile == ACPProfileClaudeCode {
+			opts.HarnessID = "claude-code"
+		}
 	}
 	if opts.Model == "" {
 		opts.Model = opts.Upstream.Model
@@ -326,17 +396,34 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 		}
 	}
 	a := &ACPAgent{opts: opts, sessions: map[string]*acpSession{}}
-	proxy, err := startACPModelProxy(a)
-	if err != nil {
-		return nil, err
+	if a.claude() {
+		// No model proxy: the agent never reaches the platform's model endpoint.
+		server, err := startACPToolServer(a)
+		if err != nil {
+			return nil, err
+		}
+		a.mcp = server
+	} else {
+		proxy, err := startACPModelProxy(a)
+		if err != nil {
+			return nil, err
+		}
+		a.proxy = proxy
 	}
-	a.proxy = proxy
 	proc, err := a.ensureProcess(ctx)
 	if err != nil {
-		proxy.close()
+		a.closeServers()
 		return nil, err
 	}
 	init := proc.init
+	if a.claude() {
+		a.harness = AgentHarnessCapability{
+			ID: opts.HarnessID, Version: init.AgentInfo.Version, Protocol: "acp/1",
+			AgentName: init.AgentInfo.Name, AgentVersion: init.AgentInfo.Version,
+			Streaming: "token", PermissionRelay: "full", SessionLoad: init.AgentCapabilities.LoadSession,
+		}
+		return a, nil
+	}
 	a.harness = AgentHarnessCapability{
 		ID: opts.HarnessID, Version: init.AgentInfo.Version + "+dsh" + init.Meta.Bma.DSH, Protocol: "acp/1",
 		AgentName: init.AgentInfo.Name, AgentVersion: init.AgentInfo.Version,
@@ -352,11 +439,16 @@ func (a *ACPAgent) Capability() AgentCapability {
 	h := a.harness
 	c := AgentCapability{
 		Enabled: true, PermissionModes: acpPermissionModes, InteractionKinds: []string{InteractionKindPermission},
-		TurnResume:  true,
+		// Claude Code repeats a re-sent prompt as a new user message, so a turn
+		// interrupted by an executor restart is not continued (ADR-0013: failed).
+		TurnResume:  !a.claude(),
 		MaxSessions: a.opts.MaxSessions, Harness: &h, Harnesses: []AgentHarnessCapability{a.harness},
 	}
 	if a.opts.PlatformModel {
-		c.PlatformCredentials = []string{PlatformCredentialHarnessModel}
+		c.PlatformCredentials = append(c.PlatformCredentials, PlatformCredentialHarnessModel)
+	}
+	if a.opts.PlatformTools {
+		c.PlatformCredentials = append(c.PlatformCredentials, PlatformCredentialBrainTools)
 	}
 	return c
 }
@@ -370,8 +462,18 @@ func (a *ACPAgent) Close() error {
 	if proc != nil {
 		proc.kill(a.opts.KillGrace)
 	}
-	a.proxy.close()
+	a.background.killAll()
+	a.closeServers()
 	return nil
+}
+
+func (a *ACPAgent) closeServers() {
+	if a.proxy != nil {
+		a.proxy.close()
+	}
+	if a.mcp != nil {
+		a.mcp.close()
+	}
 }
 
 func (a *ACPAgent) interaction(e ACPInteractionEvent) {
@@ -404,13 +506,30 @@ func (a *ACPAgent) OpenTurn(ctx context.Context, params TurnStartParams) (TurnSt
 	if !slices.Contains(acpPermissionModes, mode) {
 		return TurnStartResult{}, &RPCError{Code: CodeInvalidParams, Message: "unknown permission_mode " + mode}
 	}
-	cwd, err := a.turnCwd(params.SessionID, config.Cwd)
+	// With tools_mcp_* the hands are elsewhere: config.Cwd is a path on that
+	// machine, not checked here, and the agent works in a scratch workspace.
+	remote := handsAreRemote(params.Metadata)
+	requestedCwd, handsCwd := config.Cwd, ""
+	if remote {
+		requestedCwd, handsCwd = "", config.Cwd
+		if handsCwd == "" && config.EnvironmentInfo != nil {
+			handsCwd = config.EnvironmentInfo.Cwd
+		}
+	}
+	cwd, err := a.turnCwd(params.SessionID, requestedCwd)
 	if err != nil {
 		return TurnStartResult{}, err
+	}
+	promptCwd := cwd
+	if remote {
+		promptCwd = handsCwd
 	}
 	model := config.Model
 	if model == "" {
 		model = a.opts.Model
+	}
+	if a.claude() {
+		model = "" // Claude Code uses the model the node owner configured for it
 	}
 	proc, err := a.ensureProcess(ctx)
 	if err != nil {
@@ -418,8 +537,20 @@ func (a *ACPAgent) OpenTurn(ctx context.Context, params TurnStartParams) (TurnSt
 	}
 	s := a.session(params.SessionID)
 	resumed := params.ExecutorSessionRef != "" || s.proc == proc
-	if s.proc != proc {
-		meta := map[string]any{"sessionId": params.SessionID, "systemPrompt": a.systemPrompt(cwd, config.System), "model": a.modelMeta(s, model, params.Metadata)}
+	if a.claude() {
+		if s.proc != proc {
+			if err := a.openClaudeSession(ctx, proc, s, params, cwd, a.systemPrompt(promptCwd, config.System, config.EnvironmentInfo)); err != nil {
+				return TurnStartResult{}, err
+			}
+		}
+		if err := a.claudeDefaultMode(ctx, proc, s); err != nil {
+			return TurnStartResult{}, err
+		}
+		a.mu.Lock()
+		s.mode = mode
+		a.mu.Unlock()
+	} else if s.proc != proc {
+		meta := map[string]any{"sessionId": params.SessionID, "systemPrompt": a.systemPrompt(promptCwd, config.System, config.EnvironmentInfo), "model": a.modelMeta(s, model, params.Metadata)}
 		var res acpSessionResponse
 		if params.ExecutorSessionRef != "" {
 			err = proc.call(ctx, "session/load", map[string]any{"sessionId": params.ExecutorSessionRef, "cwd": cwd, "mcpServers": []any{}, "_meta": map[string]any{acpMetaKey: meta}}, &res)
@@ -440,7 +571,7 @@ func (a *ACPAgent) OpenTurn(ctx context.Context, params TurnStartParams) (TurnSt
 		s.proc, s.mode = proc, "default"
 		a.mu.Unlock()
 	}
-	if s.mode != mode {
+	if !a.claude() && s.mode != mode {
 		if err := proc.call(ctx, "session/set_mode", map[string]any{"sessionId": params.SessionID, "modeId": mode}, nil); err != nil {
 			return TurnStartResult{}, &RPCError{Code: CodeInternalError, Message: "agent set_mode: " + err.Error()}
 		}
@@ -460,8 +591,8 @@ func (a *ACPAgent) OpenTurn(ctx context.Context, params TurnStartParams) (TurnSt
 		return TurnStartResult{}, &RPCError{Code: CodeInternalError, Message: "turn state: " + err.Error()}
 	}
 	return TurnStartResult{
-		Accepted: true, TurnID: params.TurnID, ExecutorSessionRef: params.SessionID, Resumed: resumed,
-		Effective: AgentTurnConfig{Model: model, PermissionMode: mode, Cwd: cwd, Harness: a.harness.ID},
+		Accepted: true, TurnID: params.TurnID, ExecutorSessionRef: s.wire(), Resumed: resumed,
+		Effective: AgentTurnConfig{Model: model, PermissionMode: mode, Cwd: promptCwd, Harness: a.harness.ID},
 	}, nil
 }
 
@@ -478,8 +609,12 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 		return err
 	}
 	route := a.route(turn)
-	if route.baseURL == "" && route.platform == nil {
+	if !a.claude() && route.baseURL == "" && route.platform == nil {
 		return errors.New("the platform handed no model credential for this turn (turn.start metadata model_base_url, model_token)")
+	}
+	remoteRoute, err := a.remoteToolRoute(turn)
+	if err != nil {
+		return err
 	}
 	var overrides map[string]string
 	if raw := params.Metadata["tool_policy"]; raw != "" {
@@ -496,6 +631,9 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: acpEffectivePolicy(s.mode, overrides),
 		messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}}
 	t.toolRoute = localToolRoute{agent: a, turn: t}
+	if remoteRoute != nil {
+		t.toolRoute = remoteRoute(ledger)
+	}
 	s.turn = t
 	proc := s.proc
 	a.mu.Unlock()
@@ -507,23 +645,25 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 		a.mu.Unlock()
 	}()
 	policy := overrides
-	if err := a.runInput(ctx, proc, t, s.id, params.InputID, inputText(params.Input), policy); err != nil {
+	if err := a.runInput(ctx, proc, t, s.wire(), params.InputID, inputText(params.Input), policy); err != nil {
 		return err
 	}
 	// turn.input received while the turn ran: prompted in order, in the same turn.
 	for {
 		select {
 		case input := <-turn.Inputs():
-			if err := a.runInput(ctx, proc, t, s.id, input.InputID, inputText(input.Input), policy); err != nil {
+			if err := a.runInput(ctx, proc, t, s.wire(), input.InputID, inputText(input.Input), policy); err != nil {
 				return err
 			}
 		default:
+			t.completed.Store(ctx.Err() == nil)
 			return nil
 		}
 	}
 }
 
 func (a *ACPAgent) CloseSession(ctx context.Context, sessionID, _ string) error {
+	a.background.killSession(sessionID)
 	a.mu.Lock()
 	s := a.sessions[sessionID]
 	delete(a.sessions, sessionID)
@@ -532,7 +672,7 @@ func (a *ACPAgent) CloseSession(ctx context.Context, sessionID, _ string) error 
 		return nil
 	}
 	if s.proc != nil && s.proc.alive() {
-		if err := s.proc.call(ctx, "session/close", map[string]any{"sessionId": sessionID}, nil); err != nil {
+		if err := s.proc.call(ctx, "session/close", map[string]any{"sessionId": s.wire()}, nil); err != nil {
 			a.log(LogDebug, "acp session/close "+sessionID, err)
 		}
 	}
@@ -552,7 +692,14 @@ func (a *ACPAgent) runInput(ctx context.Context, proc *acpProcess, t *acpTurn, s
 	if t.ledger.inputDone(inputID) {
 		return nil
 	}
-	if err := a.prompt(ctx, proc, sessionID, inputID, text, policy); err != nil {
+	err := a.prompt(ctx, proc, sessionID, inputID, text, policy)
+	if a.claude() {
+		t.flushMessages()
+		if violation := t.violationError(); violation != nil {
+			return violation
+		}
+	}
+	if err != nil {
 		return err
 	}
 	if err := t.turn.Flush(ctx); err != nil {
@@ -562,9 +709,13 @@ func (a *ACPAgent) runInput(ctx context.Context, proc *acpProcess, t *acpTurn, s
 }
 
 func (a *ACPAgent) prompt(ctx context.Context, proc *acpProcess, sessionID, inputID, text string, policy map[string]string) error {
-	meta := map[string]any{"inputId": inputID}
-	if len(policy) > 0 {
-		meta["toolPolicy"] = policy
+	params := map[string]any{"sessionId": sessionID, "prompt": []any{map[string]any{"type": "text", "text": text}}}
+	if !a.claude() {
+		meta := map[string]any{"inputId": inputID}
+		if len(policy) > 0 {
+			meta["toolPolicy"] = policy
+		}
+		params["_meta"] = map[string]any{acpMetaKey: meta}
 	}
 	type outcome struct {
 		res acpPromptResponse
@@ -573,9 +724,7 @@ func (a *ACPAgent) prompt(ctx context.Context, proc *acpProcess, sessionID, inpu
 	done := make(chan outcome, 1)
 	go func() {
 		var res acpPromptResponse
-		err := proc.call(context.Background(), "session/prompt", map[string]any{
-			"sessionId": sessionID, "prompt": []any{map[string]any{"type": "text", "text": text}}, "_meta": map[string]any{acpMetaKey: meta},
-		}, &res)
+		err := proc.call(context.Background(), "session/prompt", params, &res)
 		done <- outcome{res, err}
 	}()
 	select {
@@ -645,8 +794,11 @@ func inputText(blocks []AgentInputBlock) string {
 	return strings.Join(parts, "\n")
 }
 
-func (a *ACPAgent) systemPrompt(cwd, system string) string {
+func (a *ACPAgent) systemPrompt(cwd, system string, hands *EnvironmentInfo) string {
 	prompt := fmt.Sprintf(a.opts.SystemPrompt, cwd)
+	if hands != nil {
+		prompt += "\n\n" + handsDescription(hands)
+	}
 	if system != "" {
 		prompt += "\n\n" + system
 	}
@@ -665,6 +817,9 @@ func (a *ACPAgent) modelMeta(s *acpSession, model string, metadata map[string]st
 
 // route is the platform's per-turn model endpoint when turn.start hands one, otherwise Upstream.
 func (a *ACPAgent) route(turn *AgentTurn) acpRoute {
+	if a.claude() {
+		return acpRoute{} // the agent's model is the node owner's own; nothing is forwarded
+	}
 	metadata := turn.Params().Metadata
 	if base, token := metadata["model_base_url"], metadata["model_token"]; base != "" && token != "" {
 		// An unparsable or missing expiry is never refreshed (the platform did not say).
@@ -707,16 +862,30 @@ func (a *ACPAgent) session(id string) *acpSession {
 	return s
 }
 
-// turnFor is the running turn of a session in proc.
-func (a *ACPAgent) turnFor(proc *acpProcess, sessionID string) *acpTurn {
+// sessionOf is the session that proc knows by wireID.
+func (a *ACPAgent) sessionOf(proc *acpProcess, wireID string) *acpSession {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	s := a.sessions[sessionID]
-	if s == nil || s.proc != proc {
+	for _, s := range a.sessions {
+		if s.proc == proc && s.wire() == wireID {
+			return s
+		}
+	}
+	return nil
+}
+
+// turnFor is the running turn of the session that proc knows by wireID.
+func (a *ACPAgent) turnFor(proc *acpProcess, wireID string) *acpTurn {
+	s := a.sessionOf(proc, wireID)
+	if s == nil {
 		return nil
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return s.turn
 }
+
+func (a *ACPAgent) claude() bool { return a.opts.Profile == ACPProfileClaudeCode }
 
 // approvalID is the platform interaction id of a tool call: deterministic
 // across reconnects and restarts (ADR-0027: appr_ + 24 hex of sha256(session NUL turn NUL call)).
@@ -748,9 +917,14 @@ func (a *ACPAgent) onNotification(proc *acpProcess, method string, raw json.RawM
 		if json.Unmarshal(raw, &n) != nil {
 			return
 		}
+		if a.claude() {
+			a.trackClaudeMode(proc, n.SessionID, n.Update)
+		}
 		if t := a.turnFor(proc, n.SessionID); t != nil {
 			t.update(n.Update)
 		}
+	case "_claude/sdkMessage":
+		a.onClaudeSDKMessage(proc, raw)
 	case "_bma/message":
 		var m struct {
 			SessionID string `json:"sessionId"`
@@ -780,7 +954,9 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 	}
 	_ = json.Unmarshal(raw, &base)
 	t := a.turnFor(proc, base.SessionID)
+	sessionID := base.SessionID // the platform's id (the agent may know the session by another)
 	if t != nil {
+		sessionID = t.turn.SessionID()
 		// The turn's end (cancel, deadline) also ends what the agent asked for.
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithCancel(ctx)
@@ -795,6 +971,11 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 				ToolCallID string         `json:"toolCallId"`
 				Title      string         `json:"title"`
 				RawInput   map[string]any `json:"rawInput"`
+				Meta       struct {
+					ClaudeCode struct {
+						ToolName string `json:"toolName"`
+					} `json:"claudeCode"`
+				} `json:"_meta"`
 			} `json:"toolCall"`
 			Options []struct {
 				OptionID string `json:"optionId"`
@@ -816,7 +997,26 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 			}
 			return cancelled
 		}
-		toolUseID := t.toolUse(p.ToolCall.ToolCallID, p.ToolCall.Title, p.ToolCall.RawInput, "ask")
+		toolName := p.ToolCall.Title
+		if a.claude() {
+			// Only the platform tools (the injected MCP server) may be used at all;
+			// the platform's policy decides here, as bma-dsh-acp does for itself.
+			name, ok := claudePlatformTool(p.ToolCall.Meta.ClaudeCode.ToolName)
+			if !ok {
+				a.log(LogWarn, fmt.Sprintf("claude code asked to use %q, which is not a platform tool: refused", p.ToolCall.Meta.ClaudeCode.ToolName), nil)
+				return choose("reject_once"), nil
+			}
+			toolName = name
+			permission := t.policyOf(name)
+			t.toolUse(p.ToolCall.ToolCallID, name, p.ToolCall.RawInput, permission)
+			switch permission {
+			case "allow":
+				return choose("allow_once"), nil
+			case "deny":
+				return choose("reject_once"), nil
+			}
+		}
+		toolUseID := t.toolUse(p.ToolCall.ToolCallID, toolName, p.ToolCall.RawInput, "ask")
 		// An approval the platform already answered (before a restart) is not asked again.
 		switch t.ledger.call(p.ToolCall.ToolCallID).Decision {
 		case acpDecisionAllow:
@@ -824,20 +1024,20 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 		case acpDecisionDeny:
 			return choose("reject_once"), nil
 		}
-		interactionID := approvalID(base.SessionID, t.turn.Params().TurnID, p.ToolCall.ToolCallID)
-		a.interaction(ACPInteractionEvent{Phase: "requested", SessionID: base.SessionID, InteractionID: interactionID, ToolName: p.ToolCall.Title, ToolInput: p.ToolCall.RawInput})
+		interactionID := approvalID(sessionID, t.turn.Params().TurnID, p.ToolCall.ToolCallID)
+		a.interaction(ACPInteractionEvent{Phase: "requested", SessionID: sessionID, InteractionID: interactionID, ToolName: toolName, ToolInput: p.ToolCall.RawInput})
 		answer, err := t.turn.RequestInteraction(ctx, InteractionRequestParams{
 			Kind: InteractionKindPermission, InteractionID: interactionID,
-			ToolUseID: toolUseID, ToolName: p.ToolCall.Title, ToolInput: p.ToolCall.RawInput, Scopes: []string{InteractionScopeOnce},
+			ToolUseID: toolUseID, ToolName: toolName, ToolInput: p.ToolCall.RawInput, Scopes: []string{InteractionScopeOnce},
 		})
 		outcome := string(answer.Outcome)
 		if err != nil {
 			outcome = "withdrawn"
 		}
-		a.interaction(ACPInteractionEvent{Phase: "ended", SessionID: base.SessionID, InteractionID: interactionID, ToolName: p.ToolCall.Title, Outcome: outcome})
+		a.interaction(ACPInteractionEvent{Phase: "ended", SessionID: sessionID, InteractionID: interactionID, ToolName: toolName, Outcome: outcome})
 		decide := func(decision string) error {
 			return t.ledger.update(p.ToolCall.ToolCallID, func(c *acpCallState) {
-				c.Decision, c.InteractionID, c.ToolName, c.InputHash = decision, interactionID, p.ToolCall.Title, acpInputHash(p.ToolCall.RawInput)
+				c.Decision, c.InteractionID, c.ToolName, c.InputHash = decision, interactionID, toolName, acpInputHash(p.ToolCall.RawInput)
 			})
 		}
 		switch {
@@ -867,7 +1067,7 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 		}
 		result := refused("stale_turn", "no turn of this session is running in this agent process")
 		if t != nil {
-			result = t.toolRoute.call(ctx, routedCall{SessionID: base.SessionID, CallID: p.ToolCallID, Name: p.Name, Input: p.Input})
+			result = t.toolRoute.call(ctx, routedCall{SessionID: sessionID, CallID: p.ToolCallID, Name: p.Name, Input: p.Input})
 		}
 		return map[string]any{"text": result.Text, "isError": result.IsError, "outcome": result.Outcome, "errorCode": result.Code}, nil
 	}
@@ -887,7 +1087,13 @@ type acpUpdate struct {
 			Name       string `json:"name"`
 			Permission string `json:"permission"`
 		} `json:"bma"`
+		ClaudeCode struct {
+			ToolName string `json:"toolName"`
+		} `json:"claudeCode"`
 	} `json:"_meta"`
+	// Claude Code profile: the agent's permission mode.
+	CurrentModeID string          `json:"currentModeId"`
+	ConfigOptions json.RawMessage `json:"configOptions"`
 }
 
 func (t *acpTurn) eventID(messageID string) string {
@@ -902,6 +1108,10 @@ func (t *acpTurn) eventID(messageID string) string {
 }
 
 func (t *acpTurn) update(u acpUpdate) {
+	if t.agent.claude() {
+		t.updateClaude(u)
+		return
+	}
 	switch u.Kind {
 	case "agent_message_chunk", "agent_thought_chunk":
 		var c struct {
@@ -932,37 +1142,42 @@ func (t *acpTurn) update(u acpUpdate) {
 		}
 		t.toolUse(u.ToolCallID, name, u.RawInput, permission)
 	case "tool_call_update":
-		if u.Status != "completed" && u.Status != "failed" {
-			return
-		}
-		t.mu.Lock()
-		toolUseID := t.tools[u.ToolCallID]
-		t.mu.Unlock()
-		if toolUseID == "" {
-			return
-		}
-		var blocks []struct {
-			Content struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		}
-		_ = json.Unmarshal(u.Content, &blocks)
-		var content []ContentBlock
-		for _, b := range blocks {
-			if b.Content.Type == "text" {
-				content = append(content, ContentBlock{Type: ContentBlockTypeText, Text: b.Content.Text})
-			}
-		}
-		_ = t.turn.emitAcked(AgentToolResultEvent{Type: AgentEventTypeAgentToolResult, ToolUseID: toolUseID, Content: content, IsError: u.Status == "failed"}, func() {
-			if err := t.ledger.update(u.ToolCallID, func(c *acpCallState) { c.Reported = true }); err != nil {
-				t.agent.log(LogWarn, "turn state: tool result of "+u.ToolCallID+" acknowledged but not recorded", err)
-			}
-			if t.agent.hook != nil {
-				t.agent.hook(t.ctx, "reported")
-			}
-		})
+		t.toolResult(u)
 	}
+}
+
+// toolResult emits the agent.tool_result of a finished tool call.
+func (t *acpTurn) toolResult(u acpUpdate) {
+	if u.Status != "completed" && u.Status != "failed" {
+		return
+	}
+	t.mu.Lock()
+	toolUseID := t.tools[u.ToolCallID]
+	t.mu.Unlock()
+	if toolUseID == "" {
+		return
+	}
+	var blocks []struct {
+		Content struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	_ = json.Unmarshal(u.Content, &blocks)
+	var content []ContentBlock
+	for _, b := range blocks {
+		if b.Content.Type == "text" {
+			content = append(content, ContentBlock{Type: ContentBlockTypeText, Text: b.Content.Text})
+		}
+	}
+	_ = t.turn.emitAcked(AgentToolResultEvent{Type: AgentEventTypeAgentToolResult, ToolUseID: toolUseID, Content: content, IsError: u.Status == "failed"}, func() {
+		if err := t.ledger.update(u.ToolCallID, func(c *acpCallState) { c.Reported = true }); err != nil {
+			t.agent.log(LogWarn, "turn state: tool result of "+u.ToolCallID+" acknowledged but not recorded", err)
+		}
+		if t.agent.hook != nil {
+			t.agent.hook(t.ctx, "reported")
+		}
+	})
 }
 
 // toolUse emits agent.tool_use once per tool call and returns its event id.
@@ -1054,7 +1269,10 @@ type acpInitializeResponse struct {
 
 type acpSessionResponse struct {
 	SessionID string `json:"sessionId"`
-	Meta      struct {
+	Modes     struct {
+		CurrentModeID string `json:"currentModeId"`
+	} `json:"modes"`
+	Meta struct {
 		Bma struct {
 			ToolCatalog []string `json:"toolCatalog"`
 		} `json:"bma"`
@@ -1100,7 +1318,10 @@ func (a *ACPAgent) ensureProcess(ctx context.Context) (*acpProcess, error) {
 
 func (a *ACPAgent) startProcess(ctx context.Context) (*acpProcess, error) {
 	cmd := exec.Command(a.opts.Command[0], a.opts.Command[1:]...)
-	env := []string{"BMA_DSH_ACP_HOME=" + a.opts.StateDir}
+	var env []string
+	if !a.claude() {
+		env = append(env, "BMA_DSH_ACP_HOME="+a.opts.StateDir)
+	}
 	runAs := a.opts.Core.opts.RunAs
 	for _, key := range []string{"PATH", "HOME", "USER", "LANG", "TMPDIR"} {
 		value, ok := os.LookupEnv(key)
@@ -1163,6 +1384,13 @@ func (a *ACPAgent) startProcess(ctx context.Context) (*acpProcess, error) {
 	if p.init.ProtocolVersion != 1 {
 		p.kill(a.opts.KillGrace)
 		return nil, fmt.Errorf("agent speaks ACP protocol %d, not 1", p.init.ProtocolVersion)
+	}
+	if a.claude() {
+		if err := claudeCheckPin(p.init.AgentInfo.Name, p.init.AgentInfo.Version); err != nil {
+			p.kill(a.opts.KillGrace)
+			return nil, err
+		}
+		return p, nil
 	}
 	if violation := acpCatalogViolation(p.init.Meta.Bma.Tools); violation != "" {
 		p.kill(a.opts.KillGrace)

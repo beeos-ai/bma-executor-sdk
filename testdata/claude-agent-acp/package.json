@@ -1,0 +1,8 @@
+{
+  "name": "claude-agent-acp-pin",
+  "private": true,
+  "description": "The claude-agent-acp release the Claude Code profile of ACPAgent is tested with (agent_acp_claude.go claudeAgentACPPins). npm ci installs exactly the locked, integrity-checked tree.",
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.101.0"
+  }
+}

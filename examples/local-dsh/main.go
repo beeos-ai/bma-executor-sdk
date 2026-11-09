@@ -10,6 +10,19 @@
 // node owner's endpoint (-model-base-url with BMA_LOCAL_MODEL_KEY), or the
 // platform's per-turn model endpoint when turn.start carries one.
 //
+// Claude Code instead of DSH: -profile claude-code with -agent set to the
+// pinned official claude-agent-acp (node dist/index.js, see -node). It uses
+// only your own Claude credentials, which are never sent to BMA: your Claude
+// Code login (HOME), or ANTHROPIC_* / CLAUDE_CODE_* / AWS_* / GOOGLE_*
+// variables of this process, which are handed to the agent as they are.
+// -model-base-url and BMA_LOCAL_MODEL_KEY are not used.
+//
+// -labels (comma separated) and -remote-brain are this machine owner's local
+// choices: labels narrow where BMA may place sessions; -remote-brain lets a
+// brain on another machine use this one as its hands (off unless given).
+// -platform-tools lets this machine be the brain of a session whose hands are
+// on another machine (platform credential brain_tools).
+//
 // Output is one JSON object per line on stderr (a supervisor such as a desktop
 // app reads it): "executor registered" with executor_id, connection log lines,
 // and "interaction requested" / "interaction ended" with the platform
@@ -45,11 +58,16 @@ func main() {
 	model := flag.String("model", "", "model id sent upstream")
 	workRoot := flag.String("work-root", filepath.Join(os.TempDir(), "bma-local-dsh"), "session workspaces and allowed cwd root")
 	state := flag.String("state", "", "agent state directory (default <work-root>/.state)")
+	profile := flag.String("profile", bmaexecutor.ACPProfileDSH, "agent profile: dsh or claude-code")
+	labels := flag.String("labels", "", "comma separated executor labels (a-z 0-9 . _ -)")
+	remoteBrain := flag.Bool("remote-brain", false, "allow a brain on another machine to use this machine as its hands")
+	platformTools := flag.Bool("platform-tools", false, "may be the brain of a session whose hands are on another machine")
 	lifeline := flag.Bool("stdin-lifeline", false, "exit when stdin closes (a supervising app passes a pipe, so its exit or crash stops this executor)")
 	flag.Parse()
 	token, key := os.Getenv("BMA_MACHINE_TOKEN"), os.Getenv("BMA_LOCAL_MODEL_KEY")
-	if *baseURL == "" || *agent == "" || *modelBase == "" || token == "" {
-		log.Fatal("-base-url, -agent, -model-base-url and BMA_MACHINE_TOKEN are required")
+	claude := *profile == bmaexecutor.ACPProfileClaudeCode
+	if *baseURL == "" || *agent == "" || (*modelBase == "" && !claude) || token == "" {
+		log.Fatal("-base-url, -agent, -model-base-url (not with -profile claude-code) and BMA_MACHINE_TOKEN are required")
 	}
 	if *state == "" {
 		*state = filepath.Join(*workRoot, ".state")
@@ -82,18 +100,31 @@ func main() {
 	core, err := bmaexecutor.NewCore(bmaexecutor.CoreOptions{WorkRoot: *workRoot, OnLog: logf})
 	check(err)
 	defer core.Close()
-	brain, err := bmaexecutor.NewACPAgent(ctx, bmaexecutor.ACPAgentOptions{
-		Command: command, StateDir: *state, Core: core, OnLog: logf, OnInteraction: onInteraction,
-		Upstream: bmaexecutor.ACPModelUpstream{BaseURL: *modelBase, Model: *model,
-			Header: func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+key) }},
-	})
+	agentOptions := bmaexecutor.ACPAgentOptions{
+		Profile: *profile, Command: command, StateDir: *state, Core: core, OnLog: logf, OnInteraction: onInteraction,
+		PlatformTools: *platformTools,
+	}
+	if claude {
+		for _, kv := range os.Environ() { // the owner's own credentials, for Claude Code only
+			for _, prefix := range []string{"ANTHROPIC_", "CLAUDE_CODE_", "AWS_", "GOOGLE_", "CLOUD_ML_"} {
+				if strings.HasPrefix(kv, prefix) {
+					agentOptions.Env = append(agentOptions.Env, kv)
+				}
+			}
+		}
+	} else {
+		agentOptions.Upstream = bmaexecutor.ACPModelUpstream{BaseURL: *modelBase, Model: *model,
+			Header: func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+key) }}
+	}
+	brain, err := bmaexecutor.NewACPAgent(ctx, agentOptions)
 	check(err)
 	defer brain.Close()
 
 	client, err := bmaexecutor.NewClient(bmaexecutor.Options{
 		BaseURL: *baseURL, EnvironmentKey: token, MachineID: *machineID,
 		Executor:     bmaexecutor.ExecutorInfo{Name: "local-dsh", OS: runtime.GOOS, Arch: runtime.GOARCH, Version: "0.1.0"},
-		Capabilities: core.Capabilities(), OnLog: logf,
+		Capabilities: core.Capabilities(), OnLog: logf, RemoteBrain: *remoteBrain,
+		Labels: splitLabels(*labels),
 	})
 	check(err)
 	capability := brain.Capability()
@@ -122,4 +153,14 @@ func check(err error) {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func splitLabels(s string) []string {
+	var labels []string
+	for _, label := range strings.Split(s, ",") {
+		if label = strings.TrimSpace(label); label != "" {
+			labels = append(labels, label)
+		}
+	}
+	return labels
 }
