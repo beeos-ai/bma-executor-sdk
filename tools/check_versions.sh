@@ -12,6 +12,11 @@ found[typescript/package-lock.json]="$(node -p "require('./typescript/package-lo
 found[python/pyproject.toml]="$(python3 -c 'import tomllib; print(tomllib.load(open("python/pyproject.toml", "rb"))["project"]["version"])')"
 want="${1:-}"; want="${want#v}"
 [ -n "$want" ] || want="${found[typescript/package.json]}"
+# No pre-release or build suffix anywhere (beeos-versioning).
+if ! [[ "$want" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  printf 'release version "%s" must be plain X.Y.Z (no pre-release suffix)\n' "$want" >&2
+  exit 1
+fi
 status=0
 for file in "${!found[@]}"; do
   if [ "${found[$file]}" != "$want" ]; then
