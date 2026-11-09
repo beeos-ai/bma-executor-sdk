@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Go: `CoreOptions.ToolOutputDir`, output files of local bash outside the
+  user's folders.** The bash of a `LocalToolRoute` (so `ACPAgent`'s) wrote its
+  output file to `.bma-bash/` in the working directory, from the executor,
+  past a sandbox `CoreOptions.Launch` sets up: into folders the user marked
+  read-only, and leaving `.bma-bash/` behind. With the option set the files go
+  to `ToolOutputDir/<short hash of the session>/` (0700, chowned to `RunAs`),
+  the answer names that path, the session's `read` tool may read its own
+  output files there, and `CloseSession` removes the directory. `tool.call`
+  bash writes no file. Without the option nothing changes.
 - **Go: `CoreOptions.Launch`, the Launch hook for bash tools.** It takes the
   same `LaunchFunc` as `ProcessOptions.Launch` and runs once per bash tool
   call before its command starts: a `tool.call` bash and the bash of a

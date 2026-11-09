@@ -47,6 +47,8 @@
 
 `CoreOptions.Launch` 用同一个 `LaunchFunc` 类型，每次 bash 工具调用在起命令前调用一次：包括 `tool.call` 的 bash，以及 `LocalToolRoute` 的 bash（`ACPAgent` 自己的工具就走它）。两个选项传同一个函数，脑自己的命令就和 `process.*` 走同一套准入和沙箱。请求里 `Tool` 为 `"bash"`，`ToolCallID` 为调用 id，`ProcessID` 为空；`Argv` 是 shell 命令（`bash -lc <命令>`，没有 bash 时用 `sh`；Windows 上是 `cmd.exe /d /s /c <命令>`）；`Cwd` 是调用的 cwd（`LocalToolRoute` 为空）。`tool.call` 的 `AgentSessionID`、`Metadata`、`Client` 取自该会话的 `session.assign`；`LocalToolRoute` 的 `SessionID` 与 `AgentSessionID` 都是路由的会话，没有 `Metadata` 和 `Client`（需要会话上下文时用自己的 client 去查）。返回的 spec 按进程的规则生效。拒绝时不起进程：`tool.call` 返回失败结果，文本为 `<原因>: <说明>`；`LocalToolRoute` 返回 `not_forwarded`，`Code` 为原因（普通错误为 `spawn_failed`），同一调用 id 再来时原样返回。文件工具（read/write/edit/glob/grep）在执行端进程内完成，不调用钩子，仍限制在会话工作区内。不设 `CoreOptions.Launch` 时 bash 工具行为不变。
 
+`LocalToolRoute` 的 bash 把输出写进一个文件（后台运行的回答里给出路径）。默认这个文件在本轮工作目录的 `.bma-bash/` 下，由执行端进程写入，不在沙箱里。给命令加了沙箱的宿主应设 `CoreOptions.ToolOutputDir`，指向不在任何会话可写范围内（也不对任何会话沙箱开放）的目录：输出文件改放 `ToolOutputDir/<会话的短哈希>/`（权限 0700，设了 `RunAs` 时归该用户），不再往用户文件夹里写；该会话的 `read` 工具仍可读自己的输出文件；`CloseSession` 时删掉这个目录。`tool.call` 的 bash 输出留在内存里，不写文件。
+
 实现 `SessionFileTransferer` 的文件传输器改收 `TransferSessionFile(ctx, ProcessContext, transfer)`。
 
 示例 [`examples/sandboxed-folder`](../../examples/sandboxed-folder)：metadata `owner` 校验（`session_rejected`）、`workspace_ref` → 本机目录（`workspace_unavailable`）、cwd 越界（`workspace_boundary`）、macOS `sandbox-exec` 包装（只允许写该目录与会话 outputs）、缺 `agent_session_id` 的进程返回 `session_rejected`（平台自发进程在设置了 `-platform-dir` 时运行于该独立目录，不进任何会话目录）、包安装返回 `local_confirmation_denied`。
