@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
 
 - **Go `ACPAgent` in a sandbox (BMA S6):** `ACPAgentOptions.PlatformModel`
   declares `platform_credentials: [harness_model]` and makes `Upstream`
