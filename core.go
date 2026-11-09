@@ -124,6 +124,16 @@ type CoreOptions struct {
 	// the executor and do not call it (they stay within the session
 	// workspace). Nil starts commands as before.
 	Launch LaunchFunc
+	// ToolOutputDir, when set, holds the output files of the bash commands
+	// of a LocalToolRoute (so also ACPAgent's own tools):
+	// ToolOutputDir/<short hash of the session>/, created 0700 (owned by
+	// RunAs when set). Empty keeps them in .bma-bash/ under the turn's
+	// working directory. A host whose Launch sandboxes commands sets it to a
+	// directory outside every folder a session may write, so the executor
+	// writes nothing into the user's folders. The read tool of the session
+	// may read its own output files there. tool.call bash keeps its output
+	// in memory and does not use it.
+	ToolOutputDir string
 	// EndAfterToolCall marks sessions that carry exactly one tool call: the
 	// core ends them (session.ended "completed") after the result is
 	// delivered. BMA's durable selfhost queue assigns such sessions.
@@ -272,6 +282,11 @@ func NewCore(opts CoreOptions) (*Core, error) {
 		return nil, err
 	}
 	opts.WorkRoot = root
+	if opts.ToolOutputDir != "" {
+		if opts.ToolOutputDir, err = filepath.Abs(opts.ToolOutputDir); err != nil {
+			return nil, err
+		}
+	}
 	if opts.MaxSessions <= 0 {
 		opts.MaxSessions = DefaultCoreMaxSessions
 	}
@@ -1177,6 +1192,11 @@ func (c *Core) read(session *CoreSession, input ToolInput) (ToolResultParams, er
 	if err != nil {
 		return ToolResultParams{}, err
 	}
+	return c.readPath(path, input)
+}
+
+// readPath reads a resolved path with the read tool's offset and limit.
+func (c *Core) readPath(path string, input ToolInput) (ToolResultParams, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return ToolResultParams{}, err

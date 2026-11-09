@@ -245,6 +245,9 @@ type localState struct {
 // session and its turn state.
 func (c *Core) closeLocalSession(sessionID string) {
 	c.local.background.killSession(sessionID)
+	if dir := c.bashOutputDir(sessionID); dir != "" {
+		_ = os.RemoveAll(dir)
+	}
 	c.closeLocal(acpBrain, sessionID)
 	c.local.dropLedgers(sessionID)
 }
@@ -408,6 +411,10 @@ func (r *LocalToolRoute) runTool(ctx context.Context, callID, name string, in ma
 	case ToolNameEdit:
 		if flag("replace_all") {
 			return r.replaceAll(input)
+		}
+	case ToolNameRead:
+		if path, ok := r.ownOutputFile(input.Path); ok {
+			return r.readOutputFile(path, input)
 		}
 	}
 	raw, _ := json.Marshal(input)

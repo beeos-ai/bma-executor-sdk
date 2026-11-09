@@ -32,7 +32,8 @@ const (
 	acpBashMaxTimeout = 600 * time.Second
 	// acpBashLifetime is how long a command left in the background may run.
 	acpBashLifetime = time.Hour
-	// acpBashOutputDir (under the turn's working directory) holds the output files.
+	// acpBashOutputDir (under the turn's working directory) holds the output
+	// files when CoreOptions.ToolOutputDir is not set.
 	acpBashOutputDir = ".bma-bash"
 )
 
@@ -229,9 +230,23 @@ func (r *LocalToolRoute) superviseBackground(proc *acpBackgroundProc) {
 	}
 }
 
-// bashOutputFile is the file a command's output goes to, in the working directory.
+// bashOutputDir is the session's directory for output files under
+// CoreOptions.ToolOutputDir, "" when the option is not set.
+func (c *Core) bashOutputDir(sessionID string) string {
+	if c.opts.ToolOutputDir == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(sessionID))
+	return filepath.Join(c.opts.ToolOutputDir, hex.EncodeToString(sum[:8]))
+}
+
+// bashOutputFile is the file a command's output goes to: in the session's
+// directory under CoreOptions.ToolOutputDir, else in the working directory.
 func (r *LocalToolRoute) bashOutputFile(cwd, callID string) (string, error) {
-	dir := filepath.Join(cwd, acpBashOutputDir)
+	dir := r.core.bashOutputDir(r.sessionID)
+	if dir == "" {
+		dir = filepath.Join(cwd, acpBashOutputDir)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
@@ -242,6 +257,37 @@ func (r *LocalToolRoute) bashOutputFile(cwd, callID string) (string, error) {
 	}
 	sum := sha256.Sum256([]byte(r.sessionID + "\x00" + callID))
 	return filepath.Join(dir, hex.EncodeToString(sum[:8])+".out"), nil
+}
+
+// ownOutputFile reports whether path names an output file of this session
+// under CoreOptions.ToolOutputDir, which the read tool may read although it
+// is outside the workspace.
+func (r *LocalToolRoute) ownOutputFile(path string) (string, bool) {
+	dir := r.core.bashOutputDir(r.sessionID)
+	if dir == "" || !filepath.IsAbs(path) {
+		return "", false
+	}
+	path = filepath.Clean(path)
+	return path, filepath.Dir(path) == dir
+}
+
+// readOutputFile reads an output file of the session with the read tool's
+// offset and limit. Like every file tool it is refused under RunAs; a link
+// is not followed.
+func (r *LocalToolRoute) readOutputFile(path string, input ToolInput) (string, bool) {
+	if r.core.opts.RunAs != nil {
+		return `tool "read" is unavailable: this executor runs workloads as another OS user; use bash`, true
+	}
+	if info, err := os.Lstat(path); err != nil {
+		return err.Error(), true
+	} else if !info.Mode().IsRegular() {
+		return fmt.Sprintf("%s is not a regular file", path), true
+	}
+	result, err := r.core.readPath(path, input)
+	if err != nil {
+		return err.Error(), true
+	}
+	return result.Content[0].Text, false
 }
 
 // bashFinished is the answer of a command that ended within the wait: its
