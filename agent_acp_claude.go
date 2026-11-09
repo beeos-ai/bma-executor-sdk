@@ -492,7 +492,7 @@ func (s *acpToolServer) call(ctx context.Context, session *acpSession, callID, n
 		t.mu.Lock()
 		toolUseID := t.tools[callID]
 		t.mu.Unlock()
-		result = t.toolRoute.call(ctx, routedCall{SessionID: session.id, CallID: callID, ToolUseID: toolUseID, Name: name, Input: input})
+		result = t.toolRoute.Call(ctx, RouteCall{ID: callID, ToolUseID: toolUseID, Name: name, Input: input})
 	}
 	// No structuredContent: Claude Code would show the model that instead of
 	// the text. The outcome is in the text ("<code>: ..." for a refused or

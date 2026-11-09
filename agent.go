@@ -225,7 +225,7 @@ func (t *AgentTurn) Tools() ToolRoute {
 // restart, so the platform keeps one interaction per call and an approval
 // already answered is not asked again.
 func (t *AgentTurn) ApprovalID(callID string) string {
-	return approvalID(t.session.id, t.params.TurnID, callID)
+	return ApprovalID(t.session.id, t.params.TurnID, callID)
 }
 
 // Inputs delivers turn.input messages in arrival order.

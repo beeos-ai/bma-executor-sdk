@@ -18,8 +18,8 @@ import (
 // A turn that completed does not end it.
 
 type bashRig struct {
-	agent  *ACPAgent
-	turn   *acpTurn
+	core   *Core
+	route  *LocalToolRoute
 	cancel context.CancelFunc
 }
 
@@ -34,23 +34,17 @@ func newBashRig(t *testing.T) *bashRig {
 	t.Cleanup(core.Close)
 	workspace := filepath.Join(core.opts.WorkRoot, "acp", rigSession)
 	noErr(t, os.MkdirAll(workspace, 0o755))
-	noErr(t, core.openLocal(acpBrain, rigSession, workspace))
-	agent := &ACPAgent{opts: ACPAgentOptions{Core: core, StateDir: t.TempDir()}}
-	t.Cleanup(agent.background.killAll)
-	ledger, err := agent.ledger(rigSession)
-	noErr(t, err)
-	_, err = ledger.begin(rigTurn)
-	noErr(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	turn := &acpTurn{agent: agent, ctx: ctx, ledger: ledger, turnID: rigTurn, policy: acpEffectivePolicy("default", map[string]string{"bash": "allow"})}
-	turn.toolRoute = localToolRoute{agent: agent, turn: turn}
-	return &bashRig{agent: agent, turn: turn, cancel: cancel}
+	route, err := NewLocalToolRoute(LocalToolRouteOptions{Core: core, StateDir: t.TempDir(), SessionID: rigSession, TurnID: rigTurn,
+		Workspace: workspace, ToolPolicy: map[string]string{"bash": "allow"}, Context: ctx})
+	noErr(t, err)
+	return &bashRig{core: core, route: route, cancel: cancel}
 }
 
 func (r *bashRig) background(t *testing.T, callID string) *RouteBackground {
 	t.Helper()
-	got := r.turn.toolRoute.call(context.Background(), routedCall{SessionID: rigSession, CallID: callID, Name: "bash",
+	got := r.route.Call(context.Background(), RouteCall{ID: callID, Name: "bash",
 		Input: map[string]any{"command": "sleep 30", "timeout": float64(200)}})
 	wantExecuted(t, got)
 	if got.Background == nil || !processAlive(got.Background.PID) {
@@ -84,13 +78,13 @@ func TestLocalBashBackgroundEndsWithACanceledTurn(t *testing.T) {
 func TestLocalBashBackgroundSurvivesACompletedTurnAndEndsWithTheSession(t *testing.T) {
 	rig := newBashRig(t)
 	bg := rig.background(t, "c1")
-	rig.turn.completed.Store(true)
+	rig.route.Complete()
 	rig.cancel() // the SDK cancels the turn context when RunTurn returns
 	time.Sleep(300 * time.Millisecond)
 	if !processAlive(bg.PID) {
 		t.Fatal("the command was killed when its turn completed")
 	}
-	noErr(t, rig.agent.CloseSession(context.Background(), rigSession, "test"))
+	rig.route.CloseSession()
 	waitDead(t, bg.PID, "session closed")
 	if _, err := os.Stat(bg.OutputFile); err == nil {
 		t.Fatal("the output file outlived the session")
@@ -99,7 +93,7 @@ func TestLocalBashBackgroundSurvivesACompletedTurnAndEndsWithTheSession(t *testi
 
 func TestLocalBashOutputFileHoldsTheOutputAndTheCommandOutlivesTheWait(t *testing.T) {
 	rig := newBashRig(t)
-	got := rig.turn.toolRoute.call(context.Background(), routedCall{SessionID: rigSession, CallID: "c1", Name: "bash",
+	got := rig.route.Call(context.Background(), RouteCall{ID: "c1", Name: "bash",
 		Input: map[string]any{"command": "echo early; sleep 30", "timeout": float64(500)}})
 	wantExecuted(t, got)
 	if !strings.Contains(got.Text, "running in the background") || !strings.Contains(got.Text, got.Background.OutputFile) {
@@ -111,7 +105,7 @@ func TestLocalBashOutputFileHoldsTheOutputAndTheCommandOutlivesTheWait(t *testin
 		t.Fatalf("output file = %q, %v", raw, err)
 	}
 	// The output file is inside the session's workspace, where the read tool can reach it.
-	read := rig.turn.toolRoute.call(context.Background(), routedCall{SessionID: rigSession, CallID: "c2", Name: "read",
+	read := rig.route.Call(context.Background(), RouteCall{ID: "c2", Name: "read",
 		Input: map[string]any{"file_path": got.Background.OutputFile}})
 	if read.IsError || !strings.Contains(read.Text, "early") {
 		t.Fatalf("read of the output file = %+v", read)
@@ -120,19 +114,19 @@ func TestLocalBashOutputFileHoldsTheOutputAndTheCommandOutlivesTheWait(t *testin
 
 func TestLocalBashOnTimeoutKillStopsTheCommand(t *testing.T) {
 	rig := newBashRig(t)
-	got := rig.turn.toolRoute.call(context.Background(), routedCall{SessionID: rigSession, CallID: "c1", Name: "bash",
+	got := rig.route.Call(context.Background(), RouteCall{ID: "c1", Name: "bash",
 		Input: map[string]any{"command": "echo $$ > pid.txt; sleep 30", "timeout": float64(300), "on_timeout": "kill"}})
 	if got.Outcome != RouteOutcomeExecuted || !got.IsError || got.Background != nil || !strings.Contains(got.Text, "timed out") {
 		t.Fatalf("answer = %+v", got)
 	}
-	pid := waitForPID(t, filepath.Join(rig.agent.opts.Core.workspace(acpBrain, rigSession), "pid.txt"))
+	pid := waitForPID(t, filepath.Join(rig.core.workspace(acpBrain, rigSession), "pid.txt"))
 	waitDead(t, pid, "on_timeout kill")
 }
 
 func TestLocalBashRepeatedCallReplaysTheBackgroundAnswer(t *testing.T) {
 	rig := newBashRig(t)
 	bg := rig.background(t, "c1")
-	again := rig.turn.toolRoute.call(context.Background(), routedCall{SessionID: rigSession, CallID: "c1", Name: "bash",
+	again := rig.route.Call(context.Background(), RouteCall{ID: "c1", Name: "bash",
 		Input: map[string]any{"command": "sleep 30", "timeout": float64(200)}})
 	if !again.Replayed || !strings.Contains(again.Text, bg.OutputFile) {
 		t.Fatalf("replay = %+v", again)

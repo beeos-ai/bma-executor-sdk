@@ -176,7 +176,7 @@ func TestACPAgentToolGate(t *testing.T) {
 	const turn = "turn_gt"
 	approved := func(l *acpLedger, sid, call, tool string, input map[string]any) {
 		noErr(t, l.update(call, func(c *acpCallState) {
-			c.Decision, c.InteractionID, c.ToolName, c.InputHash = acpDecisionAllow, approvalID(sid, turn, call), tool, acpInputHash(input)
+			c.Decision, c.InteractionID, c.ToolName, c.InputHash = acpDecisionAllow, ApprovalID(sid, turn, call), tool, acpInputHash(input)
 		}))
 	}
 	bashInput := map[string]any{"command": "true"}
@@ -186,10 +186,12 @@ func TestACPAgentToolGate(t *testing.T) {
 		setup  func(l *acpLedger, sid string)
 		ledger string // turn the ledger belongs to
 		ended  bool
-		call   string
-		tool   string
-		input  map[string]any
-		want   string // "" = may run, otherwise error code
+		// presented is the approval id the brain presents with the call.
+		presented string
+		call      string
+		tool      string
+		input     map[string]any
+		want      string // "" = may run, otherwise error code
 	}{
 		{name: "allow", policy: map[string]string{"bash": "allow"}, call: "c", tool: "bash", input: bashInput},
 		{name: "deny", policy: map[string]string{"bash": "deny"}, call: "c", tool: "bash", input: bashInput, want: "permission_denied"},
@@ -206,8 +208,12 @@ func TestACPAgentToolGate(t *testing.T) {
 		{name: "approved under another interaction id", policy: map[string]string{"bash": "ask"}, call: "c", tool: "bash", input: bashInput,
 			setup: func(l *acpLedger, sid string) {
 				approved(l, sid, "c", "bash", bashInput)
-				noErr(t, l.update("c", func(c *acpCallState) { c.InteractionID = approvalID(sid, "turn_other", "c") }))
+				noErr(t, l.update("c", func(c *acpCallState) { c.InteractionID = ApprovalID(sid, "turn_other", "c") }))
 			}, want: "approval_invalid"},
+		{name: "an approval presented with no answer recorded", policy: map[string]string{"bash": "ask"}, call: "c", tool: "bash", input: bashInput,
+			presented: "appr_nothing", want: "approval_invalid"},
+		{name: "another approval presented than the one answered", policy: map[string]string{"bash": "ask"}, call: "c", tool: "bash", input: bashInput,
+			presented: "appr_other", setup: func(l *acpLedger, sid string) { approved(l, sid, "c", "bash", bashInput) }, want: "approval_invalid"},
 		{name: "denied by the user", policy: map[string]string{"bash": "ask"}, call: "c", tool: "bash", input: bashInput,
 			setup: func(l *acpLedger, sid string) {
 				noErr(t, l.update("c", func(c *acpCallState) { c.Decision = acpDecisionDeny }))
@@ -235,8 +241,8 @@ func TestACPAgentToolGate(t *testing.T) {
 			if tc.ended {
 				cancel()
 			}
-			at := &acpTurn{agent: f.agent, ctx: turnCtx, ledger: ledger, turnID: turn, policy: tc.policy}
-			got := at.gate(sid, tc.call, tc.tool, tc.input)
+			route := newLocalToolRoute(localRouteConfig{core: f.agent.opts.Core, sessionID: sid, turnID: turn, ledger: ledger, policy: tc.policy, ctx: turnCtx})
+			got := route.gate(RouteCall{ID: tc.call, Name: tc.tool, Input: tc.input, ApprovalID: tc.presented})
 			switch {
 			case tc.want == "" && got != nil:
 				t.Fatalf("refused: %+v", got)

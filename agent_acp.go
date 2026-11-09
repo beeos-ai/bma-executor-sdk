@@ -46,7 +46,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -61,7 +60,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -212,11 +210,7 @@ type ACPAgent struct {
 	mu       sync.Mutex
 	proc     *acpProcess
 	sessions map[string]*acpSession
-	ledgers  map[string]*acpLedger // see agent_acp_resume.go
 	closed   bool
-
-	// background holds the bash commands left running past their calls (agent_acp_bash.go).
-	background acpBackground
 
 	// hook, set by tests only, runs at named points of tool execution; it
 	// may block until ctx ends to stand in for a crash there.
@@ -319,11 +313,11 @@ type acpTurn struct {
 	route  acpRoute
 	turnID string
 	// toolRoute runs the agent's tool calls: the platform's gateway when the
-	// turn carries tools_mcp_* (the hands are elsewhere), otherwise this machine.
-	toolRoute toolRoute
-	// completed: the turn ended without cancel or deadline. A bash command
-	// left in the background then lives on (agent_acp_bash.go).
-	completed atomic.Bool
+	// turn carries tools_mcp_* (the hands are elsewhere), otherwise local.
+	toolRoute ToolRoute
+	// local is this machine's route (the hands are here), nil for a turn with
+	// remote hands. It decides the fate of a bash command left in the background.
+	local *LocalToolRoute
 	// claude is the Claude Code profile's state (agent_acp_claude.go).
 	claude acpClaudeTurn
 	// policy is the effective permission of each tool (see acpEffectivePolicy);
@@ -472,7 +466,7 @@ func (a *ACPAgent) Close() error {
 	if proc != nil {
 		proc.kill(a.opts.KillGrace)
 	}
-	a.background.killAll()
+	a.opts.Core.local.background.killAll()
 	a.closeServers()
 	return nil
 }
@@ -612,9 +606,12 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 	a.mu.Lock()
 	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: acpEffectivePolicy(s.mode, overrides),
 		messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}}
-	t.toolRoute = localToolRoute{agent: a, turn: t}
 	if remoteRoute != nil {
 		t.toolRoute = remoteRoute(ledger)
+	} else {
+		t.local = newLocalToolRoute(localRouteConfig{core: a.opts.Core, sessionID: params.SessionID, turnID: params.TurnID, ledger: ledger,
+			policy: t.policy, ctx: ctx, log: a.log, hook: a.hook})
+		t.toolRoute = t.local
 	}
 	s.turn = t
 	proc := s.proc
@@ -641,14 +638,16 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 				return err
 			}
 		default:
-			t.completed.Store(ctx.Err() == nil)
+			if t.local != nil && ctx.Err() == nil {
+				t.local.Complete()
+			}
 			return nil
 		}
 	}
 }
 
 func (a *ACPAgent) CloseSession(ctx context.Context, sessionID, _ string) error {
-	a.background.killSession(sessionID)
+	a.opts.Core.local.background.killSession(sessionID)
 	a.mu.Lock()
 	s := a.sessions[sessionID]
 	delete(a.sessions, sessionID)
@@ -661,8 +660,8 @@ func (a *ACPAgent) CloseSession(ctx context.Context, sessionID, _ string) error 
 			a.log(LogDebug, "acp session/close "+sessionID, err)
 		}
 	}
-	a.opts.Core.closeLocal(acpBrain, sessionID)
-	a.dropLedger(sessionID)
+	a.opts.Core.closeLocalSession(sessionID)
+	_ = os.Remove(ledgerPath(a.opts.StateDir, sessionID))
 	return nil
 }
 
@@ -872,14 +871,6 @@ func (a *ACPAgent) turnFor(proc *acpProcess, wireID string) *acpTurn {
 
 func (a *ACPAgent) claude() bool { return a.opts.Profile == ACPProfileClaudeCode }
 
-// approvalID is the platform interaction id of a tool call: deterministic
-// across reconnects and restarts (ADR-0027: appr_ + 24 hex of sha256(session NUL turn NUL call)).
-// The turn is in it because providers may reuse call ids such as "call_0" in every turn.
-func approvalID(sessionID, turnID, callID string) string {
-	sum := sha256.Sum256([]byte(sessionID + "\x00" + turnID + "\x00" + callID))
-	return "appr_" + hex.EncodeToString(sum[:])[:24]
-}
-
 func acpCatalogViolation(catalog []string) string {
 	want := []string{ToolNameBash, ToolNameEdit, ToolNameGlob, ToolNameGrep, ToolNameRead, ToolNameWrite}
 	got := append([]string(nil), catalog...)
@@ -1009,7 +1000,7 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 		case acpDecisionDeny:
 			return choose("reject_once"), nil
 		}
-		interactionID := approvalID(sessionID, t.turn.Params().TurnID, p.ToolCall.ToolCallID)
+		interactionID := ApprovalID(sessionID, t.turn.Params().TurnID, p.ToolCall.ToolCallID)
 		a.interaction(ACPInteractionEvent{Phase: "requested", SessionID: sessionID, InteractionID: interactionID, ToolName: toolName, ToolInput: p.ToolCall.RawInput})
 		answer, err := t.turn.RequestInteraction(ctx, InteractionRequestParams{
 			Kind: InteractionKindPermission, InteractionID: interactionID,
@@ -1021,9 +1012,7 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 		}
 		a.interaction(ACPInteractionEvent{Phase: "ended", SessionID: sessionID, InteractionID: interactionID, ToolName: toolName, Outcome: outcome})
 		decide := func(decision string) error {
-			return t.ledger.update(p.ToolCall.ToolCallID, func(c *acpCallState) {
-				c.Decision, c.InteractionID, c.ToolName, c.InputHash = decision, interactionID, toolName, acpInputHash(p.ToolCall.RawInput)
-			})
+			return t.ledger.decide(p.ToolCall.ToolCallID, decision, interactionID, toolName, p.ToolCall.RawInput)
 		}
 		switch {
 		case err != nil:
@@ -1052,7 +1041,7 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 		}
 		result := refused("stale_turn", "no turn of this session is running in this agent process")
 		if t != nil {
-			result = t.toolRoute.call(ctx, routedCall{SessionID: sessionID, CallID: p.ToolCallID, Name: p.Name, Input: p.Input})
+			result = t.toolRoute.Call(ctx, RouteCall{ID: p.ToolCallID, Name: p.Name, Input: p.Input})
 		}
 		return map[string]any{"text": result.Text, "isError": result.IsError, "outcome": result.Outcome, "errorCode": result.Code}, nil
 	}

@@ -30,8 +30,8 @@ func TestAgentTurnToolsIsNilWhenHandsAreLocal(t *testing.T) {
 // tools_mcp_* makes the platform's gateway the route of every call; the call
 // id is the idempotency identity and the approval id travels in _meta.
 func TestAgentTurnToolsIsThePlatformRoute(t *testing.T) {
-	gw := newStubGateway(t, map[string]string{"bash": "ask"})
-	turn := newToolsTurn(map[string]string{"tools_mcp_url": gw.server.URL, "tools_mcp_token": "tok-1"})
+	gw := newGateway(t, map[string]string{"bash": "ask"})
+	turn := newToolsTurn(map[string]string{"tools_mcp_url": gw.URL(), "tools_mcp_token": "tok-1"})
 	tools := turn.Tools()
 	if tools == nil {
 		t.Fatal("Tools() = nil, want the platform route")
@@ -42,21 +42,21 @@ func TestAgentTurnToolsIsThePlatformRoute(t *testing.T) {
 	ctx := context.Background()
 	call := RouteCall{ID: "c1", ToolUseID: "evt_1", Name: "bash", Input: wireInput(bashInput("echo hi > out.txt"))}
 	wantRefused(t, tools.Call(ctx, call), "approval_required")
-	if exists(&routeRig{workspace: gw.workspace}, "out.txt") {
+	if fileExists(gw.Workspace(), "out.txt") {
 		t.Fatal("a call without approval ran")
 	}
 	id := turn.ApprovalID("c1")
-	if id != approvalID(rigSession, rigTurn, "c1") || !strings.HasPrefix(id, "appr_") || len(id) != len("appr_")+24 {
+	if id != ApprovalID(rigSession, rigTurn, "c1") || !strings.HasPrefix(id, "appr_") || len(id) != len("appr_")+24 {
 		t.Fatalf("ApprovalID = %q", id)
 	}
 	if other := turn.ApprovalID("c2"); other == id {
 		t.Fatal("two calls share an approval id")
 	}
-	gw.answer(id, "bash", call.Input, "allow")
+	gw.Answer(id, "bash", call.Input, "allow")
 	call.ApprovalID = id
 	got := tools.Call(ctx, call)
 	wantExecuted(t, got)
-	if !exists(&routeRig{workspace: gw.workspace}, "out.txt") {
+	if !fileExists(gw.Workspace(), "out.txt") {
 		t.Fatal("the approved call did not run on the hands")
 	}
 	again := tools.Call(ctx, call)
@@ -81,13 +81,13 @@ func TestAgentTurnToolsRefusesAHalfCredential(t *testing.T) {
 }
 
 func TestPlatformToolRouteCallNeedsAnIDAndName(t *testing.T) {
-	gw := newStubGateway(t, map[string]string{"bash": "allow"})
-	route, err := NewPlatformToolRoute(PlatformToolRouteOptions{Endpoint: gw.server.URL, Token: "tok-1", SessionID: rigSession, TurnID: rigTurn})
+	gw := newGateway(t, map[string]string{"bash": "allow"})
+	route, err := NewPlatformToolRoute(PlatformToolRouteOptions{Endpoint: gw.URL(), Token: "tok-1", SessionID: rigSession, TurnID: rigTurn})
 	noErr(t, err)
 	for _, call := range []RouteCall{{Name: "bash"}, {ID: "c1"}} {
 		wantRefused(t, route.Call(context.Background(), call), "invalid_tool_input")
 	}
-	if n := len(gw.recorded()); n != 0 {
+	if n := len(gw.Recorded()); n != 0 {
 		t.Fatalf("%d requests reached the gateway", n)
 	}
 }
@@ -119,6 +119,5 @@ func TestNewPlatformToolRouteChecksItsOptions(t *testing.T) {
 // Both routes are ToolRoutes; the compiler checks it.
 var (
 	_ ToolRoute = (*PlatformToolRoute)(nil)
-	_ toolRoute = (*PlatformToolRoute)(nil)
-	_ toolRoute = localToolRoute{}
+	_ ToolRoute = (*LocalToolRoute)(nil)
 )

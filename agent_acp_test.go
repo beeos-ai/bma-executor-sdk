@@ -969,7 +969,7 @@ func TestACPAgentWithBmaDshAcp(t *testing.T) {
 	f.start(t, ctx, "sesn_real", "turn_1", "write r.txt")
 	f.platform.waitFor(t, "permission", func() bool { return len(f.platform.interactions) == 1 })
 	request := f.platform.interactions[0]
-	if request.InteractionID != approvalID("sesn_real", "turn_1", "call_real_1") || request.ToolInput["command"] != "echo real > r.txt && cat r.txt" {
+	if request.InteractionID != ApprovalID("sesn_real", "turn_1", "call_real_1") || request.ToolInput["command"] != "echo real > r.txt && cat r.txt" {
 		t.Fatalf("interaction.request = %+v", request)
 	}
 	if _, err := f.executor.RespondInteraction(ctx, InteractionResponseParams{SessionID: "sesn_real", InteractionID: request.InteractionID, Outcome: InteractionOutcomeAllow}); err != nil {
@@ -1039,21 +1039,21 @@ func TestACPAgentOnInteractionReportsTheSameApproval(t *testing.T) {
 // The id is appr_ + sha256(session NUL turn NUL call)[:24] (ADR-0027, DSH S3): shared vectors with the
 // TypeScript adapter (brain-host dsh-adapter events-approval.test.ts).
 func TestApprovalIDVectors(t *testing.T) {
-	if got := approvalID("sesn_t", "turn_1", "call_w"); got != "appr_4eadd9a6cda5f6ed52115828" {
+	if got := ApprovalID("sesn_t", "turn_1", "call_w"); got != "appr_4eadd9a6cda5f6ed52115828" {
 		t.Fatalf("pinned vector = %s", got)
 	}
-	if got := approvalID("sesn_t", "turn_2", "call_w"); got != "appr_2cd3b7c0bd1f82076e65801e" {
+	if got := ApprovalID("sesn_t", "turn_2", "call_w"); got != "appr_2cd3b7c0bd1f82076e65801e" {
 		t.Fatalf("pinned vector turn_2 = %s", got)
 	}
 	// A provider that reuses call_0 in every turn must not collide within a session.
-	if approvalID("sesn_t", "turn_1", "call_0") == approvalID("sesn_t", "turn_2", "call_0") {
+	if ApprovalID("sesn_t", "turn_1", "call_0") == ApprovalID("sesn_t", "turn_2", "call_0") {
 		t.Fatal("two turns of one session share an id")
 	}
 	// Same turn after a restart: same id.
-	if approvalID("sesn_t", "turn_1", "call_0") != approvalID("sesn_t", "turn_1", "call_0") {
+	if ApprovalID("sesn_t", "turn_1", "call_0") != ApprovalID("sesn_t", "turn_1", "call_0") {
 		t.Fatal("the id is not deterministic")
 	}
-	if approvalID("sesn_t", "turn_1c", "all_w") == approvalID("sesn_t", "turn_1", "call_w") {
+	if ApprovalID("sesn_t", "turn_1c", "all_w") == ApprovalID("sesn_t", "turn_1", "call_w") {
 		t.Fatal("field boundaries can be shifted")
 	}
 }

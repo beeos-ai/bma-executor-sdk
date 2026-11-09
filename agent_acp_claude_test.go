@@ -17,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/beeos-ai/bma-executor-sdk/conformance/gatewaystub"
 )
 
 // The Claude Code profile is tested against the real, pinned claude-agent-acp
@@ -239,7 +241,7 @@ func TestClaudeCodeProfileRunsAnApprovedPlatformTool(t *testing.T) {
 	f.start(t, ctx, "sesn_c", "turn_1", "run it")
 	f.platform.waitFor(t, "permission", func() bool { return len(f.platform.interactions) == 1 })
 	request := f.platform.interactions[0]
-	if request.InteractionID != approvalID("sesn_c", "turn_1", "toolu_01") || request.ToolName != "bash" || request.ToolInput["command"] == nil {
+	if request.InteractionID != ApprovalID("sesn_c", "turn_1", "toolu_01") || request.ToolName != "bash" || request.ToolInput["command"] == nil {
 		t.Fatalf("interaction.request = %+v", request)
 	}
 	if _, err := f.executor.RespondInteraction(ctx, InteractionResponseParams{SessionID: "sesn_c", InteractionID: request.InteractionID, Outcome: InteractionOutcomeAllow}); err != nil {
@@ -316,30 +318,30 @@ func TestClaudeCodeProfileDenyRunsNothingAndPolicyAllowAsksNobody(t *testing.T) 
 func TestClaudeCodeProfileRunsTheToolsOnTheRemoteHands(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	gw := newStubGateway(t, map[string]string{"bash": "allow"})
+	gw := newGateway(t, map[string]string{"bash": "allow"})
 	model := newScriptedModel(t, "bash", map[string]any{"command": "echo pwned > pwned.txt"})
 	f := startClaudeFixture(t, ctx, model, ACPAgentOptions{PlatformTools: true}, "")
 	capability, err := f.executor.AgentCapability()
 	if err != nil || len(capability.PlatformCredentials) != 1 || capability.PlatformCredentials[0] != PlatformCredentialBrainTools {
 		t.Fatalf("platform_credentials = %+v, %v", capability, err)
 	}
-	f.start(t, ctx, "sesn_c", "turn_1", "run it", remoteTurn(gw.server.URL, "tok-1"))
+	f.start(t, ctx, "sesn_c", "turn_1", "run it", remoteTurn(gw.URL(), "tok-1"))
 	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
-	if _, err := os.Stat(filepath.Join(gw.workspace, "pwned.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(gw.Workspace(), "pwned.txt")); err != nil {
 		t.Fatalf("the tool did not run on the hands machine: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(f.root, "acp", "sesn_c", "pwned.txt")); err == nil {
 		t.Fatal("the tool also ran on the brain's machine")
 	}
 	// The MCP call to the gateway carried Claude Code's call id as the idempotency identity and the tool_use id.
-	var call *stubRequest
-	for _, r := range gw.recorded() {
+	var call *gatewaystub.Request
+	for _, r := range gw.Recorded() {
 		if r.Method == "tools/call" {
 			call = &r
 		}
 	}
 	if call == nil || !strings.Contains(string(call.Params), platformIdempotencyKey("sesn_c", "turn_1", "toolu_01")) {
-		t.Fatalf("gateway calls: %+v", gw.recorded())
+		t.Fatalf("gateway calls: %+v", gw.Recorded())
 	}
 }
 

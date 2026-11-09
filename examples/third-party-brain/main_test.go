@@ -137,11 +137,17 @@ func runTurn(t *testing.T, p *platform, executor *bmaexecutor.Executor, params b
 
 func start(t *testing.T) (*platform, *bmaexecutor.Executor) {
 	t.Helper()
+	return startFor(t, brain{})
+}
+
+// startFor is start with agent in place of the brain.
+func startFor(t *testing.T, agent bmaexecutor.AgentHandler) (*platform, *bmaexecutor.Executor) {
+	t.Helper()
 	p := &platform{events: map[string][]bmaexecutor.AgentEventRecord{}, idle: map[string]chan struct{}{}}
 	harness := bmaexecutor.NewHarness(bmaexecutor.HarnessOptions{Agent: p})
 	server := httptest.NewServer(harness)
 	t.Cleanup(server.Close)
-	client, err := newClient(bmaexecutor.Options{EnvironmentID: "env_local", TokenSource: bmaexecutor.StaticToken("ws"+strings.TrimPrefix(server.URL, "http"), "")})
+	client, err := newClientFor(bmaexecutor.Options{EnvironmentID: "env_local", TokenSource: bmaexecutor.StaticToken("ws"+strings.TrimPrefix(server.URL, "http"), "")}, agent)
 	if err != nil {
 		t.Fatal(err)
 	}

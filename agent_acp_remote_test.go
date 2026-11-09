@@ -46,18 +46,18 @@ func lastMessage(t *testing.T, f *acpFixture, turn string) string {
 func TestACPAgentRunsAPlatformToolTurnOnTheGateway(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	gw := newStubGateway(t, map[string]string{"bash": "allow"})
+	gw := newGateway(t, map[string]string{"bash": "allow"})
 	f := startACPFixture(t, ctx, ACPAgentOptions{PlatformTools: true})
 	capability, err := f.executor.AgentCapability()
 	if err != nil || len(capability.PlatformCredentials) != 1 || capability.PlatformCredentials[0] != PlatformCredentialBrainTools {
 		t.Fatalf("platform_credentials = %+v, %v", capability, err)
 	}
-	f.start(t, ctx, "sesn_r", "turn_1", "bypass", remoteTurn(gw.server.URL, "tok-1"))
+	f.start(t, ctx, "sesn_r", "turn_1", "bypass", remoteTurn(gw.URL(), "tok-1"))
 	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
 	if got := lastMessage(t, f, "turn_1"); !strings.HasPrefix(got, "exit_code: 0|false|executed|") {
 		t.Fatalf("answer = %q", got)
 	}
-	if _, err := os.Stat(filepath.Join(gw.workspace, "pwned.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(gw.Workspace(), "pwned.txt")); err != nil {
 		t.Fatalf("the tool did not run on the gateway's machine: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(f.root, "acp", "sesn_r", "pwned.txt")); err == nil {
@@ -72,23 +72,23 @@ func TestACPAgentRunsAPlatformToolTurnOnTheGateway(t *testing.T) {
 func TestACPAgentRemoteTurnNeverFallsBackToThisMachine(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	gw := newStubGateway(t, map[string]string{"bash": "allow"})
+	gw := newGateway(t, map[string]string{"bash": "allow"})
 	f := startACPFixture(t, ctx, ACPAgentOptions{PlatformTools: true})
 
 	// A refused credential: stale_turn, nothing ran anywhere.
-	f.start(t, ctx, "sesn_r", "turn_1", "bypass", remoteTurn(gw.server.URL, "tok-unknown"))
+	f.start(t, ctx, "sesn_r", "turn_1", "bypass", remoteTurn(gw.URL(), "tok-unknown"))
 	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
 	if got := lastMessage(t, f, "turn_1"); !strings.Contains(got, "|true|not_forwarded|stale_turn") {
 		t.Fatalf("answer = %q", got)
 	}
 	// A gateway that cannot be reached: not_forwarded, not run here.
-	gw.server.Close()
-	f.start(t, ctx, "sesn_r", "turn_2", "bypass", remoteTurn(gw.server.URL, "tok-1"))
+	gw.Close()
+	f.start(t, ctx, "sesn_r", "turn_2", "bypass", remoteTurn(gw.URL(), "tok-1"))
 	assertIdle(t, f.platform.waitIdle(t, "turn_2"), TurnOutcomeCompleted)
 	if got := lastMessage(t, f, "turn_2"); !strings.Contains(got, "|true|not_forwarded|tools_unavailable") {
 		t.Fatalf("answer = %q", got)
 	}
-	for _, dir := range []string{filepath.Join(f.root, "acp", "sesn_r"), gw.workspace} {
+	for _, dir := range []string{filepath.Join(f.root, "acp", "sesn_r"), gw.Workspace()} {
 		if _, err := os.Stat(filepath.Join(dir, "pwned.txt")); err == nil {
 			t.Fatalf("a refused call ran in %s", dir)
 		}
