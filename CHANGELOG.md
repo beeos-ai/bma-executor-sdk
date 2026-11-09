@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.3.0
+## Unreleased
 
 - **Behavior change, Go `ACPAgent` local `bash` (ADR-0029 T6):** `timeout` is
   now how long the call waits, not how long the command may live, as on the
@@ -40,6 +40,8 @@
   placeholder tools of the pinned release are listed explicitly), foreign
   tools rejected, no `harness_model`, no `turn_resume`. `examples/local-dsh`
   gains `-profile`, `-labels`, `-remote-brain`, `-platform-tools`.
+
+## 1.3.0
 
 - **Go tool route seam (ADR-0029 S1, internal, no API or protocol change):**
   `ACPAgent` now sends every local tool call through an unexported `toolRoute`
