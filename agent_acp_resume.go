@@ -15,7 +15,8 @@ package bmaexecutor
 //   - Calls[call].Decision: the platform's allow/deny of a tool call, so an
 //     approval already answered is not asked again (a pending one is asked
 //     again under the same deterministic appr_ id, which the platform keeps
-//     as one interaction).
+//     as one interaction). It is also the evidence the executor checks before
+//     it runs an ask tool (ACPAgent's tool gate, agent_acp_tools.go).
 //   - Calls[call].Phase: "started" is written before a tool runs and "done"
 //     with its result after it. A call that is "done" is answered from the
 //     ledger when the agent asks for it again; one that is "started" has an
@@ -47,10 +48,19 @@ const (
 )
 
 type acpCallState struct {
-	Decision string `json:"decision,omitempty"`
-	Phase    string `json:"phase,omitempty"`
-	Text     string `json:"text,omitempty"`
-	IsError  bool   `json:"is_error,omitempty"`
+	// Decision is the platform's answer to the call's permission interaction
+	// (interaction.response); InteractionID, ToolName and InputHash say what it
+	// was given for, so the executor can check the call it runs is that one.
+	Decision      string `json:"decision,omitempty"`
+	InteractionID string `json:"interaction_id,omitempty"`
+	ToolName      string `json:"tool_name,omitempty"`
+	InputHash     string `json:"input_hash,omitempty"`
+	Phase         string `json:"phase,omitempty"`
+	Text          string `json:"text,omitempty"`
+	IsError       bool   `json:"is_error,omitempty"`
+	// Outcome is executed (also when empty) or unknown; Code the reason of an unknown one.
+	Outcome  string `json:"outcome,omitempty"`
+	Code     string `json:"code,omitempty"`
 	Reported bool   `json:"reported,omitempty"`
 }
 
@@ -155,6 +165,13 @@ func (l *acpLedger) call(callID string) acpCallState {
 		return *c
 	}
 	return acpCallState{}
+}
+
+// turnID is the turn the ledger belongs to.
+func (l *acpLedger) turnID() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.state.TurnID
 }
 
 func (l *acpLedger) inputDone(inputID string) bool {

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Go `ACPAgent` re-checks every local tool call itself (ADR-0005 gateway
+  semantics, security fix):** a brain that calls `_bma/tools/call` without
+  `session/request_permission` no longer gets the tool run. Before a tool runs
+  the executor checks that the call belongs to the session's running turn
+  (`stale_turn` otherwise), applies the turn's effective policy (mode defaults
+  plus `turn.start` `metadata.tool_policy`; an unlisted tool is `ask`): `deny`
+  is refused (`permission_denied`); `ask` needs the platform's `allow` for this
+  call (`interaction.response` for the deterministic `appr_` id, same tool and
+  input; `approval_required` / `approval_invalid` otherwise); `allow` runs. The
+  answer to `_bma/tools/call` now carries `outcome` (`not_forwarded` /
+  `executed` / `unknown`) and `errorCode` next to `text` / `isError`; a refused
+  call is `isError`, so the brain reports `tool_call_update` failed and the
+  platform sees `agent.tool_result` `is_error` with the text `"<code>: ..."`.
+  `metadata.tool_policy` values other than `allow|ask|deny` now fail the turn.
 - **Go `ACPAgent` in a sandbox (BMA S6):** `ACPAgentOptions.PlatformModel`
   declares `platform_credentials: [harness_model]` and makes `Upstream`
   optional (a turn without the platform credential then fails with

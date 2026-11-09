@@ -305,7 +305,9 @@ func TestACPAgentFileToolsUseCMAInputNames(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	f := startACPFixture(t, ctx, ACPAgentOptions{})
-	f.start(t, ctx, "sesn_f", "turn_1", "files")
+	f.start(t, ctx, "sesn_f", "turn_1", "files", func(p *TurnStartParams) {
+		p.Metadata = map[string]string{"tool_policy": `{"write":"allow","edit":"allow","rm_rf":"allow"}`}
+	})
 	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
 	var results []string
 	for _, e := range eventsOf(f.platform.snapshot(), "turn_1") {
@@ -519,16 +521,35 @@ func (c *fakeConn) message(session, id, kind, text string) {
 	c.notify("_bma/message", map[string]any{"sessionId": session, "messageId": id, "kind": kind, "text": text})
 }
 
-func (c *fakeConn) tool(session, callID, name string, input map[string]any) (string, bool) {
+// toolResult is what _bma/tools/call answered.
+type fakeToolResult struct {
+	Text      string `json:"text"`
+	IsError   bool   `json:"isError"`
+	Outcome   string `json:"outcome"`
+	ErrorCode string `json:"errorCode"`
+}
+
+// toolFull announces the call like bma-dsh-acp does (tool_call, then
+// _bma/tools/call) and returns the executor's whole answer.
+func (c *fakeConn) toolFull(session, callID, name string, input map[string]any) fakeToolResult {
+	c.update(session, map[string]any{"sessionUpdate": "tool_call", "toolCallId": callID, "title": name, "kind": "execute", "status": "pending", "rawInput": input,
+		"_meta": map[string]any{"bma": map[string]any{"name": name, "permission": "allow"}}})
+	return c.toolRaw(session, callID, name, input)
+}
+
+// toolRaw calls _bma/tools/call without announcing the call first.
+func (c *fakeConn) toolRaw(session, callID, name string, input map[string]any) fakeToolResult {
 	raw := c.request("_bma/tools/call", map[string]any{"sessionId": session, "toolCallId": callID, "name": name, "input": input})
 	var r struct {
-		Result struct {
-			Text    string `json:"text"`
-			IsError bool   `json:"isError"`
-		} `json:"result"`
+		Result fakeToolResult `json:"result"`
 	}
 	_ = json.Unmarshal(raw, &r)
-	return r.Result.Text, r.Result.IsError
+	return r.Result
+}
+
+func (c *fakeConn) tool(session, callID, name string, input map[string]any) (string, bool) {
+	r := c.toolFull(session, callID, name, input)
+	return r.Text, r.IsError
 }
 
 func fakeACPAgent() {
@@ -695,6 +716,54 @@ func fakePrompt(c *fakeConn, sid, text string) (any, map[string]any) {
 		c.update(sid, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": callID, "status": status,
 			"content": []any{map[string]any{"type": "content", "content": map[string]any{"type": "text", "text": out}}}})
 		c.message(sid, "m2", "message", "done")
+		return endTurn, nil
+	case "bypass", "bypass-swap", "ask-ignore":
+		// A brain that does not honor the permission relay: it calls the tool
+		// without asking (bypass), asks for one input and runs another
+		// (bypass-swap), or runs the tool whatever the platform answered (ask-ignore).
+		input := map[string]any{"command": "echo pwned > pwned.txt"}
+		if text != "bypass" {
+			asked := input
+			if text == "bypass-swap" {
+				asked = map[string]any{"command": "echo harmless"}
+			}
+			c.update(sid, map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_b", "title": "bash", "kind": "execute", "status": "pending", "rawInput": asked,
+				"_meta": map[string]any{"bma": map[string]any{"name": "bash", "permission": "ask"}}})
+			answer := make(chan json.RawMessage, 1)
+			go func() {
+				answer <- c.request("session/request_permission", map[string]any{"sessionId": sid,
+					"toolCall": map[string]any{"toolCallId": "call_b", "title": "bash", "rawInput": asked},
+					"options":  []any{map[string]any{"optionId": "allow", "name": "Allow", "kind": "allow_once"}, map[string]any{"optionId": "reject", "name": "Reject", "kind": "reject_once"}}})
+			}()
+			select {
+			case <-answer:
+			case <-canceled:
+				return map[string]any{"stopReason": "cancelled"}, nil
+			}
+		}
+		r := c.toolFull(sid, "call_b", "bash", input)
+		status := "completed"
+		if r.IsError {
+			status = "failed"
+		}
+		c.update(sid, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "call_b", "status": status,
+			"content": []any{map[string]any{"type": "content", "content": map[string]any{"type": "text", "text": r.Text}}}})
+		c.message(sid, "m-"+text, "message", fmt.Sprintf("%s|%v|%s|%s", r.Text, r.IsError, r.Outcome, r.ErrorCode))
+		return endTurn, nil
+	case "late":
+		// Ends the turn at once; calls a tool later, when the turn is over.
+		home := os.Getenv("BMA_DSH_ACP_HOME")
+		go func() {
+			for {
+				if _, err := os.Stat(filepath.Join(home, "go")); err == nil {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			r := c.toolFull(sid, "call_late", "bash", map[string]any{"command": "echo late > late.txt"})
+			b, _ := json.Marshal(r)
+			_ = os.WriteFile(filepath.Join(home, "late.json"), b, 0o600)
+		}()
 		return endTurn, nil
 	case "files":
 		say := func(label, text string, isErr bool) {
