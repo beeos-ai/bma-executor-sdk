@@ -19,6 +19,18 @@
         },
         "version": {
           "type": "string"
+        },
+        "labels": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9._-]+$"
+          },
+          "description": "Contract 1.4.0, optional. Labels the executor reports about itself (at most 32, each 1-64 characters of a-z 0-9 . _ -), set by the machine's owner in the executor's local configuration (for example BMA_LABELS or the SDK Options.Labels). The platform accepts them as given and does not validate their meaning, and it adds its own os:<os> and arch:<arch> labels from os and arch. Labels only narrow a choice among machines the project is already authorized to use (environment placement selectors); no authorization or security decision depends on them. Omitted: no labels."
         }
       },
       "required": [
@@ -240,6 +252,19 @@
       ],
       "additionalProperties": true
     },
+    "RemoteBrainCapability": {
+      "type": "object",
+      "description": "Contract 1.4.0. The machine's owner allows a brain that runs on another machine to use this machine as its hands (platform tools routed here for a session whose brain machine is a different one). Set only by the executor's local configuration (bmad configuration or SDK Options.RemoteBrain); the platform reads it back and cannot switch it on through any API. Absent or enabled=false: off, which is also what an executor that predates 1.4.0 means. It applies to a BYO (tenant-owned) machine; a platform pool machine does not need it. It does not restrict a platform-hosted brain driving this machine (project authorization is enough there), and a brain and hands on one machine never need it.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": true
+    },
     "Capabilities": {
       "type": "object",
       "description": "Executor capability object. The server only sends a method to an executor that advertised its capability; otherwise the executor answers -32012 capability_unavailable.",
@@ -294,6 +319,9 @@
         },
         "fs": {
           "$ref": "executor.json#/$defs/FsCapability"
+        },
+        "remote_brain": {
+          "$ref": "executor.json#/$defs/RemoteBrainCapability"
         }
       },
       "required": [],

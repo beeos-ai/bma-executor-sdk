@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 1.3.0
+  version: 1.4.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -1365,6 +1365,19 @@ methods:
           minimum: 1
       - name: metadata
         required: false
+        description: >-
+          String key/value pairs the platform adds to the turn. Per-turn credentials the executor
+          declared in AgentCapability.platform_credentials: model_base_url, model_token (and optionally
+          model_context_window, model_max_output_tokens) for harness_model; for brain_tools (contract 1.4.0,
+          only when this machine is the brain and a different machine the hands of the session)
+          tools_mcp_url (https://executor.<domain>/v1/machines/{brain_machine_id}/mcp), tools_mcp_token and
+          tools_mcp_token_expires_at (RFC 3339, 1 hour after turn.start). With tools_mcp_* present every tool
+          call of the turn must go to that endpoint as an MCP tools/call (tools bash, read, write, edit, glob,
+          grep) and none may run on this machine: when the endpoint cannot be reached or refuses the token
+          the call fails and the executor never falls back to running the tool locally (fail closed). The
+          token is bound to the turn's event epoch: the same turn started again after an executor restart
+          (turn.start with the same turn_id, a new epoch) carries a new token and the previous token is
+          refused. Refresh with tools_token.refresh. Keys the executor does not know are ignored.
         schema:
           type: object
           additionalProperties:
@@ -1789,6 +1802,52 @@ methods:
       name: ModelTokenRefreshResult
       schema:
         $ref: schemas/agent.json#/$defs/ModelTokenRefreshResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: tools_token.refresh
+    summary: Fetch a fresh platform tools token for a running turn.
+    description: >-
+      Executor to harness request (capability agent, contract 1.4.0). A brain started by turn.start with
+      a platform tools credential (metadata tools_mcp_token, valid 1 hour, handed over only when the
+      session's brain machine and hands machine differ) calls it before the token expires (the reference
+      executors do so when less than 10 minutes remain) and uses the new tools_mcp_token with
+      tools_mcp_url for its next tool calls; the old token stays valid until it expires or its epoch is
+      superseded. The shape and rules are those of model_token.refresh: the platform signs a new token only
+      while the turn is active (pending, running or rescheduling), the turn belongs to a session routed to
+      this executor's machine as the brain machine, and the call comes from the turn's current epoch, so a
+      turn that ended, was canceled or failed, or was started again in a newer epoch gets no further
+      token for the old epoch. Each call returns a new token; calls are not idempotent and a repeat is
+      harmless. Errors carry data.reason: turn_inactive (-32007: the turn is not active), forbidden
+      (-32001: the session or turn is unknown, belongs to another executor, or this executor is not
+      entitled to brain_tools), tools_token_unavailable (-32012: the platform issues no such token for
+      this turn, for example brain and hands are one machine). A harness without the method answers
+      -32601; the executor then keeps the token it has.
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        description: Platform session id of the turn.
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        description: Platform id of the running turn the token is for.
+        schema:
+          type: string
+    result:
+      name: ToolsTokenRefreshResult
+      schema:
+        $ref: schemas/agent.json#/$defs/ToolsTokenRefreshResult
     errors:
       - $ref: "#/components/errors/InvalidParams"
       - $ref: "#/components/errors/Forbidden"

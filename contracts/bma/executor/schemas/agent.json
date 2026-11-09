@@ -52,7 +52,7 @@
             "type": "string",
             "enum": ["brain_tools", "harness_model"]
           },
-          "description": "Per-turn credentials the executor asks the platform to hand it in turn.start metadata: brain_tools (tools_mcp_url, tools_mcp_token: the session's tools endpoint) and harness_model (model_base_url, model_token: the session's model endpoint; optionally model_context_window and model_max_output_tokens, positive integer strings: the resolved model's context window and output ceiling, absent when the platform has no catalog entry for the model, in which case the executor uses its own defaults). A declaration only states what the executor can use; the platform decides by the executor's identity: a platform service executor gets what it declares; on a platform-managed pool machine an ACP harness turn gets harness_model by default, without a declaration; a BYO machine gets harness_model only when it declares it, and an undeclared BYO machine gets nothing, so it keeps using the model endpoint configured on it and the platform never overrides that upstream. brain_tools is never handed to a tenant executor. The harness_model token is a bma-model token bound to the turn's org, session, turn and machine (model_base_url is the machine's proxy path). Tokens are computed for each turn.start, are valid until the turn ends, and are never stored."
+          "description": "Per-turn credentials the executor asks the platform to hand it in turn.start metadata: brain_tools (tools_mcp_url, tools_mcp_token: the session's tools endpoint) and harness_model (model_base_url, model_token: the session's model endpoint; optionally model_context_window and model_max_output_tokens, positive integer strings: the resolved model's context window and output ceiling, absent when the platform has no catalog entry for the model, in which case the executor uses its own defaults). A declaration only states what the executor can use; the platform decides by the executor's identity: a platform service executor gets what it declares; on a platform-managed pool machine an ACP harness turn gets harness_model by default, without a declaration; a BYO machine gets harness_model only when it declares it, and an undeclared BYO machine gets nothing, so it keeps using the model endpoint configured on it and the platform never overrides that upstream. brain_tools (contract 1.4.0) is handed to a tenant executor only when the session binds this machine as the brain machine and a different machine as the hands machine (brain and hands apart, ADR-0029) and the executor declared brain_tools; the token is bound to the org, the session, the turn, this machine and the brain epoch of the turn (the event epoch of the turn.start that carries it), so a turn started again in a new epoch gets a new token and calls made with the previous epoch's token are refused. When one machine is both brain and hands nothing is handed (the executor runs its tools itself); a platform service executor and an executor that did not declare brain_tools never get it. Until contract 1.4.0 brain_tools was never handed to a tenant executor. The harness_model token is a bma-model token bound to the turn's org, session, turn and machine (model_base_url is the machine's proxy path). Tokens are computed for each turn.start, are valid until the turn ends, and are never stored."
         },
         "custom_tools": {
           "type": "boolean",
@@ -188,7 +188,11 @@
         },
         "cwd": {
           "type": "string",
-          "description": "Working directory on the executor host. The executor rejects a directory outside its allowed roots with -32001 forbidden."
+          "description": "Working directory on the executor host. The executor rejects a directory outside its allowed roots with -32001 forbidden. When turn.start metadata carries tools_mcp_* (brain and hands on different machines, contract 1.4.0) cwd is a path on the hands machine: the executor does not check it against its own allowed roots and does not create a workspace for it on this machine; the hands machine's own policy applies when a tool runs there."
+        },
+        "environment_info": {
+          "$ref": "agent.json#/$defs/EnvironmentInfo",
+          "description": "Contract 1.4.0, optional. Sent only when brain and hands are on different machines (turn.start metadata carries tools_mcp_*): describes the hands machine, so the brain can tell the model where its tools run. Omitted when brain and hands are the same machine, and absent from TurnStartResult.effective."
         },
         "system": {
           "type": "string",
@@ -280,6 +284,59 @@
       },
       "required": [
         "canceled"
+      ],
+      "additionalProperties": true
+    },
+    "EnvironmentInfo": {
+      "type": "object",
+      "description": "Contract 1.4.0. The hands machine as the platform knows it (AgentTurnConfig.environment_info), from the hands executor's registration and the session's file mounts. Every member is optional; an omitted member is unknown, not empty. Values describe the machine at the time of turn.start.",
+      "properties": {
+        "os": {
+          "type": "string",
+          "description": "Operating system of the hands machine, as ExecutorInfo.os (for example linux, darwin, windows)."
+        },
+        "arch": {
+          "type": "string",
+          "description": "CPU architecture, as ExecutorInfo.arch."
+        },
+        "shell": {
+          "type": "string",
+          "description": "Shell the bash tool runs commands with on the hands machine (for example bash, zsh, powershell)."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Default working directory of tools on the hands machine; the same value as AgentTurnConfig.cwd when that is set."
+        },
+        "session_files_root": {
+          "type": "string",
+          "description": "Directory on the hands machine where the session's files are mounted, when the hands executor declared session_files."
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "ToolsTokenRefreshResult": {
+      "type": "object",
+      "description": "Contract 1.4.0. tools_token.refresh result: the credential for the turn's next platform tool calls, in the form of the turn.start metadata tools_mcp_url, tools_mcp_token and tools_mcp_token_expires_at.",
+      "properties": {
+        "tools_mcp_token": {
+          "type": "string",
+          "description": "Bearer token for tools_mcp_url, bound to the org, session, turn, brain machine and brain epoch of the turn. Valid until expires_at."
+        },
+        "tools_mcp_url": {
+          "type": "string",
+          "description": "The session's platform tools endpoint the token is for (https://<executor host>/v1/machines/{brain_machine_id}/mcp)."
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339 time the token stops being accepted."
+        }
+      },
+      "required": [
+        "tools_mcp_token",
+        "tools_mcp_url",
+        "expires_at"
       ],
       "additionalProperties": true
     },
