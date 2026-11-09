@@ -31,6 +31,8 @@ func newRecordingPlatform() *recordingPlatform {
 	return &recordingPlatform{persisted: map[string]int64{}, changed: make(chan struct{}, 64)}
 }
 
+func (p *recordingPlatform) recorder() *recordingPlatform { return p }
+
 func (p *recordingPlatform) notify() {
 	select {
 	case p.changed <- struct{}{}:

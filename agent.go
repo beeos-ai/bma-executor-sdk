@@ -133,6 +133,12 @@ func (t *AgentTurn) SessionID() string       { return t.session.id }
 func (t *AgentTurn) TurnID() string          { return t.params.TurnID }
 func (t *AgentTurn) Params() TurnStartParams { return t.params }
 
+// RefreshModelToken asks the platform for a fresh model credential for this
+// turn (Client.RefreshModelToken).
+func (t *AgentTurn) RefreshModelToken(ctx context.Context) (ModelTokenRefreshResult, error) {
+	return t.session.runtime.client.RefreshModelToken(ctx, t.session.id, t.params.TurnID)
+}
+
 // Inputs delivers turn.input messages in arrival order.
 func (t *AgentTurn) Inputs() <-chan TurnInputParams { return t.inputs }
 

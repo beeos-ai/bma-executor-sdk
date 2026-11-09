@@ -88,7 +88,13 @@ func (p *acpModelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		request["model"], _ = json.Marshal(route.model)
 		body, _ = json.Marshal(request)
 	}
-	upstream, err := http.NewRequestWithContext(r.Context(), http.MethodPost, route.baseURL+"/chat/completions", bytes.NewReader(body))
+	base, header := route.baseURL, route.header
+	if route.platform != nil {
+		var token string
+		base, token = route.platform.credential(r.Context())
+		header = func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+token) }
+	}
+	upstream, err := http.NewRequestWithContext(r.Context(), http.MethodPost, base+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		http.Error(w, "bad upstream", http.StatusBadGateway)
 		return
@@ -97,8 +103,8 @@ func (p *acpModelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if accept := r.Header.Get("Accept"); accept != "" {
 		upstream.Header.Set("Accept", accept)
 	}
-	if route.header != nil {
-		route.header(upstream)
+	if header != nil {
+		header(upstream)
 	}
 	resp, err := p.client.Do(upstream)
 	if err != nil {

@@ -36,7 +36,11 @@ package bmaexecutor
 // forwards only during a running turn, refuses a request whose tools are not
 // the six platform tools, and adds the real credential: the platform's
 // per-turn model endpoint when turn.start carries one (metadata
-// model_base_url, model_token), otherwise the node owner's Upstream.
+// model_base_url, model_token; refreshed with model_token.refresh when at most
+// 10 minutes of model_token_expires_at are left), otherwise the node owner's
+// Upstream. PlatformModel declares platform_credentials harness_model (a
+// sandbox machine of the platform). The agent process runs as the Core's
+// RunAs identity, like the tools.
 
 import (
 	"bufio"
@@ -71,6 +75,21 @@ const (
 
 	acpBrain   = "acp"
 	acpMetaKey = "bma"
+
+	// PlatformCredentialHarnessModel is the agent capability's
+	// platform_credentials entry for the per-turn model endpoint and token
+	// (turn.start metadata model_base_url, model_token, model_token_expires_at).
+	PlatformCredentialHarnessModel = "harness_model"
+
+	// acpModelTokenRefreshWindow: a platform model token with at most this
+	// much time left is replaced through model_token.refresh before the
+	// request that needs it is forwarded.
+	acpModelTokenRefreshWindow  = 10 * time.Minute
+	acpModelTokenRefreshTimeout = 10 * time.Second
+	// A failed refresh is tried again by a later request after a backoff
+	// doubling from acpModelTokenRetryBase to acpModelTokenRetryMax.
+	acpModelTokenRetryBase = 5 * time.Second
+	acpModelTokenRetryMax  = time.Minute
 )
 
 // DefaultACPSystemPrompt is the base system prompt of a local brain; the
@@ -110,7 +129,13 @@ type ACPAgentOptions struct {
 	// without cwd works in Core's per-session workspace.
 	AllowedRoots []string
 	// Upstream is the model endpoint used when the platform hands none.
+	// Required unless PlatformModel.
 	Upstream ACPModelUpstream
+	// PlatformModel asks the platform for the per-turn model credential
+	// (agent capability platform_credentials: harness_model), as a sandbox
+	// machine of the platform does. Without Upstream a turn the platform
+	// hands no credential fails (session.error); it is never sent elsewhere.
+	PlatformModel bool
 	// HarnessID is the declared harness id (default "dsh").
 	HarnessID string
 	// Model is the model name the agent uses when the turn config has none (default Upstream.Model).
@@ -169,10 +194,63 @@ type acpSession struct {
 	turn        *acpTurn
 }
 
+// acpRoute is where a turn's model requests go: the platform's credential
+// (platform set), or Upstream.
 type acpRoute struct {
-	baseURL string
-	model   string
-	header  func(*http.Request)
+	platform *acpPlatformModel
+	baseURL  string
+	model    string
+	header   func(*http.Request)
+}
+
+// acpPlatformModel is the platform's model credential of one turn (turn.start
+// metadata model_base_url, model_token, model_token_expires_at). It lives in
+// memory only.
+type acpPlatformModel struct {
+	agent *ACPAgent
+	turn  *AgentTurn
+	// mu serializes refreshes, so concurrent requests share one.
+	mu        sync.Mutex
+	base      string
+	token     string
+	expiresAt time.Time // zero: the platform did not say; never refreshed
+	failures  int
+	retryAt   time.Time
+}
+
+// credential is the base URL and token to forward with, refreshed first
+// when at most acpModelTokenRefreshWindow is left. A failed refresh keeps
+// the current token (the gateway answers 401 once it expires, never a silent
+// substitute) and is tried again by a later request after a backoff.
+func (m *acpPlatformModel) credential(ctx context.Context) (string, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	if m.expiresAt.IsZero() || m.expiresAt.Sub(now) > acpModelTokenRefreshWindow || now.Before(m.retryAt) {
+		return m.base, m.token
+	}
+	ctx, cancel := context.WithTimeout(ctx, acpModelTokenRefreshTimeout)
+	defer cancel()
+	result, err := m.turn.RefreshModelToken(ctx)
+	var expiresAt time.Time
+	if err == nil {
+		if expiresAt, err = time.Parse(time.RFC3339, result.ExpiresAt); err != nil || result.ModelToken == "" {
+			err = fmt.Errorf("model_token.refresh returned an unusable credential (token empty=%t, expires_at %q)", result.ModelToken == "", result.ExpiresAt)
+		}
+	}
+	if err != nil {
+		m.failures++
+		m.retryAt = now.Add(min(acpModelTokenRetryBase<<(m.failures-1), acpModelTokenRetryMax))
+		m.agent.log(LogError, fmt.Sprintf("model token refresh failed for session %s turn %s (attempt %d, expires %s); forwarding with the current token",
+			m.turn.SessionID(), m.turn.TurnID(), m.failures, m.expiresAt.Format(time.RFC3339)), err)
+		return m.base, m.token
+	}
+	m.token, m.expiresAt, m.failures, m.retryAt = result.ModelToken, expiresAt, 0, time.Time{}
+	if result.ModelBaseURL != "" {
+		m.base = strings.TrimRight(result.ModelBaseURL, "/")
+	}
+	m.agent.log(LogInfo, fmt.Sprintf("model token refreshed for session %s turn %s (expires %s)", m.turn.SessionID(), m.turn.TurnID(), expiresAt.Format(time.RFC3339)), nil)
+	return m.base, m.token
 }
 
 type acpTurn struct {
@@ -198,8 +276,8 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 	if !filepath.IsAbs(opts.Command[0]) {
 		return nil, fmt.Errorf("bmaexecutor: ACPAgentOptions.Command[0] must be an absolute path, got %q (no PATH lookup)", opts.Command[0])
 	}
-	if opts.Upstream.BaseURL == "" {
-		return nil, errors.New("bmaexecutor: ACPAgentOptions.Upstream.BaseURL is required")
+	if opts.Upstream.BaseURL == "" && !opts.PlatformModel {
+		return nil, errors.New("bmaexecutor: ACPAgentOptions.Upstream.BaseURL is required unless PlatformModel is set")
 	}
 	if opts.HarnessID == "" {
 		opts.HarnessID = "dsh"
@@ -235,6 +313,12 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 	if err := os.MkdirAll(opts.StateDir, 0o700); err != nil {
 		return nil, err
 	}
+	if runAs := opts.Core.opts.RunAs; runAs != nil {
+		// The agent runs as the Core's workload identity and keeps its conversations here.
+		if err := os.Chown(opts.StateDir, int(runAs.UID), int(runAs.GID)); err != nil {
+			return nil, err
+		}
+	}
 	a := &ACPAgent{opts: opts, sessions: map[string]*acpSession{}}
 	proxy, err := startACPModelProxy(a)
 	if err != nil {
@@ -260,11 +344,15 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 // and in the deprecated harness member.
 func (a *ACPAgent) Capability() AgentCapability {
 	h := a.harness
-	return AgentCapability{
+	c := AgentCapability{
 		Enabled: true, PermissionModes: acpPermissionModes, InteractionKinds: []string{InteractionKindPermission},
 		TurnResume:  true,
 		MaxSessions: a.opts.MaxSessions, Harness: &h, Harnesses: []AgentHarnessCapability{a.harness},
 	}
+	if a.opts.PlatformModel {
+		c.PlatformCredentials = []string{PlatformCredentialHarnessModel}
+	}
+	return c
 }
 
 // Close stops the agent process and the model proxy.
@@ -383,7 +471,11 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 	if err != nil {
 		return err
 	}
-	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: a.route(params.Metadata), messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}}
+	route := a.route(turn)
+	if route.baseURL == "" && route.platform == nil {
+		return errors.New("the platform handed no model credential for this turn (turn.start metadata model_base_url, model_token)")
+	}
+	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}}
 	a.mu.Lock()
 	s.turn = t
 	proc := s.proc
@@ -558,9 +650,12 @@ func (a *ACPAgent) modelMeta(s *acpSession, model string, metadata map[string]st
 }
 
 // route is the platform's per-turn model endpoint when turn.start hands one, otherwise Upstream.
-func (a *ACPAgent) route(metadata map[string]string) acpRoute {
+func (a *ACPAgent) route(turn *AgentTurn) acpRoute {
+	metadata := turn.Params().Metadata
 	if base, token := metadata["model_base_url"], metadata["model_token"]; base != "" && token != "" {
-		return acpRoute{baseURL: strings.TrimRight(base, "/"), header: func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+token) }}
+		// An unparsable or missing expiry is never refreshed (the platform did not say).
+		expiresAt, _ := time.Parse(time.RFC3339, metadata["model_token_expires_at"])
+		return acpRoute{platform: &acpPlatformModel{agent: a, turn: turn, base: strings.TrimRight(base, "/"), token: token, expiresAt: expiresAt}}
 	}
 	u := a.opts.Upstream
 	return acpRoute{baseURL: strings.TrimRight(u.BaseURL, "/"), model: u.Model, header: u.Header}
@@ -990,14 +1085,24 @@ func (a *ACPAgent) ensureProcess(ctx context.Context) (*acpProcess, error) {
 func (a *ACPAgent) startProcess(ctx context.Context) (*acpProcess, error) {
 	cmd := exec.Command(a.opts.Command[0], a.opts.Command[1:]...)
 	env := []string{"BMA_DSH_ACP_HOME=" + a.opts.StateDir}
+	runAs := a.opts.Core.opts.RunAs
 	for _, key := range []string{"PATH", "HOME", "USER", "LANG", "TMPDIR"} {
-		if value, ok := os.LookupEnv(key); ok {
+		value, ok := os.LookupEnv(key)
+		switch {
+		case runAs != nil && key == "HOME":
+			value, ok = runAs.Home, runAs.Home != ""
+		case runAs != nil && key == "USER":
+			value, ok = runAs.User, runAs.User != ""
+		}
+		if ok {
 			env = append(env, key+"="+value)
 		}
 	}
 	cmd.Env = append(env, a.opts.Env...)
 	cmd.Dir = a.opts.StateDir
 	setProcessGroupID(cmd)
+	// The brain runs as the workload, like the tools it calls (CoreOptions.RunAs).
+	setCredential(cmd, runAs)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

@@ -76,24 +76,46 @@ func startACPFixture(t *testing.T, ctx context.Context, opts ACPAgentOptions) *a
 // is a restart of the executor process.
 func startACPFixtureAt(t *testing.T, ctx context.Context, opts ACPAgentOptions, root string, platform *recordingPlatform, hook func(context.Context, string)) *acpFixture {
 	t.Helper()
+	return startACPFixtureAtCore(t, ctx, opts, root, platform, hook)
+}
+
+// startACPFixtureOn is startACPFixture with a platform of the test's own
+// (embedding a recordingPlatform).
+func startACPFixtureOn(t *testing.T, ctx context.Context, opts ACPAgentOptions, platform interface {
+	AgentPlatform
+	recorder() *recordingPlatform
+}) *acpFixture {
+	t.Helper()
+	return startACPFixtureAtCore(t, ctx, opts, t.TempDir(), platform, nil)
+}
+
+// startACPFixtureAtCore is startACPFixtureAt; opts.Core, when set, is used
+// instead of a new Core on root/work.
+func startACPFixtureAtCore(t *testing.T, ctx context.Context, opts ACPAgentOptions, root string, platform interface {
+	AgentPlatform
+	recorder() *recordingPlatform
+}, hook func(context.Context, string)) *acpFixture {
+	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	work := filepath.Join(root, "work")
-	core, err := NewCore(CoreOptions{WorkRoot: work})
-	if err != nil {
-		t.Fatal(err)
+	if opts.Core == nil {
+		core, err := NewCore(CoreOptions{WorkRoot: filepath.Join(root, "work")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(core.Close)
+		opts.Core = core
 	}
-	t.Cleanup(core.Close)
+	work := opts.Core.opts.WorkRoot
 	upstream := newFakeUpstream(t)
 	if opts.Command == nil {
 		opts.Command = []string{exe}
 	}
 	opts.Env = append(opts.Env, "BMA_ACP_FAKE_AGENT=1")
 	opts.StateDir = filepath.Join(root, "state")
-	opts.Core = core
-	if opts.Upstream.BaseURL == "" {
+	if opts.Upstream.BaseURL == "" && !opts.PlatformModel {
 		opts.Upstream = ACPModelUpstream{BaseURL: upstream.server.URL + "/v1", Model: "upstream-model",
 			Header: func(r *http.Request) { r.Header.Set("Authorization", "Bearer node-owner-key") }}
 	}
@@ -126,7 +148,7 @@ func startACPFixtureAt(t *testing.T, ctx context.Context, opts ACPAgentOptions, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &acpFixture{agent: agent, executor: executor, client: client, platform: platform, root: work, upstream: upstream}
+	return &acpFixture{agent: agent, executor: executor, client: client, platform: platform.recorder(), root: work, upstream: upstream}
 }
 
 func (f *acpFixture) start(t *testing.T, ctx context.Context, session, turn, text string, extra ...func(*TurnStartParams)) TurnStartResult {
@@ -708,7 +730,31 @@ func fakePrompt(c *fakeConn, sid, text string) (any, map[string]any) {
 		select {} // ignores session/cancel
 	case "crash":
 		os.Exit(3)
-	case "model":
+	case "whoami":
+		state := "writable"
+		if err := os.WriteFile(filepath.Join(os.Getenv("BMA_DSH_ACP_HOME"), "probe"), nil, 0o600); err != nil {
+			state = err.Error()
+		}
+		c.message(sid, "m-who", "message", fmt.Sprintf("uid=%d home=%s user=%s state=%s", os.Getuid(), os.Getenv("HOME"), os.Getenv("USER"), state))
+		return endTurn, nil
+	case "model", "model-twice":
+		if text == "model-twice" {
+			c.mu.Lock()
+			model := c.models[sid]
+			c.mu.Unlock()
+			for i := range 2 {
+				body := `{"model":"m","stream":true,"messages":[],"tools":[{"type":"function","function":{"name":"bash"}}]}`
+				req, _ := http.NewRequest("POST", model["baseUrl"].(string)+"/chat/completions", strings.NewReader(body))
+				req.Header.Set("Authorization", "Bearer "+model["token"].(string))
+				status := "error"
+				if resp, err := http.DefaultClient.Do(req); err == nil {
+					status = fmt.Sprint(resp.StatusCode)
+					resp.Body.Close()
+				}
+				c.message(sid, fmt.Sprintf("m-%d", i), "message", fmt.Sprintf("request %d: %s", i, status))
+			}
+			return endTurn, nil
+		}
 		c.mu.Lock()
 		model := c.models[sid]
 		c.mu.Unlock()
