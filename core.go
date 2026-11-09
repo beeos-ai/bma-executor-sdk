@@ -1003,6 +1003,21 @@ func (c *Core) runShell(ctx context.Context, session *CoreSession, input ToolInp
 	return execution, nil
 }
 
+// shellCommand runs command as a bash tool does (shellArgv), in its own
+// process group (tree on Windows) that ends with ctx.
+func shellCommand(ctx context.Context, command string) *exec.Cmd {
+	return toolCommand(ctx, shellArgv(command))
+}
+
+// toolCommand runs argv in its own process group (tree on Windows) that ends
+// with ctx.
+func toolCommand(ctx context.Context, argv []string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	setCommandLine(cmd)
+	setProcessGroup(cmd)
+	return cmd
+}
+
 // runCommand runs cmd to completion in its own process tree. What the
 // command left running is not ended, as a POSIX process group's orphans are
 // not.
