@@ -18,8 +18,8 @@ import (
 // run against every toolRoute. A brain must not be able to tell which route
 // its calls took: the same refusals with the same codes, the same three
 // outcomes, the same texts, at most once per call id, the same cancel and
-// epoch behavior. Cases a route cannot show are declared in routeCaps, not
-// skipped silently.
+// epoch behavior. The only case a route does not run is T11 on hands in the
+// same process (they cannot be offline); there is no other exemption.
 
 const (
 	rigSession = "sesn_t1"
@@ -63,14 +63,6 @@ func wireInput(input map[string]any) map[string]any {
 	return out
 }
 
-// routeCaps are the behaviors a route is known not to have yet.
-type routeCaps struct {
-	// BackgroundOnSyncWait: bash that outlives its wait is left running and
-	// answered with pid and output file (ADR-0005 decision 4). The local
-	// Core kills it at the timeout instead.
-	BackgroundOnSyncWait bool
-}
-
 type routeFactory func(t *testing.T, toolPolicy map[string]string) *routeRig
 
 func bashInput(command string) map[string]any { return map[string]any{"command": command} }
@@ -106,23 +98,23 @@ func wantExecuted(t *testing.T, got *acpToolResult) {
 type conformanceCase struct {
 	id   string
 	name string
-	run  func(t *testing.T, factory routeFactory, caps routeCaps)
+	run  func(t *testing.T, factory routeFactory)
 }
 
 // registerToolRouteConformance runs T1–T11 against the route factory.
-func registerToolRouteConformance(t *testing.T, name string, factory routeFactory, caps routeCaps, hasRemoteHands bool) {
+func registerToolRouteConformance(t *testing.T, name string, factory routeFactory, hasRemoteHands bool) {
 	t.Run(name, func(t *testing.T) {
 		for _, c := range conformanceCases {
 			if c.id == "T11" && !hasRemoteHands {
 				continue // the hands are in the same process: they cannot be offline
 			}
-			t.Run(c.id+"_"+c.name, func(t *testing.T) { c.run(t, factory, caps) })
+			t.Run(c.id+"_"+c.name, func(t *testing.T) { c.run(t, factory) })
 		}
 	})
 }
 
 var conformanceCases = []conformanceCase{
-	{"T1", "allowed_tool_executes", func(t *testing.T, factory routeFactory, _ routeCaps) {
+	{"T1", "allowed_tool_executes", func(t *testing.T, factory routeFactory) {
 		rig := factory(t, map[string]string{"bash": "allow", "write": "allow"})
 		got := rig.call("c1", "bash", bashInput("printf hi"))
 		wantExecuted(t, got)
@@ -141,14 +133,14 @@ var conformanceCases = []conformanceCase{
 			t.Fatalf("failing read answer = %+v", failed)
 		}
 	}},
-	{"T2", "policy_deny_is_not_run", func(t *testing.T, factory routeFactory, _ routeCaps) {
+	{"T2", "policy_deny_is_not_run", func(t *testing.T, factory routeFactory) {
 		rig := factory(t, map[string]string{"bash": "deny"})
 		wantRefused(t, rig.call("c1", "bash", bashInput("touch pwned.txt")), "permission_denied")
 		if exists(rig, "pwned.txt") {
 			t.Fatal("the denied tool ran")
 		}
 	}},
-	{"T3", "ask_needs_a_matching_approval", func(t *testing.T, factory routeFactory, _ routeCaps) {
+	{"T3", "ask_needs_a_matching_approval", func(t *testing.T, factory routeFactory) {
 		rig := factory(t, map[string]string{"bash": "ask"})
 		run := bashInput("touch pwned.txt")
 		wantRefused(t, rig.call("none", "bash", run), "approval_required")
@@ -167,7 +159,7 @@ var conformanceCases = []conformanceCase{
 			t.Fatal("the approved call did not run")
 		}
 	}},
-	{"T4", "approval_is_one_call_and_a_retry_runs_once", func(t *testing.T, factory routeFactory, _ routeCaps) {
+	{"T4", "approval_is_one_call_and_a_retry_runs_once", func(t *testing.T, factory routeFactory) {
 		rig := factory(t, map[string]string{"bash": "ask"})
 		run := bashInput("echo x >> count.txt")
 		rig.approve("c1", "bash", run, "allow")
@@ -186,7 +178,7 @@ var conformanceCases = []conformanceCase{
 			t.Fatalf("the unapproved call ran (%d)", n)
 		}
 	}},
-	{"T5", "restart_keeps_results_and_never_reruns", func(t *testing.T, factory routeFactory, _ routeCaps) {
+	{"T5", "restart_keeps_results_and_never_reruns", func(t *testing.T, factory routeFactory) {
 		rig := factory(t, map[string]string{"bash": "allow"})
 		run := bashInput("echo x >> count.txt")
 		first := rig.call("c1", "bash", run)
@@ -207,17 +199,9 @@ var conformanceCases = []conformanceCase{
 			t.Fatal("a call was run again")
 		}
 	}},
-	{"T6", "bash_past_its_wait", func(t *testing.T, factory routeFactory, caps routeCaps) {
+	{"T6", "bash_past_its_wait", func(t *testing.T, factory routeFactory) {
 		rig := factory(t, map[string]string{"bash": "allow"})
 		got := rig.call("c1", "bash", map[string]any{"command": "sleep 30", "timeout": 300})
-		if !caps.BackgroundOnSyncWait {
-			// Known gap of the local route: Core ends the command at the
-			// timeout (failed call, no process left); it cannot leave it running.
-			if got.Outcome != acpToolExecuted || !got.IsError || got.Background != nil || !strings.Contains(got.Text, "timed out") {
-				t.Fatalf("answer = %+v", got)
-			}
-			return
-		}
 		wantExecuted(t, got)
 		if got.Background == nil || got.Background.PID <= 0 || got.Background.OutputFile == "" {
 			t.Fatalf("answer = %+v, want a background pid and output file", got)
@@ -227,7 +211,7 @@ var conformanceCases = []conformanceCase{
 			t.Fatal("the command was killed at the end of the wait")
 		}
 	}},
-	{"T7", "cancel_ends_the_call_and_kills_the_process_group", func(t *testing.T, factory routeFactory, _ routeCaps) {
+	{"T7", "cancel_ends_the_call_and_kills_the_process_group", func(t *testing.T, factory routeFactory) {
 		rig := factory(t, map[string]string{"bash": "allow"})
 		answer := make(chan *acpToolResult, 1)
 		go func() { answer <- rig.call("c1", "bash", bashInput("sleep 60 & echo $! > child.pid; wait")) }()
@@ -250,7 +234,7 @@ var conformanceCases = []conformanceCase{
 			time.Sleep(20 * time.Millisecond)
 		}
 	}},
-	{"T8", "hands_refusal_is_passed_through", func(t *testing.T, factory routeFactory, _ routeCaps) {
+	{"T8", "hands_refusal_is_passed_through", func(t *testing.T, factory routeFactory) {
 		rig := factory(t, map[string]string{"write": "allow"})
 		got := rig.call("c1", "write", map[string]any{"file_path": "../escape.txt", "content": "x"})
 		if got.Outcome != acpToolExecuted || !got.IsError || got.Text == "" {
@@ -260,7 +244,7 @@ var conformanceCases = []conformanceCase{
 			t.Fatal("the hands wrote outside their workspace")
 		}
 	}},
-	{"T9", "large_write_roundtrips", func(t *testing.T, factory routeFactory, _ routeCaps) {
+	{"T9", "large_write_roundtrips", func(t *testing.T, factory routeFactory) {
 		rig := factory(t, map[string]string{"write": "allow"})
 		content := strings.Repeat("0123456789abcdef", 128*1024) // 2 MiB
 		wantExecuted(t, rig.call("c1", "write", map[string]any{"file_path": "big.txt", "content": content}))
@@ -269,7 +253,7 @@ var conformanceCases = []conformanceCase{
 			t.Fatalf("big.txt: %d bytes, %v", len(got), err)
 		}
 	}},
-	{"T10", "an_older_epoch_is_refused", func(t *testing.T, factory routeFactory, _ routeCaps) {
+	{"T10", "an_older_epoch_is_refused", func(t *testing.T, factory routeFactory) {
 		rig := factory(t, map[string]string{"bash": "allow"})
 		old := rig.route()
 		rig.supersede()
@@ -280,7 +264,7 @@ var conformanceCases = []conformanceCase{
 		}
 		wantExecuted(t, rig.call("c2", "bash", bashInput("true")))
 	}},
-	{"T11", "offline_hands_are_not_forwarded", func(t *testing.T, factory routeFactory, _ routeCaps) {
+	{"T11", "offline_hands_are_not_forwarded", func(t *testing.T, factory routeFactory) {
 		rig := factory(t, map[string]string{"bash": "allow"})
 		rig.handsOffline(true)
 		wantRefused(t, rig.call("c1", "bash", bashInput("touch late.txt")), "environment_unavailable")
@@ -313,8 +297,8 @@ func waitForPID(t *testing.T, path string) int {
 }
 
 func TestToolRouteConformance(t *testing.T) {
-	registerToolRouteConformance(t, "local", newLocalRig, routeCaps{}, false)
-	registerToolRouteConformance(t, "platform", newPlatformRig, routeCaps{BackgroundOnSyncWait: true}, true)
+	registerToolRouteConformance(t, "local", newLocalRig, false)
+	registerToolRouteConformance(t, "platform", newPlatformRig, true)
 }
 
 // The refusal text of the hands (T8) is the same on both routes.

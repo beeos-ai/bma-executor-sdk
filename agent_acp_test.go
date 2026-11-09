@@ -128,13 +128,18 @@ func startACPFixtureAtCore(t *testing.T, ctx context.Context, opts ACPAgentOptio
 	}
 	agent.hook = hook
 	t.Cleanup(func() { _ = agent.Close() })
-	harness := NewHarness(HarnessOptions{Agent: platform, RequestTimeout: 5 * time.Second})
+	// session/new of Claude Code takes several seconds (it starts its CLI).
+	requestTimeout := 5 * time.Second
+	if opts.Profile == ACPProfileClaudeCode {
+		requestTimeout = 60 * time.Second
+	}
+	harness := NewHarness(HarnessOptions{Agent: platform, RequestTimeout: requestTimeout})
 	server := httptest.NewServer(harness)
 	t.Cleanup(server.Close)
 	client, err := NewClient(Options{
 		EnvironmentID: "env_local", Executor: ExecutorInfo{Name: "mac", OS: "darwin", Arch: "arm64", Version: "0.1.0"},
 		TokenSource:    StaticToken("ws"+strings.TrimPrefix(server.URL, "http"), "local"),
-		RequestTimeout: 5 * time.Second, ReconnectBaseDelay: 20 * time.Millisecond, Random: func() float64 { return 0 },
+		RequestTimeout: requestTimeout, ReconnectBaseDelay: 20 * time.Millisecond, Random: func() float64 { return 0 },
 	})
 	if err != nil {
 		t.Fatal(err)

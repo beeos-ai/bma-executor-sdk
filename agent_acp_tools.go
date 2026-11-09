@@ -183,7 +183,14 @@ func (a *ACPAgent) runToolOnce(ctx context.Context, t *acpTurn, sessionID, callI
 	if err := ledger.update(callID, func(c *acpCallState) { c.Phase = acpPhaseStarted }); err != nil {
 		return stateError(err)
 	}
-	text, isError := a.runTool(ctx, sessionID, callID, name, in)
+	var text string
+	var isError bool
+	var background *toolBackground
+	if name == ToolNameBash {
+		text, isError, background = a.runBash(ctx, t, sessionID, callID, in)
+	} else {
+		text, isError = a.runTool(ctx, sessionID, callID, name, in)
+	}
 	if err := ledger.update(callID, func(c *acpCallState) {
 		c.Phase, c.Text, c.IsError, c.Outcome, c.Code = acpPhaseDone, text, isError, acpToolExecuted, ""
 	}); err != nil {
@@ -192,11 +199,12 @@ func (a *ACPAgent) runToolOnce(ctx context.Context, t *acpTurn, sessionID, callI
 	if a.hook != nil {
 		a.hook(ctx, "tool:after")
 	}
-	return &acpToolResult{Outcome: acpToolExecuted, Text: text, IsError: isError}
+	return &acpToolResult{Outcome: acpToolExecuted, Text: text, IsError: isError, Background: background}
 }
 
+// runTool runs a file tool in Core (bash is runBash).
 func (a *ACPAgent) runTool(ctx context.Context, sessionID, callID, name string, in map[string]any) (string, bool) {
-	if !coreTools[name] {
+	if !coreTools[name] || name == ToolNameBash {
 		return fmt.Sprintf("tool %q is not available on this computer", name), true
 	}
 	str := func(k string) string { v, _ := in[k].(string); return v }
@@ -205,8 +213,6 @@ func (a *ACPAgent) runTool(ctx context.Context, sessionID, callID, name string, 
 	input := ToolInput{Path: str("file_path"), Offset: num("offset"), Limit: num("limit"), Content: str("content"),
 		OldString: str("old_string"), NewString: str("new_string"), Pattern: str("pattern"), Glob: str("glob")}
 	switch name {
-	case ToolNameBash:
-		input.Command, input.TimeoutMS = str("command"), num("timeout")
 	case ToolNameGlob, ToolNameGrep:
 		input.Path = str("path")
 		if name == ToolNameGrep && flag("case_insensitive") {

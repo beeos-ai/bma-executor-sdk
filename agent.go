@@ -139,6 +139,22 @@ func (t *AgentTurn) RefreshModelToken(ctx context.Context) (ModelTokenRefreshRes
 	return t.session.runtime.client.RefreshModelToken(ctx, t.session.id, t.params.TurnID)
 }
 
+// RefreshToolsToken asks the platform for a fresh credential for this turn's
+// platform tool calls (Client.RefreshToolsToken).
+func (t *AgentTurn) RefreshToolsToken(ctx context.Context) (ToolsTokenRefreshResult, error) {
+	return t.session.runtime.client.RefreshToolsToken(ctx, t.session.id, t.params.TurnID)
+}
+
+// EnvironmentInfo describes the hands machine when brain and hands are on
+// different machines (turn.start config.environment_info, contract 1.4.0);
+// nil when the tools run on this machine.
+func (t *AgentTurn) EnvironmentInfo() *EnvironmentInfo {
+	if t.params.Config == nil {
+		return nil
+	}
+	return t.params.Config.EnvironmentInfo
+}
+
 // Inputs delivers turn.input messages in arrival order.
 func (t *AgentTurn) Inputs() <-chan TurnInputParams { return t.inputs }
 

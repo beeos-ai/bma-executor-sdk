@@ -191,6 +191,21 @@ client.ServeAgent(myAgent, bmaexecutor.AgentCapability{
 
 The harness side is `HarnessOptions.Agent` (`AgentPlatform`) plus `Executor.StartTurn`, `SendTurnInput`, `CancelTurn`, `CloseAgentSession` and `RespondInteraction`. The BMA platform side is in preview: the binding of an agent to the machine is made by the BMA team (the public `/v1` API has no route for it yet); its sessions accept text input only. See [agent capability](docs/executor/agent-capability.md#7-platform-preview).
 
+### Brain and hands on different machines, and Claude Code (Go)
+
+`ACPAgent` (Go) hosts an ACP agent process as the brain of a session. Its tool calls go through one seam, the tool route:
+
+- **Hands on this machine** (no `tools_mcp_*` in `turn.start` metadata): the call runs in this executor's `Core`, after the executor's own re-check (policy, approval, turn) and at most once.
+- **Hands on another machine** (`turn.start` metadata carries `tools_mcp_url` and `tools_mcp_token`, contract 1.4.0, handed only to an executor that declared `ACPAgentOptions.PlatformTools`): every call goes to the platform's tool gateway, which re-checks and runs it on the session's hands machine. The turn never falls back to this machine. The token lives in memory only, is replaced with `tools_token.refresh` before it expires (a failed refresh is logged and retried with backoff), and a refused token (an older epoch, expired) answers `not_forwarded` / `stale_turn`.
+
+Both routes behave the same (the conformance suite `toolroute_conformance_test.go` runs T1–T11 against each). In particular `bash`: `timeout` is how long the call waits (default 120 s, at most 600 s, and at most 55 s per call); a command that outlives the wait keeps running and the call returns its pid and the file its output goes to (`on_timeout: "kill"` stops it instead). It ends when it exits, after 1 h, when its turn is canceled or runs out of time, or when the session closes.
+
+`Options.Labels` and `Options.RemoteBrain` are the machine owner's local configuration (`ExecutorInfo.labels`, `Capabilities.remote_brain`). Labels only narrow where the platform may place sessions; `RemoteBrain` is off unless the owner turns it on here — it lets a brain on another machine use this one as its hands, and the platform has no way to switch it on.
+
+**Claude Code** (`ACPAgentOptions.Profile: bmaexecutor.ACPProfileClaudeCode`) hosts the official [claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp), unmodified, at a pinned release (`claudeAgentACPPins`; tested with npm `@agentclientprotocol/claude-agent-acp@0.101.0`, `testdata/claude-agent-acp/package-lock.json`). It uses only the node owner's own Claude credentials (their Claude Code login, or `ANTHROPIC_API_KEY` / a third-party provider's variables in `ACPAgentOptions.Env`); they never pass through BMA, the profile starts no model proxy and declares no `harness_model`. Its tools are the six platform tools, injected as an MCP server (`mcp__bma__bash`, ...) with Claude Code's own tools turned off (`tools: []`); the platform's policy and approvals apply as for every brain. Gates, all fail closed: `session/set_mode default` after every `session/new` and a check that the mode is `default` (otherwise the turn is refused); the tool list of Claude Code's init message must be the six platform tools plus the placeholder tools the pinned release is known to add (e.g. `DeferredToolPlaceholder`); a permission request for any other tool is rejected. A Claude Code brain does not declare `turn_resume`. See `examples/local-dsh -profile claude-code`.
+
+TypeScript and Python have no equivalent: they have no ACP host and no execution core, and no `model_token.refresh` client either; the generated types carry the 1.4.0 members (`executor.labels`, `capabilities.remote_brain`, `tools_token.refresh`) for code that sets or calls them by hand.
+
 ## Examples
 
 Run from the repository root:

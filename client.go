@@ -133,6 +133,20 @@ type Options struct {
 	MachineID    string
 	Executor     ExecutorInfo
 	Capabilities Capabilities
+	// Labels are reported with executor.register (ExecutorInfo.Labels, contract
+	// 1.4.0) and added to Executor.Labels: at most 32, each 1-64 characters of
+	// a-z 0-9 . _ - . They are the machine owner's local configuration; the
+	// platform accepts them as given and uses them only to narrow a choice
+	// among machines the project is already authorized to use, never for an
+	// authorization or security decision.
+	Labels []string
+	// RemoteBrain is the machine owner's consent to let a brain that runs on
+	// another machine use this machine as its hands (Capabilities.RemoteBrain,
+	// contract 1.4.0). It is off unless the owner turns it on here, in the
+	// executor's local configuration; the platform only reads it back and has
+	// no way to switch it on. It applies to a machine the tenant owns; a
+	// platform-hosted brain driving this machine does not need it.
+	RemoteBrain bool
 	// Protocol is the WebSocket subprotocol and executor.register protocol.
 	// Defaults to ProtocolV11.
 	Protocol string
@@ -326,6 +340,14 @@ func NewClient(options Options) (*Client, error) {
 	}
 	if options.EnvironmentID == "" && options.MachineID == "" {
 		options.MachineID = strings.TrimSpace(os.Getenv(MachineIDEnv))
+	}
+	labels, err := mergeExecutorLabels(options.Executor.Labels, options.Labels)
+	if err != nil {
+		return nil, err
+	}
+	options.Executor.Labels = labels
+	if options.RemoteBrain {
+		options.Capabilities.RemoteBrain = &RemoteBrainCapability{Enabled: true}
 	}
 	if options.Protocol == "" {
 		options.Protocol = ProtocolV11
@@ -694,6 +716,20 @@ func (c *Client) SessionReady(ctx context.Context, params SessionReadyParams) (A
 func (c *Client) RefreshModelToken(ctx context.Context, sessionID, turnID string) (ModelTokenRefreshResult, error) {
 	var result ModelTokenRefreshResult
 	err := c.callInto(ctx, MethodModelTokenRefresh, ModelTokenRefreshParams{SessionID: sessionID, TurnID: turnID}, &result)
+	return result, err
+}
+
+// RefreshToolsToken asks the platform for a fresh credential for the running
+// turn's platform tool calls (tools_token.refresh, contract 1.4.0): call it
+// before the turn.start tools_mcp_token expires
+// (ToolsTokenRefreshResult.ExpiresAt). A turn that already ended, or one that
+// was started again in a newer epoch, answers an *RPCError with reason
+// turn_inactive or forbidden; a platform that cannot mint one answers
+// tools_token_unavailable. It makes one attempt; the caller owns retry and
+// backoff.
+func (c *Client) RefreshToolsToken(ctx context.Context, sessionID, turnID string) (ToolsTokenRefreshResult, error) {
+	var result ToolsTokenRefreshResult
+	err := c.callInto(ctx, MethodToolsTokenRefresh, ToolsTokenRefreshParams{SessionID: sessionID, TurnID: turnID}, &result)
 	return result, err
 }
 
@@ -1794,4 +1830,31 @@ func (c *Client) registeredSignal() <-chan struct{} {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+const (
+	maxExecutorLabels   = 32
+	maxExecutorLabelLen = 64
+)
+
+// mergeExecutorLabels is the union of the label lists (first occurrence
+// order), checked against the contract's limits.
+func mergeExecutorLabels(lists ...[]string) ([]string, error) {
+	var labels []string
+	seen := map[string]bool{}
+	for _, list := range lists {
+		for _, label := range list {
+			if len(label) == 0 || len(label) > maxExecutorLabelLen || strings.Trim(label, "abcdefghijklmnopqrstuvwxyz0123456789._-") != "" {
+				return nil, fmt.Errorf("bmaexecutor: label %q must be 1-%d characters of a-z 0-9 . _ -", label, maxExecutorLabelLen)
+			}
+			if !seen[label] {
+				seen[label] = true
+				labels = append(labels, label)
+			}
+		}
+	}
+	if len(labels) > maxExecutorLabels {
+		return nil, fmt.Errorf("bmaexecutor: at most %d labels, got %d", maxExecutorLabels, len(labels))
+	}
+	return labels, nil
 }

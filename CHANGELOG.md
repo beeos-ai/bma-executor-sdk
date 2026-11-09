@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased
+
+- **Behavior change, Go `ACPAgent` local `bash` (ADR-0029 T6):** `timeout` is
+  now how long the call waits, not how long the command may live, as on the
+  platform's tool gateway. A command that outlives the wait (at most 55 s, or
+  `timeout` when shorter; default `timeout` 120 s, at most 600 s) is no longer
+  killed: the call answers `running in the background (pid N), output in
+  <file>` (the file is under `.bma-bash/` in the working directory) and the
+  command keeps running until it exits, 1 h, a canceled or timed-out turn, the
+  end of the session or `ACPAgent.Close`; a turn that completes does not stop
+  it. `on_timeout: "kill"` keeps the old behavior of stopping it at the end of
+  the wait. Output of a command that finishes within the wait is unchanged
+  (stdout and stderr now share one stream, in write order). `Core`'s own bash
+  (the `tool.call` path of a hand) is unchanged. The tool route conformance
+  suite no longer exempts the local route from T6.
+- **Go: platform tool route wired into `ACPAgent` (contract 1.4.0, ADR-0029
+  S3):** a turn whose `turn.start` metadata carries `tools_mcp_url` and
+  `tools_mcp_token` sends every tool call to the platform's tool gateway (the
+  hands are on another machine) and never runs one here; any other turn runs
+  its tools here as before. `ACPAgentOptions.PlatformTools` declares
+  `platform_credentials: [brain_tools]`. The token is kept in memory only and
+  replaced with the new `Client.RefreshToolsToken` / `AgentTurn.RefreshToolsToken`
+  (`tools_token.refresh`) before it expires; a failed refresh is logged and
+  retried with backoff (5 s to 1 min). 401/403 from the gateway is
+  `not_forwarded` / `stale_turn`. `AgentTurn.EnvironmentInfo()` returns the
+  hands machine's description; for a remote-hands turn `config.cwd` is not
+  checked against this machine's roots and the agent works in a scratch
+  workspace.
+- **Go: `Options.Labels` and `Options.RemoteBrain`:** report
+  `ExecutorInfo.labels` (checked against the contract's limits) and
+  `Capabilities.remote_brain` (off unless set; the platform cannot enable it).
+- **Go: Claude Code profile of `ACPAgent`
+  (`ACPAgentOptions.Profile: ACPProfileClaudeCode`):** hosts the official
+  claude-agent-acp (pinned release, unmodified) with the node owner's own
+  credentials only; Claude Code's tools are replaced by the six platform
+  tools served as an MCP server on loopback. `session/set_mode default` after
+  `session/new` with an asserted default mode, a checked tool catalog (known
+  placeholder tools of the pinned release are listed explicitly), foreign
+  tools rejected, no `harness_model`, no `turn_resume`. `examples/local-dsh`
+  gains `-profile`, `-labels`, `-remote-brain`, `-platform-tools`.
+
 ## 1.3.0
 
 - **Go tool route seam (ADR-0029 S1, internal, no API or protocol change):**
