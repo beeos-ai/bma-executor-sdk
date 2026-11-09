@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
 
 - **Go tool route seam (ADR-0029 S1, internal, no API or protocol change):**
   `ACPAgent` now sends every local tool call through an unexported `toolRoute`

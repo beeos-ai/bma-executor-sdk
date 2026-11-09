@@ -4,6 +4,13 @@ ADR 0012 replaces string-dispatched tool handlers with one typed slot per
 built-in tool, and string-named protocol calls with methods typed by the
 contract, in TypeScript, Python and Go (one release, **1.0.0**).
 
+## 1.3.0
+
+No breaking change (contract 1.3.0 is additive). `AgentCapability.harness`
+is deprecated in favour of `harnesses[]`; Go executors that use the platform
+model proxy can call `Client.RefreshModelToken` (or let `ACPAgent` with
+`PlatformModel` refresh it).
+
 ## 1.2.0
 
 No breaking change. Set the machine id so a machine-scoped executor uses
