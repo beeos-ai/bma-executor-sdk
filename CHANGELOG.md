@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Go: the brain-side tool API is public (ADR-0029 S3):** `ToolRoute` (one
+  method, `Call(ctx, RouteCall) *RouteResult`), `RouteCall` (`ID`, `ToolUseID`,
+  `Name`, `Input`, `ApprovalID`), `RouteResult` with the `RouteOutcome*`
+  constants and `RouteBackground`, `PlatformToolRoute` with
+  `NewPlatformToolRoute`, and on `AgentTurn`: `Tools()` (the platform route of
+  a turn that carries `tools_mcp_*`, a refusing route for a half credential,
+  nil when the hands are this machine) and `ApprovalID(callID)` (the
+  deterministic `appr_` interaction id). A third-party brain needs only the SDK
+  and the contract; two runnable skeletons with tests:
+  `examples/third-party-brain` and `examples/third-party-hand`. The local route
+  and the conformance suite stay internal. Previously unexported
+  (`acpToolResult`, `toolBackground`, `platformToolRoute`): no earlier release
+  exposed them.
 - **Behavior change, Go `ACPAgent` local `bash` (ADR-0029 T6):** `timeout` is
   now how long the call waits, not how long the command may live, as on the
   platform's tool gateway. A command that outlives the wait (at most 55 s, or
