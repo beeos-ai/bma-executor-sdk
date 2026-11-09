@@ -3,6 +3,7 @@ package bmaexecutor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -29,6 +30,13 @@ type AgentPlatform interface {
 	InteractionRequested(ctx context.Context, executor *Executor, request InteractionRequestParams) (string, error)
 	// InteractionCanceled closes the platform interaction without an answer.
 	InteractionCanceled(ctx context.Context, executor *Executor, cancel InteractionCancelParams) error
+}
+
+// AgentModelTokens is implemented by an AgentPlatform that answers
+// model_token.refresh: a fresh model credential for a running turn. A
+// returned *RPCError is sent as is. Without it the method is not handled.
+type AgentModelTokens interface {
+	RefreshModelToken(ctx context.Context, executor *Executor, params ModelTokenRefreshParams) (ModelTokenRefreshResult, error)
 }
 
 // AgentEventRecord is one validated durable agent event.
@@ -109,6 +117,24 @@ func (h *Harness) dispatchAgent(ctx context.Context, executor *Executor, method 
 			return nil, rpcErr(CodeInternalError, err.Error(), true), true
 		}
 		return Ack{Accepted: true}, nil, true
+	case MethodModelTokenRefresh:
+		tokens, ok := platform.(AgentModelTokens)
+		if !ok {
+			return nil, nil, false
+		}
+		var params ModelTokenRefreshParams
+		if json.Unmarshal(raw, &params) != nil || params.SessionID == "" || params.TurnID == "" {
+			return nil, rpcErr(CodeInvalidParams, "invalid model_token.refresh params", false), true
+		}
+		result, err := tokens.RefreshModelToken(ctx, executor, params)
+		var rpc *RPCError
+		switch {
+		case errors.As(err, &rpc):
+			return nil, &JSONRPCError{Code: rpc.Code, Message: rpc.Message, Data: rpc.Data}, true
+		case err != nil:
+			return nil, rpcErr(CodeInternalError, err.Error(), true), true
+		}
+		return result, nil, true
 	case MethodSessionEnded:
 		// Agent sessions end with session.close; the hand-session path
 		// answers session.ended for any session id, so nothing to add here.

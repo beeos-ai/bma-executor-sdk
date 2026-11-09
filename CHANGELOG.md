@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Go `ACPAgent` in a sandbox (BMA S6):** `ACPAgentOptions.PlatformModel`
+  declares `platform_credentials: [harness_model]` and makes `Upstream`
+  optional (a turn without the platform credential then fails with
+  `session.error`, never goes elsewhere); the platform's `model_token` is
+  refreshed with `model_token.refresh` before a forwarded request when at most
+  10 minutes of `model_token_expires_at` are left (a failure keeps the current
+  token and backs off 5 s to 1 min); the agent process runs as
+  `CoreOptions.RunAs` (HOME/USER of the workload, `StateDir` owned by it).
+  New `AgentTurn.RefreshModelToken`; the reference `Harness` answers
+  `model_token.refresh` when its `AgentPlatform` implements `AgentModelTokens`.
 - **Go `Client.RefreshModelToken(ctx, sessionID, turnID)`:** calls the contract's
   `model_token.refresh` and returns the turn's fresh `model_token`,
   `model_base_url` and `expires_at`; one attempt, the caller owns backoff.
