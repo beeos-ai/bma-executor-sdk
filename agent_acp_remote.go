@@ -23,7 +23,7 @@ func handsAreRemote(metadata map[string]string) bool {
 // remoteToolRoute is the platform route of a turn with tools_mcp_*, or nil
 // for a turn whose tools run here. One of url and token without the other is
 // an error: the turn must not fall back to this machine.
-func (a *ACPAgent) remoteToolRoute(turn *AgentTurn) (func(*acpLedger) toolRoute, error) {
+func (a *ACPAgent) remoteToolRoute(turn *AgentTurn) (func(*acpLedger) ToolRoute, error) {
 	md := turn.Params().Metadata
 	if !handsAreRemote(md) {
 		return nil, nil
@@ -34,9 +34,9 @@ func (a *ACPAgent) remoteToolRoute(turn *AgentTurn) (func(*acpLedger) toolRoute,
 	}
 	// An unparsable or missing expiry is never refreshed (the platform did not say).
 	expiresAt, _ := time.Parse(time.RFC3339, md[metaToolsExpiresAt])
-	return func(ledger *acpLedger) toolRoute {
+	return func(ledger *acpLedger) ToolRoute {
 		return newPlatformToolRoute(PlatformToolRouteOptions{
-			Endpoint: url, Token: token, ExpiresAt: expiresAt, TurnID: turn.TurnID(),
+			Endpoint: url, Token: token, ExpiresAt: expiresAt, SessionID: turn.SessionID(), TurnID: turn.TurnID(),
 			Refresh: turn.RefreshToolsToken, OnLog: a.log,
 			ApprovalFor: func(callID string) string {
 				if call := ledger.call(callID); call.Decision == acpDecisionAllow {

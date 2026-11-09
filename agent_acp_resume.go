@@ -16,7 +16,7 @@ package bmaexecutor
 //     approval already answered is not asked again (a pending one is asked
 //     again under the same deterministic appr_ id, which the platform keeps
 //     as one interaction). It is also the evidence the executor checks before
-//     it runs an ask tool (ACPAgent's tool gate, agent_acp_tools.go).
+//     it runs an ask tool (ACPAgent's tool gate, toolroute_local.go).
 //   - Calls[call].Phase: "started" is written before a tool runs and "done"
 //     with its result after it. A call that is "done" is answered from the
 //     ledger when the agent asks for it again; one that is "started" has an
@@ -78,19 +78,24 @@ type acpLedgerState struct {
 	Calls     map[string]*acpCallState `json:"calls,omitempty"`
 }
 
-func (a *ACPAgent) ledgerPath(sessionID string) string {
+func ledgerPath(stateDir, sessionID string) string {
 	sum := sha256.Sum256([]byte(sessionID))
-	return filepath.Join(a.opts.StateDir, "executor-turns", hex.EncodeToString(sum[:16])+".json")
+	return filepath.Join(stateDir, "executor-turns", hex.EncodeToString(sum[:16])+".json")
 }
 
-// ledger returns the session's ledger, read from disk the first time.
+// ledger returns the session's ledger, read from disk the first time. There
+// is one in-memory copy per file in a Core, however many routes use it.
 func (a *ACPAgent) ledger(sessionID string) (*acpLedger, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if l := a.ledgers[sessionID]; l != nil {
+	return a.opts.Core.local.ledger(ledgerPath(a.opts.StateDir, sessionID), sessionID)
+}
+
+func (s *localState) ledger(path, sessionID string) (*acpLedger, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if l := s.ledgers[path]; l != nil {
 		return l, nil
 	}
-	l := &acpLedger{path: a.ledgerPath(sessionID), state: acpLedgerState{SessionID: sessionID}}
+	l := &acpLedger{path: path, state: acpLedgerState{SessionID: sessionID}}
 	raw, err := os.ReadFile(l.path)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -101,18 +106,23 @@ func (a *ACPAgent) ledger(sessionID string) (*acpLedger, error) {
 			return nil, errors.New("the turn state of session " + sessionID + " is unreadable: " + l.path)
 		}
 	}
-	if a.ledgers == nil {
-		a.ledgers = map[string]*acpLedger{}
+	if s.ledgers == nil {
+		s.ledgers = map[string]*acpLedger{}
 	}
-	a.ledgers[sessionID] = l
+	s.ledgers[path] = l
 	return l, nil
 }
 
-func (a *ACPAgent) dropLedger(sessionID string) {
-	a.mu.Lock()
-	delete(a.ledgers, sessionID)
-	a.mu.Unlock()
-	_ = os.Remove(a.ledgerPath(sessionID))
+// dropLedgers removes the turn state of a session from memory and disk.
+func (s *localState) dropLedgers(sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for path, l := range s.ledgers {
+		if l.sessionID() == sessionID {
+			delete(s.ledgers, path)
+			_ = os.Remove(path)
+		}
+	}
 }
 
 // begin keeps the ledger when it belongs to turnID (a turn the platform
@@ -165,6 +175,20 @@ func (l *acpLedger) call(callID string) acpCallState {
 		return *c
 	}
 	return acpCallState{}
+}
+
+func (l *acpLedger) sessionID() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.state.SessionID
+}
+
+// decide records the platform's answer to a call's permission interaction and
+// what it was given for, so the gate can check that the call it runs is that one.
+func (l *acpLedger) decide(callID, decision, interactionID, toolName string, input map[string]any) error {
+	return l.update(callID, func(c *acpCallState) {
+		c.Decision, c.InteractionID, c.ToolName, c.InputHash = decision, interactionID, toolName, acpInputHash(input)
+	})
 }
 
 // turnID is the turn the ledger belongs to.

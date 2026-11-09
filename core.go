@@ -185,6 +185,9 @@ type Core struct {
 	capabilities []Capability
 	methods      map[string]registeredMethod
 	closed       bool
+
+	// local is the state of the local tool routes (toolroute_local.go).
+	local localState
 }
 
 type registeredMethod struct {
@@ -469,6 +472,7 @@ func (c *Core) Close() {
 		}()
 	}
 	wg.Wait()
+	c.local.background.killAll()
 }
 
 func busy(message string) error {

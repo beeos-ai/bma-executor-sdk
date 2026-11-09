@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- **Go: `LocalToolRoute`, the local counterpart of `PlatformToolRoute`.**
+  `NewLocalToolRoute(LocalToolRouteOptions{Core, StateDir, SessionID, TurnID,
+  Workspace, PermissionMode, ToolPolicy, Context, OnLog})` is a `ToolRoute`
+  that runs the six tools on this machine, in a `Core`, behind the executor's
+  own gate (the one `ACPAgent` has had since the local tool re-check):
+  `stale_turn` for a call after its turn ended or from an older turn,
+  `permission_denied` for `deny`, and for `ask` the user's `allow` for this very
+  call (`RecordApproval(callID, request, answer)` after
+  `AgentTurn.RequestInteraction`; none is `approval_required`, another tool,
+  input or approval id `approval_invalid`). A call id runs at most once, also
+  across executor restarts (turn state under `StateDir`; a started call whose
+  result was lost answers `outcome_unknown`). `Complete()` lets a bash command
+  left in the background outlive the turn; `CloseSession()` ends the session.
+  `ACPAgent` now runs its local turns through this same route: the gate, the
+  ledger and the `bash` background logic are one implementation, not a copy
+  (file names changed accordingly: `agent_acp_tools.go`/`agent_acp_bash.go` are
+  `toolroute_local*.go`). No behavior change for `ACPAgent`; the turn state
+  ledger is now kept per `Core` (one in-memory copy per file) instead of per
+  `ACPAgent`, and `Core.Close` also ends bash commands left in the background.
+  New exported function `ApprovalID(sessionID, turnID, callID)` (what
+  `AgentTurn.ApprovalID` returns) for code that has no `AgentTurn`.
+- **Go: the tool route conformance suite is a public package for tests,
+  `github.com/beeos-ai/bma-executor-sdk/conformance` (cases T1–T11).**
+  `RunToolRouteConformance(t, factory)` runs the cases against the route a
+  `Factory` builds (a `Rig`: the route and the levers - approval, restart,
+  newer epoch, cancel, offline hands), so a third-party brain or hands can hold
+  its own route to the same cases the SDK holds `LocalToolRoute` and
+  `PlatformToolRoute` to. `PlatformFactory(hands)` builds the platform route
+  against `conformance/gatewaystub`, a standard-library-only contract double of
+  the platform's tool gateway, with hands of your choosing (`CoreHands`,
+  `DefaultHands`). `examples/third-party-brain` and `examples/third-party-hand`
+  run the suite in their tests; the SDK runs it against both of its routes.
+  The packages import package `testing`: production code must not import them
+  (the new `arch_test.go` fails if any non-test file of the module does, or if
+  a conformance package imports an `internal/` package) and they are not built
+  on Windows. Test-only; nothing changes for programs that do not import them.
 - **Go `ACPAgent`, Claude Code profile: prewarm.** `NewACPAgent` starts the
   agent process as before and now also opens one throwaway session in the
   background (scratch directory `StateDir/prewarm`, closed unused, never
@@ -40,8 +76,7 @@
   nil when the hands are this machine) and `ApprovalID(callID)` (the
   deterministic `appr_` interaction id). A third-party brain needs only the SDK
   and the contract; two runnable skeletons with tests:
-  `examples/third-party-brain` and `examples/third-party-hand`. The local route
-  and the conformance suite stay internal. Previously unexported
+  `examples/third-party-brain` and `examples/third-party-hand`. Previously unexported
   (`acpToolResult`, `toolBackground`, `platformToolRoute`): no earlier release
   exposed them.
 - **Behavior change, Go `ACPAgent` local `bash` (ADR-0029 T6):** `timeout` is

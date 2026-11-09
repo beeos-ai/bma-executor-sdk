@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// The bash tool of the local route has the platform gateway's semantics
+// The bash tool of the LocalToolRoute has the platform gateway's semantics
 // (ADR-0005 decision 4, the same as the tool route conformance case T6):
 // `timeout` is how long the call waits, not how long the command may live.
 // A command that outlives the wait is left running; the call answers with its
@@ -100,10 +100,9 @@ func (b *acpBackground) killAll() {
 }
 
 // runBash runs one bash call of the agent in the session's workspace. The
-// call's own ctx ends with the call (the turn's cancel or deadline); turn is
-// the turn the command belongs to, which decides the fate of a command left
-// in the background.
-func (a *ACPAgent) runBash(ctx context.Context, turn *acpTurn, sessionID, callID string, in map[string]any) (string, bool, *RouteBackground) {
+// call's own ctx ends with the call (the turn's cancel or deadline); the
+// route's turn decides the fate of a command left in the background.
+func (r *LocalToolRoute) runBash(ctx context.Context, callID string, in map[string]any) (string, bool, *RouteBackground) {
 	command, _ := in["command"].(string)
 	if command == "" {
 		return "bash requires command", true, nil
@@ -113,7 +112,7 @@ func (a *ACPAgent) runBash(ctx context.Context, turn *acpTurn, sessionID, callID
 		timeout = min(time.Duration(ms)*time.Millisecond, acpBashMaxTimeout)
 	}
 	onTimeoutKill := in["on_timeout"] == "kill"
-	session := a.opts.Core.session(coreKey{acpBrain, sessionID})
+	session := r.core.session(coreKey{acpBrain, r.sessionID})
 	if session == nil {
 		return "session_not_active: the session is not open", true, nil
 	}
@@ -121,11 +120,11 @@ func (a *ACPAgent) runBash(ctx context.Context, turn *acpTurn, sessionID, callID
 	if err != nil {
 		return err.Error(), true, nil
 	}
-	env, err := a.opts.Core.Env(nil)
+	env, err := r.core.Env(nil)
 	if err != nil {
 		return err.Error(), true, nil
 	}
-	output, err := a.bashOutputFile(cwd, sessionID, callID)
+	output, err := r.bashOutputFile(cwd, callID)
 	if err != nil {
 		return "spawn bash: " + err.Error(), true, nil
 	}
@@ -134,14 +133,14 @@ func (a *ACPAgent) runBash(ctx context.Context, turn *acpTurn, sessionID, callID
 		return "spawn bash: " + err.Error(), true, nil
 	}
 	defer func() { _ = out.Close() }()
-	if runAs := a.opts.Core.opts.RunAs; runAs != nil {
+	if runAs := r.core.opts.RunAs; runAs != nil {
 		if err := os.Chown(output, int(runAs.UID), int(runAs.GID)); err != nil {
 			return "spawn bash: " + err.Error(), true, nil
 		}
 	}
 	// The command is not tied to the call's ctx: it may outlive the call.
 	cmd := shellCommand(context.Background(), command)
-	setCredential(cmd, a.opts.Core.opts.RunAs)
+	setCredential(cmd, r.core.opts.RunAs)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = cwd, env, out, out
 	tree, err := startCommand(cmd)
 	if err != nil {
@@ -158,7 +157,7 @@ func (a *ACPAgent) runBash(ctx context.Context, turn *acpTurn, sessionID, callID
 	defer timer.Stop()
 	select {
 	case <-proc.done:
-		return a.bashFinished(output, waitErr), false, nil
+		return r.bashFinished(output, waitErr), false, nil
 	case <-ctx.Done():
 		proc.kill()
 		<-proc.done
@@ -172,8 +171,8 @@ func (a *ACPAgent) runBash(ctx context.Context, turn *acpTurn, sessionID, callID
 		_ = os.Remove(output)
 		return "tool timed out", true, nil
 	}
-	a.background.add(sessionID, proc)
-	go a.superviseBackground(turn, proc)
+	r.core.local.background.add(r.sessionID, proc)
+	go r.superviseBackground(proc)
 	text := fmt.Sprintf("running in the background (pid %d), output in %s", cmd.Process.Pid, output)
 	return text, false, &RouteBackground{PID: cmd.Process.Pid, OutputFile: output}
 }
@@ -181,7 +180,7 @@ func (a *ACPAgent) runBash(ctx context.Context, turn *acpTurn, sessionID, callID
 // superviseBackground ends a command left in the background when its turn is
 // canceled or runs out of time, or after acpBashLifetime. A turn that
 // completed leaves it running.
-func (a *ACPAgent) superviseBackground(turn *acpTurn, proc *acpBackgroundProc) {
+func (r *LocalToolRoute) superviseBackground(proc *acpBackgroundProc) {
 	lifetime := time.NewTimer(acpBashLifetime)
 	defer lifetime.Stop()
 	for {
@@ -191,8 +190,8 @@ func (a *ACPAgent) superviseBackground(turn *acpTurn, proc *acpBackgroundProc) {
 		case <-lifetime.C:
 			proc.kill()
 			return
-		case <-turn.ctx.Done():
-			if !turn.completed.Load() {
+		case <-r.ctx.Done():
+			if !r.completed.Load() {
 				proc.kill()
 				return
 			}
@@ -208,23 +207,23 @@ func (a *ACPAgent) superviseBackground(turn *acpTurn, proc *acpBackgroundProc) {
 }
 
 // bashOutputFile is the file a command's output goes to, in the working directory.
-func (a *ACPAgent) bashOutputFile(cwd, sessionID, callID string) (string, error) {
+func (r *LocalToolRoute) bashOutputFile(cwd, callID string) (string, error) {
 	dir := filepath.Join(cwd, acpBashOutputDir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	if runAs := a.opts.Core.opts.RunAs; runAs != nil {
+	if runAs := r.core.opts.RunAs; runAs != nil {
 		if err := os.Chown(dir, int(runAs.UID), int(runAs.GID)); err != nil {
 			return "", err
 		}
 	}
-	sum := sha256.Sum256([]byte(sessionID + "\x00" + callID))
+	sum := sha256.Sum256([]byte(r.sessionID + "\x00" + callID))
 	return filepath.Join(dir, hex.EncodeToString(sum[:8])+".out"), nil
 }
 
 // bashFinished is the answer of a command that ended within the wait: its
 // output (capped) and exit code, as the gateway renders them.
-func (a *ACPAgent) bashFinished(output string, waitErr error) string {
+func (r *LocalToolRoute) bashFinished(output string, waitErr error) string {
 	code := 0
 	var exitErr *exec.ExitError
 	if errors.As(waitErr, &exitErr) {
@@ -233,7 +232,7 @@ func (a *ACPAgent) bashFinished(output string, waitErr error) string {
 	raw, _ := os.ReadFile(output)
 	_ = os.Remove(output)
 	text := fmt.Sprintf("exit_code: %d", code)
-	if limit := a.opts.Core.opts.MaxOutputBytes; len(raw) > limit {
+	if limit := r.core.opts.MaxOutputBytes; len(raw) > limit {
 		raw = append(raw[:limit:limit], "\n[truncated]"...)
 	}
 	if len(raw) > 0 {

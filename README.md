@@ -193,7 +193,7 @@ The harness side is `HarnessOptions.Agent` (`AgentPlatform`) plus `Executor.Star
 
 ### Writing your own brain or hands (Go, ADR-0029)
 
-A third-party **brain** implements `AgentHandler` and depends on this SDK and the contract only; a third-party **hands** is a `Core` (or your own tool handlers) behind a `Client`. Minimal, runnable skeletons: [`examples/third-party-brain`](examples/third-party-brain/main.go) and [`examples/third-party-hand`](examples/third-party-hand/main.go), each with a test that runs it against the SDK's `Harness`.
+A third-party **brain** implements `AgentHandler` and depends on this SDK and the contract only; a third-party **hands** is a `Core` (or your own tool handlers) behind a `Client`. Minimal, runnable skeletons: [`examples/third-party-brain`](examples/third-party-brain/main.go) and [`examples/third-party-hand`](examples/third-party-hand/main.go), each with tests that run it against the SDK's `Harness` and against the tool route conformance suite.
 
 The brain's tools go through `AgentTurn.Tools()`:
 
@@ -213,7 +213,23 @@ Declare `AgentCapability.PlatformCredentials: []string{bmaexecutor.PlatformCrede
 
 A hands' owner chooses what may use the machine: `Options.Labels` (placement filters, never an authorization) and `Options.RemoteBrain` (off by default; the platform cannot enable it).
 
-The local route (brain and hands on one computer) is `ACPAgent`'s and is not exported: a brain of your own that runs its tools itself on its own computer does not need it. The conformance suite stays in this repository.
+`LocalToolRoute` is the same route for the case where the hands are this machine (`Tools()` is nil there): `NewLocalToolRoute(LocalToolRouteOptions{Core, StateDir, SessionID, TurnID, Workspace, ...})` runs the six tools in a `Core` behind the executor's own gate, which is what the platform's gateway does for a remote machine: a call after its turn ended is `stale_turn`, `deny` is `permission_denied`, an `ask` tool needs the user's `allow` for this very call (record it with `RecordApproval` after `RequestInteraction`; without one `approval_required`, for another tool, input or approval id `approval_invalid`), and a call id runs at most once, across executor restarts too (state under `StateDir`; a call whose result was lost with the process answers `outcome_unknown`). `ACPAgent` uses this route for its own local turns.
+
+#### Testing a route: the conformance suite
+
+Package [`conformance`](conformance) holds the tool route conformance suite (cases T1–T11, ADR-0029 §5). One set of cases, run against every route, so that a brain cannot tell which one its calls took. Run it in the tests of your own brain or hands:
+
+```go
+import "github.com/beeos-ai/bma-executor-sdk/conformance"
+
+func TestMyHandsConformToTheGateway(t *testing.T) {
+	conformance.RunToolRouteConformance(t, conformance.PlatformFactory(func(t *testing.T, turn context.Context) (gatewaystub.Hands, string) {
+		// your hands: run a call that passed the gateway, in the returned directory
+	}))
+}
+```
+
+`RunToolRouteConformance(t, factory)` takes a `Factory` that builds a `Rig` (your route and the levers the cases pull: the user's approval, a restart, a newer epoch, a cancel, offline hands). `conformance.PlatformFactory` builds the SDK's `PlatformToolRoute` against [`conformance/gatewaystub`](conformance/gatewaystub), a contract double of the platform's tool gateway (token and epoch, policy, one-time approval, idempotency, three outcomes, background bash), with hands you choose (`conformance.CoreHands` runs the calls in a `Core`: [`examples/third-party-hand`](examples/third-party-hand/conformance_test.go)). [`examples/third-party-brain`](examples/third-party-brain/conformance_test.go) runs the route a brain gets from `AgentTurn.Tools()`. The SDK runs it against its own two routes in `toolroute_conformance_test.go`. The packages import package `testing` and are for tests only: production code must not import them (`arch_test.go` checks the SDK's own), and they are not built on Windows (the cases start POSIX commands).
 
 ### Brain and hands on different machines, and Claude Code (Go)
 
@@ -222,7 +238,7 @@ The local route (brain and hands on one computer) is `ACPAgent`'s and is not exp
 - **Hands on this machine** (no `tools_mcp_*` in `turn.start` metadata): the call runs in this executor's `Core`, after the executor's own re-check (policy, approval, turn) and at most once.
 - **Hands on another machine** (`turn.start` metadata carries `tools_mcp_url` and `tools_mcp_token`, contract 1.4.0, handed only to an executor that declared `ACPAgentOptions.PlatformTools`): every call goes to the platform's tool gateway, which re-checks and runs it on the session's hands machine. The turn never falls back to this machine. The token lives in memory only, is replaced with `tools_token.refresh` before it expires (a failed refresh is logged and retried with backoff), and a refused token (an older epoch, expired) answers `not_forwarded` / `stale_turn`.
 
-Both routes behave the same (the conformance suite `toolroute_conformance_test.go` runs T1–T11 against each). In particular `bash`: `timeout` is how long the call waits (default 120 s, at most 600 s, and at most 55 s per call); a command that outlives the wait keeps running and the call returns its pid and the file its output goes to (`on_timeout: "kill"` stops it instead). It ends when it exits, after 1 h, when its turn is canceled or runs out of time, or when the session closes.
+Both routes behave the same (the conformance suite, package [`conformance`](conformance), runs T1–T11 against each). In particular `bash`: `timeout` is how long the call waits (default 120 s, at most 600 s, and at most 55 s per call); a command that outlives the wait keeps running and the call returns its pid and the file its output goes to (`on_timeout: "kill"` stops it instead). It ends when it exits, after 1 h, when its turn is canceled or runs out of time, or when the session closes.
 
 `Options.Labels` and `Options.RemoteBrain` are the machine owner's local configuration (`ExecutorInfo.labels`, `Capabilities.remote_brain`). Labels only narrow where the platform may place sessions; `RemoteBrain` is off unless the owner turns it on here — it lets a brain on another machine use this one as its hands, and the platform has no way to switch it on.
 

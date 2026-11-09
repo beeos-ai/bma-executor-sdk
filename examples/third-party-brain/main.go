@@ -83,12 +83,17 @@ var capability = bmaexecutor.AgentCapability{
 }
 
 func newClient(options bmaexecutor.Options) (*bmaexecutor.Client, error) {
+	return newClientFor(options, brain{})
+}
+
+// newClientFor serves agent instead of the brain itself (tests swap in a probe).
+func newClientFor(options bmaexecutor.Options, agent bmaexecutor.AgentHandler) (*bmaexecutor.Client, error) {
 	options.Executor = bmaexecutor.ExecutorInfo{Name: "third-party-brain", OS: runtime.GOOS, Arch: runtime.GOARCH, Version: "0.1.0"}
 	client, err := bmaexecutor.NewClient(options)
 	if err != nil {
 		return nil, err
 	}
-	client.ServeAgent(brain{}, capability)
+	client.ServeAgent(agent, capability)
 	return client, nil
 }
 

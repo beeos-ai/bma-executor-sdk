@@ -1,20 +1,24 @@
 package bmaexecutor
 
-import "context"
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+)
 
 // ToolRoute is where a brain's tool calls go to run (ADR-0029, brain-hands
 // split): the seam between a brain and its hands. A brain written against the
 // SDK gets the route of its turn from AgentTurn.Tools and never needs to know
 // where the hands are.
 //
-// The route is the platform's execute-only tool gateway (ADR-0005; see
-// PlatformToolRoute): it checks the turn's credential and epoch, re-evaluates
+// There are two routes. PlatformToolRoute is the platform's execute-only tool
+// gateway (ADR-0005): it checks the turn's credential and epoch, re-evaluates
 // the tool policy, verifies the user's approval, runs each call id at most
 // once and runs the tool on the session's hands machine, which may refuse it
-// again by its own policy. The ACPAgent's own local route (the hands are this
-// machine) answers with the same outcomes and refuses for the same reasons
-// with the same error codes; both are held to the tool route conformance
-// suite (toolroute_conformance_test.go, cases T1–T11).
+// again by its own policy. LocalToolRoute (the hands are this machine) answers
+// with the same outcomes and refuses for the same reasons with the same error
+// codes. Both are held to the tool route conformance suite (package
+// conformance, cases T1–T11), which a route of your own can run too.
 //
 // A ToolRoute is bound to one turn of one session and is safe for concurrent
 // use. Its calls end with ctx: a canceled ctx abandons the call, which does not
@@ -26,6 +30,18 @@ type ToolRoute interface {
 	// a Go error. A repeated Call with the same RouteCall.ID is answered with
 	// the first result (RouteResult.Replayed), not run again.
 	Call(ctx context.Context, call RouteCall) *RouteResult
+}
+
+// ApprovalID is the interaction id to ask a tool call's approval under
+// (InteractionRequestParams.InteractionID) and to present with the call
+// (RouteCall.ApprovalID): "appr_" and 24 hex characters of sha256 over session,
+// turn and call id, NUL separated (ADR-0027). It is the same after a reconnect
+// or an executor restart, so the platform keeps one interaction per call and an
+// approval already answered is not asked again. The turn is part of it because
+// providers may reuse call ids such as "call_0" in every turn.
+func ApprovalID(sessionID, turnID, callID string) string {
+	sum := sha256.Sum256([]byte(sessionID + "\x00" + turnID + "\x00" + callID))
+	return "appr_" + hex.EncodeToString(sum[:])[:24]
 }
 
 // RouteCall is one tool call of a brain, in the CMA agent_toolset input shape
@@ -89,39 +105,6 @@ type RouteResult struct {
 type RouteBackground struct {
 	PID        int
 	OutputFile string
-}
-
-// toolRoute is the form ACPAgent uses inside: the session is part of the call.
-// PlatformToolRoute implements it and ToolRoute; the local route only this.
-type toolRoute interface {
-	// call runs one tool call. A route is bound to one turn of one session;
-	// the answer is never nil. ctx ends with the turn (cancel, deadline).
-	call(ctx context.Context, c routedCall) *RouteResult
-}
-
-// routedCall is one tool call of a brain, in the CMA agent_toolset input shape.
-type routedCall struct {
-	SessionID string
-	// CallID is the brain's tool call id; it is also the idempotency identity
-	// (a repeated call is answered with the first result, not run again).
-	CallID string
-	// ToolUseID is the id of the agent.tool_use event of the call (optional).
-	ToolUseID string
-	Name      string
-	Input     map[string]any
-	// ApprovalID, when set, is presented to the gateway as the call's
-	// approval instead of what the route's ApprovalFor says.
-	ApprovalID string
-}
-
-// localToolRoute runs a call in this executor's Core (see ACPAgent.runToolOnce).
-type localToolRoute struct {
-	agent *ACPAgent
-	turn  *acpTurn
-}
-
-func (r localToolRoute) call(ctx context.Context, c routedCall) *RouteResult {
-	return r.agent.runToolOnce(ctx, r.turn, c.SessionID, c.CallID, c.Name, c.Input)
 }
 
 // refusingRoute answers every call with a refusal: the turn's tool

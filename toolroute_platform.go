@@ -218,19 +218,15 @@ func (r *PlatformToolRoute) Call(ctx context.Context, c RouteCall) *RouteResult 
 	if c.ID == "" || c.Name == "" {
 		return refused("invalid_tool_input", "a tool call needs an ID (its idempotency identity) and a Name")
 	}
-	return r.call(ctx, routedCall{SessionID: r.sessionID, CallID: c.ID, ToolUseID: c.ToolUseID, Name: c.Name, Input: c.Input, ApprovalID: c.ApprovalID})
-}
-
-func (r *PlatformToolRoute) call(ctx context.Context, c routedCall) *RouteResult {
 	r.prepare(ctx)
 	if err := r.ensureSession(ctx); err != nil {
 		return err.result // nothing of the call was sent
 	}
-	meta := map[string]any{metaIdempotency: platformIdempotencyKey(c.SessionID, r.turnID, c.CallID)}
+	meta := map[string]any{metaIdempotency: platformIdempotencyKey(r.sessionID, r.turnID, c.ID)}
 	if c.ApprovalID != "" {
 		meta[metaApproval] = c.ApprovalID
 	} else if r.approvalFor != nil {
-		if id := r.approvalFor(c.CallID); id != "" {
+		if id := r.approvalFor(c.ID); id != "" {
 			meta[metaApproval] = id
 		}
 	}
