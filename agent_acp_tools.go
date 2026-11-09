@@ -64,6 +64,18 @@ type acpToolResult struct {
 	Code    string
 	Text    string
 	IsError bool
+	// Replayed: the answer was saved from an earlier call with the same id
+	// (not run again).
+	Replayed bool
+	// Background: a command left running when the call stopped waiting
+	// (platform route; the local Core has none).
+	Background *toolBackground
+}
+
+// toolBackground is a command still running after its call returned.
+type toolBackground struct {
+	PID        int
+	OutputFile string
 }
 
 func refused(code, detail string) *acpToolResult {
@@ -148,7 +160,7 @@ func (a *ACPAgent) runToolOnce(ctx context.Context, t *acpTurn, sessionID, callI
 		if outcome == "" {
 			outcome = acpToolExecuted
 		}
-		return &acpToolResult{Outcome: outcome, Code: call.Code, Text: call.Text, IsError: call.IsError}
+		return &acpToolResult{Outcome: outcome, Code: call.Code, Text: call.Text, IsError: call.IsError, Replayed: true}
 	case acpPhaseStarted:
 		text := "outcome_unknown: the tool call was started before the executor restarted; whether it took effect is unknown, so it was not run again."
 		if err := ledger.update(callID, func(c *acpCallState) {
