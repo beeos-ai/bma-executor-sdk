@@ -151,6 +151,8 @@ channels:
         $ref: "#/components/messages/agentCustomToolResult"
       interactionCancel:
         $ref: "#/components/messages/interactionCancel"
+      modelTokenRefresh:
+        $ref: "#/components/messages/modelTokenRefresh"
       jsonRpcSuccessResponse:
         $ref: "#/components/messages/jsonRpcSuccessResponse"
       jsonRpcErrorResponse:
@@ -416,6 +418,12 @@ operations:
       $ref: "#/channels/control"
     messages:
       - $ref: "#/components/messages/interactionCancel"
+  modelTokenRefreshSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/modelTokenRefresh"
 components:
   messages:
     executorRegister:
@@ -777,6 +785,10 @@ components:
               sequence:
                 type: integer
                 minimum: 1
+              idempotency_key:
+                type: string
+                minLength: 1
+                maxLength: 200
               event:
                 $ref: schemas/session.json#/$defs/SessionEvent
                 x-go-type: json.RawMessage
@@ -2054,7 +2066,7 @@ components:
       name: interaction.request
       title: interaction.request
       summary: Ask the platform for an approval or an answer.
-      description: Executor to harness request (capability agent). The harness opens one platform agent interaction (the same request on desktop, mobile and integrations) and answers with interaction.response later. Idempotent by interaction_id. A permission request references the agent.tool_use event in tool_use_id, sent earlier with evaluated_permission ask. The executor keeps local authority; it may still deny, and it treats expires_at as a local deny.
+      description: Executor to harness request (capability agent). The harness opens one platform agent interaction (the same request on desktop, mobile and integrations) and answers with interaction.response later. Idempotent by interaction_id. A permission request references the agent.tool_use event in tool_use_id, sent earlier with evaluated_permission ask. The executor keeps local authority; it may still deny, and it treats expires_at as a local deny. An interaction_id of the form appr_ plus 24 lower-case hex digits (the deterministic approval id) is adopted as the platform interaction id; the interactions API, its card and the session stream use it, platform_interaction_id equals it, and a repeat of it (after an executor restart too) names the same interaction, never a second card. The same id for another tool_use_id (within one executor epoch) or another kind is refused with error conflict (-32013) and the stored interaction is left unchanged. An interaction_id of any other form is only the executor's key; the platform assigns its own id (int_...) and returns it.
       contentType: application/json
       payload:
         type: object
@@ -2250,6 +2262,44 @@ components:
       x-bma-kind: request
       x-bma-channel: control
       x-bma-idempotent-by: interaction_id
+    modelTokenRefresh:
+      name: model_token.refresh
+      title: model_token.refresh
+      summary: Fetch a fresh model token for a running turn.
+      description: "Executor to harness request (capability agent). A brain started by turn.start with a model credential (metadata model_token, valid 1 hour) calls it before the token expires (the reference executors do so when less than 10 minutes remain) and joins model_base_url with the new model_token for its next model calls; the old token stays valid until it expires. The platform signs a new token only while the turn is active (pending, running or rescheduling) and the turn belongs to a session routed to this executor's machine, so a turn that ended, was canceled or failed gets no further tokens: this is how the platform revokes model access per turn (a token already issued runs out its own expiry). Each call returns a new token; calls are not idempotent and a repeat is harmless. Errors carry data.reason: turn_inactive (-32007: the turn is not active), forbidden (-32001: the session or turn is unknown, belongs to another executor, or this executor is not entitled to platform credentials), model_token_unavailable (-32012: the platform issues no such token). A harness without the method answers -32601; the executor then keeps the token it has."
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: model_token.refresh
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              turn_id:
+                type: string
+            required:
+              - session_id
+              - turn_id
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: model_token.refresh
+      x-bma-direction: executor-to-harness
+      x-bma-kind: request
+      x-bma-channel: control
     jsonRpcSuccessResponse:
       name: JSON-RPC success response
       title: JSON-RPC success response

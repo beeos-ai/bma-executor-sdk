@@ -27,7 +27,7 @@ type AgentCapability struct {
 	MaxSessions int64 `json:"max_sessions,omitempty"`
 	// The executor keeps the state of its turns across a process restart. When it registers again without a session whose turn was running, the platform starts the same turn again in a new event epoch (turn.start with the same turn_id, input_id and executor_session_ref, then the turn.input the turn already received) and the executor continues the turn from its own state. Without it such a turn ends failed (session.error, session.status_idle retries_exhausted) and is not sent again: an executor without that state would run the turn again from its opening input and repeat tool calls whose effects already happened.
 	TurnResume bool `json:"turn_resume,omitempty"`
-	// Per-turn credentials the executor asks the platform to hand it in turn.start metadata: brain_tools (tools_mcp_url, tools_mcp_token: the session's tools endpoint) and harness_model (model_base_url, model_token: the session's model endpoint). A declaration only states what the executor can use; the platform decides by the executor's identity and hands them only to an executor registered as a platform service, never to a tenant executor. Tokens are computed for each turn.start, are valid until the turn ends, and are never stored.
+	// Per-turn credentials the executor asks the platform to hand it in turn.start metadata: brain_tools (tools_mcp_url, tools_mcp_token: the session's tools endpoint) and harness_model (model_base_url, model_token: the session's model endpoint; optionally model_context_window and model_max_output_tokens, positive integer strings: the resolved model's context window and output ceiling, absent when the platform has no catalog entry for the model, in which case the executor uses its own defaults). A declaration only states what the executor can use; the platform decides by the executor's identity and hands them only to an executor registered as a platform service, never to a tenant executor. Tokens are computed for each turn.start, are valid until the turn ends, and are never stored.
 	PlatformCredentials []string `json:"platform_credentials,omitempty"`
 	// The executor runs custom tools defined by the platform agent: it emits agent.custom_tool_use for a call to one and waits for agent.custom_tool_result. Without it the platform never sends agent.custom_tool_result and answers a user.custom_tool_result for the session with an error.
 	CustomTools bool `json:"custom_tools,omitempty"`
@@ -44,8 +44,20 @@ type AgentCustomToolUseEvent struct {
 	Input map[string]any `json:"input"`
 }
 
+// AgentErrorCode values. Stop code table: the error types an agent executor reports for a turn that ended failed, so every agent (Go ACP harness, brain hosts, local desktop agents) says the same thing for the same cause. output_limit_reached: the model reply was cut at its output-token limit (ACP stopReason max_tokens, DSH max-tokens, finish_reason length). context_too_large: the conversation does not fit the model context window even after compaction. model_stream_idle: the model stream sent no data for the idle limit (default 90 s). agent_error: any other failure of the agent. agent_unavailable: the agent process is gone or did not answer a cancel in time. agent_auth_required: the agent needs credentials it does not have. agent_protocol_error: the agent rejected the request as malformed or unsupported. A code is the type of session.error; an executor whose SDK cannot set the type yet (structured_errors false) puts it first in the message as '<code>: <detail>', and the platform reads both forms. The platform keeps the code in error.code and projects a type outside the official session.error union to unknown_error; a platform may map a code to an official type itself (context_too_large to compaction_limit_reached_error, ADR-0010). Executors report only these values; a new cause adds a value here first.
+const (
+	AgentErrorCodeOutputLimitReached = "output_limit_reached"
+	AgentErrorCodeContextTooLarge    = "context_too_large"
+	AgentErrorCodeModelStreamIdle    = "model_stream_idle"
+	AgentErrorCodeAgentError         = "agent_error"
+	AgentErrorCodeAgentUnavailable   = "agent_unavailable"
+	AgentErrorCodeAgentAuthRequired  = "agent_auth_required"
+	AgentErrorCodeAgentProtocolError = "agent_protocol_error"
+)
+
 // AgentErrorInfo Typed session error.
 type AgentErrorInfo struct {
+	// An AgentErrorCode value; other strings are tolerated (objects accept unknown members) and projected as unknown_error.
 	Type    string `json:"type"`
 	Message string `json:"message,omitempty"`
 }
@@ -508,7 +520,7 @@ type InteractionQuestionOption struct {
 	Label string `json:"label"`
 }
 
-// InteractionRequestResult interaction.request result. Idempotent by interaction_id: a repeat returns the same platform interaction.
+// InteractionRequestResult interaction.request result. Idempotent by interaction_id: a repeat returns the same platform interaction. platform_interaction_id equals interaction_id when that is an appr_ plus 24 lower-case hex id (adopted); otherwise it is the platform-assigned int_ id.
 type InteractionRequestResult struct {
 	Accepted              bool   `json:"accepted"`
 	PlatformInteractionID string `json:"platform_interaction_id"`
@@ -568,7 +580,7 @@ type JSONRPCErrorData struct {
 	Detail    string `json:"detail,omitempty"`
 	// Missing capability for -32012, for example "tool:read" or "process.pty".
 	Capability string `json:"capability,omitempty"`
-	// Machine-readable cause; an open set that the harness passes through unchanged (process.start: the tool result error_code and the process state reason; turn.start: the session.error code). Recommended values: workspace_unavailable, workspace_boundary, workspace_read_only, session_rejected, local_confirmation_denied, local_confirmation_expired, spawn_failed / process_id_spec_mismatch for process.start, and capability_missing for executor.register. Receivers must accept values they do not know.
+	// Machine-readable cause; an open set that the harness passes through unchanged (process.start: the tool result error_code and the process state reason; turn.start: the session.error code). Recommended values: workspace_unavailable, workspace_boundary, workspace_read_only, session_rejected, local_confirmation_denied, local_confirmation_expired, spawn_failed / process_id_spec_mismatch for process.start, capability_missing for executor.register, and turn_inactive / forbidden / model_token_unavailable for model_token.refresh. Receivers must accept values they do not know.
 	Reason string `json:"reason,omitempty"`
 	// bma.terminal.v1 error code for a failed terminal.* call.
 	TerminalCode string `json:"terminal_code,omitempty"`
@@ -775,6 +787,16 @@ const (
 	MCPTransportTypeStdio = "stdio"
 	MCPTransportTypeHttp  = "http"
 )
+
+// ModelTokenRefreshResult model_token.refresh result: the credential for the turn's next model calls, in the form of the turn.start metadata model_base_url and model_token.
+type ModelTokenRefreshResult struct {
+	// Bearer token for model_base_url. Valid until expires_at.
+	ModelToken string `json:"model_token"`
+	// Base URL the token is for (an OpenAI / Anthropic base URL path).
+	ModelBaseURL string `json:"model_base_url"`
+	// RFC 3339 time the token stops being accepted.
+	ExpiresAt string `json:"expires_at"`
+}
 
 // PackageManager values. Package manager for process.start package_install.
 const (
@@ -1216,6 +1238,7 @@ const (
 	MethodInteractionResponse        = "interaction.response"
 	MethodAgentCustomToolResult      = "agent.custom_tool_result"
 	MethodInteractionCancel          = "interaction.cancel"
+	MethodModelTokenRefresh          = "model_token.refresh"
 )
 
 // Methods is the complete method catalog.
@@ -1259,6 +1282,7 @@ var Methods = map[string]MethodSpec{
 	MethodInteractionResponse:        {Name: MethodInteractionResponse, Direction: DirectionHarnessToExecutor, Notification: false, Since: "bma.executor.v1.1", Capability: "agent", IdempotentBy: "interaction_id"},
 	MethodAgentCustomToolResult:      {Name: MethodAgentCustomToolResult, Direction: DirectionHarnessToExecutor, Notification: false, Since: "bma.executor.v1.1", Capability: "agent", IdempotentBy: "tool_use_id"},
 	MethodInteractionCancel:          {Name: MethodInteractionCancel, Direction: DirectionExecutorToHarness, Notification: false, Since: "bma.executor.v1.1", Capability: "agent", IdempotentBy: "interaction_id"},
+	MethodModelTokenRefresh:          {Name: MethodModelTokenRefresh, Direction: DirectionExecutorToHarness, Notification: false, Since: "bma.executor.v1.1", Capability: "agent", IdempotentBy: ""},
 }
 
 // ExecutorRegisterParams is the params object of executor.register.
@@ -1327,8 +1351,10 @@ type SessionEventParams struct {
 	// Agent sessions; executor-assigned, unique within the session, stable across resends.
 	EventID string `json:"event_id,omitempty"`
 	// Agent sessions; starts at 1 and increases by 1 per durable event within the session.
-	Sequence int64           `json:"sequence,omitempty"`
-	Event    json.RawMessage `json:"event"`
+	Sequence int64 `json:"sequence,omitempty"`
+	// Agent sessions; optional key the executor keeps for this event across process restarts (its outbox entry id, for example). A new executor epoch renumbers sequence and suffixes event_id, so only this key lets the harness recognize an event it stored just before the executor crashed. The harness acknowledges an event whose key the session already stored as a duplicate (sequence advanced, nothing added to the session log), in any epoch. Without it an event resent in a new epoch is stored again (at-least-once).
+	IdempotencyKey string          `json:"idempotency_key,omitempty"`
+	Event          json.RawMessage `json:"event"`
 }
 
 // SessionStatusParams is the params object of session.status.
@@ -1569,7 +1595,7 @@ type SessionEventDeltaParams struct {
 type InteractionRequestParams struct {
 	SessionID string `json:"session_id"`
 	TurnID    string `json:"turn_id"`
-	// Executor-assigned, unique within the session.
+	// Executor-assigned, unique within the session and stable for the same tool call or question across executor and brain restarts (derive it from the session, the turn and the call, for example appr_ + the first 24 hex chars of sha256(session_id, NUL, turn_id, NUL, call_id); the turn is part of it because some providers reuse call ids such as call_0 in every turn), so a restarted executor asks again with the same id and gets the same platform interaction, and an answer given while it was offline, back. The platform interaction is the one card every client of the session shows; a local UI shows the same interaction rather than a separate local prompt.
 	InteractionID string `json:"interaction_id"`
 	Kind          string `json:"kind"`
 	// Required for permission.
@@ -1612,6 +1638,14 @@ type InteractionCancelParams struct {
 	SessionID     string `json:"session_id"`
 	InteractionID string `json:"interaction_id"`
 	Reason        string `json:"reason"`
+}
+
+// ModelTokenRefreshParams is the params object of model_token.refresh.
+type ModelTokenRefreshParams struct {
+	// Platform session id of the turn.
+	SessionID string `json:"session_id"`
+	// Platform id of the running turn the token is for.
+	TurnID string `json:"turn_id"`
 }
 
 // NewParams returns a pointer to a zero params object for method, or nil
@@ -1696,6 +1730,8 @@ func NewParams(method string) any {
 		return new(AgentCustomToolResultParams)
 	case MethodInteractionCancel:
 		return new(InteractionCancelParams)
+	case MethodModelTokenRefresh:
+		return new(ModelTokenRefreshParams)
 	}
 	return nil
 }
@@ -1770,6 +1806,8 @@ func NewResult(method string) any {
 		return new(CustomToolResultResult)
 	case MethodInteractionCancel:
 		return new(Ack)
+	case MethodModelTokenRefresh:
+		return new(ModelTokenRefreshResult)
 	}
 	return nil
 }
@@ -1870,5 +1908,12 @@ func SendInteractionRequest(ctx context.Context, rpc RPC, params InteractionRequ
 func SendInteractionCancel(ctx context.Context, rpc RPC, params InteractionCancelParams) (Ack, error) {
 	var result Ack
 	err := rpc.Call(ctx, MethodInteractionCancel, params, &result)
+	return result, err
+}
+
+// SendModelTokenRefresh calls model_token.refresh.
+func SendModelTokenRefresh(ctx context.Context, rpc RPC, params ModelTokenRefreshParams) (ModelTokenRefreshResult, error) {
+	var result ModelTokenRefreshResult
+	err := rpc.Call(ctx, MethodModelTokenRefresh, params, &result)
 	return result, err
 }

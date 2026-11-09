@@ -35,6 +35,16 @@ class AgentCustomToolUseEvent(TypedDict):
     name: str
     input: dict[str, Any]
 
+class AgentErrorCode(str, Enum):
+    """Stop code table: the error types an agent executor reports for a turn that ended failed, so every agent (Go ACP harness, brain hosts, local desktop agents) says the same thing for the same cause. output_limit_reached: the model reply was cut at its output-token limit (ACP stopReason max_tokens, DSH max-tokens, finish_reason length). context_too_large: the conversation does not fit the model context window even after compaction. model_stream_idle: the model stream sent no data for the idle limit (default 90 s). agent_error: any other failure of the agent. agent_unavailable: the agent process is gone or did not answer a cancel in time. agent_auth_required: the agent needs credentials it does not have. agent_protocol_error: the agent rejected the request as malformed or unsupported. A code is the type of session.error; an executor whose SDK cannot set the type yet (structured_errors false) puts it first in the message as '<code>: <detail>', and the platform reads both forms. The platform keeps the code in error.code and projects a type outside the official session.error union to unknown_error; a platform may map a code to an official type itself (context_too_large to compaction_limit_reached_error, ADR-0010). Executors report only these values; a new cause adds a value here first."""
+    OutputLimitReached = "output_limit_reached"
+    ContextTooLarge = "context_too_large"
+    ModelStreamIdle = "model_stream_idle"
+    AgentError = "agent_error"
+    AgentUnavailable = "agent_unavailable"
+    AgentAuthRequired = "agent_auth_required"
+    AgentProtocolError = "agent_protocol_error"
+
 class AgentErrorInfo(TypedDict):
     """Typed session error."""
     type: str
@@ -407,7 +417,7 @@ class InteractionQuestionOption(TypedDict):
     label: str
 
 class InteractionRequestResult(TypedDict):
-    """interaction.request result. Idempotent by interaction_id: a repeat returns the same platform interaction."""
+    """interaction.request result. Idempotent by interaction_id: a repeat returns the same platform interaction. platform_interaction_id equals interaction_id when that is an appr_ plus 24 lower-case hex id (adopted); otherwise it is the platform-assigned int_ id."""
     accepted: bool
     platform_interaction_id: str
 
@@ -611,6 +621,12 @@ class McpToolsListResult(TypedDict):
 class McpTransportType(str, Enum):
     Stdio = "stdio"
     Http = "http"
+
+class ModelTokenRefreshResult(TypedDict):
+    """model_token.refresh result: the credential for the turn's next model calls, in the form of the turn.start metadata model_base_url and model_token."""
+    model_token: str
+    model_base_url: str
+    expires_at: str
 
 class PackageManager(str, Enum):
     """Package manager for process.start package_install."""
@@ -989,6 +1005,7 @@ class SessionEventParams(TypedDict):
     turn_id: NotRequired[str]
     event_id: NotRequired[str]
     sequence: NotRequired[int]
+    idempotency_key: NotRequired[str]
     event: SessionEvent
 
 class SessionStatusParams(TypedDict):
@@ -1220,6 +1237,11 @@ class InteractionCancelParams(TypedDict):
     interaction_id: str
     reason: InteractionCancelReason
 
+class ModelTokenRefreshParams(TypedDict):
+    "Params object of model_token.refresh."
+    session_id: str
+    turn_id: str
+
 
 @dataclass(frozen=True, slots=True)
 class MethodSpec:
@@ -1274,6 +1296,7 @@ METHOD_INTERACTION_REQUEST = "interaction.request"
 METHOD_INTERACTION_RESPONSE = "interaction.response"
 METHOD_AGENT_CUSTOM_TOOL_RESULT = "agent.custom_tool_result"
 METHOD_INTERACTION_CANCEL = "interaction.cancel"
+METHOD_MODEL_TOKEN_REFRESH = "model_token.refresh"
 
 METHODS: dict[str, MethodSpec] = {
     "executor.register": MethodSpec(name="executor.register", direction="executor-to-harness", kind="request", since="bma.executor.v1", params_type="ExecutorRegisterParams", result_type="ExecutorRegisterResult", capability=None, idempotent_by=None),
@@ -1315,4 +1338,5 @@ METHODS: dict[str, MethodSpec] = {
     "interaction.response": MethodSpec(name="interaction.response", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="InteractionResponseParams", result_type="InteractionResponseResult", capability="agent", idempotent_by="interaction_id"),
     "agent.custom_tool_result": MethodSpec(name="agent.custom_tool_result", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="AgentCustomToolResultParams", result_type="CustomToolResultResult", capability="agent", idempotent_by="tool_use_id"),
     "interaction.cancel": MethodSpec(name="interaction.cancel", direction="executor-to-harness", kind="request", since="bma.executor.v1.1", params_type="InteractionCancelParams", result_type="Ack", capability="agent", idempotent_by="interaction_id"),
+    "model_token.refresh": MethodSpec(name="model_token.refresh", direction="executor-to-harness", kind="request", since="bma.executor.v1.1", params_type="ModelTokenRefreshParams", result_type="ModelTokenRefreshResult", capability="agent", idempotent_by=None),
 }
