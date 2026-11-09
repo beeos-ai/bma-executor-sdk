@@ -685,6 +685,18 @@ func (c *Client) SessionReady(ctx context.Context, params SessionReadyParams) (A
 	return ack, err
 }
 
+// RefreshModelToken asks the platform for a fresh model credential for the
+// running turn (model_token.refresh, contract 1.3.0): call it before the
+// turn.start model_token expires (ModelTokenRefreshResult.ExpiresAt). A turn
+// that already ended answers an *RPCError with reason turn_inactive; a
+// platform that cannot mint one answers forbidden or model_token_unavailable.
+// It makes one attempt; the caller owns retry and backoff.
+func (c *Client) RefreshModelToken(ctx context.Context, sessionID, turnID string) (ModelTokenRefreshResult, error) {
+	var result ModelTokenRefreshResult
+	err := c.callInto(ctx, MethodModelTokenRefresh, ModelTokenRefreshParams{SessionID: sessionID, TurnID: turnID}, &result)
+	return result, err
+}
+
 // SessionEnded reports that every process and MCP server for the session has
 // stopped. The session leaves ActiveSessions after the harness accepts.
 func (c *Client) SessionEnded(ctx context.Context, params SessionEndedParams) (Ack, error) {
