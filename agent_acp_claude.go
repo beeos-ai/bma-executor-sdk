@@ -474,7 +474,7 @@ func (s *acpToolServer) call(ctx context.Context, session *acpSession, callID, n
 	a.mu.Lock()
 	t, mode := session.turn, session.agentMode
 	a.mu.Unlock()
-	var result *acpToolResult
+	var result *RouteResult
 	switch {
 	case t == nil:
 		result = refused("stale_turn", "no turn of this session is running")

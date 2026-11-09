@@ -87,7 +87,7 @@ func TestToolsCredentialRejectsAnUnusableRefreshAndNeverRefreshesWithoutExpiry(t
 }
 
 func TestPlatformToolRouteReopensItsSessionWhenTheEndpointMoves(t *testing.T) {
-	r := newPlatformToolRoute(platformToolRouteOptions{Endpoint: "https://a/mcp", Token: "t", TurnID: "turn"})
+	r := newPlatformToolRoute(PlatformToolRouteOptions{Endpoint: "https://a/mcp", Token: "t", TurnID: "turn"})
 	r.initialized, r.mcpSession = true, "s1"
 	r.cred.endpoint = "https://b/mcp"
 	r.prepare(context.Background())

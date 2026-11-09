@@ -49,7 +49,7 @@ type routeRig struct {
 	handsOffline func(offline bool)
 }
 
-func (r *routeRig) call(callID, name string, input map[string]any) *acpToolResult {
+func (r *routeRig) call(callID, name string, input map[string]any) *RouteResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	return r.route().call(ctx, routedCall{SessionID: rigSession, CallID: callID, Name: name, Input: wireInput(input)})
@@ -81,16 +81,16 @@ func lineCount(t *testing.T, rig *routeRig, name string) int {
 	return strings.Count(string(raw), "\n")
 }
 
-func wantRefused(t *testing.T, got *acpToolResult, code string) {
+func wantRefused(t *testing.T, got *RouteResult, code string) {
 	t.Helper()
-	if got.Outcome != acpToolNotForwarded || got.Code != code || !got.IsError || !strings.HasPrefix(got.Text, code+": ") {
+	if got.Outcome != RouteOutcomeNotForwarded || got.Code != code || !got.IsError || !strings.HasPrefix(got.Text, code+": ") {
 		t.Fatalf("answer = %+v, want not_forwarded %s", got, code)
 	}
 }
 
-func wantExecuted(t *testing.T, got *acpToolResult) {
+func wantExecuted(t *testing.T, got *RouteResult) {
 	t.Helper()
-	if got.Outcome != acpToolExecuted || got.Code != "" || got.IsError {
+	if got.Outcome != RouteOutcomeExecuted || got.Code != "" || got.IsError {
 		t.Fatalf("answer = %+v, want executed without error", got)
 	}
 }
@@ -129,7 +129,7 @@ var conformanceCases = []conformanceCase{
 		}
 		// A tool that fails is still an executed call; IsError says so.
 		failed := rig.call("c4", "read", map[string]any{"file_path": "missing.txt"})
-		if failed.Outcome != acpToolExecuted || !failed.IsError || failed.Text == "" {
+		if failed.Outcome != RouteOutcomeExecuted || !failed.IsError || failed.Text == "" {
 			t.Fatalf("failing read answer = %+v", failed)
 		}
 	}},
@@ -166,7 +166,7 @@ var conformanceCases = []conformanceCase{
 		first := rig.call("c1", "bash", run)
 		wantExecuted(t, first)
 		retry := rig.call("c1", "bash", run)
-		if retry.Outcome != acpToolExecuted || retry.IsError || retry.Text != first.Text || !retry.Replayed {
+		if retry.Outcome != RouteOutcomeExecuted || retry.IsError || retry.Text != first.Text || !retry.Replayed {
 			t.Fatalf("retry answer = %+v, first %+v", retry, first)
 		}
 		if n := lineCount(t, rig, "count.txt"); n != 1 {
@@ -185,14 +185,14 @@ var conformanceCases = []conformanceCase{
 		wantExecuted(t, first)
 		rig.restart()
 		again := rig.call("c1", "bash", run)
-		if again.Outcome != acpToolExecuted || again.Text != first.Text || !again.Replayed {
+		if again.Outcome != RouteOutcomeExecuted || again.Text != first.Text || !again.Replayed {
 			t.Fatalf("after restart = %+v, first %+v", again, first)
 		}
 		// Submitted, but the result was lost with the process: unknown, never run again.
 		rig.markStarted("c2")
 		rig.restart()
 		lost := rig.call("c2", "bash", bashInput("touch rerun.txt"))
-		if lost.Outcome != acpToolUnknown || lost.Code != "outcome_unknown" || !lost.IsError || !strings.HasPrefix(lost.Text, "outcome_unknown: ") {
+		if lost.Outcome != RouteOutcomeUnknown || lost.Code != "outcome_unknown" || !lost.IsError || !strings.HasPrefix(lost.Text, "outcome_unknown: ") {
 			t.Fatalf("lost call answer = %+v", lost)
 		}
 		if exists(rig, "rerun.txt") || lineCount(t, rig, "count.txt") != 1 {
@@ -213,7 +213,7 @@ var conformanceCases = []conformanceCase{
 	}},
 	{"T7", "cancel_ends_the_call_and_kills_the_process_group", func(t *testing.T, factory routeFactory) {
 		rig := factory(t, map[string]string{"bash": "allow"})
-		answer := make(chan *acpToolResult, 1)
+		answer := make(chan *RouteResult, 1)
 		go func() { answer <- rig.call("c1", "bash", bashInput("sleep 60 & echo $! > child.pid; wait")) }()
 		pid := waitForPID(t, filepath.Join(rig.workspace, "child.pid"))
 		t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
@@ -237,7 +237,7 @@ var conformanceCases = []conformanceCase{
 	{"T8", "hands_refusal_is_passed_through", func(t *testing.T, factory routeFactory) {
 		rig := factory(t, map[string]string{"write": "allow"})
 		got := rig.call("c1", "write", map[string]any{"file_path": "../escape.txt", "content": "x"})
-		if got.Outcome != acpToolExecuted || !got.IsError || got.Text == "" {
+		if got.Outcome != RouteOutcomeExecuted || !got.IsError || got.Text == "" {
 			t.Fatalf("answer = %+v", got)
 		}
 		if _, err := os.Stat(filepath.Join(filepath.Dir(rig.workspace), "escape.txt")); err == nil {

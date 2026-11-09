@@ -2,27 +2,101 @@ package bmaexecutor
 
 import "context"
 
-// A toolRoute is where a brain's tool call goes to run (ADR-0029, brain-hands
-// split): the seam between the brain's shell and the hands.
+// ToolRoute is where a brain's tool calls go to run (ADR-0029, brain-hands
+// split): the seam between a brain and its hands. A brain written against the
+// SDK gets the route of its turn from AgentTurn.Tools and never needs to know
+// where the hands are.
 //
-//   - localToolRoute: the brain and the hands are on one machine; the call runs
-//     in this executor's Core, after the executor's own re-check (policy,
-//     approval, turn) and at most once (the turn ledger).
-//   - platformToolRoute (toolroute_platform.go): the hands are elsewhere; the
-//     call goes to the platform's execute-only tool gateway (ADR-0005), which
-//     does the same checks and runs it in the session's machine.
+// The route is the platform's execute-only tool gateway (ADR-0005; see
+// PlatformToolRoute): it checks the turn's credential and epoch, re-evaluates
+// the tool policy, verifies the user's approval, runs each call id at most
+// once and runs the tool on the session's hands machine, which may refuse it
+// again by its own policy. The ACPAgent's own local route (the hands are this
+// machine) answers with the same outcomes and refuses for the same reasons
+// with the same error codes; both are held to the tool route conformance
+// suite (toolroute_conformance_test.go, cases T1–T11).
 //
-// Both answer with the gateway's three outcomes (not_forwarded, executed,
-// unknown) and refuse for the same reasons with the same error codes. The
-// conformance suite (toolroute_conformance_test.go) runs every case against
-// both routes.
-//
-// The seam is unexported until the SDK's brain-side API (AgentTurn.Tools) is
-// settled; nothing in the protocol or the exported API changes.
+// A ToolRoute is bound to one turn of one session and is safe for concurrent
+// use. Its calls end with ctx: a canceled ctx abandons the call, which does not
+// kill a process already started on the hands (the platform's turn cancel
+// does).
+type ToolRoute interface {
+	// Call runs one tool call and always answers: a refusal, a transport
+	// failure or an unclear outcome is a RouteResult with IsError set, never
+	// a Go error. A repeated Call with the same RouteCall.ID is answered with
+	// the first result (RouteResult.Replayed), not run again.
+	Call(ctx context.Context, call RouteCall) *RouteResult
+}
+
+// RouteCall is one tool call of a brain, in the CMA agent_toolset input shape
+// (bash, read, write, edit, glob, grep; for example {"command": "ls"} for bash).
+type RouteCall struct {
+	// ID is the brain's tool call id. It is the call's idempotency identity:
+	// the same ID in the same turn is run once, also when the brain process
+	// restarts and asks again. It must be unique within the turn.
+	ID string
+	// ToolUseID is the event id of the call's agent.tool_use event (optional;
+	// it ties the gateway's audit record to the event).
+	ToolUseID string
+	// Name is the tool: bash, read, write, edit, glob or grep.
+	Name string
+	// Input is the tool's input as the brain's JSON decoder produced it.
+	Input map[string]any
+	// ApprovalID is the interaction id of the user's approval of this call
+	// (AgentTurn.RequestInteraction answered allow), or "" when the call needs
+	// none. The gateway verifies it: one approval is good for one call, the
+	// same tool and the same input.
+	ApprovalID string
+}
+
+// The three outcomes of a tool call, as the platform's tool gateway says them
+// (ADR-0005).
+const (
+	// RouteOutcomeNotForwarded: the call was refused and certainly did not
+	// run (policy, approval, a stale turn, hands offline); it is safe to ask
+	// again, for example once approved.
+	RouteOutcomeNotForwarded = "not_forwarded"
+	// RouteOutcomeExecuted: the tool ran; RouteResult.IsError says whether the
+	// tool itself failed.
+	RouteOutcomeExecuted = "executed"
+	// RouteOutcomeUnknown: the call may have run (the connection broke after
+	// it was sent, the hands restarted); do not blindly run it again.
+	RouteOutcomeUnknown = "unknown"
+)
+
+// RouteResult is the answer to a RouteCall.
+type RouteResult struct {
+	// Outcome is a RouteOutcome* value.
+	Outcome string
+	// Code is the reason of a refusal or an unclear outcome, for example
+	// permission_denied, approval_required, approval_invalid, stale_turn,
+	// environment_unavailable, in_progress, idempotency_key_reused,
+	// tools_unavailable (open set; contract schemas/common.json lists them).
+	Code string
+	// Text is the tool's output, or "<Code>: <detail>" when Code is set.
+	Text string
+	// IsError: the call failed, was refused or its outcome is unknown.
+	IsError bool
+	// Replayed: the answer was saved from an earlier call with the same ID
+	// (not run again).
+	Replayed bool
+	// Background: a command left running when the call stopped waiting
+	// (bash past its synchronous wait).
+	Background *RouteBackground
+}
+
+// RouteBackground is a command still running after its call returned.
+type RouteBackground struct {
+	PID        int
+	OutputFile string
+}
+
+// toolRoute is the form ACPAgent uses inside: the session is part of the call.
+// PlatformToolRoute implements it and ToolRoute; the local route only this.
 type toolRoute interface {
 	// call runs one tool call. A route is bound to one turn of one session;
 	// the answer is never nil. ctx ends with the turn (cancel, deadline).
-	call(ctx context.Context, c routedCall) *acpToolResult
+	call(ctx context.Context, c routedCall) *RouteResult
 }
 
 // routedCall is one tool call of a brain, in the CMA agent_toolset input shape.
@@ -35,6 +109,9 @@ type routedCall struct {
 	ToolUseID string
 	Name      string
 	Input     map[string]any
+	// ApprovalID, when set, is presented to the gateway as the call's
+	// approval instead of what the route's ApprovalFor says.
+	ApprovalID string
 }
 
 // localToolRoute runs a call in this executor's Core (see ACPAgent.runToolOnce).
@@ -43,6 +120,14 @@ type localToolRoute struct {
 	turn  *acpTurn
 }
 
-func (r localToolRoute) call(ctx context.Context, c routedCall) *acpToolResult {
+func (r localToolRoute) call(ctx context.Context, c routedCall) *RouteResult {
 	return r.agent.runToolOnce(ctx, r.turn, c.SessionID, c.CallID, c.Name, c.Input)
+}
+
+// refusingRoute answers every call with a refusal: the turn's tool
+// credential is unusable, so no call may run anywhere (fail closed).
+type refusingRoute struct{ detail string }
+
+func (r refusingRoute) Call(context.Context, RouteCall) *RouteResult {
+	return refused("tools_unavailable", r.detail)
 }

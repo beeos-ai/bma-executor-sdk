@@ -240,7 +240,7 @@ func TestACPAgentToolGate(t *testing.T) {
 			switch {
 			case tc.want == "" && got != nil:
 				t.Fatalf("refused: %+v", got)
-			case tc.want != "" && (got == nil || got.Code != tc.want || got.Outcome != acpToolNotForwarded || !got.IsError || !strings.HasPrefix(got.Text, tc.want+": ")):
+			case tc.want != "" && (got == nil || got.Code != tc.want || got.Outcome != RouteOutcomeNotForwarded || !got.IsError || !strings.HasPrefix(got.Text, tc.want+": ")):
 				t.Fatalf("gate = %+v, want %s", got, tc.want)
 			}
 		})
@@ -279,7 +279,7 @@ func TestACPAgentNoTurnOfThatProcessIsStale(t *testing.T) {
 		t.Fatal(rpcErr)
 	}
 	m := got.(map[string]any)
-	if m["outcome"] != acpToolNotForwarded || m["errorCode"] != "stale_turn" || m["isError"] != true {
+	if m["outcome"] != RouteOutcomeNotForwarded || m["errorCode"] != "stale_turn" || m["isError"] != true {
 		t.Fatalf("answer = %v", m)
 	}
 }

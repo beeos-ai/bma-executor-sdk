@@ -103,7 +103,7 @@ func (b *acpBackground) killAll() {
 // call's own ctx ends with the call (the turn's cancel or deadline); turn is
 // the turn the command belongs to, which decides the fate of a command left
 // in the background.
-func (a *ACPAgent) runBash(ctx context.Context, turn *acpTurn, sessionID, callID string, in map[string]any) (string, bool, *toolBackground) {
+func (a *ACPAgent) runBash(ctx context.Context, turn *acpTurn, sessionID, callID string, in map[string]any) (string, bool, *RouteBackground) {
 	command, _ := in["command"].(string)
 	if command == "" {
 		return "bash requires command", true, nil
@@ -175,7 +175,7 @@ func (a *ACPAgent) runBash(ctx context.Context, turn *acpTurn, sessionID, callID
 	a.background.add(sessionID, proc)
 	go a.superviseBackground(turn, proc)
 	text := fmt.Sprintf("running in the background (pid %d), output in %s", cmd.Process.Pid, output)
-	return text, false, &toolBackground{PID: cmd.Process.Pid, OutputFile: output}
+	return text, false, &RouteBackground{PID: cmd.Process.Pid, OutputFile: output}
 }
 
 // superviseBackground ends a command left in the background when its turn is

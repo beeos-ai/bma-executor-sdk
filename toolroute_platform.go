@@ -12,28 +12,33 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// platformToolRoute sends a brain's tool calls to the platform's execute-only
+// PlatformToolRoute sends a brain's tool calls to the platform's execute-only
 // tool gateway (ADR-0005), an MCP Streamable HTTP endpoint, instead of running
 // them here: the hands are on another machine. The gateway does what the
 // local route does for itself (token and epoch, policy re-check, approval
 // check, at-most-once by idempotency key) and runs the tool in the session's
 // machine; this side only speaks its wire and maps the answer to the same
-// acpToolResult as the local route.
+// RouteResult as the local route.
 //
 // The tool credential (session x turn x epoch) lives in memory only: it is
 // never written to the state directory, to a log, to an error text or by
 // String/%v. It is replaced before it expires (toolsCredential).
 //
-// ACPAgent uses it for a turn whose turn.start metadata carries tools_mcp_*
-// (the hands are on another machine); any other turn gets localToolRoute.
-type platformToolRoute struct {
+// A brain gets one from AgentTurn.Tools for a turn whose turn.start metadata
+// carries tools_mcp_* (the hands are on another machine), with the token
+// refreshed through tools_token.refresh; NewPlatformToolRoute builds one from
+// a credential the caller manages itself. ACPAgent uses it the same way; any
+// other turn gets its local route.
+type PlatformToolRoute struct {
 	cred        *toolsCredential
+	sessionID   string
 	turnID      string
 	approvalFor func(callID string) string
 	syncWait    time.Duration
@@ -46,7 +51,7 @@ type platformToolRoute struct {
 	nextID      atomic.Int64
 }
 
-type platformToolRouteOptions struct {
+type PlatformToolRouteOptions struct {
 	// Endpoint is the gateway's MCP URL.
 	Endpoint string
 	// Token is the turn's tool credential.
@@ -58,6 +63,8 @@ type platformToolRouteOptions struct {
 	// OnLog tells about a failed refresh (it is also retried; see toolsCredential).
 	OnLog  func(level LogLevel, message string, err error)
 	TurnID string
+	// SessionID is the platform session of the turn (required by NewPlatformToolRoute).
+	SessionID string
 	// ApprovalFor returns the interaction id of the user's approval of a call,
 	// or "" when there is none (ADR-0005: presented in _meta, checked by the gateway).
 	ApprovalFor func(callID string) string
@@ -67,13 +74,28 @@ type platformToolRouteOptions struct {
 	HTTPClient *http.Client
 }
 
-func newPlatformToolRoute(opts platformToolRouteOptions) *platformToolRoute {
+// NewPlatformToolRoute returns the route of one turn to the platform's tool
+// gateway. Endpoint, Token, SessionID and TurnID are required. Most brains use
+// AgentTurn.Tools instead, which fills this from turn.start and keeps the token
+// fresh; use this when the credential comes from somewhere else.
+func NewPlatformToolRoute(opts PlatformToolRouteOptions) (*PlatformToolRoute, error) {
+	if opts.Endpoint == "" || opts.Token == "" || opts.SessionID == "" || opts.TurnID == "" {
+		return nil, errors.New("bmaexecutor: PlatformToolRouteOptions.Endpoint, Token, SessionID and TurnID are required")
+	}
+	u, err := url.Parse(opts.Endpoint)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return nil, errors.New("bmaexecutor: PlatformToolRouteOptions.Endpoint must be an http(s) URL")
+	}
+	return newPlatformToolRoute(opts), nil
+}
+
+func newPlatformToolRoute(opts PlatformToolRouteOptions) *PlatformToolRoute {
 	client := opts.HTTPClient
 	if client == nil {
 		client = &http.Client{}
 	}
 	cred := &toolsCredential{endpoint: opts.Endpoint, token: opts.Token, expiresAt: opts.ExpiresAt, refresh: opts.Refresh, log: opts.OnLog, now: time.Now}
-	return &platformToolRoute{cred: cred, endpoint: opts.Endpoint, turnID: opts.TurnID,
+	return &PlatformToolRoute{cred: cred, endpoint: opts.Endpoint, sessionID: opts.SessionID, turnID: opts.TurnID,
 		approvalFor: opts.ApprovalFor, syncWait: opts.SyncWait, client: client}
 }
 
@@ -155,7 +177,7 @@ func (c *toolsCredential) current(ctx context.Context) (string, string) {
 
 // prepare refreshes the credential when it is due and reopens the MCP session
 // when the endpoint moved.
-func (r *platformToolRoute) prepare(ctx context.Context) {
+func (r *PlatformToolRoute) prepare(ctx context.Context) {
 	endpoint, _ := r.cred.current(ctx)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -165,13 +187,13 @@ func (r *platformToolRoute) prepare(ctx context.Context) {
 }
 
 // String keeps the credential out of %v / %+v / %s.
-func (r *platformToolRoute) String() string {
+func (r *PlatformToolRoute) String() string {
 	endpoint, _ := r.cred.peek()
-	return "platformToolRoute{" + endpoint + "}"
+	return "PlatformToolRoute{" + endpoint + "}"
 }
 
 // GoString keeps the credential out of %#v.
-func (r *platformToolRoute) GoString() string { return r.String() }
+func (r *PlatformToolRoute) GoString() string { return r.String() }
 
 const (
 	mcpProtocolVersion = "2025-06-18"
@@ -191,13 +213,23 @@ func platformIdempotencyKey(sessionID, turnID, callID string) string {
 	return "bma-tool-" + hex.EncodeToString(sum[:16])
 }
 
-func (r *platformToolRoute) call(ctx context.Context, c routedCall) *acpToolResult {
+// Call implements ToolRoute.
+func (r *PlatformToolRoute) Call(ctx context.Context, c RouteCall) *RouteResult {
+	if c.ID == "" || c.Name == "" {
+		return refused("invalid_tool_input", "a tool call needs an ID (its idempotency identity) and a Name")
+	}
+	return r.call(ctx, routedCall{SessionID: r.sessionID, CallID: c.ID, ToolUseID: c.ToolUseID, Name: c.Name, Input: c.Input, ApprovalID: c.ApprovalID})
+}
+
+func (r *PlatformToolRoute) call(ctx context.Context, c routedCall) *RouteResult {
 	r.prepare(ctx)
 	if err := r.ensureSession(ctx); err != nil {
 		return err.result // nothing of the call was sent
 	}
 	meta := map[string]any{metaIdempotency: platformIdempotencyKey(c.SessionID, r.turnID, c.CallID)}
-	if r.approvalFor != nil {
+	if c.ApprovalID != "" {
+		meta[metaApproval] = c.ApprovalID
+	} else if r.approvalFor != nil {
 		if id := r.approvalFor(c.CallID); id != "" {
 			meta[metaApproval] = id
 		}
@@ -231,10 +263,10 @@ func (r *platformToolRoute) call(ctx context.Context, c routedCall) *acpToolResu
 	if err := r.rpc(ctx, "tools/call", map[string]any{"name": c.Name, "arguments": input, "_meta": meta}, &reply); err != nil {
 		return err.result
 	}
-	out := &acpToolResult{Outcome: reply.StructuredContent.Outcome, Code: reply.StructuredContent.ErrorCode,
+	out := &RouteResult{Outcome: reply.StructuredContent.Outcome, Code: reply.StructuredContent.ErrorCode,
 		IsError: reply.IsError, Replayed: reply.StructuredContent.Replayed}
 	if bg := reply.StructuredContent.Background; bg != nil {
-		out.Background = &toolBackground{PID: bg.PID, OutputFile: bg.OutputFile}
+		out.Background = &RouteBackground{PID: bg.PID, OutputFile: bg.OutputFile}
 	}
 	var texts []string
 	for _, block := range reply.Content {
@@ -244,11 +276,11 @@ func (r *platformToolRoute) call(ctx context.Context, c routedCall) *acpToolResu
 	}
 	out.Text = strings.Join(texts, "\n")
 	switch out.Outcome {
-	case acpToolExecuted:
-	case acpToolNotForwarded, acpToolUnknown:
+	case RouteOutcomeExecuted:
+	case RouteOutcomeNotForwarded, RouteOutcomeUnknown:
 		out.IsError = true
 	default: // the gateway always says; anything else cannot be trusted to mean "not run"
-		return &acpToolResult{Outcome: acpToolUnknown, Code: "bad_gateway_reply", IsError: true,
+		return &RouteResult{Outcome: RouteOutcomeUnknown, Code: "bad_gateway_reply", IsError: true,
 			Text: "bad_gateway_reply: the tool gateway's answer carries no outcome"}
 	}
 	if out.Code != "" && !strings.HasPrefix(out.Text, out.Code+":") {
@@ -258,16 +290,16 @@ func (r *platformToolRoute) call(ctx context.Context, c routedCall) *acpToolResu
 }
 
 // callError is a failed exchange with the gateway, already as the answer to the call.
-type callError struct{ result *acpToolResult }
+type callError struct{ result *RouteResult }
 
 func (e *callError) Error() string { return e.result.Text }
 
 func failure(outcome, code, detail string) *callError {
-	return &callError{&acpToolResult{Outcome: outcome, Code: code, Text: code + ": " + detail, IsError: true}}
+	return &callError{&RouteResult{Outcome: outcome, Code: code, Text: code + ": " + detail, IsError: true}}
 }
 
 // ensureSession runs the MCP handshake once (initialize, notifications/initialized).
-func (r *platformToolRoute) ensureSession(ctx context.Context) *callError {
+func (r *PlatformToolRoute) ensureSession(ctx context.Context) *callError {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.initialized {
@@ -276,25 +308,25 @@ func (r *platformToolRoute) ensureSession(ctx context.Context) *callError {
 	params := map[string]any{"protocolVersion": mcpProtocolVersion, "capabilities": map[string]any{},
 		"clientInfo": map[string]any{"name": "bma-executor-sdk", "version": "0"}}
 	if err := r.rpcLocked(ctx, "initialize", params, nil); err != nil {
-		if err.result.Outcome != acpToolNotForwarded { // a handshake sends no tool call: nothing ran
-			err.result.Outcome = acpToolNotForwarded
+		if err.result.Outcome != RouteOutcomeNotForwarded { // a handshake sends no tool call: nothing ran
+			err.result.Outcome = RouteOutcomeNotForwarded
 		}
 		return err
 	}
 	if err := r.rpcLocked(ctx, "notifications/initialized", nil, nil); err != nil {
-		err.result.Outcome = acpToolNotForwarded
+		err.result.Outcome = RouteOutcomeNotForwarded
 		return err
 	}
 	r.initialized = true
 	return nil
 }
 
-func (r *platformToolRoute) rpc(ctx context.Context, method string, params, result any) *callError {
+func (r *PlatformToolRoute) rpc(ctx context.Context, method string, params, result any) *callError {
 	return r.rpcLocked(ctx, method, params, result)
 }
 
 // rpcLocked sends one JSON-RPC message. A notification (nil result) expects no reply body.
-func (r *platformToolRoute) rpcLocked(ctx context.Context, method string, params, result any) *callError {
+func (r *PlatformToolRoute) rpcLocked(ctx context.Context, method string, params, result any) *callError {
 	message := map[string]any{"jsonrpc": "2.0", "method": method}
 	var id int64
 	if result != nil || method != "notifications/initialized" {
@@ -306,12 +338,12 @@ func (r *platformToolRoute) rpcLocked(ctx context.Context, method string, params
 	}
 	body, err := json.Marshal(message)
 	if err != nil {
-		return failure(acpToolNotForwarded, "invalid_tool_input", err.Error())
+		return failure(RouteOutcomeNotForwarded, "invalid_tool_input", err.Error())
 	}
 	endpoint, token := r.cred.peek()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return failure(acpToolNotForwarded, "tools_unavailable", "the tool gateway URL is unusable")
+		return failure(RouteOutcomeNotForwarded, "tools_unavailable", "the tool gateway URL is unusable")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
@@ -330,11 +362,11 @@ func (r *platformToolRoute) rpcLocked(ctx context.Context, method string, params
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		// An epoch that is not the turn's current one, or an expired credential: refused before it ran.
-		return failure(acpToolNotForwarded, "stale_turn", "the platform refused this turn's tool credential (an older epoch or an expired token)")
+		return failure(RouteOutcomeNotForwarded, "stale_turn", "the platform refused this turn's tool credential (an older epoch or an expired token)")
 	case resp.StatusCode >= 500:
-		return failure(acpToolUnknown, "tools_unavailable", fmt.Sprintf("the tool gateway answered %d; the call may have run", resp.StatusCode))
+		return failure(RouteOutcomeUnknown, "tools_unavailable", fmt.Sprintf("the tool gateway answered %d; the call may have run", resp.StatusCode))
 	case resp.StatusCode >= 300:
-		return failure(acpToolNotForwarded, "tools_unavailable", fmt.Sprintf("the tool gateway answered %d", resp.StatusCode))
+		return failure(RouteOutcomeNotForwarded, "tools_unavailable", fmt.Sprintf("the tool gateway answered %d", resp.StatusCode))
 	}
 	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" && method == "initialize" {
 		r.mcpSession = sid
@@ -355,14 +387,14 @@ func (r *platformToolRoute) rpcLocked(ctx context.Context, method string, params
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &reply); err != nil {
-		return failure(acpToolUnknown, "bad_gateway_reply", "the tool gateway's answer is not JSON-RPC")
+		return failure(RouteOutcomeUnknown, "bad_gateway_reply", "the tool gateway's answer is not JSON-RPC")
 	}
 	if reply.Error != nil {
-		return failure(acpToolNotForwarded, "tools_unavailable", fmt.Sprintf("the tool gateway refused the request (%d): %s", reply.Error.Code, reply.Error.Message))
+		return failure(RouteOutcomeNotForwarded, "tools_unavailable", fmt.Sprintf("the tool gateway refused the request (%d): %s", reply.Error.Code, reply.Error.Message))
 	}
 	if result != nil {
 		if err := json.Unmarshal(reply.Result, result); err != nil {
-			return failure(acpToolUnknown, "bad_gateway_reply", "the tool gateway's result has an unexpected shape")
+			return failure(RouteOutcomeUnknown, "bad_gateway_reply", "the tool gateway's result has an unexpected shape")
 		}
 	}
 	return nil
@@ -370,15 +402,15 @@ func (r *platformToolRoute) rpcLocked(ctx context.Context, method string, params
 
 // transportFailure: a connection that was never made proves the call did not
 // run; anything after the request was sent leaves its fate unknown.
-func (r *platformToolRoute) transportFailure(ctx context.Context, err error) *callError {
+func (r *PlatformToolRoute) transportFailure(ctx context.Context, err error) *callError {
 	var opErr *net.OpError
 	switch {
 	case errors.As(err, &opErr) && opErr.Op == "dial" && ctx.Err() == nil:
-		return failure(acpToolNotForwarded, "tools_unavailable", "the tool gateway cannot be reached")
+		return failure(RouteOutcomeNotForwarded, "tools_unavailable", "the tool gateway cannot be reached")
 	case ctx.Err() != nil:
-		return failure(acpToolUnknown, "canceled", "the call was abandoned before the tool gateway answered; it may have run")
+		return failure(RouteOutcomeUnknown, "canceled", "the call was abandoned before the tool gateway answered; it may have run")
 	default:
-		return failure(acpToolUnknown, "transport_error", "the connection to the tool gateway failed after the call was sent; it may have run")
+		return failure(RouteOutcomeUnknown, "transport_error", "the connection to the tool gateway failed after the call was sent; it may have run")
 	}
 }
 
