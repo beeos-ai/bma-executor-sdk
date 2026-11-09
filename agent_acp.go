@@ -259,6 +259,12 @@ type acpTurn struct {
 	ctx    context.Context
 	ledger *acpLedger
 	route  acpRoute
+	turnID string
+	// toolRoute runs the agent's tool calls (always the local one for now).
+	toolRoute toolRoute
+	// policy is the effective permission of each tool (see acpEffectivePolicy);
+	// the executor enforces it, whatever the agent does.
+	policy map[string]string
 
 	mu       sync.Mutex
 	messages map[string]string // messageId -> event id
@@ -475,8 +481,21 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 	if route.baseURL == "" && route.platform == nil {
 		return errors.New("the platform handed no model credential for this turn (turn.start metadata model_base_url, model_token)")
 	}
-	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}}
+	var overrides map[string]string
+	if raw := params.Metadata["tool_policy"]; raw != "" {
+		if err := json.Unmarshal([]byte(raw), &overrides); err != nil {
+			return fmt.Errorf("turn.start metadata.tool_policy must be a JSON object of tool: allow|ask|deny")
+		}
+		for tool, permission := range overrides {
+			if permission != "allow" && permission != "ask" && permission != "deny" {
+				return fmt.Errorf("turn.start metadata.tool_policy.%s must be allow, ask or deny", tool)
+			}
+		}
+	}
 	a.mu.Lock()
+	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: acpEffectivePolicy(s.mode, overrides),
+		messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}}
+	t.toolRoute = localToolRoute{agent: a, turn: t}
 	s.turn = t
 	proc := s.proc
 	a.mu.Unlock()
@@ -487,12 +506,7 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 		}
 		a.mu.Unlock()
 	}()
-	var policy map[string]string
-	if raw := params.Metadata["tool_policy"]; raw != "" {
-		if err := json.Unmarshal([]byte(raw), &policy); err != nil {
-			return fmt.Errorf("turn.start metadata.tool_policy must be a JSON object of tool: allow|ask|deny")
-		}
-	}
+	policy := overrides
 	if err := a.runInput(ctx, proc, t, s.id, params.InputID, inputText(params.Input), policy); err != nil {
 		return err
 	}
@@ -822,7 +836,9 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 		}
 		a.interaction(ACPInteractionEvent{Phase: "ended", SessionID: base.SessionID, InteractionID: interactionID, ToolName: p.ToolCall.Title, Outcome: outcome})
 		decide := func(decision string) error {
-			return t.ledger.update(p.ToolCall.ToolCallID, func(c *acpCallState) { c.Decision = decision })
+			return t.ledger.update(p.ToolCall.ToolCallID, func(c *acpCallState) {
+				c.Decision, c.InteractionID, c.ToolName, c.InputHash = decision, interactionID, p.ToolCall.Title, acpInputHash(p.ToolCall.RawInput)
+			})
 		}
 		switch {
 		case err != nil:
@@ -849,11 +865,11 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return nil, &RPCError{Code: CodeInvalidParams, Message: err.Error()}
 		}
-		if t == nil {
-			return map[string]any{"text": "no turn is running in this session", "isError": true}, nil
+		result := refused("stale_turn", "no turn of this session is running in this agent process")
+		if t != nil {
+			result = t.toolRoute.call(ctx, routedCall{SessionID: base.SessionID, CallID: p.ToolCallID, Name: p.Name, Input: p.Input})
 		}
-		text, isError := a.runToolOnce(ctx, t.ledger, base.SessionID, p.ToolCallID, p.Name, p.Input)
-		return map[string]any{"text": text, "isError": isError}, nil
+		return map[string]any{"text": result.Text, "isError": result.IsError, "outcome": result.Outcome, "errorCode": result.Code}, nil
 	}
 	return nil, &RPCError{Code: CodeMethodNotFound, Message: "method not found: " + method}
 }

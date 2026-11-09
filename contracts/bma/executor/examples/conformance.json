@@ -1162,6 +1162,105 @@
       }
     },
     {
+      "name": "turn.start request (brain and hands apart)",
+      "method": "turn.start",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_turn_start_apart",
+        "method": "turn.start",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "input_id": "ain_01JAGENT",
+          "input": [
+            {
+              "type": "text",
+              "text": "Run uname -a on the other machine and save it to a file"
+            }
+          ],
+          "config": {
+            "model": "claude-opus-4-5",
+            "permission_mode": "default",
+            "cwd": "/home/work/project",
+            "harness": "claude-code",
+            "environment_info": {
+              "os": "linux",
+              "arch": "amd64",
+              "shell": "bash",
+              "cwd": "/home/work/project",
+              "session_files_root": "/mnt/session"
+            }
+          },
+          "deadline_ms": 3600000,
+          "metadata": {
+            "tools_mcp_url": "https://executor.example.com/v1/machines/mch_brain/mcp",
+            "tools_mcp_token": "bma_cap_v1.example-payload.example-mac",
+            "tools_mcp_token_expires_at": "2026-11-10T15:23:50Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "tools_token.refresh request",
+      "method": "tools_token.refresh",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_tools_token_refresh",
+        "method": "tools_token.refresh",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT"
+        }
+      }
+    },
+    {
+      "name": "tools_token.refresh result",
+      "method": "tools_token.refresh",
+      "kind": "result",
+      "result": {
+        "tools_mcp_token": "bma_cap_v1.example-payload.example-mac",
+        "tools_mcp_url": "https://executor.example.com/v1/machines/mch_brain/mcp",
+        "expires_at": "2026-11-10T16:23:50Z"
+      }
+    },
+    {
+      "name": "executor.register request (labels, remote brain)",
+      "method": "executor.register",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_1",
+        "method": "executor.register",
+        "params": {
+          "protocol": "bma.executor.v1.1",
+          "environment_id": "",
+          "executor": {
+            "name": "bmad",
+            "os": "linux",
+            "arch": "amd64",
+            "version": "1.4.0",
+            "labels": [
+              "team-a",
+              "gpu"
+            ]
+          },
+          "capabilities": {
+            "shell": {
+              "enabled": true
+            },
+            "process": {
+              "enabled": true
+            },
+            "remote_brain": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "turn.input request",
       "method": "turn.input",
       "kind": "request",

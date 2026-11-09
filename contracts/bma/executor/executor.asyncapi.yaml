@@ -2,8 +2,8 @@ asyncapi: 3.0.0
 id: https://contracts.bma.beeos.ai/executor.asyncapi
 info:
   title: BMA Executor Protocol channels
-  version: 1.3.0
-  description: WebSocket channels for bma.executor.v1 and bma.executor.v1.1. The control channel carries JSON-RPC 2.0 requests, notifications, and responses. The mcp channel carries raw MCP JSON-RPC with no BMA wrapper. PTY bytes travel on per-attach outbound host sockets (subprotocol bma.terminal.v1), not on these channels.
+  version: 1.4.0
+  description: "WebSocket channels for bma.executor.v1 and bma.executor.v1.1. The control channel carries JSON-RPC 2.0 requests, notifications, and responses. The mcp channel carries raw MCP JSON-RPC with no BMA wrapper. PTY bytes travel on per-attach outbound host sockets (subprotocol bma.terminal.v1), not on these channels. Contract 1.4.0 adds the platform tools endpoint (x-bma-platform-tools): the HTTP MCP endpoint a brain on one machine calls to run its tools on the session's hands machine."
   license:
     name: Apache-2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -153,6 +153,8 @@ channels:
         $ref: "#/components/messages/interactionCancel"
       modelTokenRefresh:
         $ref: "#/components/messages/modelTokenRefresh"
+      toolsTokenRefresh:
+        $ref: "#/components/messages/toolsTokenRefresh"
       jsonRpcSuccessResponse:
         $ref: "#/components/messages/jsonRpcSuccessResponse"
       jsonRpcErrorResponse:
@@ -424,6 +426,12 @@ operations:
       $ref: "#/channels/control"
     messages:
       - $ref: "#/components/messages/modelTokenRefresh"
+  toolsTokenRefreshSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/toolsTokenRefresh"
 components:
   messages:
     executorRegister:
@@ -2300,6 +2308,44 @@ components:
       x-bma-direction: executor-to-harness
       x-bma-kind: request
       x-bma-channel: control
+    toolsTokenRefresh:
+      name: tools_token.refresh
+      title: tools_token.refresh
+      summary: Fetch a fresh platform tools token for a running turn.
+      description: "Executor to harness request (capability agent, contract 1.4.0). A brain started by turn.start with a platform tools credential (metadata tools_mcp_token, valid 1 hour, handed over only when the session's brain machine and hands machine differ) calls it before the token expires (the reference executors do so when less than 10 minutes remain) and uses the new tools_mcp_token with tools_mcp_url for its next tool calls; the old token stays valid until it expires or its epoch is superseded. The shape and rules are those of model_token.refresh: the platform signs a new token only while the turn is active (pending, running or rescheduling), the turn belongs to a session routed to this executor's machine as the brain machine, and the call comes from the turn's current epoch, so a turn that ended, was canceled or failed, or was started again in a newer epoch gets no further token for the old epoch. Each call returns a new token; calls are not idempotent and a repeat is harmless. Errors carry data.reason: turn_inactive (-32007: the turn is not active), forbidden (-32001: the session or turn is unknown, belongs to another executor, or this executor is not entitled to brain_tools), tools_token_unavailable (-32012: the platform issues no such token for this turn, for example brain and hands are one machine). A harness without the method answers -32601; the executor then keeps the token it has."
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: tools_token.refresh
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              turn_id:
+                type: string
+            required:
+              - session_id
+              - turn_id
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: tools_token.refresh
+      x-bma-direction: executor-to-harness
+      x-bma-kind: request
+      x-bma-channel: control
     jsonRpcSuccessResponse:
       name: JSON-RPC success response
       title: JSON-RPC success response
@@ -2495,6 +2541,28 @@ x-bma-token-endpoints:
       $ref: schemas/executor.json#/$defs/ExecutorTokenRequest
     response:
       $ref: schemas/executor.json#/$defs/ExecutorTokenResponse
+x-bma-platform-tools:
+  description: "Platform tools endpoint (contract 1.4.0). When turn.start metadata carries tools_mcp_url, tools_mcp_token and tools_mcp_token_expires_at (the session binds this executor as the brain machine and a different machine as the hands machine, and the executor declared platform_credentials brain_tools), the brain sends every tool call of the turn to tools_mcp_url as MCP JSON-RPC over HTTPS (Authorization: Bearer <tools_mcp_token>) and never runs a tool locally (fail closed). The token is bound to the org, session, turn, brain machine and brain epoch; it lives 1 hour and is renewed with tools_token.refresh. The platform checks token and epoch, re-evaluates the tool policy, verifies the approval, claims the idempotency key, then runs the tool on the hands machine through its own tool.call or process.* methods; the hands executor's local policy may still refuse. A turn.cancel, session.close or turn end cancels the calls of the turn on the hands machine (process.interrupt, then process.terminate after a grace period). A brain disconnect does not kill processes already running on the hands machine; their results are kept by idempotency key for 24 hours and a brain that resumes the turn in a new epoch retries with the same key to get the result (replayed=true)."
+  endpoint: https://{host}/v1/machines/{brain_machine_id}/mcp
+  authentication:
+    - tools_mcp_token
+  tools:
+    - bash
+    - read
+    - write
+    - edit
+    - glob
+    - grep
+  tools-call-meta:
+    ai.beeos.bma/approval: "Approval evidence for a call the policy resolved as always_ask: the interaction id the user answered with allow. A missing or mismatched value answers approval_required or approval_invalid."
+    ai.beeos.bma/idempotency_key: Caller-chosen key (1-200 bytes) that makes a repeated call return the stored result instead of running the tool again; the same key with different input answers idempotency_key_reused. Results are kept for 24 hours.
+    ai.beeos.bma/sync_wait_ms: How long the call waits for the hands machine before it answers in_progress (the work continues and the same key fetches the result).
+  structured-content:
+    outcome: "executed | not_forwarded | unknown. executed: ran and finished. not_forwarded: certainly not run (for example the hands machine was offline for the whole wait). unknown: forwarded but the result is lost (hands restarted or disconnected); the platform never reruns it."
+    error_code: "Open set, set when the call did not execute normally: environment_unavailable, permission_denied, approval_required, approval_invalid, in_progress, idempotency_key_reused; receivers must accept values they do not know."
+    replayed: true when the result is the stored one of an earlier call with the same idempotency key.
+    output_file: Path on the hands machine of the full output when it was truncated.
+    pid: Process id on the hands machine of a call that is still running (in_progress).
 x-bma-token-endpoint:
   deprecated: true
   description: Deprecated alias of the two endpoints in x-bma-token-endpoints; the credential, not the path, picks the executor kind.
