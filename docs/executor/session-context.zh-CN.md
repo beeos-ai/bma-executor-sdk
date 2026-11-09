@@ -43,6 +43,10 @@
 
 每个新命令进程或包安装调用一次（重放、文件传输不调用），在会话文件同步之后、spawn 之前。`LaunchRequest` 含执行端会话 id、进程 id、`AgentSessionID`、`Metadata`、请求的 `Argv`、未解析的 `Cwd`、会话工作区 `DefaultCwd` 与计算出的 `Env`。包安装时 `PackageInstall` 为管理器与包名，`Argv`、`Cwd`、`Env` 是安装器的固定命令（其 `Dir` 作为 `Cwd`）；`PackageInstall == nil` 即命令。`LaunchSpec{Dir, Argv, Env}` 替换之，空字段保持原值（无 `Dir` 时照旧把请求 cwd 限制在工作区内；`Dir` 必须是绝对路径且不受工作区限制）。返回 `*RPCError` 原样拒绝；其他错误为 `spawn_failed`。包安装会调用包管理器、可能执行安装脚本并写系统或全局目录，所以限制或拒绝命令的钩子应显式处理 `req.PackageInstall != nil`：像命令一样包装、改环境，或带原因拒绝（例如需要用户在本机确认时返回 `local_confirmation_denied`）。返回空 `LaunchSpec` 则保持安装器自己的命令、目录与环境。没有 `Launch` 钩子时包安装照旧运行。
 
+### bash 工具：`CoreOptions.Launch`
+
+`CoreOptions.Launch` 用同一个 `LaunchFunc` 类型，每次 bash 工具调用在起命令前调用一次：包括 `tool.call` 的 bash，以及 `LocalToolRoute` 的 bash（`ACPAgent` 自己的工具就走它）。两个选项传同一个函数，脑自己的命令就和 `process.*` 走同一套准入和沙箱。请求里 `Tool` 为 `"bash"`，`ToolCallID` 为调用 id，`ProcessID` 为空；`Argv` 是 shell 命令（`bash -lc <命令>`，没有 bash 时用 `sh`；Windows 上是 `cmd.exe /d /s /c <命令>`）；`Cwd` 是调用的 cwd（`LocalToolRoute` 为空）。`tool.call` 的 `AgentSessionID`、`Metadata`、`Client` 取自该会话的 `session.assign`；`LocalToolRoute` 的 `SessionID` 与 `AgentSessionID` 都是路由的会话，没有 `Metadata` 和 `Client`（需要会话上下文时用自己的 client 去查）。返回的 spec 按进程的规则生效。拒绝时不起进程：`tool.call` 返回失败结果，文本为 `<原因>: <说明>`；`LocalToolRoute` 返回 `not_forwarded`，`Code` 为原因（普通错误为 `spawn_failed`），同一调用 id 再来时原样返回。文件工具（read/write/edit/glob/grep）在执行端进程内完成，不调用钩子，仍限制在会话工作区内。不设 `CoreOptions.Launch` 时 bash 工具行为不变。
+
 实现 `SessionFileTransferer` 的文件传输器改收 `TransferSessionFile(ctx, ProcessContext, transfer)`。
 
 示例 [`examples/sandboxed-folder`](../../examples/sandboxed-folder)：metadata `owner` 校验（`session_rejected`）、`workspace_ref` → 本机目录（`workspace_unavailable`）、cwd 越界（`workspace_boundary`）、macOS `sandbox-exec` 包装（只允许写该目录与会话 outputs）、缺 `agent_session_id` 的进程返回 `session_rejected`（平台自发进程在设置了 `-platform-dir` 时运行于该独立目录，不进任何会话目录）、包安装返回 `local_confirmation_denied`。

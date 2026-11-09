@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- **Go: `CoreOptions.Launch`, the Launch hook for bash tools.** It takes the
+  same `LaunchFunc` as `ProcessOptions.Launch` and runs once per bash tool
+  call before its command starts: a `tool.call` bash and the bash of a
+  `LocalToolRoute`, so `ACPAgent`'s own tools too. Before, those commands
+  started with `sh -lc` and skipped the host's admission check and sandbox
+  that `process.*` commands get; pass the same function to both options to
+  close that gap. The hook may change dir, argv and env, or refuse, as for a
+  process. `LaunchRequest` gains `Tool` (`"bash"`; `""` for `process.start`)
+  and `ToolCallID`; `ProcessID` is empty for a tool, and a `LocalToolRoute`
+  has no `Metadata` or `Client` (`AgentSessionID` is its session). A refusal
+  starts nothing: a `tool.call` fails with `<reason>: <message>`; a
+  `LocalToolRoute` call is `not_forwarded` with the reason as `Code`
+  (`spawn_failed` for a plain error) and is recorded like a result, so the
+  same call id gets the same answer, as behind the platform gateway. File
+  tools do not call the hook. Without the option nothing changes.
+
 ## 1.4.0
 
 - **Contract snapshot synced to beeos-managed-agents f872a540b (contract
