@@ -207,6 +207,15 @@ type ACPAgentOptions struct {
 	// id must be a single safe directory name. Absolute, or empty for
 	// the workspace only.
 	SessionFilesRoot string
+	// InputFiles fetches the bytes of an image the user attached (a file
+	// block of turn.start / turn.input; see agent_acp_images.go) when the
+	// platform hands the turn no tools endpoint to download it from. With it
+	// (or PlatformTools) and an agent that takes images (initialize
+	// promptCapabilities.image) the agent capability declares file_inputs and
+	// the harness image_inputs, and the platform then sends image input; the
+	// image reaches the agent as an ACP image content block. Without both, the
+	// platform is told the agent takes no image and refuses an image input.
+	InputFiles ACPInputFiles
 	// DisablePrewarm turns off the background prewarm of the Claude Code
 	// profile (see WaitPrewarm); the DSH profile has none.
 	DisablePrewarm bool
@@ -541,7 +550,7 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 		ID: opts.HarnessID, Version: init.AgentInfo.Version + "+dsh" + init.Meta.Bma.DSH, Protocol: "acp/1",
 		AgentName: init.AgentInfo.Name, AgentVersion: init.AgentInfo.Version,
 		Streaming: init.Meta.Bma.Streaming, PermissionRelay: init.Meta.Bma.PermissionRelay,
-		SessionLoad: init.AgentCapabilities.LoadSession, ImageInputs: false,
+		SessionLoad: init.AgentCapabilities.LoadSession, ImageInputs: proc.canTakeImages(),
 	}
 	a.models = acpAgentModels(opts.Models, init.Meta.Bma.ReasoningEfforts)
 	if len(opts.Models) > 0 && len(init.Meta.Bma.ReasoningEfforts) == 0 && slices.ContainsFunc(opts.Models, func(m AgentModel) bool { return len(m.ThinkingLevels) > 0 }) {
@@ -561,6 +570,7 @@ func (a *ACPAgent) Capability() AgentCapability {
 		// Claude Code repeats a re-sent prompt as a new user message, so a turn
 		// interrupted by an executor restart is not continued (ADR-0013: failed).
 		TurnResume:  !a.claude(),
+		FileInputs:  a.fileInputs(h.ImageInputs),
 		MaxSessions: a.opts.MaxSessions, Harness: &h, Harnesses: []AgentHarnessCapability{a.harness},
 		Models: a.models,
 	}
@@ -764,14 +774,14 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 		}
 		a.mu.Unlock()
 	}()
-	if err := a.runInput(ctx, proc, t, s.wire(), params.InputID, inputText(params.Input), overrides); err != nil {
+	if err := a.runInput(ctx, proc, t, s.wire(), params.InputID, params.Input, overrides); err != nil {
 		return err
 	}
 	// turn.input received while the turn ran: prompted in order, in the same turn.
 	for {
 		select {
 		case input := <-turn.Inputs():
-			if err := a.runInput(ctx, proc, t, s.wire(), input.InputID, inputText(input.Input), overrides); err != nil {
+			if err := a.runInput(ctx, proc, t, s.wire(), input.InputID, input.Input, overrides); err != nil {
 				return err
 			}
 		default:
@@ -846,11 +856,15 @@ func (a *ACPAgent) SuspendSession(ctx context.Context, sessionID string) error {
 // every event it produced is acknowledged by the platform. After a restart
 // the turn's inputs come again (turn.start, turn.input); the agent continues
 // the one it recorded without having finished it (same inputId).
-func (a *ACPAgent) runInput(ctx context.Context, proc *acpProcess, t *acpTurn, sessionID, inputID, text string, policy map[string]string) error {
+func (a *ACPAgent) runInput(ctx context.Context, proc *acpProcess, t *acpTurn, sessionID, inputID string, input []AgentInputBlock, policy map[string]string) error {
 	if t.ledger.inputDone(inputID) {
 		return nil
 	}
-	err := a.prompt(ctx, proc, sessionID, inputID, text, policy, t.effort)
+	content, err := a.promptContent(ctx, proc, t.turn, input)
+	if err != nil {
+		return err
+	}
+	err = a.prompt(ctx, proc, sessionID, inputID, content, policy, t.effort)
 	if a.claude() {
 		t.flushMessages()
 		if violation := t.violationError(); violation != nil {
@@ -866,8 +880,8 @@ func (a *ACPAgent) runInput(ctx context.Context, proc *acpProcess, t *acpTurn, s
 	return t.ledger.markInputDone(inputID)
 }
 
-func (a *ACPAgent) prompt(ctx context.Context, proc *acpProcess, sessionID, inputID, text string, policy map[string]string, effort string) error {
-	params := map[string]any{"sessionId": sessionID, "prompt": []any{map[string]any{"type": "text", "text": text}}}
+func (a *ACPAgent) prompt(ctx context.Context, proc *acpProcess, sessionID, inputID string, content []any, policy map[string]string, effort string) error {
+	params := map[string]any{"sessionId": sessionID, "prompt": content}
 	if !a.claude() {
 		meta := map[string]any{"inputId": inputID}
 		if len(policy) > 0 {
@@ -943,16 +957,6 @@ func acpStop(ctx context.Context, res acpPromptResponse, err error) error {
 	default:
 		return fmt.Errorf("agent stopped: %s", res.StopReason)
 	}
-}
-
-func inputText(blocks []AgentInputBlock) string {
-	var parts []string
-	for _, b := range blocks {
-		if b.Type == AgentInputBlockTypeText {
-			parts = append(parts, b.Text)
-		}
-	}
-	return strings.Join(parts, "\n")
 }
 
 func (a *ACPAgent) systemPrompt(cwd, system string, hands *EnvironmentInfo) string {
@@ -1526,7 +1530,10 @@ type acpWire struct {
 type acpInitializeResponse struct {
 	ProtocolVersion   int `json:"protocolVersion"`
 	AgentCapabilities struct {
-		LoadSession bool `json:"loadSession"`
+		LoadSession        bool `json:"loadSession"`
+		PromptCapabilities struct {
+			Image bool `json:"image"`
+		} `json:"promptCapabilities"`
 	} `json:"agentCapabilities"`
 	AgentInfo struct {
 		Name    string `json:"name"`

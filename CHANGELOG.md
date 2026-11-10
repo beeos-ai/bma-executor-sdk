@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.5.1
+
+- **Go: a user's image reaches the local brain (`ACPAgent`).** A turn.start /
+  turn.input file block of an image type (the platform's `file_id`, `name`,
+  `mime_type`, `size_bytes`; bytes never travel on the control channel) is
+  downloaded and handed to the agent as an ACP `image` content block
+  (`data` base64 + `mimeType`, after the input's text) in `session/prompt`,
+  where before only the text blocks were sent and the image was dropped. It
+  needs an agent whose initialize reply declares `promptCapabilities.image`
+  (bma-dsh-acp >= 0.2.2). When it does, and the host can fetch the file
+  (new `ACPAgentOptions.InputFiles`, or `PlatformTools`: the turn's tools
+  endpoint `<tools_mcp_url without /mcp>/files/<file_id>/content` with
+  `tools_mcp_token`, as the platform's own brain host does), the agent
+  capability declares `file_inputs` and the harness `image_inputs`, so the
+  platform starts sending image input; otherwise both stay false and the
+  platform refuses an image input itself. An image the executor cannot hand
+  over ends the turn with a visible `session.error`, never a silent drop:
+  the agent takes no image (`agent_protocol_error`), or the image is refused
+  (`agent_error`) for a type outside png/jpeg/gif/webp, a size over 5 MB
+  (`size_bytes` or the downloaded bytes), bytes that are not the declared
+  type, a longest side over 8000 px, more than 100 images in one input, or a
+  failed download. The limits are the Anthropic API's (vision docs: JPEG,
+  PNG, GIF, WebP; 5 MB per image; 8000x8000 px; 100 images per request). The
+  Claude Code profile does not declare image input yet (an image there fails
+  with `agent_protocol_error`). File blocks of other types are still ignored.
+- Tests: a real bma-dsh-acp 0.2.2 (`testdata/bma-dsh-acp`, `npm ci`) run end
+  to end: a scripted OpenAI-compatible model endpoint receives the image.
+  CI runs it in its own job (it fails, not skips, when the agent is missing).
+- From 1.5.0 on main (#54): a `PlatformToolRoute` stale_turn renewal waits for
+  the reconnecting executor channel, and the Claude Code profile's loopback
+  MCP `tools/call` answers as an SSE stream so a call can outlast Claude
+  Code's 60 s first-byte budget.
+
 ## 1.5.0
 
 - **Go: a local DSH brain runs the model and thinking level the turn asks for

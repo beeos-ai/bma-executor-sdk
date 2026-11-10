@@ -102,6 +102,38 @@ jobs:
           go test -race -count=1 -v -run 'ClaudeCode' ./... | tee /tmp/claude.log
           ! grep -q -- '--- SKIP' /tmp/claude.log
 
+  # The DSH profile of ACPAgent against the real, pinned bma-dsh-acp (npm ci
+  # installs the locked tree): a user's image reaches a scripted model
+  # endpoint. The model endpoint is scripted; no credential is used.
+  dsh-acp:
+    name: ACPAgent user images with the pinned bma-dsh-acp
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
+          cache-dependency-path: go.sum
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Install the pinned bma-dsh-acp
+        working-directory: testdata/bma-dsh-acp
+        run: npm ci
+
+      - name: User image test (fails, not skips, when the agent is missing)
+        env:
+          BMA_REQUIRE_DSH_ACP: "1"
+        run: |
+          go test -race -count=1 -v -run 'UserImageReachesTheModelThroughBmaDshAcp' ./... | tee /tmp/dsh.log
+          ! grep -q -- '--- SKIP' /tmp/dsh.log
+
   # The Go executor on Windows: environment, cmd.exe command lines, job
   # objects, ConPTY, files. Tests that need a POSIX shell skip themselves.
   windows-go:
