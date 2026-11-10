@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.1
+## Unreleased
 
 - **Fix, Go: the ninth session never started - idle sessions no longer hold a
   slot, and resident sessions are bounded apart (`ACPAgent`, `ServeAgent`).**
@@ -27,6 +27,8 @@
   (`MaxResidentSessions`, `SuspendSession`) lets a custom `AgentHandler` do the
   same; without it resident sessions are unbounded as before. `session.close`
   of a suspended session still cleans up (ledger file included).
+
+## 1.4.1
 
 - **Go: `PlatformToolRoute` renews a refused credential once and sends the
   call again (ADR-0029 §4.3, E4).** After the brain's executor reconnects the
