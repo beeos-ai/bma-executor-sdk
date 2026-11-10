@@ -3,7 +3,6 @@
 package bmaexecutor
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -74,15 +73,14 @@ func (t *processTree) release() {}
 // setCommandLine is a Windows concern (cmd.exe quoting).
 func setCommandLine(*exec.Cmd) {}
 
-// shellCommand runs command with a login bash (sh when bash is missing).
-func shellCommand(ctx context.Context, command string) *exec.Cmd {
+// shellArgv is the argv a bash tool runs command with: a login bash (sh when
+// bash is missing).
+func shellArgv(command string) []string {
 	shell := "bash"
 	if _, err := exec.LookPath(shell); err != nil {
 		shell = "sh"
 	}
-	cmd := exec.CommandContext(ctx, shell, "-lc", command)
-	setProcessGroup(cmd)
-	return cmd
+	return []string{shell, "-lc", command}
 }
 
 func signalGroup(process *os.Process, signal processSignal) error {

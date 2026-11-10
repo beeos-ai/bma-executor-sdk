@@ -32,7 +32,8 @@ const (
 	acpBashMaxTimeout = 600 * time.Second
 	// acpBashLifetime is how long a command left in the background may run.
 	acpBashLifetime = time.Hour
-	// acpBashOutputDir (under the turn's working directory) holds the output files.
+	// acpBashOutputDir (under the turn's working directory) holds the output
+	// files when CoreOptions.ToolOutputDir is not set.
 	acpBashOutputDir = ".bma-bash"
 )
 
@@ -99,32 +100,55 @@ func (b *acpBackground) killAll() {
 	}
 }
 
-// runBash runs one bash call of the agent in the session's workspace. The
-// call's own ctx ends with the call (the turn's cancel or deadline); the
-// route's turn decides the fate of a command left in the background.
-func (r *LocalToolRoute) runBash(ctx context.Context, callID string, in map[string]any) (string, bool, *RouteBackground) {
+// bashPlan is a bash call ready to run: how its command starts and the
+// session workspace (where its output file goes), or why it cannot run.
+type bashPlan struct {
+	launch    toolLaunch
+	workspace string
+	failure   string
+}
+
+// prepareBash resolves where and how a bash call's command starts, through
+// CoreOptions.Launch when the Core has one. A refusal of the hook is the
+// call's answer (not_forwarded); a call that cannot run otherwise fails when
+// run (plan.failure), as before the hook existed.
+func (r *LocalToolRoute) prepareBash(ctx context.Context, callID string, in map[string]any) (bashPlan, *RouteResult) {
 	command, _ := in["command"].(string)
 	if command == "" {
-		return "bash requires command", true, nil
+		return bashPlan{failure: "bash requires command"}, nil
+	}
+	session := r.core.session(coreKey{acpBrain, r.sessionID})
+	if session == nil {
+		return bashPlan{failure: "session_not_active: the session is not open"}, nil
+	}
+	process := ProcessContext{SessionID: r.sessionID, AgentSessionID: r.sessionID}
+	launch, err := r.core.launchTool(ctx, session, process, callID, command, "", nil)
+	if err != nil {
+		if code, detail, ok := launchRefusal(err); ok {
+			return bashPlan{}, refused(code, detail)
+		}
+		return bashPlan{failure: err.Error()}, nil
+	}
+	workspace, err := session.ResolveCwd("")
+	if err != nil {
+		return bashPlan{failure: err.Error()}, nil
+	}
+	return bashPlan{launch: launch, workspace: workspace}, nil
+}
+
+// runBash runs one prepared bash call of the agent. The call's own ctx ends
+// with the call (the turn's cancel or deadline); the route's turn decides the
+// fate of a command left in the background.
+func (r *LocalToolRoute) runBash(ctx context.Context, callID string, in map[string]any, plan bashPlan) (string, bool, *RouteBackground) {
+	if plan.failure != "" {
+		return plan.failure, true, nil
 	}
 	timeout := acpBashDefaultTimeout
 	if ms, ok := in["timeout"].(float64); ok && ms > 0 {
 		timeout = min(time.Duration(ms)*time.Millisecond, acpBashMaxTimeout)
 	}
 	onTimeoutKill := in["on_timeout"] == "kill"
-	session := r.core.session(coreKey{acpBrain, r.sessionID})
-	if session == nil {
-		return "session_not_active: the session is not open", true, nil
-	}
-	cwd, err := session.ResolveCwd("")
-	if err != nil {
-		return err.Error(), true, nil
-	}
-	env, err := r.core.Env(nil)
-	if err != nil {
-		return err.Error(), true, nil
-	}
-	output, err := r.bashOutputFile(cwd, callID)
+	output, err := r.bashOutputFile(plan.workspace, callID)
 	if err != nil {
 		return "spawn bash: " + err.Error(), true, nil
 	}
@@ -139,9 +163,9 @@ func (r *LocalToolRoute) runBash(ctx context.Context, callID string, in map[stri
 		}
 	}
 	// The command is not tied to the call's ctx: it may outlive the call.
-	cmd := shellCommand(context.Background(), command)
+	cmd := toolCommand(context.Background(), plan.launch.argv)
 	setCredential(cmd, r.core.opts.RunAs)
-	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = cwd, env, out, out
+	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = plan.launch.dir, plan.launch.env, out, out
 	tree, err := startCommand(cmd)
 	if err != nil {
 		return "spawn bash: " + err.Error(), true, nil
@@ -206,9 +230,23 @@ func (r *LocalToolRoute) superviseBackground(proc *acpBackgroundProc) {
 	}
 }
 
-// bashOutputFile is the file a command's output goes to, in the working directory.
+// bashOutputDir is the session's directory for output files under
+// CoreOptions.ToolOutputDir, "" when the option is not set.
+func (c *Core) bashOutputDir(sessionID string) string {
+	if c.opts.ToolOutputDir == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(sessionID))
+	return filepath.Join(c.opts.ToolOutputDir, hex.EncodeToString(sum[:8]))
+}
+
+// bashOutputFile is the file a command's output goes to: in the session's
+// directory under CoreOptions.ToolOutputDir, else in the working directory.
 func (r *LocalToolRoute) bashOutputFile(cwd, callID string) (string, error) {
-	dir := filepath.Join(cwd, acpBashOutputDir)
+	dir := r.core.bashOutputDir(r.sessionID)
+	if dir == "" {
+		dir = filepath.Join(cwd, acpBashOutputDir)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
@@ -219,6 +257,37 @@ func (r *LocalToolRoute) bashOutputFile(cwd, callID string) (string, error) {
 	}
 	sum := sha256.Sum256([]byte(r.sessionID + "\x00" + callID))
 	return filepath.Join(dir, hex.EncodeToString(sum[:8])+".out"), nil
+}
+
+// ownOutputFile reports whether path names an output file of this session
+// under CoreOptions.ToolOutputDir, which the read tool may read although it
+// is outside the workspace.
+func (r *LocalToolRoute) ownOutputFile(path string) (string, bool) {
+	dir := r.core.bashOutputDir(r.sessionID)
+	if dir == "" || !filepath.IsAbs(path) {
+		return "", false
+	}
+	path = filepath.Clean(path)
+	return path, filepath.Dir(path) == dir
+}
+
+// readOutputFile reads an output file of the session with the read tool's
+// offset and limit. Like every file tool it is refused under RunAs; a link
+// is not followed.
+func (r *LocalToolRoute) readOutputFile(path string, input ToolInput) (string, bool) {
+	if r.core.opts.RunAs != nil {
+		return `tool "read" is unavailable: this executor runs workloads as another OS user; use bash`, true
+	}
+	if info, err := os.Lstat(path); err != nil {
+		return err.Error(), true
+	} else if !info.Mode().IsRegular() {
+		return fmt.Sprintf("%s is not a regular file", path), true
+	}
+	result, err := r.core.readPath(path, input)
+	if err != nil {
+		return err.Error(), true
+	}
+	return result.Content[0].Text, false
 }
 
 // bashFinished is the answer of a command that ended within the wait: its

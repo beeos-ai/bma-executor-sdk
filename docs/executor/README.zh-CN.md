@@ -173,7 +173,7 @@ bma-executor-sdk（Go）
 | session files（`/mnt/session/uploads\|outputs`） | 机器 token HTTP 路由 | 已有 | 已有 | — |
 | 执行端声明的会话文件根（`capabilities.session_files.root`，`<root>/<会话>/{uploads,outputs}`） | v1.1 附加 | 待上线（#411 F2） | 否（保持 `/mnt/session`） | 1.1：`ProcessOptions.SessionFiles`（TS/Python：声明能力，自行同步） |
 | 会话上下文（`GET …/daemon/processes/{id}/session`、`…/daemon/sessions/{id}`） | 机器 token HTTP 路由 | 待上线（#411 F1） | — | 1.1：`Client.SessionContext` / `SessionContextByID`（TS `sessionContext`，Python `session_context`） |
-| 按进程启动钩子（cwd/argv/env、沙箱包装、拒绝） | — | — | — | 1.1：`ProcessOptions.Launch`（TS/Python：在自己的 `process.start` handler 里做） |
+| 按进程启动钩子（cwd/argv/env、沙箱包装、拒绝） | — | — | — | 1.1：`ProcessOptions.Launch`（TS/Python：在自己的 `process.start` handler 里做）；bash 工具（含 `ACPAgent` 的）：`CoreOptions.Launch`（未发布） |
 | 拒绝原因（`error.data.reason`：`workspace_boundary`、`session_rejected` 等） | v1.1 | 待上线（#411 F3） | `spawn_failed` | 1.1：`Reason*` + `NewReasonError`（TS `ErrorReason` + `RpcError.withReason`，Python `ErrorReason` + `RPCError.with_reason`） |
 | `workspace.backup` | v1.1 附加 | 已有 | 已有 | — |
 | agent 能力（`turn.*`、interaction） | v1.1 + `agent` | 预览（machine 执行端，经 `PUT …/agents/{agentID}/executor-binding` 绑定；仅文本输入） | 未实现 | 已有（两侧） |

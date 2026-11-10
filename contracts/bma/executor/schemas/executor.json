@@ -230,6 +230,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "skills_per_session": {
+          "type": "boolean",
+          "description": "Contract 1.4.0. The executor mounts the skills view at the path of each fs.mount, whatever it is, and keeps the views of several sessions mounted at once: mounting or unmounting one session never touches another session's views. When true and the executor also declared session_files.root, the harness mounts a session's skills at <root>/<agent_session_id>/skills (next to its uploads and outputs), so sessions sharing a machine each see their own skills; the executor removes the mount points it created when the session is unmounted. Absent or false (every executor before 1.4.0): the harness mounts skills at the fixed /mnt/skills, which shows one session at a time."
         }
       },
       "required": [
@@ -239,7 +243,7 @@
     },
     "SessionFilesCapability": {
       "type": "object",
-      "description": "Executor-owned per-session file layout. The harness derives <root>/<agent_session_id>/uploads (read-only session inputs) and <root>/<agent_session_id>/outputs (deliverables) from it, with agent_session_id as sent in process.start metadata, and uses these real paths in prompts, tool descriptions, write rules and the session files manifest. Absent: the harness keeps /mnt/session/uploads and /mnt/session/outputs. Fixed at executor.register: executor.capabilities.update does not change it. Machine-scoped executors only.",
+      "description": "Executor-owned per-session file layout. The harness derives <root>/<agent_session_id>/uploads (read-only session inputs) and <root>/<agent_session_id>/outputs (deliverables) from it, with agent_session_id as sent in process.start metadata, and uses these real paths in prompts, tool descriptions, write rules and the session files manifest. Absent: the harness keeps /mnt/session/uploads and /mnt/session/outputs. With the fs capability skills_per_session the same tree also holds <root>/<agent_session_id>/skills (the session's skills view, read-only). Fixed at executor.register: executor.capabilities.update does not change it. Machine-scoped executors only.",
       "properties": {
         "root": {
           "type": "string",

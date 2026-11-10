@@ -25,9 +25,15 @@ type bashRig struct {
 
 func newBashRig(t *testing.T) *bashRig {
 	t.Helper()
+	return newBashRigWith(t, CoreOptions{})
+}
+
+func newBashRigWith(t *testing.T, opts CoreOptions) *bashRig {
+	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	noErr(t, err)
-	core, err := NewCore(CoreOptions{WorkRoot: root})
+	opts.WorkRoot = root
+	core, err := NewCore(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +110,11 @@ func TestLocalBashOutputFileHoldsTheOutputAndTheCommandOutlivesTheWait(t *testin
 	if err != nil || strings.TrimSpace(string(raw)) != "early" {
 		t.Fatalf("output file = %q, %v", raw, err)
 	}
-	// The output file is inside the session's workspace, where the read tool can reach it.
+	// Without ToolOutputDir the output file is inside the session's
+	// workspace, where the read tool can reach it.
+	if dir := filepath.Join(rig.core.workspace(acpBrain, rigSession), acpBashOutputDir); filepath.Dir(got.Background.OutputFile) != dir {
+		t.Fatalf("output file %s, want it in %s", got.Background.OutputFile, dir)
+	}
 	read := rig.route.Call(context.Background(), RouteCall{ID: "c2", Name: "read",
 		Input: map[string]any{"file_path": got.Background.OutputFile}})
 	if read.IsError || !strings.Contains(read.Text, "early") {
@@ -130,5 +140,61 @@ func TestLocalBashRepeatedCallReplaysTheBackgroundAnswer(t *testing.T) {
 		Input: map[string]any{"command": "sleep 30", "timeout": float64(200)}})
 	if !again.Replayed || !strings.Contains(again.Text, bg.OutputFile) {
 		t.Fatalf("replay = %+v", again)
+	}
+}
+
+// TestLocalBashToolOutputDirKeepsOutputOutOfTheWorkspace: with
+// CoreOptions.ToolOutputDir the output files go to the session's directory
+// there, the workspace gets no .bma-bash, the read tool reads the session's
+// own output files (and no other file there), and the session's end removes
+// its directory.
+func TestLocalBashToolOutputDirKeepsOutputOutOfTheWorkspace(t *testing.T) {
+	outputs, err := filepath.EvalSymlinks(t.TempDir())
+	noErr(t, err)
+	outputs = filepath.Join(outputs, "brain-output")
+	rig := newBashRigWith(t, CoreOptions{ToolOutputDir: outputs})
+	workspace := rig.core.workspace(acpBrain, rigSession)
+
+	done := rig.route.Call(context.Background(), RouteCall{ID: "c1", Name: "bash", Input: map[string]any{"command": "echo finished"}})
+	if done.IsError || !strings.Contains(done.Text, "finished") || !strings.Contains(done.Text, "exit_code: 0") {
+		t.Fatalf("answer = %+v", done)
+	}
+	got := rig.route.Call(context.Background(), RouteCall{ID: "c2", Name: "bash",
+		Input: map[string]any{"command": "echo early; sleep 30", "timeout": float64(500)}})
+	wantExecuted(t, got)
+	if got.Background == nil {
+		t.Fatalf("answer = %+v", got)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(-got.Background.PID, syscall.SIGKILL) })
+	sessionDir := filepath.Dir(got.Background.OutputFile)
+	if filepath.Dir(sessionDir) != outputs || !strings.Contains(got.Text, got.Background.OutputFile) {
+		t.Fatalf("output file %s (text %q), want it in a session directory under %s", got.Background.OutputFile, got.Text, outputs)
+	}
+	if info, err := os.Stat(sessionDir); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("session output directory: %v, %v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, acpBashOutputDir)); !os.IsNotExist(err) {
+		t.Fatalf("the workspace has %s: %v", acpBashOutputDir, err)
+	}
+	waitFor(t, func() bool {
+		raw, _ := os.ReadFile(got.Background.OutputFile)
+		return strings.TrimSpace(string(raw)) == "early"
+	})
+	read := rig.route.Call(context.Background(), RouteCall{ID: "c3", Name: "read",
+		Input: map[string]any{"file_path": got.Background.OutputFile}})
+	if read.IsError || !strings.Contains(read.Text, "early") {
+		t.Fatalf("read of the output file = %+v", read)
+	}
+	// Only the session's own output files: not another file under ToolOutputDir.
+	other := filepath.Join(outputs, "other.out")
+	noErr(t, os.WriteFile(other, []byte("secret"), 0o600))
+	if read := rig.route.Call(context.Background(), RouteCall{ID: "c4", Name: "read",
+		Input: map[string]any{"file_path": other}}); !read.IsError || strings.Contains(read.Text, "secret") {
+		t.Fatalf("read outside the session's output directory = %+v", read)
+	}
+	rig.route.CloseSession()
+	waitDead(t, got.Background.PID, "session closed")
+	if _, err := os.Stat(sessionDir); !os.IsNotExist(err) {
+		t.Fatalf("the session's output directory outlived the session: %v", err)
 	}
 }
