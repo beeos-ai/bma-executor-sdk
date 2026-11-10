@@ -2,15 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.bma.beeos.ai/schemas/file.json",
   "title": "BMA executor bma-file types",
-  "description": "fs.mount and fs.unmount (machine-scoped executors with the fs capability). bma-file HTTP routes live under the service_url the harness sends (a complete prefix ending in /v1/machines/{machine_id}/fs, for example https://executor.example.com/v1/machines/mach_01/fs, operations at <service_url>/<op>; the executor does not compose the machine id; the previous <origin>/v1/fs/<op> stays as an alias); they are authenticated with the mount token, not executor methods.",
+  "description": "fs.mount and fs.unmount (machine-scoped executors with the fs capability). bma-file HTTP routes live under the service_url the harness sends (a complete prefix ending in /v1/machines/{machine_id}/fs, for example https://executor.example.com/v1/machines/mach_01/fs, operations at <service_url>/<op>; the executor does not compose the machine id); they are authenticated with the mount token, not executor methods.",
   "$defs": {
     "FsMount": {
       "type": "object",
-      "description": "One view to mount. path is the absolute mount point on the executor host (derived from session_files by the harness). readonly is also fixed inside token; the executor mounts read-only when it is true. token is a capability token for this session and machine: keep it in memory only, never write it to disk, argv, environment or logs.",
+      "description": "One view to mount. path is the absolute mount point on the executor host (derived from session_files by the harness; the skills view is at <root>/<agent_session_id>/skills for an executor that declared fs.skills_per_session and a root, otherwise /mnt/skills). Mount points of different sessions never overlap, and the executor mounts exactly the path it is given. readonly is also fixed inside token; the executor mounts read-only when it is true. token is a capability token for this session and machine: keep it in memory only, never write it to disk, argv, environment or logs.",
       "properties": {
         "view": {
           "type": "string",
-          "description": "uploads (FS1). Open enum: outputs, skills and memory follow."
+          "description": "uploads, skills. Open enum: outputs and memory follow."
         },
         "path": {
           "type": "string",

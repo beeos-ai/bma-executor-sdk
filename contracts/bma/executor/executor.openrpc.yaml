@@ -1248,7 +1248,11 @@ methods:
       the token in memory only. Idempotent by (session_id, view), so resending the same mounts with new
       tokens renews the tokens without remounting; a changed path or readonly remounts. Sent when the
       session is bound to the machine and again after a resume or reconnect, because tokens are bound
-      to the binding epoch.
+      to the binding epoch. Sessions are independent, so a request for one session never changes the
+      mounts of another, and fs.unmount ends one session only. An executor that declared fs.skills_per_session
+      receives the skills view of each session at its own path (<session_files.root>/<agent_session_id>/skills)
+      and removes the mount points it created on fs.unmount; any other executor receives skills at the fixed
+      /mnt/skills and one session at a time.
     tags:
       - name: fs
     x-bma-direction: harness-to-executor
@@ -1264,7 +1268,7 @@ methods:
           type: string
       - name: service_url
         required: true
-        description: Complete prefix of the bma-file routes for this machine, ending in /v1/machines/{machine_id}/fs (for example https://executor.example.com/v1/machines/mach_01/fs). The executor appends "/<op>" and nothing else; it does not compose the machine id itself. The previous <origin>/v1/fs/<op> routes stay as an alias until they are removed.
+        description: Complete prefix of the bma-file routes for this machine, ending in /v1/machines/{machine_id}/fs (for example https://executor.example.com/v1/machines/mach_01/fs). The executor appends "/<op>" and nothing else; it does not compose the machine id itself.
         schema:
           type: string
       - name: mounts

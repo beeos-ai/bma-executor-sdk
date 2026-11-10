@@ -358,9 +358,10 @@ class FsCapability(TypedDict):
     """Session file views mounted by the executor as FUSE file systems backed by bma-file (docs/adr/0021). Declared only after the executor probed that it can mount. Absent or fuse=false: the session files stay on the copy-and-scan protocol (session_files). views lists the views the executor can mount; the harness only mounts those. Machine-scoped executors only."""
     fuse: bool
     views: NotRequired[list[str]]
+    skills_per_session: NotRequired[bool]
 
 class FsMount(TypedDict):
-    """One view to mount. path is the absolute mount point on the executor host (derived from session_files by the harness). readonly is also fixed inside token; the executor mounts read-only when it is true. token is a capability token for this session and machine: keep it in memory only, never write it to disk, argv, environment or logs."""
+    """One view to mount. path is the absolute mount point on the executor host (derived from session_files by the harness; the skills view is at <root>/<agent_session_id>/skills for an executor that declared fs.skills_per_session and a root, otherwise /mnt/skills). Mount points of different sessions never overlap, and the executor mounts exactly the path it is given. readonly is also fixed inside token; the executor mounts read-only when it is true. token is a capability token for this session and machine: keep it in memory only, never write it to disk, argv, environment or logs."""
     view: str
     path: str
     readonly: bool
@@ -779,7 +780,7 @@ class SessionEventType(str, Enum):
     SessionError = "session.error"
 
 class SessionFilesCapability(TypedDict):
-    """Executor-owned per-session file layout. The harness derives <root>/<agent_session_id>/uploads (read-only session inputs) and <root>/<agent_session_id>/outputs (deliverables) from it, with agent_session_id as sent in process.start metadata, and uses these real paths in prompts, tool descriptions, write rules and the session files manifest. Absent: the harness keeps /mnt/session/uploads and /mnt/session/outputs. Fixed at executor.register: executor.capabilities.update does not change it. Machine-scoped executors only."""
+    """Executor-owned per-session file layout. The harness derives <root>/<agent_session_id>/uploads (read-only session inputs) and <root>/<agent_session_id>/outputs (deliverables) from it, with agent_session_id as sent in process.start metadata, and uses these real paths in prompts, tool descriptions, write rules and the session files manifest. Absent: the harness keeps /mnt/session/uploads and /mnt/session/outputs. With the fs capability skills_per_session the same tree also holds <root>/<agent_session_id>/skills (the session's skills view, read-only). Fixed at executor.register: executor.capabilities.update does not change it. Machine-scoped executors only."""
     root: str
 
 class SessionMemoryResource(TypedDict):

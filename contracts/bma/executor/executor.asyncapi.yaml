@@ -1758,7 +1758,7 @@ components:
       name: fs.mount
       title: fs.mount
       summary: Mount session file views backed by bma-file.
-      description: Harness to executor request (machine-scoped). The executor mounts each listed view at its path as a FUSE file system that reads from service_url with the view's token, and keeps the token in memory only. Idempotent by (session_id, view), so resending the same mounts with new tokens renews the tokens without remounting; a changed path or readonly remounts. Sent when the session is bound to the machine and again after a resume or reconnect, because tokens are bound to the binding epoch.
+      description: Harness to executor request (machine-scoped). The executor mounts each listed view at its path as a FUSE file system that reads from service_url with the view's token, and keeps the token in memory only. Idempotent by (session_id, view), so resending the same mounts with new tokens renews the tokens without remounting; a changed path or readonly remounts. Sent when the session is bound to the machine and again after a resume or reconnect, because tokens are bound to the binding epoch. Sessions are independent, so a request for one session never changes the mounts of another, and fs.unmount ends one session only. An executor that declared fs.skills_per_session receives the skills view of each session at its own path (<session_files.root>/<agent_session_id>/skills) and removes the mount points it created on fs.unmount; any other executor receives skills at the fixed /mnt/skills and one session at a time.
       contentType: application/json
       payload:
         type: object
