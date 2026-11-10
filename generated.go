@@ -147,9 +147,10 @@ type AgentMessageEvent struct {
 type AgentModel struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name,omitempty"`
-	// Thinking or reasoning-effort levels the model accepts, for example off, low, medium, high.
-	ThinkingLevels       []string `json:"thinking_levels,omitempty"`
-	DefaultThinkingLevel string   `json:"default_thinking_level,omitempty"`
+	// Thinking or reasoning-effort levels the model accepts, lowest first. Use the reasoning effort values of the model APIs: none, minimal, low, medium, high, xhigh, max (OpenAI reasoning_effort; Claude Code effort levels are low, medium, high, xhigh, max). An executor that drives an OpenAI-compatible endpoint sends the level as reasoning_effort unchanged. Empty or absent: the model takes no level and AgentTurnConfig.thinking_level is not applied.
+	ThinkingLevels []string `json:"thinking_levels,omitempty"`
+	// Level applied when the turn names none; one of thinking_levels. Absent: no level is sent and the model uses its own default.
+	DefaultThinkingLevel string `json:"default_thinking_level,omitempty"`
 }
 
 // AgentThinkingEvent Model thinking. content may be empty when the model only reports that it thought.
@@ -176,8 +177,11 @@ type AgentToolUseEvent struct {
 
 // AgentTurnConfig Requested (turn.start) or effective (TurnStartResult.effective) turn configuration. Every member is optional in a request; the executor reports the values it actually applied.
 type AgentTurnConfig struct {
-	Model          string `json:"model,omitempty"`
-	ThinkingLevel  string `json:"thinking_level,omitempty"`
+	// Model the turn runs on. When the capability lists models it must be one of models[].id: an executor answers any other with -32602 invalid params and never substitutes another model. When the capability lists no models the executor picks its own model and ignores this member; effective then reports the model it used.
+	Model string `json:"model,omitempty"`
+	// Reasoning effort of the turn: one of the thinking_levels of the turn's model (AgentModel). Absent: the model's default_thinking_level, or none. A level the model does not list answers -32602 invalid params; for a model that lists no levels the member is ignored and effective omits it.
+	ThinkingLevel string `json:"thinking_level,omitempty"`
+	// One of the capability permission_modes. Absent: the executor's default mode. turn.start metadata tool_policy, when present, refines the permission of single tools on top of the mode.
 	PermissionMode string `json:"permission_mode,omitempty"`
 	// Working directory on the executor host. The executor rejects a directory outside its allowed roots with -32001 forbidden. When turn.start metadata carries tools_mcp_* (brain and hands on different machines, contract 1.4.0) cwd is a path on the hands machine: the executor does not check it against its own allowed roots and does not create a workspace for it on this machine; the hands machine's own policy applies when a tool runs there.
 	Cwd string `json:"cwd,omitempty"`
@@ -1593,7 +1597,7 @@ type TurnStartParams struct {
 	ExecutorSessionRef string            `json:"executor_session_ref,omitempty"`
 	Config             *AgentTurnConfig  `json:"config,omitempty"`
 	DeadlineMS         int64             `json:"deadline_ms,omitempty"`
-	// String key/value pairs the platform adds to the turn. Per-turn credentials the executor declared in AgentCapability.platform_credentials: model_base_url, model_token (and optionally model_context_window, model_max_output_tokens) for harness_model; for brain_tools (contract 1.4.0, only when this machine is the brain and a different machine the hands of the session) tools_mcp_url (https://executor.<domain>/v1/machines/{brain_machine_id}/mcp), tools_mcp_token and tools_mcp_token_expires_at (RFC 3339, 1 hour after turn.start). With tools_mcp_* present every tool call of the turn must go to that endpoint as an MCP tools/call (tools bash, read, write, edit, glob, grep) and none may run on this machine: when the endpoint cannot be reached or refuses the token the call fails and the executor never falls back to running the tool locally (fail closed). The token is bound to the turn's event epoch: the same turn started again after an executor restart (turn.start with the same turn_id, a new epoch) carries a new token and the previous token is refused. Refresh with tools_token.refresh. Keys the executor does not know are ignored.
+	// String key/value pairs the platform adds to the turn. Per-turn credentials the executor declared in AgentCapability.platform_credentials: model_base_url, model_token (and optionally model_context_window, model_max_output_tokens) for harness_model; for brain_tools (contract 1.4.0, only when this machine is the brain and a different machine the hands of the session) tools_mcp_url (https://executor.<domain>/v1/machines/{brain_machine_id}/mcp), tools_mcp_token and tools_mcp_token_expires_at (RFC 3339, 1 hour after turn.start). With tools_mcp_* present every tool call of the turn must go to that endpoint as an MCP tools/call (tools bash, read, write, edit, glob, grep) and none may run on this machine: when the endpoint cannot be reached or refuses the token the call fails and the executor never falls back to running the tool locally (fail closed). The token is bound to the turn's event epoch: the same turn started again after an executor restart (turn.start with the same turn_id, a new epoch) carries a new token and the previous token is refused. Refresh with tools_token.refresh. tool_policy is a JSON object of tool name to allow, ask or deny (for example {"bash":"ask","write":"deny"}): the permission of those tools for this turn, applied over AgentTurnConfig.permission_mode; an executor may only make a tool stricter than its own ceiling, never looser, and a tool the object does not name keeps the mode's permission. Keys the executor does not know are ignored.
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 

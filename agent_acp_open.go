@@ -37,6 +37,7 @@ type acpOpenPlan struct {
 	cwd       string
 	promptCwd string
 	model     string
+	effort    string // thinking level ("" none)
 	mode      string
 	system    string
 	hands     *EnvironmentInfo

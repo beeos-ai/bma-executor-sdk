@@ -656,9 +656,13 @@ func fakeHandle(c *fakeConn, method string, raw json.RawMessage) (any, map[strin
 	_ = json.Unmarshal(raw, &p)
 	switch method {
 	case "initialize":
+		bma := map[string]any{"dsh": "0.2.1-rc.5", "tools": fakeTools, "streaming": "token", "permissionRelay": "full"}
+		if os.Getenv("BMA_ACP_FAKE_NO_EFFORTS") == "" { // BMA_ACP_FAKE_NO_EFFORTS: an agent before bma-dsh-acp 0.2.2
+			bma["reasoningEfforts"] = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+		}
 		return map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": true},
 			"agentInfo": map[string]any{"name": "fake-dsh-acp", "version": "9.9.9"},
-			"_meta":     map[string]any{"bma": map[string]any{"dsh": "0.2.1-rc.5", "tools": fakeTools, "streaming": "token", "permissionRelay": "full"}}}, nil
+			"_meta":     map[string]any{"bma": bma}}, nil
 	case "session/new", "session/load":
 		// BMA_ACP_FAKE_NEW_DELAY_MS makes opening a session slow, and
 		// BMA_ACP_FAKE_NEW_ERROR (an ACP error code) makes it fail.
@@ -701,6 +705,19 @@ func fakeHandle(c *fakeConn, method string, raw json.RawMessage) (any, map[strin
 			Text string `json:"text"`
 		}
 		_ = json.Unmarshal(p.Prompt[0], &block)
+		if block.Text == "effort" {
+			// One model request through the proxy; reports the prompt's reasoning effort.
+			c.mu.Lock()
+			model := c.models[p.SessionID]
+			c.mu.Unlock()
+			req, _ := http.NewRequest("POST", model["baseUrl"].(string)+"/chat/completions", strings.NewReader(`{"model":"as-opened","stream":true,"messages":[]}`))
+			req.Header.Set("Authorization", "Bearer "+model["token"].(string))
+			if resp, err := http.DefaultClient.Do(req); err == nil {
+				resp.Body.Close()
+			}
+			c.message(p.SessionID, "m-effort", "message", fmt.Sprintf("effort=%v", p.Meta.Bma["reasoningEffort"]))
+			return map[string]any{"stopReason": "end_turn"}, nil
+		}
 		if os.Getenv("BMA_ACP_FAKE_STRICT") == "1" {
 			c.mu.Lock()
 			open := c.open[p.SessionID]

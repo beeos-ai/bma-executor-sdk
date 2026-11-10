@@ -1,6 +1,6 @@
 {
   "source_repository": "beeos-ai/beeos-managed-agents",
-  "source_commit": "e3b139f3bfbb578168ad322c1c38e7282fbd807f+dirty",
+  "source_commit": "d394a5ebf834da4b3b58d49360cc6d2a8bf54e54",
   "protocols": [
     "bma.executor.v1",
     "bma.executor.v1.1"
@@ -9,8 +9,8 @@
   "contract": {
     "contracts/bma/executor/examples/conformance.json": "14b9e093b8201f882d2f53c25a4a5561007c816269197b1b6fc12d43278b6c94",
     "contracts/bma/executor/executor.asyncapi.yaml": "290dbaba0d8307b058aa52e34fa76ba40f8b267f21bb22c6afec1d113a5b7d60",
-    "contracts/bma/executor/executor.openrpc.yaml": "f7c15d98bb96223c1b2ff708d80dc9b59dc3659d03539b625c278f56028591d2",
-    "contracts/bma/executor/schemas/agent.json": "dae535761fca53514836fd2c14446c9bc4c36f45bfa48d57f84ac0a348a3accd",
+    "contracts/bma/executor/executor.openrpc.yaml": "30f1d72089fb2b28d528934b128df247ce520742faada88b2865a11ffa8b6b38",
+    "contracts/bma/executor/schemas/agent.json": "af6958d61438824e2082b51fe217c20f2d25ab9ce8dc51a64fb7eabd4c3a6569",
     "contracts/bma/executor/schemas/common.json": "ad01c086fb4df2b5122753ab9557c1ab8d987723e56e24ab8419b859ee434df8",
     "contracts/bma/executor/schemas/executor.json": "e6210f3ec1e11f72de2dfcde0413bce40fd4934f40a6b0882ba377c582e883dc",
     "contracts/bma/executor/schemas/file.json": "2299157f8960a8b3df170ec5c06b0d2c7d6870b937750b2bfccad343a00b45da",
@@ -23,8 +23,8 @@
     "contracts/bma/executor/schemas/workspace.json": "4e8d0ebbab963c9f7f179125a96cb2b89fa79c6a03e3899a1b94c14bed54f5c0"
   },
   "generated": {
-    "generated.go": "f672cdc83f6d773ee0fc580338896dd70f8d3f57c146428f21d6649ee0a75250",
+    "generated.go": "3abedad1a8ea7c81fc9425c2010200995673841052fae0f5b9df67cf0b564e26",
     "python/src/bma_executor_sdk/generated.py": "45e7b54c567faa7052e7e25ebbd16ae2501a7e9185a97c324f4af3a3c1580d1b",
-    "typescript/src/generated/executor.ts": "cac686adbd06868b910c8f0e11e0931b9ee079c2f7e6bcc31666fa335aa786e2"
+    "typescript/src/generated/executor.ts": "02e76a6e8a6046f88a552417f7ae4a5d9795f03f1bd485d14c8320835700dab5"
   }
 }
