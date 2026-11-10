@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.5.2
+
+- **Go: the host's model endpoint learns which session a request belongs to
+  (`ACPModelUpstream.SessionHeader`).** The model proxy of `ACPAgent` knew the
+  session of every request it forwarded but only called the host's `Header`
+  hook, so a host could not account a model request to its session. When
+  `SessionHeader` names a request header, every request forwarded to
+  `Upstream` carries the platform session id of its turn (turn.start
+  `session_id`) under that name, set before `Header` runs. The value never
+  comes from the agent: the forwarded request is built anew and of the
+  agent's headers only `Accept` is kept. Requests that go to the platform's
+  own model endpoint (turn.start metadata `model_base_url`) never carry it.
+  A name that is not an HTTP header name is refused by `NewACPAgent`. Empty
+  (the default) changes nothing. The Claude Code profile has no model proxy
+  and ignores it, as it ignores `Upstream`.
+
 ## 1.5.1
 
 - **Go: a user's image reaches the local brain (`ACPAgent`).** A turn.start /
