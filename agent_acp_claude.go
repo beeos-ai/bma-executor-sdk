@@ -357,7 +357,7 @@ func (t *acpTurn) flushMessages() {
 // --- the platform tools as an MCP server on loopback ---
 
 // acpToolServer serves the six platform tools to Claude Code over MCP
-// Streamable HTTP (JSON replies). A request carries the session's
+// Streamable HTTP (JSON replies; tools/call as an SSE stream). A request carries the session's
 // placeholder as its bearer token, so a session can only reach its own turn.
 type acpToolServer struct {
 	agent  *ACPAgent
@@ -462,7 +462,19 @@ func (s *acpToolServer) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		callID, _ := p.Meta[claudeToolUseIDMeta].(string)
-		reply(s.call(r.Context(), session, callID, p.Name, p.Arguments), nil)
+		// A call can outlast Claude Code's first-byte budget for an HTTP MCP
+		// request (60 s: a person deciding an approval, a brain reconnecting,
+		// a long command). Answer it as a Streamable HTTP SSE stream: the
+		// headers go out at once, the result is its one event.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		data, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID,
+			"result": s.call(r.Context(), session, callID, p.Name, p.Arguments)})
+		_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", data)
 	default:
 		reply(nil, map[string]any{"code": -32601, "message": "method not found: " + req.Method})
 	}
