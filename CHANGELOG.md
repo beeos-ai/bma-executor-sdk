@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.1
 
 - **Fix, Go: the ninth session never started - idle sessions no longer hold a
   slot, and resident sessions are bounded apart (`ACPAgent`, `ServeAgent`).**
