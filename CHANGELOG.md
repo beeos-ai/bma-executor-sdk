@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.1
 
 - **Go: `PlatformToolRoute` renews a refused credential once and sends the
   call again (ADR-0029 §4.3, E4).** After the brain's executor reconnects the
