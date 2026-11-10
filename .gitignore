@@ -2,3 +2,4 @@
 .DS_Store
 .build/
 testdata/claude-agent-acp/node_modules/
+testdata/bma-dsh-acp/node_modules/

@@ -660,7 +660,9 @@ func fakeHandle(c *fakeConn, method string, raw json.RawMessage) (any, map[strin
 		if os.Getenv("BMA_ACP_FAKE_NO_EFFORTS") == "" { // BMA_ACP_FAKE_NO_EFFORTS: an agent before bma-dsh-acp 0.2.2
 			bma["reasoningEfforts"] = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 		}
-		return map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": true},
+		// BMA_ACP_FAKE_IMAGE=1: an agent that takes image prompts (promptCapabilities.image).
+		prompts := map[string]any{"image": os.Getenv("BMA_ACP_FAKE_IMAGE") == "1", "audio": false, "embeddedContext": false}
+		return map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": true, "promptCapabilities": prompts},
 			"agentInfo": map[string]any{"name": "fake-dsh-acp", "version": "9.9.9"},
 			"_meta":     map[string]any{"bma": bma}}, nil
 	case "session/new", "session/load":
@@ -701,6 +703,22 @@ func fakeHandle(c *fakeConn, method string, raw json.RawMessage) (any, map[strin
 		}
 		return map[string]any{}, nil
 	case "session/prompt":
+		var images []string
+		for _, raw := range p.Prompt {
+			var b struct {
+				Type     string `json:"type"`
+				Data     string `json:"data"`
+				MimeType string `json:"mimeType"`
+			}
+			_ = json.Unmarshal(raw, &b)
+			if b.Type == "image" {
+				images = append(images, b.MimeType+":"+b.Data)
+			}
+		}
+		if len(images) > 0 { // reports the images of the prompt (the test decodes them)
+			c.message(p.SessionID, "m-images", "message", "images="+strings.Join(images, ","))
+			return map[string]any{"stopReason": "end_turn"}, nil
+		}
 		var block struct {
 			Text string `json:"text"`
 		}

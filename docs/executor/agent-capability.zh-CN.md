@@ -74,6 +74,7 @@ agent 会话**不需要** `session.assign`：首个 `turn.start` 即打开；exe
 - 同一 `turn_id` 重发返回首次结果，不会跑第二次。
 - 会话已有运行中的轮次 → `-32013`（改用 `turn.input`）；正在运行的轮次已达 `max_sessions` 时的 `turn.start` → `-32009`（可重试；空闲会话不占槽，只有运行中的轮次占）；`cwd` 不在允许根内 → `-32001`。
 - 文件输入只传 `file_id`，executor 经文件 API 下载，控制通道不传字节。
+- 图片输入（SDK `ACPAgent` 1.5.1）：`mime_type` 为图片（png、jpeg、gif、webp）的 `file` 块由 executor 下载，仅当托管的 ACP agent 在 `initialize` 声明 `promptCapabilities.image` 时，作为 ACP `image` 内容块传给它。限制对标 Anthropic API：单张 5 MB、长边 8000 px、一次输入最多 100 张，字节必须与声明的类型一致。无法传入的图片使该回合以 `session.error` 失败（`agent_protocol_error`：agent 不收图片；`agent_error`：图片被拒或下载失败），不会静默丢弃。仅当 executor 能取到文件（宿主 `InputFiles`，或 `PlatformTools` 下回合的 tools 端点）且 agent 收图片时才声明 `file_inputs` / `harness.image_inputs`。
 - `deadline_ms` 到期：`session.error{error:{type:"timeout"}}` + `session.status_idle turn_outcome:"failed"`。
 
 ### 3.2 `turn.input` / `turn.cancel` / `session.close`
@@ -160,5 +161,5 @@ harness 侧（平台或测试用的模拟平台）：`HarnessOptions.Agent`（`A
 - 把 agent 绑定到其执行端提供 `agent` 能力的 machine：请 BMA 团队完成绑定（公开的 `/v1` API 目前还没有绑定路由）；machine 须已授予该 project，绑定会记录执行端最近一次上报的 `capabilities.agent`。绑定后该 agent 的会话不再由 BMA harness 运行。
 - 会话输入转为 `turn.start` / `turn.input`，取消转为 `turn.cancel`，归档转为 `session.close`；执行端离线时输入排队。
 - 执行端上报的事件入库，并经原生事件流与 facade 发布；审批与问答走 interactions API。
-- 限制：这类会话的输入只接受 `text` content block，其他类型（文件、图片）返回 `invalid_request`。
+- 限制：这类会话的输入接受 `text` content block；executor 声明了 `file_inputs` 且 harness 声明 `image_inputs` 时也接受图片（平台以 `file` 块下发，§3.1）；其他类型返回 `invalid_request`。
 - 离线开发 executor 侧时，SDK 示例的模拟平台仍是最快的联调方式。

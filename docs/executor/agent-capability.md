@@ -74,6 +74,7 @@ Result `TurnStartResult{accepted, turn_id, executor_session_ref, resumed, effect
 - Repeating a `turn_id` returns the first result; nothing runs twice.
 - A running turn → `-32013` (use `turn.input`); a `turn.start` while `max_sessions` turns are running → `-32009` (retryable; an idle session holds no slot, only a running turn does); `cwd` outside allowed roots → `-32001`.
 - Files are `file_id` references downloaded through the files API; no bytes on the control channel.
+- Image input (SDK `ACPAgent` 1.5.1): a `file` block with an image `mime_type` (png, jpeg, gif, webp) is downloaded by the executor and passed to the hosted ACP agent as an ACP `image` content block, only when the agent's `initialize` declared `promptCapabilities.image`. Limits follow the Anthropic API: 5 MB per image, longest side 8000 px, 100 images per input; the bytes must be the declared type. An image that cannot be handed over fails the turn with `session.error` (`agent_protocol_error`: the agent takes no images; `agent_error`: the image is refused or could not be downloaded). `file_inputs` / `harness.image_inputs` are declared only when the executor can fetch the file (host `InputFiles`, or the turn's tools endpoint with `PlatformTools`) and the agent takes images.
 - `deadline_ms` expiry: `session.error{error:{type:"timeout"}}` + `session.status_idle turn_outcome:"failed"`.
 
 ### 3.2 `turn.input` / `turn.cancel` / `session.close`
@@ -155,5 +156,5 @@ Full flow: `go run ./examples/agentexecutor` ([source](../../examples/agentexecu
 - Bind an agent to a machine whose executor serves the `agent` capability: ask the BMA team to bind it (the public `/v1` API has no route for the binding yet); the machine must be granted to the project, and the binding records the executor's latest `capabilities.agent`. The BMA harness then no longer runs that agent's sessions.
 - Session input becomes `turn.start` / `turn.input`, session cancel `turn.cancel`, and archiving `session.close`; input queues while the executor is offline.
 - Events the executor reports are stored and published on the native event stream and through the facade; approvals and questions go through the interactions API.
-- Limit: input to these sessions accepts `text` content blocks only; other block types (files, images) are rejected with `invalid_request`.
+- Limit: input to these sessions accepts `text` content blocks, and image blocks when the executor declared `file_inputs` and its harness `image_inputs` (the platform sends them as `file` blocks, §3.1); other block types are rejected with `invalid_request`.
 - The SDK example's simulated platform remains the quickest way to develop the executor side offline.
