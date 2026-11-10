@@ -485,11 +485,13 @@ export interface FilesCapability {
 export interface FsCapability {
   fuse: boolean
   views?: Array<string>
+  /** Contract 1.4.0. The executor mounts the skills view at the path of each fs.mount, whatever it is, and keeps the views of several sessions mounted at once: mounting or unmounting one session never touches another session's views. When true and the executor also declared session_files.root, the harness mounts a session's skills at <root>/<agent_session_id>/skills (next to its uploads and outputs), so sessions sharing a machine each see their own skills; the executor removes the mount points it created when the session is unmounted. Absent or false (every executor before 1.4.0): the harness mounts skills at the fixed /mnt/skills, which shows one session at a time. */
+  skills_per_session?: boolean
 }
 
-/** One view to mount. path is the absolute mount point on the executor host (derived from session_files by the harness). readonly is also fixed inside token; the executor mounts read-only when it is true. token is a capability token for this session and machine: keep it in memory only, never write it to disk, argv, environment or logs. */
+/** One view to mount. path is the absolute mount point on the executor host (derived from session_files by the harness; the skills view is at <root>/<agent_session_id>/skills for an executor that declared fs.skills_per_session and a root, otherwise /mnt/skills). Mount points of different sessions never overlap, and the executor mounts exactly the path it is given. readonly is also fixed inside token; the executor mounts read-only when it is true. token is a capability token for this session and machine: keep it in memory only, never write it to disk, argv, environment or logs. */
 export interface FsMount {
-  /** uploads (FS1). Open enum: outputs, skills and memory follow. */
+  /** uploads, skills. Open enum: outputs and memory follow. */
   view: string
   path: string
   readonly: boolean
@@ -1053,7 +1055,7 @@ export const SessionEventType = {
   SessionError: 'session.error',
 } as const
 
-/** Executor-owned per-session file layout. The harness derives <root>/<agent_session_id>/uploads (read-only session inputs) and <root>/<agent_session_id>/outputs (deliverables) from it, with agent_session_id as sent in process.start metadata, and uses these real paths in prompts, tool descriptions, write rules and the session files manifest. Absent: the harness keeps /mnt/session/uploads and /mnt/session/outputs. Fixed at executor.register: executor.capabilities.update does not change it. Machine-scoped executors only. */
+/** Executor-owned per-session file layout. The harness derives <root>/<agent_session_id>/uploads (read-only session inputs) and <root>/<agent_session_id>/outputs (deliverables) from it, with agent_session_id as sent in process.start metadata, and uses these real paths in prompts, tool descriptions, write rules and the session files manifest. Absent: the harness keeps /mnt/session/uploads and /mnt/session/outputs. With the fs capability skills_per_session the same tree also holds <root>/<agent_session_id>/skills (the session's skills view, read-only). Fixed at executor.register: executor.capabilities.update does not change it. Machine-scoped executors only. */
 export interface SessionFilesCapability {
   /** Absolute, already-expanded, clean path on the executor host (no ~, no . or .. segments, no trailing /). */
   root: string
@@ -1558,7 +1560,7 @@ export interface WorkspaceBackupParams {
 /** Params object of fs.mount. */
 export interface FsMountParams {
   session_id: string
-  /** Complete prefix of the bma-file routes for this machine, ending in /v1/machines/{machine_id}/fs (for example https://executor.example.com/v1/machines/mach_01/fs). The executor appends "/<op>" and nothing else; it does not compose the machine id itself. The previous <origin>/v1/fs/<op> routes stay as an alias until they are removed. */
+  /** Complete prefix of the bma-file routes for this machine, ending in /v1/machines/{machine_id}/fs (for example https://executor.example.com/v1/machines/mach_01/fs). The executor appends "/<op>" and nothing else; it does not compose the machine id itself. */
   service_url: string
   mounts: Array<FsMount>
 }

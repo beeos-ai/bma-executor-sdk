@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## 1.4.0
 
+- **Contract snapshot synced to beeos-managed-agents f872a540b (contract
+  1.4.0):** `FsCapability.skills_per_session` (Go `SkillsPerSession`, TS/Python
+  generated types): an executor that mounts each session's skills view at the
+  path of its `fs.mount` sets it, and the harness then mounts skills at
+  `<root>/<agent_session_id>/skills` instead of the fixed `/mnt/skills`. The
+  SDK itself does not mount views, so it never sets it; field and doc changes
+  only. `FsMountParams.service_url` no longer documents the old `/v1/fs/<op>`
+  alias (executors already use the given prefix as is).
 - **Go: `LocalToolRoute`, the local counterpart of `PlatformToolRoute`.**
   `NewLocalToolRoute(LocalToolRouteOptions{Core, StateDir, SessionID, TurnID,
   Workspace, PermissionMode, ToolPolicy, Context, OnLog})` is a `ToolRoute`
