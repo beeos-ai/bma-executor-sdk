@@ -5,6 +5,7 @@ package bmaexecutor
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -80,10 +81,81 @@ func TestPlatformToolRouteTransportFailures(t *testing.T) {
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
 	}))
 	t.Cleanup(dying.Close)
+	shortRetries(t, 300*time.Millisecond)
 	route := newPlatformToolRoute(PlatformToolRouteOptions{SessionID: rigSession, Endpoint: dying.URL, Token: "tok-1", TurnID: rigTurn})
 	got := platformCall(t, route, context.Background(), "c1")
 	if got.Outcome != RouteOutcomeUnknown || got.Code != "transport_error" || !got.IsError {
 		t.Fatalf("answer = %+v", got)
+	}
+}
+
+func shortRetries(t *testing.T, window time.Duration) {
+	t.Helper()
+	w, b, m := platformRetryWindow, platformRetryBase, platformRetryMax
+	platformRetryWindow, platformRetryBase, platformRetryMax = window, 10*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { platformRetryWindow, platformRetryBase, platformRetryMax = w, b, m })
+}
+
+// A call whose answer was lost after it was sent (the brain's network
+// dropped) is sent again with the same idempotency key, through a moment the
+// gateway cannot be reached and an in_progress reply, until its saved reply
+// comes back (ADR-0029 §4.3, E4): one execution, replayed=true.
+func TestPlatformToolRouteRetriesALostCallWithItsKey(t *testing.T) {
+	shortRetries(t, 5*time.Second)
+	var calls []string
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, r.ContentLength)
+		_, _ = io.ReadFull(r.Body, buf)
+		body := string(buf)
+		w.Header().Set("Content-Type", "application/json")
+		if !strings.Contains(body, `"tools/call"`) {
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+			return
+		}
+		key := regexp.MustCompile(`bma-tool-[0-9a-f]{32}`).FindString(body)
+		calls = append(calls, key)
+		id := regexp.MustCompile(`"id":(\d+)`).FindStringSubmatch(body)[1]
+		switch len(calls) {
+		case 1: // sent, then the connection drops
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			_ = conn.Close()
+		case 2:
+			w.WriteHeader(http.StatusBadGateway)
+		case 3:
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"in_progress: still running"}],"structuredContent":{"outcome":"not_forwarded","error_code":"in_progress"}}}`, id)
+		default:
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"ran\nexit_code: 0"}],"structuredContent":{"outcome":"executed","replayed":true}}}`, id)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	route := newPlatformToolRoute(PlatformToolRouteOptions{SessionID: rigSession, Endpoint: srv.URL, Token: "tok-1", TurnID: rigTurn})
+	got := platformCall(t, route, context.Background(), "c1")
+	if got.Outcome != RouteOutcomeExecuted || got.IsError || !got.Replayed || got.Text != "ran\nexit_code: 0" {
+		t.Fatalf("answer = %+v", got)
+	}
+	if len(calls) != 4 || calls[0] == "" || calls[0] != calls[1] || calls[1] != calls[2] || calls[2] != calls[3] {
+		t.Fatalf("tools/call keys = %v, want 4 sends of one key", calls)
+	}
+
+	// A refusal is final: no retry.
+	calls = nil
+	refusing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, r.ContentLength)
+		_, _ = io.ReadFull(r.Body, buf)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(string(buf), `"tools/call"`) {
+			calls = append(calls, "x")
+			id := regexp.MustCompile(`"id":(\d+)`).FindStringSubmatch(string(buf))[1]
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"denied"}],"structuredContent":{"outcome":"not_forwarded","error_code":"permission_denied"}}}`, id)
+			return
+		}
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	}))
+	t.Cleanup(refusing.Close)
+	route = newPlatformToolRoute(PlatformToolRouteOptions{SessionID: rigSession, Endpoint: refusing.URL, Token: "tok-1", TurnID: rigTurn})
+	if got := platformCall(t, route, context.Background(), "c2"); got.Code != "permission_denied" || len(calls) != 1 {
+		t.Fatalf("answer = %+v after %d sends", got, len(calls))
 	}
 }
 

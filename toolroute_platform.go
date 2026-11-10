@@ -213,14 +213,71 @@ func platformIdempotencyKey(sessionID, turnID, callID string) string {
 	return "bma-tool-" + hex.EncodeToString(sum[:16])
 }
 
+// A call whose request was sent and whose answer was lost (the brain's
+// network dropped, the gateway answered 5xx) or that the gateway reports
+// still running (in_progress) is sent again with the same idempotency key
+// until its saved reply comes back (ADR-0029 §4.3: replayed=true, never run
+// twice), for at most platformRetryWindow, backing off from platformRetryBase
+// to platformRetryMax. The window is the default brain_offline_timeout: after
+// it the platform has failed the turn anyway. Given up, or the turn ended,
+// the answer stays unknown.
+var (
+	platformRetryWindow = 10 * time.Minute
+	platformRetryBase   = time.Second
+	platformRetryMax    = 15 * time.Second
+)
+
 // Call implements ToolRoute.
 func (r *PlatformToolRoute) Call(ctx context.Context, c RouteCall) *RouteResult {
 	if c.ID == "" || c.Name == "" {
 		return refused("invalid_tool_input", "a tool call needs an ID (its idempotency identity) and a Name")
 	}
+	var lost *RouteResult // the first answer that left the call's fate open
+	deadline := time.Now().Add(platformRetryWindow)
+	delay := platformRetryBase
+	for {
+		got, sent := r.attempt(ctx, c)
+		switch {
+		case lost == nil && !sent:
+			return got // nothing of the call was ever sent: certainly not run
+		case !retryable(got, sent, lost != nil):
+			return got
+		}
+		if lost == nil {
+			lost = got
+		}
+		if !time.Now().Add(delay).Before(deadline) {
+			return lost
+		}
+		select {
+		case <-ctx.Done():
+			return failure(RouteOutcomeUnknown, "canceled", "the call was abandoned before the tool gateway answered; it may have run").result
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, platformRetryMax)
+	}
+}
+
+// retryable reports an answer after which the same call is sent again: its
+// request reached the gateway and the reply is not final (transport_error,
+// 5xx, in_progress), or, once a request was lost, a request that could not
+// leave this time (the call's fate is still open).
+func retryable(got *RouteResult, sent, lostBefore bool) bool {
+	switch {
+	case got.Code == "transport_error" || got.Code == "in_progress":
+		return true
+	case got.Code == "tools_unavailable" && got.Outcome == RouteOutcomeUnknown: // 5xx
+		return true
+	}
+	return lostBefore && !sent
+}
+
+// attempt sends the call once. sent is false when the request never left
+// (the handshake failed or the gateway could not be reached).
+func (r *PlatformToolRoute) attempt(ctx context.Context, c RouteCall) (result *RouteResult, sent bool) {
 	r.prepare(ctx)
 	if err := r.ensureSession(ctx); err != nil {
-		return err.result // nothing of the call was sent
+		return err.result, false // nothing of the call was sent
 	}
 	meta := map[string]any{metaIdempotency: platformIdempotencyKey(r.sessionID, r.turnID, c.ID)}
 	if c.ApprovalID != "" {
@@ -257,7 +314,7 @@ func (r *PlatformToolRoute) Call(ctx context.Context, c RouteCall) *RouteResult 
 		} `json:"structuredContent"`
 	}
 	if err := r.rpc(ctx, "tools/call", map[string]any{"name": c.Name, "arguments": input, "_meta": meta}, &reply); err != nil {
-		return err.result
+		return err.result, !(err.result.Outcome == RouteOutcomeNotForwarded && err.result.Code == "tools_unavailable" && err.dial)
 	}
 	out := &RouteResult{Outcome: reply.StructuredContent.Outcome, Code: reply.StructuredContent.ErrorCode,
 		IsError: reply.IsError, Replayed: reply.StructuredContent.Replayed}
@@ -277,21 +334,25 @@ func (r *PlatformToolRoute) Call(ctx context.Context, c RouteCall) *RouteResult 
 		out.IsError = true
 	default: // the gateway always says; anything else cannot be trusted to mean "not run"
 		return &RouteResult{Outcome: RouteOutcomeUnknown, Code: "bad_gateway_reply", IsError: true,
-			Text: "bad_gateway_reply: the tool gateway's answer carries no outcome"}
+			Text: "bad_gateway_reply: the tool gateway's answer carries no outcome"}, true
 	}
 	if out.Code != "" && !strings.HasPrefix(out.Text, out.Code+":") {
 		out.Text = out.Code + ": " + out.Text
 	}
-	return out
+	return out, true
 }
 
-// callError is a failed exchange with the gateway, already as the answer to the call.
-type callError struct{ result *RouteResult }
+// callError is a failed exchange with the gateway, already as the answer to
+// the call. dial: the connection was never made (nothing was sent).
+type callError struct {
+	result *RouteResult
+	dial   bool
+}
 
 func (e *callError) Error() string { return e.result.Text }
 
 func failure(outcome, code, detail string) *callError {
-	return &callError{&RouteResult{Outcome: outcome, Code: code, Text: code + ": " + detail, IsError: true}}
+	return &callError{result: &RouteResult{Outcome: outcome, Code: code, Text: code + ": " + detail, IsError: true}}
 }
 
 // ensureSession runs the MCP handshake once (initialize, notifications/initialized).
@@ -402,7 +463,9 @@ func (r *PlatformToolRoute) transportFailure(ctx context.Context, err error) *ca
 	var opErr *net.OpError
 	switch {
 	case errors.As(err, &opErr) && opErr.Op == "dial" && ctx.Err() == nil:
-		return failure(RouteOutcomeNotForwarded, "tools_unavailable", "the tool gateway cannot be reached")
+		e := failure(RouteOutcomeNotForwarded, "tools_unavailable", "the tool gateway cannot be reached")
+		e.dial = true
+		return e
 	case ctx.Err() != nil:
 		return failure(RouteOutcomeUnknown, "canceled", "the call was abandoned before the tool gateway answered; it may have run")
 	default:
