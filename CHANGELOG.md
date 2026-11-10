@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Go: `PlatformToolRoute` renews a refused credential once and sends the
+  call again (ADR-0029 §4.3, E4).** After the brain's executor reconnects the
+  session is in a new epoch while the turn goes on, so the gateway refuses the
+  turn's old tool token (401, `stale_turn`) - also for the retry of a call whose
+  answer was lost in the outage. The route now calls `tools_token.refresh` at
+  once, reopens its MCP session with the new token and sends the same call
+  (same idempotency key), which returns the saved reply (`replayed`). A refused
+  refresh (the turn is over) leaves the `stale_turn` answer as before.
+
 ## 1.4.0
 
 - **Go: `ACPAgentOptions.SessionFilesRoot` (and `LocalToolRouteOptions.SessionFilesRoot`),
