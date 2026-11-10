@@ -149,26 +149,28 @@ func (c *toolsCredential) current(ctx context.Context) (string, string) {
 	if c.refresh == nil || c.expiresAt.IsZero() || c.expiresAt.Sub(now) > toolsTokenRefreshWindow || now.Before(c.retryAt) {
 		return c.endpoint, c.token
 	}
-	c.refreshLocked(ctx, now)
+	_ = c.refreshLocked(ctx, now) // logged; the current token is used meanwhile
 	return c.endpoint, c.token
 }
 
 // renew replaces the credential now, whatever its expiry: the gateway refused
 // it (stale_turn), as it does once the executor reconnected and the session
-// moved to a new epoch while the turn goes on. It reports whether a new
+// moved to a new epoch while the turn goes on. A nil error means a new
 // credential was installed; a refusal (the turn is over) leaves the old one.
-func (c *toolsCredential) renew(ctx context.Context) bool {
+func (c *toolsCredential) renew(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.refresh == nil {
-		return false
+		return errNoToolsRefresh
 	}
 	return c.refreshLocked(ctx, c.now())
 }
 
+var errNoToolsRefresh = errors.New("bmaexecutor: no tools_token.refresh for this route")
+
 // refreshLocked calls tools_token.refresh once and installs its credential;
-// a failure is logged and backs off the next due refresh.
-func (c *toolsCredential) refreshLocked(ctx context.Context, now time.Time) bool {
+// a failure is logged, backs off the next due refresh and is returned.
+func (c *toolsCredential) refreshLocked(ctx context.Context, now time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, toolsTokenRefreshTimeout)
 	defer cancel()
 	result, err := c.refresh(ctx)
@@ -186,13 +188,13 @@ func (c *toolsCredential) refreshLocked(ctx context.Context, now time.Time) bool
 			c.log(LogError, fmt.Sprintf("tools token refresh failed (attempt %d, token expires %s); calling with the current token, next try after %s",
 				c.failures, c.expiresAt.Format(time.RFC3339), c.retryAt.Format(time.RFC3339)), err)
 		}
-		return false
+		return err
 	}
 	c.endpoint, c.token, c.expiresAt, c.failures, c.retryAt = result.ToolsMCPURL, result.ToolsMCPToken, expiresAt, 0, time.Time{}
 	if c.log != nil {
 		c.log(LogInfo, "tools token refreshed (expires "+expiresAt.Format(time.RFC3339)+")", nil)
 	}
-	return true
+	return nil
 }
 
 // prepare refreshes the credential when it is due and reopens the MCP session
@@ -208,15 +210,15 @@ func (r *PlatformToolRoute) prepare(ctx context.Context) {
 
 // renew replaces the credential (toolsCredential.renew) and, when it did,
 // opens a new MCP session with it.
-func (r *PlatformToolRoute) renew(ctx context.Context) bool {
-	if !r.cred.renew(ctx) {
-		return false
+func (r *PlatformToolRoute) renew(ctx context.Context) error {
+	if err := r.cred.renew(ctx); err != nil {
+		return err
 	}
 	endpoint, _ := r.cred.peek()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.endpoint, r.mcpSession, r.initialized = endpoint, "", false
-	return true
+	return nil
 }
 
 // String keeps the credential out of %v / %+v / %s.
@@ -274,11 +276,27 @@ func (r *PlatformToolRoute) Call(ctx context.Context, c RouteCall) *RouteResult 
 		if got.Code == "stale_turn" && !renewed {
 			// Refused before it ran. After a reconnect the session is in a new
 			// epoch while the turn goes on: a fresh credential for the turn,
-			// then the same call (same key) again, at once.
-			renewed = true
-			if r.renew(ctx) {
+			// then the same call (same key) again, at once. The refusal can
+			// arrive while the executor channel is still reconnecting; the
+			// refresh then waits for it, within the retry window.
+			err := r.renew(ctx)
+			if err == nil {
+				renewed = true
 				continue
 			}
+			if errors.Is(err, ErrNotConnected) && time.Now().Add(delay).Before(deadline) {
+				select {
+				case <-ctx.Done():
+					if lost != nil {
+						return failure(RouteOutcomeUnknown, "canceled", "the call was abandoned before the tool gateway answered; it may have run").result
+					}
+					return got // refused before it ran
+				case <-time.After(delay):
+				}
+				delay = min(delay*2, platformRetryMax)
+				continue
+			}
+			renewed = true
 		}
 		switch {
 		case lost == nil && !sent:

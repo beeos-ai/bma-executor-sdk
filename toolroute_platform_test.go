@@ -250,6 +250,30 @@ func TestPlatformToolRouteRenewsAStaleCredentialAndRetries(t *testing.T) {
 	// Refresh refused (the turn is over): the refusal stands, nothing ran.
 	refusing := newPlatformToolRoute(PlatformToolRouteOptions{SessionID: rigSession, Endpoint: srv.URL, Token: "tok-1", TurnID: rigTurn,
 		ExpiresAt: time.Now().Add(time.Hour),
-		Refresh: func(context.Context) (ToolsTokenRefreshResult, error) { return ToolsTokenRefreshResult{}, fmt.Errorf("turn_inactive") }})
+		Refresh: func(context.Context) (ToolsTokenRefreshResult, error) {
+			return ToolsTokenRefreshResult{}, fmt.Errorf("turn_inactive")
+		}})
 	wantRefused(t, platformCall(t, refusing, context.Background(), "c2"), "stale_turn")
+
+	// The refusal arrives while the executor channel is still reconnecting
+	// (staging E4: refresh 0.4 s before the channel was back): the refresh
+	// waits for the channel, then the same call (same key) goes again.
+	keys, tokens = nil, nil
+	waiting := 0
+	reconnecting := newPlatformToolRoute(PlatformToolRouteOptions{SessionID: rigSession, Endpoint: srv.URL, Token: "tok-1", TurnID: rigTurn,
+		ExpiresAt: time.Now().Add(time.Hour),
+		Refresh: func(context.Context) (ToolsTokenRefreshResult, error) {
+			if waiting++; waiting < 3 {
+				return ToolsTokenRefreshResult{}, fmt.Errorf("refresh: %w", ErrNotConnected)
+			}
+			return ToolsTokenRefreshResult{ToolsMCPURL: srv.URL, ToolsMCPToken: "tok-2",
+				ExpiresAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339)}, nil
+		}})
+	got = platformCall(t, reconnecting, context.Background(), "c3")
+	if got.Outcome != RouteOutcomeExecuted || waiting != 3 {
+		t.Fatalf("answer = %+v after %d refreshes, want executed after the channel came back", got, waiting)
+	}
+	if n := len(keys); n == 0 || tokens[n-1] != "Bearer tok-2" {
+		t.Fatalf("tools/call tokens %v, want the last with the fresh token", tokens)
+	}
 }
