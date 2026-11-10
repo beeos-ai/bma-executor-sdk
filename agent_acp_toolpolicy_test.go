@@ -2,6 +2,7 @@ package bmaexecutor
 
 import (
 	"context"
+	"os"
 	"runtime"
 	"strings"
 	"testing"
@@ -49,13 +50,17 @@ func TestNewACPAgentChecksToolPolicy(t *testing.T) {
 	core, err := NewCore(CoreOptions{WorkRoot: t.TempDir()})
 	noErr(t, err)
 	defer core.Close()
+	// Command[0] must be absolute on every OS; the policy is checked before
+	// anything is started.
+	self, err := os.Executable()
+	noErr(t, err)
 	for name, policy := range map[string]map[string]string{
 		"value":    {"bash": "maybe"},
 		"empty":    {"bash": ""},
 		"no tool":  {"": "deny"},
 		"one good": {"read": "allow", "write": "Deny"},
 	} {
-		_, err := NewACPAgent(context.Background(), ACPAgentOptions{Command: []string{"/bin/false"}, Core: core, StateDir: t.TempDir(),
+		_, err := NewACPAgent(context.Background(), ACPAgentOptions{Command: []string{self}, Core: core, StateDir: t.TempDir(),
 			Upstream: ACPModelUpstream{BaseURL: "http://127.0.0.1:1/v1"}, ToolPolicy: policy})
 		if err == nil || !strings.Contains(err.Error(), "ToolPolicy") {
 			t.Errorf("%s: err = %v", name, err)
