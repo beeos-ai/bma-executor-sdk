@@ -32,6 +32,17 @@
   option nothing changes. The conformance suite (T1–T11) is unaffected: the
   platform's tool gateway reaches the hands' files, and a brain on the
   platform's route sees the same files through its own machine's mounts.
+- **Behavior change, Go `PlatformToolRoute` (and so `ACPAgent` with remote
+  hands): a lost answer is fetched again, not given up.** A tool call whose
+  request reached the gateway and whose answer was lost (the brain's network
+  dropped, a 5xx) or that the gateway reports `in_progress` is sent again with
+  the same idempotency key, backing off from 1 s to 15 s, until the saved reply
+  comes back (`Replayed`, the call ran once; ADR-0029 §4.3) or for at most
+  10 minutes (the default `brain_offline_timeout`), through moments the gateway
+  cannot be reached. Before: `unknown` / `transport_error` at once, so a brain
+  whose network dropped for a few seconds during a long command lost its
+  result. A refusal, a result, a call whose request never left and a canceled
+  turn are answered as before, without a retry.
 - **Go: `CoreOptions.FileAccess`, the host's check before a file tool.** It
   runs before every `read`, `write`, `edit`, `glob` and `grep` of a `tool.call`
   and of a `LocalToolRoute` (so also `ACPAgent`'s), with a `FileAccessRequest`
