@@ -272,6 +272,25 @@ func acpEffectivePolicy(mode string, overrides map[string]string) map[string]str
 	return policy
 }
 
+// acpStricter is the stricter of two permissions: deny over ask over allow
+// (an empty one is no opinion).
+func acpStricter(a, b string) string {
+	rank := map[string]int{"": 0, "allow": 1, "ask": 2, "deny": 3}
+	if rank[b] > rank[a] {
+		return b
+	}
+	return a
+}
+
+// acpCapPolicy applies the host's ceiling (ACPAgentOptions.ToolPolicy) to a
+// turn's effective policy: no tool ends up looser than the ceiling.
+func acpCapPolicy(policy, ceiling map[string]string) map[string]string {
+	for tool, permission := range ceiling {
+		policy[tool] = acpStricter(policy[tool], permission)
+	}
+	return policy
+}
+
 // acpInputHash identifies a tool call's input (map keys are sorted by encoding/json).
 func acpInputHash(input map[string]any) string {
 	raw, _ := json.Marshal(input)
@@ -361,6 +380,17 @@ func (r *LocalToolRoute) runOnce(ctx context.Context, c RouteCall) *RouteResult 
 			return refusal
 		}
 	}
+	// A file tool passes CoreOptions.FileAccess before it is marked started;
+	// a refusal is recorded and replayed like the launch hook's.
+	if refusal := r.checkFileAccess(ctx, c); refusal != nil {
+		r.logf(LogWarn, fmt.Sprintf("tool call %s (%s) of session %s refused by the file access hook: %s", c.ID, c.Name, r.sessionID, refusal.Text))
+		if err := ledger.update(c.ID, func(s *acpCallState) {
+			s.Phase, s.Text, s.IsError, s.Outcome, s.Code = acpPhaseDone, refusal.Text, true, refusal.Outcome, refusal.Code
+		}); err != nil {
+			return stateError(err)
+		}
+		return refusal
+	}
 	if err := ledger.update(c.ID, func(s *acpCallState) { s.Phase = acpPhaseStarted }); err != nil {
 		return stateError(err)
 	}
@@ -374,7 +404,7 @@ func (r *LocalToolRoute) runOnce(ctx context.Context, c RouteCall) *RouteResult 
 	case r.core.hasComputerTool(c.Name):
 		text, isError, images = r.runComputer(ctx, c.ID, c.Name, c.Input)
 	default:
-		text, isError = r.runTool(ctx, c.ID, c.Name, c.Input)
+		text, isError = r.runTool(fileAccessChecked(ctx), c.ID, c.Name, c.Input)
 	}
 	if err := ledger.update(c.ID, func(s *acpCallState) {
 		s.Phase, s.Text, s.IsError, s.Outcome, s.Code = acpPhaseDone, text, isError, RouteOutcomeExecuted, ""
@@ -385,6 +415,24 @@ func (r *LocalToolRoute) runOnce(ctx context.Context, c RouteCall) *RouteResult 
 		r.hook(ctx, "tool:after")
 	}
 	return &RouteResult{Outcome: RouteOutcomeExecuted, Text: text, IsError: isError, Background: background, Images: images}
+}
+
+// checkFileAccess asks CoreOptions.FileAccess about a file tool call; a
+// refusal is the call's answer (not_forwarded, the hook's reason as Code).
+func (r *LocalToolRoute) checkFileAccess(ctx context.Context, c RouteCall) *RouteResult {
+	if r.core.opts.FileAccess == nil || !coreTools[c.Name] || c.Name == ToolNameBash {
+		return nil
+	}
+	session := r.core.session(coreKey{acpBrain, r.sessionID})
+	if session == nil {
+		return nil
+	}
+	input := r.toolInput(c.Name, c.Input)
+	err := r.core.checkFileAccess(ctx, session, r.sessionID, c.ID, c.Name, input)
+	if code, detail, ok := fileAccessRefusal(err); ok {
+		return refused(code, detail)
+	}
+	return nil
 }
 
 // runComputer runs computer_observe / computer_action in Core (its
@@ -429,17 +477,9 @@ func (r *LocalToolRoute) runTool(ctx context.Context, callID, name string, in ma
 	if !coreTools[name] || name == ToolNameBash {
 		return fmt.Sprintf("tool %q is not available on this computer", name), true
 	}
-	str := func(k string) string { v, _ := in[k].(string); return v }
-	num := func(k string) int64 { v, _ := in[k].(float64); return int64(v) }
-	flag := func(k string) bool { v, _ := in[k].(bool); return v }
-	input := ToolInput{Path: str("file_path"), Offset: num("offset"), Limit: num("limit"), Content: str("content"),
-		OldString: str("old_string"), NewString: str("new_string"), Pattern: str("pattern"), Glob: str("glob")}
+	str, flag := inputGetters(in)
+	input := r.toolInput(name, in)
 	switch name {
-	case ToolNameGlob, ToolNameGrep:
-		input.Path = str("path")
-		if name == ToolNameGrep && flag("case_insensitive") {
-			input.Pattern = "(?i)" + input.Pattern
-		}
 	case ToolNameEdit:
 		if flag("replace_all") {
 			return r.replaceAll(input)
@@ -465,31 +505,47 @@ func (r *LocalToolRoute) runTool(ctx context.Context, callID, name string, in ma
 	return text, isError
 }
 
+func inputGetters(in map[string]any) (str func(string) string, flag func(string) bool) {
+	str = func(k string) string { v, _ := in[k].(string); return v }
+	flag = func(k string) bool { v, _ := in[k].(bool); return v }
+	return
+}
+
+// toolInput maps the agent_toolset input of a file tool to Core's ToolInput.
+func (r *LocalToolRoute) toolInput(name string, in map[string]any) ToolInput {
+	str, flag := inputGetters(in)
+	num := func(k string) int64 { v, _ := in[k].(float64); return int64(v) }
+	input := ToolInput{Path: str("file_path"), Offset: num("offset"), Limit: num("limit"), Content: str("content"),
+		OldString: str("old_string"), NewString: str("new_string"), Pattern: str("pattern"), Glob: str("glob")}
+	if name == ToolNameGlob || name == ToolNameGrep {
+		input.Path = str("path")
+		if name == ToolNameGrep && flag("case_insensitive") {
+			input.Pattern = "(?i)" + input.Pattern
+		}
+	}
+	return input
+}
+
 // replaceAll is edit with replace_all (Core's edit replaces exactly one match).
 func (r *LocalToolRoute) replaceAll(input ToolInput) (string, bool) {
 	session := r.core.session(coreKey{acpBrain, r.sessionID})
 	if session == nil {
 		return "session_not_active: the session is not open", true
 	}
-	path, err := session.resolve(input.Path)
-	if err != nil {
-		return err.Error(), true
+	if r.core.opts.RunAs != nil {
+		return `tool "edit" is unavailable: this executor runs workloads as another OS user; use bash`, true
 	}
 	if input.OldString == "" {
 		return "edit requires old_string and new_string", true
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
+	n, err := r.core.editFile(session, input, true)
+	switch {
+	case err != nil:
 		return err.Error(), true
-	}
-	n := strings.Count(string(raw), input.OldString)
-	if n == 0 {
+	case n == 0:
 		return "old_string was not found", true
 	}
-	if err := os.WriteFile(path, []byte(strings.ReplaceAll(string(raw), input.OldString, input.NewString)), 0o600); err != nil {
-		return err.Error(), true
-	}
-	return fmt.Sprintf("edited %s (%d replacements)", filepath.Base(path), n), false
+	return fmt.Sprintf("edited %s (%d replacements)", filepath.Base(input.Path), n), false
 }
 
 // grepOutput reshapes Core's "file:line:text" matches for output_mode.

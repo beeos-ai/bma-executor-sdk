@@ -45,13 +45,25 @@
 
 ### bash 工具：`CoreOptions.Launch`
 
-`CoreOptions.Launch` 用同一个 `LaunchFunc` 类型，每次 bash 工具调用在起命令前调用一次：包括 `tool.call` 的 bash，以及 `LocalToolRoute` 的 bash（`ACPAgent` 自己的工具就走它）。两个选项传同一个函数，脑自己的命令就和 `process.*` 走同一套准入和沙箱。请求里 `Tool` 为 `"bash"`，`ToolCallID` 为调用 id，`ProcessID` 为空；`Argv` 是 shell 命令（`bash -lc <命令>`，没有 bash 时用 `sh`；Windows 上是 `cmd.exe /d /s /c <命令>`）；`Cwd` 是调用的 cwd（`LocalToolRoute` 为空）。`tool.call` 的 `AgentSessionID`、`Metadata`、`Client` 取自该会话的 `session.assign`；`LocalToolRoute` 的 `SessionID` 与 `AgentSessionID` 都是路由的会话，没有 `Metadata` 和 `Client`（需要会话上下文时用自己的 client 去查）。返回的 spec 按进程的规则生效。拒绝时不起进程：`tool.call` 返回失败结果，文本为 `<原因>: <说明>`；`LocalToolRoute` 返回 `not_forwarded`，`Code` 为原因（普通错误为 `spawn_failed`），同一调用 id 再来时原样返回。文件工具（read/write/edit/glob/grep）在执行端进程内完成，不调用钩子，仍限制在会话工作区内。不设 `CoreOptions.Launch` 时 bash 工具行为不变。
+`CoreOptions.Launch` 用同一个 `LaunchFunc` 类型，每次 bash 工具调用在起命令前调用一次：包括 `tool.call` 的 bash，以及 `LocalToolRoute` 的 bash（`ACPAgent` 自己的工具就走它）。两个选项传同一个函数，脑自己的命令就和 `process.*` 走同一套准入和沙箱。请求里 `Tool` 为 `"bash"`，`ToolCallID` 为调用 id，`ProcessID` 为空；`Argv` 是 shell 命令（`bash -lc <命令>`，没有 bash 时用 `sh`；Windows 上是 `cmd.exe /d /s /c <命令>`）；`Cwd` 是调用的 cwd（`LocalToolRoute` 为空）。`tool.call` 的 `AgentSessionID`、`Metadata`、`Client` 取自该会话的 `session.assign`；`LocalToolRoute` 的 `SessionID` 与 `AgentSessionID` 都是路由的会话，没有 `Metadata` 和 `Client`（需要会话上下文时用自己的 client 去查）。返回的 spec 按进程的规则生效。拒绝时不起进程：`tool.call` 返回失败结果，文本为 `<原因>: <说明>`；`LocalToolRoute` 返回 `not_forwarded`，`Code` 为原因（普通错误为 `spawn_failed`），同一调用 id 再来时原样返回。文件工具（read/write/edit/glob/grep）在执行端进程内完成，不调用这个钩子，见下一节。不设 `CoreOptions.Launch` 时 bash 工具行为不变。
 
 `LocalToolRoute` 的 bash 把输出写进一个文件（后台运行的回答里给出路径）。默认这个文件在本轮工作目录的 `.bma-bash/` 下，由执行端进程写入，不在沙箱里。给命令加了沙箱的宿主应设 `CoreOptions.ToolOutputDir`，指向不在任何会话可写范围内（也不对任何会话沙箱开放）的目录：输出文件改放 `ToolOutputDir/<会话的短哈希>/`（权限 0700，设了 `RunAs` 时归该用户），不再往用户文件夹里写；该会话的 `read` 工具仍可读自己的输出文件；`CloseSession` 时删掉这个目录。`tool.call` 的 bash 输出留在内存里，不写文件。
+
+### 文件工具：工作区边界与 `CoreOptions.FileAccess`
+
+`read`、`write`、`edit`、`glob`、`grep`（`tool.call` 和 `LocalToolRoute`，所以 `ACPAgent` 也是）在执行端进程内运行，绕过 `Launch` 搭的沙箱。无论宿主怎么做，它们都由系统限制在会话工作区内：所有文件都通过在工作区上打开的 `os.Root` 访问，`..`、工作区外的绝对路径、指向工作区外的符号链接都会被拒绝，检查之后目录被换成链接也一样。指向工作区内部的链接照常可用。`glob` 和 `grep` 不穿过指向工作区外的链接。会话自己在 `ToolOutputDir` 下的输出文件仍可用 `read` 读取。
+
+`CoreOptions.FileAccess`（`func(ctx, FileAccessRequest) error`）让宿主在工具碰任何文件之前按调用裁决。`FileAccessRequest` 含 `SessionID`、`AgentSessionID`（`LocalToolRoute` 与会话 id 相同；`tool.call` 取自 `session.assign` 的 metadata `agent_session_id`）、`Tool`、`ToolCallID`、`Operation`（`FileOperationRead` 或 `FileOperationWrite`）和 `Path`（相对工作区、已规范化、用 `/` 分隔，工作区本身为 `.`）。`read`、`glob`、`grep` 为读（后两者问的是搜索目录，不是其下每个文件）；`write` 为写；`edit` 又读又写，钩子调用两次，先读后写。路径在工作区外时不问钩子，工具自己失败。返回 error 即拒绝：`*RPCError`（`NewReasonError`）的 `data.reason` 作为拒绝码，例如只读会话用 `workspace_read_only`、`.git/hooks` 之类保护路径用 `workspace_boundary`；其他错误为 `permission_denied`。拒绝时不读不写：`tool.call` 返回失败结果，文本为 `<码>: <说明>`；`LocalToolRoute` 返回 `not_forwarded`，`Code` 为拒绝码，并像结果一样入账，同一调用 id 再来时原样返回、不再问钩子。宿主也可以用它在授权撤销或回合停止后拒绝。不设该选项时文件工具行为不变（仍限制在工作区内）。
+
+在这些检查接好之前想关掉某个工具，用下面的 `ACPAgentOptions.ToolPolicy`；它是上限，`deny` 严于 `ask` 严于 `allow`，平台的 `tool_policy` 和权限模式只能更严。
 
 实现 `SessionFileTransferer` 的文件传输器改收 `TransferSessionFile(ctx, ProcessContext, transfer)`。
 
 示例 [`examples/sandboxed-folder`](../../examples/sandboxed-folder)：metadata `owner` 校验（`session_rejected`）、`workspace_ref` → 本机目录（`workspace_unavailable`）、cwd 越界（`workspace_boundary`）、macOS `sandbox-exec` 包装（只允许写该目录与会话 outputs）、缺 `agent_session_id` 的进程返回 `session_rejected`（平台自发进程在设置了 `-platform-dir` 时运行于该独立目录，不进任何会话目录）、包安装返回 `local_confirmation_denied`。
+
+### 宿主的工具权限上限：`ACPAgentOptions.ToolPolicy`
+
+`ACPAgentOptions.ToolPolicy map[string]string`（工具名 → `allow`、`ask`、`deny`）是宿主对 `ACPAgent` 工具（六个工具和宿主工具）的权限上限。一个回合里某工具的权限，取这个值与权限模式、平台 `turn.start` 的 `metadata.tool_policy` 三者中较严的（`deny` > `ask` > `allow`），所以后两者只能更严、不能放松；没列出的工具不设上限。宿主还没接好某工具的检查时，先把它设为 `deny`（fail closed）。无论脑怎么做，都由执行端的 gate 强制（`permission_denied`；`ask` 没有用户批准时为 `approval_required`）。`NewACPAgent` 对其他取值和空工具名报错。
 
 TypeScript / Python 没有 process 运行时，因此不提供 Launch 钩子：执行端自己的 `process.start` handler 就是等价物（读上下文、校验、再 spawn），其 params 里能看到 `package_install`，所以包安装与命令有同样的决策点。见 [`typescript/examples/session-context`](../../typescript/examples/session-context/main.mjs) 与 [`python/examples/session_context.py`](../../python/examples/session_context.py)：缺 `agent_session_id`（承载的 `initiator: "platform"` 除外）与 `package_install` 在读取会话上下文之前就被拒绝。
 

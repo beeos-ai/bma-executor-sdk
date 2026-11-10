@@ -51,6 +51,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -170,6 +171,16 @@ type ACPAgentOptions struct {
 	// answer custom tool calls (user.custom_tool_result); a client that does not
 	// leaves the session waiting.
 	AskUserQuestion bool
+	// ToolPolicy is the host's ceiling on the permission of tools (tool name
+	// to allow, ask or deny): the permission of a tool in a turn is the
+	// stricter of this value and what the platform's turn.start
+	// metadata.tool_policy and the permission mode give (deny over ask over
+	// allow), so the platform and the mode can only tighten it, never loosen
+	// it. A tool it does not name is not capped. A host sets deny on tools it
+	// cannot yet check (fail closed). Applies to the six tools and to host
+	// tools, and is enforced by the executor's gate whatever the agent does.
+	// NewACPAgent rejects other values. Nil caps nothing.
+	ToolPolicy map[string]string
 	// DisablePrewarm turns off the background prewarm of the Claude Code
 	// profile (see WaitPrewarm); the DSH profile has none.
 	DisablePrewarm bool
@@ -369,6 +380,12 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 	} else if opts.Upstream.BaseURL == "" && !opts.PlatformModel {
 		return nil, errors.New("bmaexecutor: ACPAgentOptions.Upstream.BaseURL is required unless PlatformModel is set")
 	}
+	for tool, permission := range opts.ToolPolicy {
+		if tool == "" || (permission != "allow" && permission != "ask" && permission != "deny") {
+			return nil, fmt.Errorf("bmaexecutor: ACPAgentOptions.ToolPolicy[%q] = %q: the tool must be named and the value allow, ask or deny", tool, permission)
+		}
+	}
+	opts.ToolPolicy = maps.Clone(opts.ToolPolicy)
 	if opts.HarnessID == "" {
 		opts.HarnessID = "dsh"
 		if opts.Profile == ACPProfileClaudeCode {
@@ -622,7 +639,7 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 	a.mu.Lock()
 	mode := s.mode
 	a.mu.Unlock()
-	policy := a.withHostTools(acpEffectivePolicy(mode, overrides))
+	policy := acpCapPolicy(a.withHostTools(acpEffectivePolicy(mode, overrides)), a.opts.ToolPolicy)
 	a.mu.Lock()
 	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: policy,
 		messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}, questions: map[string]string{}}

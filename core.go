@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"maps"
 	"math/rand/v2"
 	"os"
@@ -124,6 +123,19 @@ type CoreOptions struct {
 	// the executor and do not call it (they stay within the session
 	// workspace). Nil starts commands as before.
 	Launch LaunchFunc
+	// FileAccess runs before every file tool (read, write, edit, glob, grep)
+	// of this machine: a tool.call and the tools of a LocalToolRoute (so also
+	// ACPAgent's). It gets the session, the tool, the operation (read or
+	// write) and the workspace-relative path, and refuses by returning an
+	// error: an *RPCError (NewReasonError) gives its data.reason as the
+	// refusal code, any other error permission_denied. A LocalToolRoute call
+	// is then not_forwarded with the code as Code, recorded like a result (the
+	// same call id is answered with it again); a tool.call fails with
+	// "<code>: <message>". Nothing is read or written when it refuses. A host
+	// uses it for read-only sessions, protected paths, revoked grants and
+	// stopped turns. The tools stay within the workspace with or without it.
+	// Nil allows every file tool call as before. See FileAccessRequest.
+	FileAccess FileAccessFunc
 	// ToolOutputDir, when set, holds the output files of the bash commands
 	// of a LocalToolRoute (so also ACPAgent's own tools):
 	// ToolOutputDir/<short hash of the session>/, created 0700 (owned by
@@ -769,6 +781,10 @@ func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams
 			err = fmt.Errorf("tool %q is unavailable: this executor runs workloads as another OS user; use bash", params.Tool)
 			break
 		}
+		if err = c.checkFileAccess(ctx, session, sessionProcessContext(session).AgentSessionID, params.ToolCallID, params.Tool, input); err != nil {
+			err = refusalError(err)
+			break
+		}
 		result, err = c.fileTool(session, params.Tool, input)
 	case ToolNameComputerObserve, ToolNameComputerAction:
 		if c.opts.ComputerUse == nil {
@@ -1185,150 +1201,6 @@ func truncate(value string, limit int) string {
 		return value
 	}
 	return value[:limit]
-}
-
-func (c *Core) read(session *CoreSession, input ToolInput) (ToolResultParams, error) {
-	path, err := session.resolve(input.Path)
-	if err != nil {
-		return ToolResultParams{}, err
-	}
-	return c.readPath(path, input)
-}
-
-// readPath reads a resolved path with the read tool's offset and limit.
-func (c *Core) readPath(path string, input ToolInput) (ToolResultParams, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return ToolResultParams{}, err
-	}
-	defer file.Close()
-	offset, limit := int64(1), int64(-1)
-	if input.Offset > 0 {
-		offset = input.Offset
-	}
-	if input.Limit > 0 {
-		limit = input.Limit
-	}
-	out := &cappedBuffer{limit: c.opts.InlineResultBytes}
-	reader := bufio.NewReader(file)
-	for line := int64(1); limit != 0; line++ {
-		text, err := reader.ReadString('\n')
-		if line >= offset && text != "" {
-			_, _ = out.Write([]byte(text))
-			if limit > 0 {
-				limit--
-			}
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return ToolResultParams{}, err
-		}
-	}
-	return textResult(false, out.String()), nil
-}
-
-func (c *Core) write(session *CoreSession, input ToolInput) (ToolResultParams, error) {
-	path, err := session.resolve(input.Path)
-	if err != nil {
-		return ToolResultParams{}, err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return ToolResultParams{}, err
-	}
-	if err := os.WriteFile(path, []byte(input.Content), 0o600); err != nil {
-		return ToolResultParams{}, err
-	}
-	return textResult(false, fmt.Sprintf("wrote %d bytes", len(input.Content))), nil
-}
-
-func (c *Core) edit(session *CoreSession, input ToolInput) (ToolResultParams, error) {
-	path, err := session.resolve(input.Path)
-	if err != nil {
-		return ToolResultParams{}, err
-	}
-	if input.OldString == "" {
-		return ToolResultParams{}, errors.New("edit requires old_string and new_string")
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return ToolResultParams{}, err
-	}
-	if count := strings.Count(string(raw), input.OldString); count != 1 {
-		return textResult(true, fmt.Sprintf("old_string must match exactly once; matched %d times", count)), nil
-	}
-	updated := strings.Replace(string(raw), input.OldString, input.NewString, 1)
-	if err := os.WriteFile(path, []byte(updated), 0o600); err != nil {
-		return ToolResultParams{}, err
-	}
-	return textResult(false, "edited "+filepath.Base(path)), nil
-}
-
-func (c *Core) glob(session *CoreSession, input ToolInput) (ToolResultParams, error) {
-	if input.Pattern == "" {
-		return ToolResultParams{}, errors.New("glob requires pattern")
-	}
-	base, err := session.resolve(input.Path)
-	if err != nil {
-		return ToolResultParams{}, err
-	}
-	pattern, err := session.resolve(filepath.Join(base, input.Pattern))
-	if err != nil {
-		return ToolResultParams{}, err
-	}
-	matches, err := filepath.Glob(pattern)
-	if err != nil {
-		return ToolResultParams{}, err
-	}
-	for i, match := range matches {
-		if rel, err := filepath.Rel(session.workspace, match); err == nil {
-			matches[i] = rel
-		}
-	}
-	return textResult(false, strings.Join(matches, "\n")), nil
-}
-
-func (c *Core) grep(session *CoreSession, input ToolInput) (ToolResultParams, error) {
-	if input.Pattern == "" {
-		return ToolResultParams{}, errors.New("grep requires pattern")
-	}
-	expression, err := regexp.Compile(input.Pattern)
-	if err != nil {
-		return ToolResultParams{}, err
-	}
-	root, err := session.resolve(input.Path)
-	if err != nil {
-		return ToolResultParams{}, err
-	}
-	var matches []string
-	walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() || len(matches) >= maxGrepMatches {
-			return nil
-		}
-		if input.Glob != "" {
-			if ok, _ := filepath.Match(input.Glob, entry.Name()); !ok {
-				return nil
-			}
-		}
-		file, err := os.Open(path)
-		if err != nil {
-			return nil
-		}
-		defer file.Close()
-		rel, _ := filepath.Rel(session.workspace, path)
-		scanner := bufio.NewScanner(file)
-		for line := 1; scanner.Scan() && len(matches) < maxGrepMatches; line++ {
-			if expression.Match(scanner.Bytes()) {
-				matches = append(matches, fmt.Sprintf("%s:%d:%s", rel, line, scanner.Text()))
-			}
-		}
-		return nil
-	})
-	if walkErr != nil {
-		return ToolResultParams{}, walkErr
-	}
-	return textResult(false, strings.Join(matches, "\n")), nil
 }
 
 // --- stdio MCP supervisor ---
