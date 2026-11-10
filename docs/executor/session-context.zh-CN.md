@@ -55,6 +55,10 @@
 
 `CoreOptions.FileAccess`（`func(ctx, FileAccessRequest) error`）让宿主在工具碰任何文件之前按调用裁决。`FileAccessRequest` 含 `SessionID`、`AgentSessionID`（`LocalToolRoute` 与会话 id 相同；`tool.call` 取自 `session.assign` 的 metadata `agent_session_id`）、`Tool`、`ToolCallID`、`Operation`（`FileOperationRead` 或 `FileOperationWrite`）和 `Path`（相对工作区、已规范化、用 `/` 分隔，工作区本身为 `.`）。`read`、`glob`、`grep` 为读（后两者问的是搜索目录，不是其下每个文件）；`write` 为写；`edit` 又读又写，钩子调用两次，先读后写。路径在工作区外时不问钩子，工具自己失败。返回 error 即拒绝：`*RPCError`（`NewReasonError`）的 `data.reason` 作为拒绝码，例如只读会话用 `workspace_read_only`、`.git/hooks` 之类保护路径用 `workspace_boundary`；其他错误为 `permission_denied`。拒绝时不读不写：`tool.call` 返回失败结果，文本为 `<码>: <说明>`；`LocalToolRoute` 返回 `not_forwarded`，`Code` 为拒绝码，并像结果一样入账，同一调用 id 再来时原样返回、不再问钩子。宿主也可以用它在授权撤销或回合停止后拒绝。不设该选项时文件工具行为不变（仍限制在工作区内）。
 
+#### 会话挂载的文件（`ACPAgentOptions.SessionFilesRoot`）
+
+声明了 `capabilities.session_files` 的机器上，平台把每个会话的文件挂载为 `<root>/<会话 id>/uploads`（用户文件，只读）、`.../skills`（会话技能，只读）和 `.../outputs`（交付物，可写）。把声明的 `root` 交给 `ACPAgentOptions.SessionFilesRoot`（或 `LocalToolRouteOptions.SessionFilesRoot`），该会话回合的文件工具除工作区外，按绝对路径只可访问这三个目录：`read`、`glob`、`grep` 三个都可，`write`、`edit` 仅限 `outputs`。其余一律拒绝：其他会话的目录、根下的其他路径、`..`、指向目录之外的符号链接，以及顶替会话目录或挂载目录的链接（每个目录各自以 `os.Root` 打开，且必须是真目录）。`glob`、`grep` 对挂载目录报告绝对路径。`CoreOptions.FileAccess` 对这些路径同样被询问，`FileAccessRequest.Mount` 为 `uploads`/`skills`/`outputs`，`Path` 相对该目录，因此只守护工作区的钩子必须检查 `Mount`。在带 FUSE 会话挂载的执行端上，写入 `outputs` 的文件在关闭时由挂载提交；SDK 自带的 `SessionFiles` 扫描只上传启动过进程的会话的 outputs（其 daemon 路由以进程为锚），所以收不到只有 ACP 回合的会话的产出。工具在另一台机器上执行的回合（`tools_mcp_*`）不会在本机得到这些挂载。
+
 在这些检查接好之前想关掉某个工具，用下面的 `ACPAgentOptions.ToolPolicy`；它是上限，`deny` 严于 `ask` 严于 `allow`，平台的 `tool_policy` 和权限模式只能更严。
 
 实现 `SessionFileTransferer` 的文件传输器改收 `TransferSessionFile(ctx, ProcessContext, transfer)`。

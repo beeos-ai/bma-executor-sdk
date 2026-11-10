@@ -90,6 +90,11 @@ type LocalToolRouteOptions struct {
 	// ToolPolicy overrides the permission of tools (tool name to allow, ask or
 	// deny). A tool no mode default or override names is ask (fail-closed).
 	ToolPolicy map[string]string
+	// SessionFilesRoot is the executor's capabilities.session_files.root. When
+	// set, the file tools also reach this session's <root>/<SessionID>/uploads,
+	// skills (read-only) and outputs (writable), and nothing else below the
+	// root; see ACPAgentOptions.SessionFilesRoot. Absolute, or empty.
+	SessionFilesRoot string
 	// Context ends with the turn: a canceled Context ends the calls in flight,
 	// makes later calls stale_turn and ends commands left in the background
 	// (unless Complete was called first). Default: never ends.
@@ -124,8 +129,14 @@ func NewLocalToolRoute(opts LocalToolRouteOptions) (*LocalToolRoute, error) {
 			return nil, fmt.Errorf("bmaexecutor: LocalToolRouteOptions.ToolPolicy[%q] must be allow, ask or deny", tool)
 		}
 	}
+	if opts.SessionFilesRoot != "" && !filepath.IsAbs(opts.SessionFilesRoot) {
+		return nil, fmt.Errorf("bmaexecutor: LocalToolRouteOptions.SessionFilesRoot must be an absolute path, got %q", opts.SessionFilesRoot)
+	}
 	if err := opts.Core.openLocal(acpBrain, opts.SessionID, opts.Workspace); err != nil {
 		return nil, err
+	}
+	if err := opts.Core.setLocalMounts(opts.SessionID, opts.SessionFilesRoot); err != nil {
+		return nil, fmt.Errorf("bmaexecutor: LocalToolRouteOptions.SessionFilesRoot: %w", err)
 	}
 	ledger, err := opts.Core.local.ledger(ledgerPath(opts.StateDir, opts.SessionID), opts.SessionID)
 	if err == nil {
