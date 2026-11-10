@@ -79,7 +79,7 @@ func (p *acpModelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if names := acpExtraTools(request["tools"]); len(names) > 0 {
+	if names := acpExtraTools(request["tools"], p.agent.toolNames()); len(names) > 0 {
 		p.agent.log(LogWarn, fmt.Sprintf("acp model proxy refused tools %v in session %s", names, sessionID), nil)
 		http.Error(w, "forbidden: tool catalog not allowed: "+strings.Join(names, ","), http.StatusForbidden)
 		return
@@ -137,8 +137,8 @@ func (p *acpModelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// acpExtraTools lists the offered tools that are not platform tools.
-func acpExtraTools(raw json.RawMessage) []string {
+// acpExtraTools lists the offered tools that are not in allowed (the platform tools and the host tools).
+func acpExtraTools(raw json.RawMessage, allowed map[string]bool) []string {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -157,7 +157,7 @@ func acpExtraTools(raw json.RawMessage) []string {
 		if name == "" {
 			name = t.Name
 		}
-		if !coreTools[name] {
+		if !allowed[name] {
 			extra = append(extra, name)
 		}
 	}

@@ -99,6 +99,9 @@ type RouteResult struct {
 	// Background: a command left running when the call stopped waiting
 	// (bash past its synchronous wait).
 	Background *RouteBackground
+	// Images are image blocks of the result (computer_observe screenshots),
+	// for the model with Text. A replayed result has none.
+	Images []ContentBlock
 }
 
 // RouteBackground is a command still running after its call returned.

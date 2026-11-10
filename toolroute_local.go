@@ -343,9 +343,13 @@ func (r *LocalToolRoute) runOnce(ctx context.Context, c RouteCall) *RouteResult 
 	var text string
 	var isError bool
 	var background *RouteBackground
-	if c.Name == ToolNameBash {
+	var images []ContentBlock
+	switch {
+	case c.Name == ToolNameBash:
 		text, isError, background = r.runBash(ctx, c.ID, c.Input)
-	} else {
+	case r.core.hasComputerTool(c.Name):
+		text, isError, images = r.runComputer(ctx, c.ID, c.Name, c.Input)
+	default:
 		text, isError = r.runTool(ctx, c.ID, c.Name, c.Input)
 	}
 	if err := ledger.update(c.ID, func(s *acpCallState) {
@@ -356,7 +360,35 @@ func (r *LocalToolRoute) runOnce(ctx context.Context, c RouteCall) *RouteResult 
 	if r.hook != nil {
 		r.hook(ctx, "tool:after")
 	}
-	return &RouteResult{Outcome: RouteOutcomeExecuted, Text: text, IsError: isError, Background: background}
+	return &RouteResult{Outcome: RouteOutcomeExecuted, Text: text, IsError: isError, Background: background, Images: images}
+}
+
+// runComputer runs computer_observe / computer_action in Core (its
+// ComputerUseBackend): the text blocks are the text, the image blocks the
+// images. The ledger keeps the text only.
+func (r *LocalToolRoute) runComputer(ctx context.Context, callID, name string, in map[string]any) (string, bool, []ContentBlock) {
+	raw, _ := json.Marshal(in)
+	result := r.core.toolCall(ctx, acpBrain, ToolCallParams{SessionID: r.sessionID, ToolCallID: callID, Tool: name, Input: raw})
+	var texts []string
+	var images []ContentBlock
+	for _, block := range result.Content {
+		switch {
+		case block.Type == ContentBlockTypeImage && block.Data != "":
+			images = append(images, block)
+		case block.Text != "":
+			texts = append(texts, block.Text)
+		}
+	}
+	return strings.Join(texts, "\n"), result.IsError || result.Outcome != ToolOutcomeSucceeded, images
+}
+
+// acpImages are the images of a _bma/tools/call answer (bma-dsh-acp: {mimeType, data}).
+func acpImages(blocks []ContentBlock) []map[string]string {
+	var out []map[string]string
+	for _, b := range blocks {
+		out = append(out, map[string]string{"mimeType": b.MimeType, "data": b.Data})
+	}
+	return out
 }
 
 func (r *LocalToolRoute) logf(level LogLevel, message string) {

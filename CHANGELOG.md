@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **Go: host tools of a local DSH brain (`ACPAgent`, bma-dsh-acp >= 0.2.0).**
+  `ACPAgent` declares the tools this machine adds to the six in `initialize`
+  `_meta.bma.hostTools`; bma-dsh-acp registers them, asks for them by their
+  permission and calls them like the six (`_bma/tools/call`). The executor's
+  fail-closed checks (agent catalog, session catalog, model proxy tool list,
+  tool policy) now take the six plus the host tools the agent accepted; an
+  older bma-dsh-acp that reports none keeps exactly the six.
+  - `computer_observe` / `computer_action` when `CoreOptions.ComputerUse` is
+    set (Cua Driver backend): default `ask`, so every call is a platform
+    approval (any client of the session) unless the turn's `tool_policy` says
+    otherwise; they run in `Core` through `LocalToolRoute`, and the screenshot
+    of `computer_observe` goes back to the agent with the text
+    (`RouteResult.Images`, new field; the ledger keeps the text only).
+  - `ask_user_question` with the new `ACPAgentOptions.AskUserQuestion`
+    (Claude Code `AskUserQuestion` input: 1-4 questions with 2-4 options):
+    a custom tool call of the session (`agent.custom_tool_use`, event id
+    derived from session, turn and call so a restarted executor asks under the
+    same id), answered by any client with `user.custom_tool_result`; the
+    answer is the tool result and the same turn continues. A canceled turn
+    gives the call up with a failed `agent.tool_result`. The capability then
+    declares `custom_tools`. Default allow: asking is not an operation and an
+    answer grants no permission.
+  - `ACPInteractionEvent.Kind` (`permission` or `question`); examples/local-dsh
+    logs it and takes `-cua-driver <abs path>` and `-ask-user-question`.
+
 - **Go: `LocalToolRoute`, the local counterpart of `PlatformToolRoute`.**
   `NewLocalToolRoute(LocalToolRouteOptions{Core, StateDir, SessionID, TurnID,
   Workspace, PermissionMode, ToolPolicy, Context, OnLog})` is a `ToolRoute`

@@ -339,8 +339,15 @@ func (t *AgentTurn) RequestInteraction(ctx context.Context, params InteractionRe
 // (empty when the event could not be emitted). Use ctx with a timeout for an
 // executor-side limit.
 func (t *AgentTurn) RequestCustomTool(ctx context.Context, name string, input map[string]any) (string, AgentCustomToolResultParams, error) {
+	return t.requestCustomTool(ctx, t.NewEventID(), name, input)
+}
+
+// requestCustomTool is RequestCustomTool under a given event id. An id
+// derived from the session, the turn and the agent's call id is the same
+// after an executor restart, so the platform hands back a result given while
+// the executor was away (it keys the call by that id).
+func (t *AgentTurn) requestCustomTool(ctx context.Context, id, name string, input map[string]any) (string, AgentCustomToolResultParams, error) {
 	s := t.session
-	id := t.NewEventID()
 	answer := make(chan AgentCustomToolResultParams, 1)
 	// Register before emitting: the platform may answer as soon as the
 	// event is acknowledged.
