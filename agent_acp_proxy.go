@@ -15,7 +15,9 @@ import (
 // agent only knows http://127.0.0.1:<port>/v1 and a per-session placeholder
 // key; the proxy forwards POST /v1/chat/completions while that session has a
 // running turn, after checking that the request offers only the six platform
-// tools, and adds the real credential. Bodies and credentials are never logged.
+// tools, and adds the real credential. The forwarded request is built anew:
+// of the agent's headers only Accept is kept, so the agent cannot set
+// Upstream.SessionHeader itself. Bodies and credentials are never logged.
 type acpModelProxy struct {
 	agent  *ACPAgent
 	url    string
@@ -103,6 +105,9 @@ func (p *acpModelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if accept := r.Header.Get("Accept"); accept != "" {
 		upstream.Header.Set("Accept", accept)
 	}
+	if route.sessionHeader != "" {
+		upstream.Header.Set(route.sessionHeader, sessionID)
+	}
 	if header != nil {
 		header(upstream)
 	}
@@ -135,6 +140,17 @@ func (p *acpModelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// acpHeaderName reports whether name is an HTTP header field name (an RFC
+// 9110 token); the transport refuses to send any other.
+func acpHeaderName(name string) bool {
+	for _, c := range name {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && !strings.ContainsRune("!#$%&'*+-.^_`|~", c) {
+			return false
+		}
+	}
+	return name != ""
 }
 
 // acpExtraTools lists the offered tools that are not in allowed (the platform tools and the host tools).

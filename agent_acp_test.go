@@ -40,9 +40,14 @@ type fakeUpstream struct {
 	mu       sync.Mutex
 	auth     []string
 	models   []string
+	sessions [][]string // the fakeSessionHeader values of each request
 	requests int
 	server   *httptest.Server
 }
+
+// fakeSessionHeader is the Upstream.SessionHeader of the tests. The fake
+// agent sends it itself on every model request, with a made-up session id.
+const fakeSessionHeader = "X-Test-Usage-Session"
 
 func newFakeUpstream(t *testing.T) *fakeUpstream {
 	u := &fakeUpstream{}
@@ -54,6 +59,7 @@ func newFakeUpstream(t *testing.T) *fakeUpstream {
 		u.mu.Lock()
 		u.requests++
 		u.auth = append(u.auth, r.Header.Get("Authorization"))
+		u.sessions = append(u.sessions, r.Header.Values(fakeSessionHeader))
 		u.models = append(u.models, body.Model)
 		u.mu.Unlock()
 		if r.URL.Path != "/v1/chat/completions" {
@@ -118,7 +124,8 @@ func startACPFixtureAtCore(t *testing.T, ctx context.Context, opts ACPAgentOptio
 	opts.StateDir = filepath.Join(root, "state")
 	if opts.Upstream.BaseURL == "" && !opts.PlatformModel {
 		opts.Upstream = ACPModelUpstream{BaseURL: upstream.server.URL + "/v1", Model: "upstream-model",
-			Header: func(r *http.Request) { r.Header.Set("Authorization", "Bearer node-owner-key") }}
+			Header:        func(r *http.Request) { r.Header.Set("Authorization", "Bearer node-owner-key") },
+			SessionHeader: opts.Upstream.SessionHeader}
 	}
 	if opts.CancelGrace == 0 {
 		opts.CancelGrace = time.Second
@@ -923,6 +930,7 @@ func fakePrompt(c *fakeConn, sid, text string) (any, map[string]any) {
 				body := `{"model":"m","stream":true,"messages":[],"tools":[{"type":"function","function":{"name":"bash"}}]}`
 				req, _ := http.NewRequest("POST", model["baseUrl"].(string)+"/chat/completions", strings.NewReader(body))
 				req.Header.Set("Authorization", "Bearer "+model["token"].(string))
+				req.Header.Set(fakeSessionHeader, "sesn_forged")
 				status := "error"
 				if resp, err := http.DefaultClient.Do(req); err == nil {
 					status = fmt.Sprint(resp.StatusCode)
@@ -943,6 +951,7 @@ func fakePrompt(c *fakeConn, sid, text string) (any, map[string]any) {
 			body, _ := json.Marshal(map[string]any{"model": model["model"], "stream": true, "messages": []any{}, "tools": defs})
 			req, _ := http.NewRequest("POST", model["baseUrl"].(string)+"/chat/completions", strings.NewReader(string(body)))
 			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set(fakeSessionHeader, "sesn_forged")
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				return "error"
