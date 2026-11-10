@@ -3,7 +3,6 @@
 package bmaexecutor
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -281,13 +280,11 @@ func setProcessGroup(cmd *exec.Cmd) {
 
 func setProcessGroupID(*exec.Cmd) {}
 
-// shellCommand runs command with cmd.exe: `cmd.exe /d /s /c "<command>"`
-// with the command line passed verbatim (see windowsCommandLine).
-func shellCommand(ctx context.Context, command string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "cmd", "/d", "/s", "/c", command)
-	setCommandLine(cmd)
-	setProcessGroup(cmd)
-	return cmd
+// shellArgv is the argv a bash tool runs command with: cmd.exe
+// `/d /s /c "<command>"`, its command line passed verbatim (see
+// windowsCommandLine).
+func shellArgv(command string) []string {
+	return []string{"cmd", "/d", "/s", "/c", command}
 }
 
 // setCommandLine passes cmd.exe's command line verbatim; Go's argv quoting

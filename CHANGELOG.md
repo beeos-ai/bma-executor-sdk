@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+- **Go: `CoreOptions.ToolOutputDir`, output files of local bash outside the
+  user's folders.** The bash of a `LocalToolRoute` (so `ACPAgent`'s) wrote its
+  output file to `.bma-bash/` in the working directory, from the executor,
+  past a sandbox `CoreOptions.Launch` sets up: into folders the user marked
+  read-only, and leaving `.bma-bash/` behind. With the option set the files go
+  to `ToolOutputDir/<short hash of the session>/` (0700, chowned to `RunAs`),
+  the answer names that path, the session's `read` tool may read its own
+  output files there, and `CloseSession` removes the directory. `tool.call`
+  bash writes no file. Without the option nothing changes.
+- **Go: `CoreOptions.Launch`, the Launch hook for bash tools.** It takes the
+  same `LaunchFunc` as `ProcessOptions.Launch` and runs once per bash tool
+  call before its command starts: a `tool.call` bash and the bash of a
+  `LocalToolRoute`, so `ACPAgent`'s own tools too. Before, those commands
+  started with `sh -lc` and skipped the host's admission check and sandbox
+  that `process.*` commands get; pass the same function to both options to
+  close that gap. The hook may change dir, argv and env, or refuse, as for a
+  process. `LaunchRequest` gains `Tool` (`"bash"`; `""` for `process.start`)
+  and `ToolCallID`; `ProcessID` is empty for a tool, and a `LocalToolRoute`
+  has no `Metadata` or `Client` (`AgentSessionID` is its session). A refusal
+  starts nothing: a `tool.call` fails with `<reason>: <message>`; a
+  `LocalToolRoute` call is `not_forwarded` with the reason as `Code`
+  (`spawn_failed` for a plain error) and is recorded like a result, so the
+  same call id gets the same answer, as behind the platform gateway. File
+  tools do not call the hook. Without the option nothing changes.
+
 ## 1.4.0
 
 - **Contract snapshot synced to beeos-managed-agents f872a540b (contract
