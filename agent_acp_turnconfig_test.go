@@ -126,6 +126,10 @@ func TestACPAgentRefusesInvalidModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer core.Close()
+	exe, err := os.Executable() // absolute on every OS; the options are refused before it would start
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, c := range map[string]struct {
 		profile string
 		models  []AgentModel
@@ -136,7 +140,7 @@ func TestACPAgentRefusesInvalidModels(t *testing.T) {
 		"default not offered": {"", []AgentModel{{ID: "m", ThinkingLevels: []string{"low"}, DefaultThinkingLevel: "high"}}},
 		"claude code":         {ACPProfileClaudeCode, []AgentModel{{ID: "m"}}},
 	} {
-		_, err := NewACPAgent(context.Background(), ACPAgentOptions{Profile: c.profile, Command: []string{"/bin/false"}, Core: core, StateDir: t.TempDir(),
+		_, err := NewACPAgent(context.Background(), ACPAgentOptions{Profile: c.profile, Command: []string{exe}, Core: core, StateDir: t.TempDir(),
 			Upstream: ACPModelUpstream{BaseURL: "http://127.0.0.1:1/v1"}, Models: c.models})
 		if err == nil || !strings.Contains(err.Error(), "Models") {
 			t.Fatalf("%s: %v", name, err)
