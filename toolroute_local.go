@@ -272,6 +272,25 @@ func acpEffectivePolicy(mode string, overrides map[string]string) map[string]str
 	return policy
 }
 
+// acpStricter is the stricter of two permissions: deny over ask over allow
+// (an empty one is no opinion).
+func acpStricter(a, b string) string {
+	rank := map[string]int{"": 0, "allow": 1, "ask": 2, "deny": 3}
+	if rank[b] > rank[a] {
+		return b
+	}
+	return a
+}
+
+// acpCapPolicy applies the host's ceiling (ACPAgentOptions.ToolPolicy) to a
+// turn's effective policy: no tool ends up looser than the ceiling.
+func acpCapPolicy(policy, ceiling map[string]string) map[string]string {
+	for tool, permission := range ceiling {
+		policy[tool] = acpStricter(policy[tool], permission)
+	}
+	return policy
+}
+
 // acpInputHash identifies a tool call's input (map keys are sorted by encoding/json).
 func acpInputHash(input map[string]any) string {
 	raw, _ := json.Marshal(input)
