@@ -17,7 +17,7 @@ export interface AgentCapability {
   interaction_kinds?: Array<InteractionKind>
   /** The executor resolves file input blocks (session file ids) itself. */
   file_inputs?: boolean
-  /** Concurrent agent sessions. turn.start for a new session beyond it answers -32009 executor_busy. */
+  /** Turns the executor runs at once. A turn.start while that many turns are running answers -32009 executor_busy (retryable). A session with no running turn holds no slot; an executor may release the local resources of its least recently used idle sessions and load them again from executor_session_ref on the next turn.start. */
   max_sessions?: number
   /** The executor keeps the state of its turns across a process restart. When it registers again without a session whose turn was running, the platform starts the same turn again in a new event epoch (turn.start with the same turn_id, input_id and executor_session_ref, then the turn.input the turn already received) and the executor continues the turn from its own state. Without it such a turn ends failed (session.error, session.status_idle retries_exhausted) and is not sent again: an executor without that state would run the turn again from its opening input and repeat tool calls whose effects already happened. */
   turn_resume?: boolean

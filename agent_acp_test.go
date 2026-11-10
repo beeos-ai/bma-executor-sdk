@@ -510,6 +510,20 @@ type fakeConn struct {
 	cancel   map[string]chan struct{}
 	models   map[string]map[string]any
 	nextCall int
+	// open: the sessions session/new or session/load opened and session/close
+	// did not close (BMA_ACP_FAKE_STRICT=1 refuses a prompt on any other).
+	open map[string]bool
+}
+
+// fakeLog appends one line to BMA_DSH_ACP_HOME/fake-calls.log: the session
+// lifecycle calls the fake agent got, for tests of eviction.
+func fakeLog(line string) {
+	f, err := os.OpenFile(filepath.Join(os.Getenv("BMA_DSH_ACP_HOME"), "fake-calls.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString(line + "\n")
 }
 
 func (c *fakeConn) send(v any) {
@@ -575,7 +589,7 @@ func (c *fakeConn) tool(session, callID, name string, input map[string]any) (str
 }
 
 func fakeACPAgent() {
-	c := &fakeConn{out: bufio.NewWriter(os.Stdout), waiting: map[int]chan json.RawMessage{}, cancel: map[string]chan struct{}{}, models: map[string]map[string]any{}}
+	c := &fakeConn{out: bufio.NewWriter(os.Stdout), waiting: map[int]chan json.RawMessage{}, cancel: map[string]chan struct{}{}, models: map[string]map[string]any{}, open: map[string]bool{}}
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 1<<20), 1<<24)
 	for in.Scan() {
@@ -670,9 +684,21 @@ func fakeHandle(c *fakeConn, method string, raw json.RawMessage) (any, map[strin
 		}
 		c.mu.Lock()
 		c.models[sid], _ = p.Meta.Bma["model"].(map[string]any)
+		c.open[sid] = true
 		c.mu.Unlock()
+		fakeLog(strings.TrimPrefix(method, "session/") + " " + sid)
 		return map[string]any{"sessionId": sid, "_meta": map[string]any{"bma": map[string]any{"toolCatalog": fakeTools}}}, nil
-	case "session/set_mode", "session/close":
+	case "session/set_mode":
+		return map[string]any{}, nil
+	case "session/close":
+		c.mu.Lock()
+		known := c.open[p.SessionID]
+		delete(c.open, p.SessionID)
+		c.mu.Unlock()
+		fakeLog("close " + p.SessionID)
+		if os.Getenv("BMA_ACP_FAKE_STRICT") == "1" && !known {
+			return nil, map[string]any{"code": -32002, "message": "Resource not found"}
+		}
 		return map[string]any{}, nil
 	case "session/prompt":
 		var block struct {
@@ -691,6 +717,23 @@ func fakeHandle(c *fakeConn, method string, raw json.RawMessage) (any, map[strin
 			}
 			c.message(p.SessionID, "m-effort", "message", fmt.Sprintf("effort=%v", p.Meta.Bma["reasoningEffort"]))
 			return map[string]any{"stopReason": "end_turn"}, nil
+		}
+		if os.Getenv("BMA_ACP_FAKE_STRICT") == "1" {
+			c.mu.Lock()
+			open := c.open[p.SessionID]
+			c.mu.Unlock()
+			if !open {
+				return nil, map[string]any{"code": -32002, "message": "Resource not found"}
+			}
+			// The durable transcript survives session/close, like DSH's session log.
+			var tr fakeTranscript
+			tr.load(p.SessionID)
+			if block.Text == "history" {
+				c.message(p.SessionID, "m-history", "message", strings.Join(tr.Inputs, ","))
+				return map[string]any{"stopReason": "end_turn"}, nil
+			}
+			tr.Inputs = append(tr.Inputs, block.Text)
+			tr.save(p.SessionID)
 		}
 		if strings.HasPrefix(block.Text, "resume") {
 			inputID, _ := p.Meta.Bma["inputId"].(string)

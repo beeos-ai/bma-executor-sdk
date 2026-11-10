@@ -1,6 +1,6 @@
 {
   "source_repository": "beeos-ai/beeos-managed-agents",
-  "source_commit": "10910dd9230342301d8b93722b10d992bb3e161a",
+  "source_commit": "9578b3a20f05a0479cec8646aa9fe8d524338b72",
   "protocols": [
     "bma.executor.v1",
     "bma.executor.v1.1"
@@ -8,9 +8,9 @@
   "contract_version": "1.4.0",
   "contract": {
     "contracts/bma/executor/examples/conformance.json": "14b9e093b8201f882d2f53c25a4a5561007c816269197b1b6fc12d43278b6c94",
-    "contracts/bma/executor/executor.asyncapi.yaml": "b792bac2cd69b0f67ef26d3bcc1f18f03ddf8f06492c464e65218d316445f02f",
-    "contracts/bma/executor/executor.openrpc.yaml": "ec9d1aed33de7c35262eb1be96d9f8eb1f6c25c3d241907cdb9d6a90e66cc1a1",
-    "contracts/bma/executor/schemas/agent.json": "7d2cc5442de87109d9435eb6f0bdf5de7046e58d4bb41a0da73d1db64abf60d7",
+    "contracts/bma/executor/executor.asyncapi.yaml": "290dbaba0d8307b058aa52e34fa76ba40f8b267f21bb22c6afec1d113a5b7d60",
+    "contracts/bma/executor/executor.openrpc.yaml": "30f1d72089fb2b28d528934b128df247ce520742faada88b2865a11ffa8b6b38",
+    "contracts/bma/executor/schemas/agent.json": "af6958d61438824e2082b51fe217c20f2d25ab9ce8dc51a64fb7eabd4c3a6569",
     "contracts/bma/executor/schemas/common.json": "ad01c086fb4df2b5122753ab9557c1ab8d987723e56e24ab8419b859ee434df8",
     "contracts/bma/executor/schemas/executor.json": "e6210f3ec1e11f72de2dfcde0413bce40fd4934f40a6b0882ba377c582e883dc",
     "contracts/bma/executor/schemas/file.json": "2299157f8960a8b3df170ec5c06b0d2c7d6870b937750b2bfccad343a00b45da",
@@ -23,8 +23,8 @@
     "contracts/bma/executor/schemas/workspace.json": "4e8d0ebbab963c9f7f179125a96cb2b89fa79c6a03e3899a1b94c14bed54f5c0"
   },
   "generated": {
-    "generated.go": "b1ec54daec78ab7e66d1d434e7f78d2cc3322a608f01640acdcd33ecc119dd07",
+    "generated.go": "3abedad1a8ea7c81fc9425c2010200995673841052fae0f5b9df67cf0b564e26",
     "python/src/bma_executor_sdk/generated.py": "45e7b54c567faa7052e7e25ebbd16ae2501a7e9185a97c324f4af3a3c1580d1b",
-    "typescript/src/generated/executor.ts": "8bb57e2deffeaad2e4b2527af41916e06dfd880b185d3f28fed22e5af2383b5d"
+    "typescript/src/generated/executor.ts": "02e76a6e8a6046f88a552417f7ae4a5d9795f03f1bd485d14c8320835700dab5"
   }
 }

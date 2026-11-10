@@ -1841,7 +1841,7 @@ components:
       name: turn.start
       title: turn.start
       summary: Start an agent turn.
-      description: Harness to executor request (capability agent). Opens the agent session on first use (no session.assign) or continues it; executor_session_ref from an earlier TurnStartResult lets the executor resume its local conversation after a restart. The executor answers as soon as the turn is accepted and reports progress with session.event. Idempotent by turn_id. A session with a running turn answers -32013 conflict (use turn.input); a new session beyond max_sessions answers -32009.
+      description: Harness to executor request (capability agent). Opens the agent session on first use (no session.assign) or continues it; executor_session_ref from an earlier TurnStartResult lets the executor resume its local conversation after a restart. The executor answers as soon as the turn is accepted and reports progress with session.event. Idempotent by turn_id. A session with a running turn answers -32013 conflict (use turn.input); a turn.start while max_sessions turns are running answers -32009 (an idle session holds no slot).
       contentType: application/json
       payload:
         type: object

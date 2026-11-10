@@ -75,6 +75,20 @@ func (b *acpBackground) add(sessionID string, p *acpBackgroundProc) {
 	b.procs[sessionID] = append(live, p)
 }
 
+// hasLive reports whether the session still has a command running.
+func (b *acpBackground) hasLive(sessionID string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, p := range b.procs[sessionID] {
+		select {
+		case <-p.done:
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 // killSession ends every command of the session and removes their output files.
 func (b *acpBackground) killSession(sessionID string) {
 	b.mu.Lock()

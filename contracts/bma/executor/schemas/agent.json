@@ -39,7 +39,7 @@
         "max_sessions": {
           "type": "integer",
           "minimum": 1,
-          "description": "Concurrent agent sessions. turn.start for a new session beyond it answers -32009 executor_busy."
+          "description": "Turns the executor runs at once. A turn.start while that many turns are running answers -32009 executor_busy (retryable). A session with no running turn holds no slot; an executor may release the local resources of its least recently used idle sessions and load them again from executor_session_ref on the next turn.start."
         },
         "turn_resume": {
           "type": "boolean",

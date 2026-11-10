@@ -1322,8 +1322,8 @@ methods:
       (no session.assign) or continues it; executor_session_ref from an earlier TurnStartResult lets
       the executor resume its local conversation after a restart. The executor answers as soon as the
       turn is accepted and reports progress with session.event. Idempotent by turn_id. A session
-      with a running turn answers -32013 conflict (use turn.input); a new session beyond
-      max_sessions answers -32009.
+      with a running turn answers -32013 conflict (use turn.input); a turn.start while
+      max_sessions turns are running answers -32009 (an idle session holds no slot).
     tags:
       - name: agent
     x-bma-direction: harness-to-executor
