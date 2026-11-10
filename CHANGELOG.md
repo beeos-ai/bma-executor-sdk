@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.5.0
+
+- **Go: a local DSH brain runs the model and thinking level the turn asks for
+  (`ACPAgentOptions.Models`).** The host lists the models a turn may choose
+  (contract `AgentModel`: `id`, `display_name`, `thinking_levels`,
+  `default_thinking_level`), for example the models the node owner's account
+  may use; they are the agent capability's `models`. A turn.start
+  `config.model` must be one of them, otherwise the turn is refused with
+  -32602 (never another model, as Claude Code refuses a model outside
+  `availableModels`), and the turn's model requests go upstream with that
+  model: `Upstream.Model` is now only the default of a turn that names none
+  (before, it replaced the model of every request, so a turn's choice never
+  took effect). `config.thinking_level` must be one of the model's levels
+  (the reasoning effort values `none, minimal, low, medium, high, xhigh, max`;
+  -32602 otherwise, a model without levels ignores it) and defaults to the
+  model's `default_thinking_level`; the agent sends it as the request's
+  `reasoning_effort` (prompt `_meta.bma.reasoningEffort`, bma-dsh-acp >= 0.2.1;
+  with an older agent the levels are not declared, so a turn naming one is
+  refused instead of running without it). `TurnStartResult.effective` reports
+  the model and level applied. Without `Models` nothing changes for a turn
+  that names no model; one that names a model or level now gets `effective`
+  with the host's model and no level (the contract: an executor that lists no
+  models ignores `config.model`), where before it echoed the requested model
+  while requests still went out with `Upstream.Model`. The Claude Code profile
+  refuses `Models` (it runs on the model its owner configured).
+- **examples/local-dsh: `-models` and `-allowed-root`.** `-models` takes the
+  JSON array of `AgentModel`; `-allowed-root` (repeatable, absolute) adds a
+  directory a turn's `config.cwd` may be in besides `-work-root` (for example
+  the folders a user picked as workspaces).
+- Contract snapshot: descriptions of `AgentTurnConfig.model`,
+  `thinking_level`, `permission_mode`, `AgentModel.thinking_levels` and
+  turn.start `metadata.tool_policy` (contract 1.4.0, no new members).
+
 ## 1.4.1
 
 - **Go: `PlatformToolRoute` renews a refused credential once and sends the
