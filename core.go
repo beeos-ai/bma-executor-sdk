@@ -123,6 +123,19 @@ type CoreOptions struct {
 	// the executor and do not call it (they stay within the session
 	// workspace). Nil starts commands as before.
 	Launch LaunchFunc
+	// FileAccess runs before every file tool (read, write, edit, glob, grep)
+	// of this machine: a tool.call and the tools of a LocalToolRoute (so also
+	// ACPAgent's). It gets the session, the tool, the operation (read or
+	// write) and the workspace-relative path, and refuses by returning an
+	// error: an *RPCError (NewReasonError) gives its data.reason as the
+	// refusal code, any other error permission_denied. A LocalToolRoute call
+	// is then not_forwarded with the code as Code, recorded like a result (the
+	// same call id is answered with it again); a tool.call fails with
+	// "<code>: <message>". Nothing is read or written when it refuses. A host
+	// uses it for read-only sessions, protected paths, revoked grants and
+	// stopped turns. The tools stay within the workspace with or without it.
+	// Nil allows every file tool call as before. See FileAccessRequest.
+	FileAccess FileAccessFunc
 	// ToolOutputDir, when set, holds the output files of the bash commands
 	// of a LocalToolRoute (so also ACPAgent's own tools):
 	// ToolOutputDir/<short hash of the session>/, created 0700 (owned by
@@ -766,6 +779,10 @@ func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams
 	case ToolNameRead, ToolNameWrite, ToolNameEdit, ToolNameGlob, ToolNameGrep:
 		if c.opts.RunAs != nil {
 			err = fmt.Errorf("tool %q is unavailable: this executor runs workloads as another OS user; use bash", params.Tool)
+			break
+		}
+		if err = c.checkFileAccess(ctx, session, sessionProcessContext(session).AgentSessionID, params.ToolCallID, params.Tool, input); err != nil {
+			err = refusalError(err)
 			break
 		}
 		result, err = c.fileTool(session, params.Tool, input)

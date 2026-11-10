@@ -2,6 +2,7 @@ package bmaexecutor
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -245,4 +246,106 @@ func (c *Core) grep(session *CoreSession, input ToolInput) (ToolResultParams, er
 		return ToolResultParams{}, err
 	}
 	return textResult(false, strings.Join(matches, "\n")), nil
+}
+
+// File operations a FileAccessFunc is asked about.
+const (
+	FileOperationRead  = "read"
+	FileOperationWrite = "write"
+)
+
+// FileAccessRequest is what CoreOptions.FileAccess is asked before a file
+// tool runs.
+type FileAccessRequest struct {
+	// SessionID is the executor's session id. AgentSessionID is the agent
+	// session: for a LocalToolRoute the same id, for a tool.call the
+	// session.assign metadata agent_session_id (empty when it has none).
+	SessionID, AgentSessionID string
+	// Tool is read, write, edit, glob or grep; ToolCallID the call.
+	Tool, ToolCallID string
+	// Operation is FileOperationRead or FileOperationWrite. read, glob and
+	// grep read; write writes; edit reads and writes, so the hook is called
+	// twice for it, read first. glob and grep are asked about their search
+	// directory, not about each file under it.
+	Operation string
+	// Path is the file or directory, relative to the session workspace,
+	// cleaned and slash-separated ("." is the workspace itself). A call whose
+	// path leaves the workspace fails without asking the hook.
+	Path string
+}
+
+// FileAccessFunc is CoreOptions.FileAccess.
+type FileAccessFunc func(ctx context.Context, req FileAccessRequest) error
+
+type fileAccessCheckedKey struct{}
+
+// fileAccessChecked marks a ctx whose call already passed FileAccess (the
+// LocalToolRoute asks before it records the call as started).
+func fileAccessChecked(ctx context.Context) context.Context {
+	return context.WithValue(ctx, fileAccessCheckedKey{}, true)
+}
+
+// checkFileAccess asks CoreOptions.FileAccess about a file tool call and
+// returns its first refusal. It does nothing without a hook, for another
+// tool, for a ctx already checked or for a path outside the workspace.
+func (c *Core) checkFileAccess(ctx context.Context, session *CoreSession, agentSessionID, callID, tool string, input ToolInput) error {
+	if c.opts.FileAccess == nil || ctx.Value(fileAccessCheckedKey{}) != nil {
+		return nil
+	}
+	var operations []string
+	switch tool {
+	case ToolNameRead, ToolNameGlob, ToolNameGrep:
+		operations = []string{FileOperationRead}
+	case ToolNameWrite:
+		operations = []string{FileOperationWrite}
+	case ToolNameEdit:
+		operations = []string{FileOperationRead, FileOperationWrite}
+	default:
+		return nil
+	}
+	rel, err := session.relPath(input.Path)
+	if err != nil {
+		return nil
+	}
+	for _, operation := range operations {
+		req := FileAccessRequest{SessionID: session.ID(), AgentSessionID: agentSessionID, Tool: tool, ToolCallID: callID,
+			Operation: operation, Path: filepath.ToSlash(rel)}
+		if err := c.opts.FileAccess(ctx, req); err != nil {
+			return &fileAccessError{err}
+		}
+	}
+	return nil
+}
+
+// fileAccessError is a FileAccess hook's refusal.
+type fileAccessError struct{ err error }
+
+func (e *fileAccessError) Error() string { return e.err.Error() }
+func (e *fileAccessError) Unwrap() error { return e.err }
+
+// fileAccessRefusal reports whether err is a FileAccess refusal, with the
+// code (data.reason, else permission_denied) and detail a tool result carries.
+func fileAccessRefusal(err error) (code, detail string, ok bool) {
+	var refusal *fileAccessError
+	if !errors.As(err, &refusal) {
+		return "", "", false
+	}
+	code, detail = "permission_denied", refusal.err.Error()
+	var rpcErr *RPCError
+	if errors.As(refusal.err, &rpcErr) {
+		detail = rpcErr.Message
+		if rpcErr.Data != nil && rpcErr.Data.Reason != "" {
+			code = rpcErr.Data.Reason
+		}
+	}
+	return code, detail, true
+}
+
+// refusalError turns a FileAccess refusal into the "<code>: <message>" error
+// a failed tool result carries.
+func refusalError(err error) error {
+	if code, detail, ok := fileAccessRefusal(err); ok {
+		return fmt.Errorf("%s: %s", code, detail)
+	}
+	return err
 }
