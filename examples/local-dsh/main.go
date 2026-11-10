@@ -32,6 +32,16 @@
 // that daemon here, on a private socket, for the executor's lifetime (an
 // embedding app such as a desktop app passes it, so macOS attributes the
 // Accessibility and Screen Recording grants to the app).
+// -models (DSH only) is the JSON array of models a turn may choose, in the
+// form of the contract's AgentModel: [{"id":"m","display_name":"M",
+// "thinking_levels":["none","low","high"],"default_thinking_level":"low"}];
+// turn.start config.model must be one of them (refused otherwise, never
+// substituted) and config.thinking_level one of that model's levels, sent to
+// the model as reasoning_effort. Without it every turn runs on -model and
+// config.model / config.thinking_level are ignored.
+// -allowed-root (repeatable, absolute) adds a directory a turn's config.cwd
+// may be in, besides -work-root (for example the folders the user picked as
+// workspaces); a cwd outside them is refused.
 // -ask-user-question offers ask_user_question: a question is a custom tool
 // call of the session, answered on any client (user.custom_tool_result), and
 // the same turn continues. Give it only when the clients answer custom tools.
@@ -81,6 +91,15 @@ func main() {
 	cuaDriver := flag.String("cua-driver", "", "absolute path of the cua-driver executable (computer use when its daemon runs)")
 	cuaServe := flag.Bool("cua-serve", false, "start `cua-driver serve --embedded` on a private socket for this executor's lifetime")
 	cuaSocket := flag.String("cua-socket", "", "the cua-driver daemon's socket (a host that runs `cua-driver serve --embedded --socket` passes it); default the driver's own")
+	modelsJSON := flag.String("models", "", "JSON array of the models a turn may choose (contract AgentModel: id, display_name, thinking_levels, default_thinking_level)")
+	var allowedRoots []string
+	flag.Func("allowed-root", "absolute directory a turn's cwd may be in, besides -work-root (repeatable)", func(v string) error {
+		if !filepath.IsAbs(v) {
+			return fmt.Errorf("-allowed-root %q must be absolute", v)
+		}
+		allowedRoots = append(allowedRoots, v)
+		return nil
+	})
 	lifeline := flag.Bool("stdin-lifeline", false, "exit when stdin closes (a supervising app passes a pipe, so its exit or crash stops this executor)")
 	flag.Parse()
 	token, key := os.Getenv("BMA_MACHINE_TOKEN"), os.Getenv("BMA_LOCAL_MODEL_KEY")
@@ -141,6 +160,14 @@ func main() {
 	agentOptions := bmaexecutor.ACPAgentOptions{
 		Profile: *profile, Command: command, StateDir: *state, Core: core, OnLog: logf, OnInteraction: onInteraction,
 		PlatformTools: *platformTools, AskUserQuestion: *askUser,
+	}
+	if len(allowedRoots) > 0 {
+		agentOptions.AllowedRoots = append([]string{*workRoot}, allowedRoots...)
+	}
+	if *modelsJSON != "" {
+		dec := json.NewDecoder(strings.NewReader(*modelsJSON))
+		dec.DisallowUnknownFields()
+		check(dec.Decode(&agentOptions.Models))
 	}
 	if claude {
 		for _, kv := range os.Environ() { // the owner's own credentials, for Claude Code only

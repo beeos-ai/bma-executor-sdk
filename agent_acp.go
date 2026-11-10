@@ -44,6 +44,7 @@ package bmaexecutor
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -105,6 +106,12 @@ const DefaultACPSystemPrompt = "You are an agent running on the user's computer 
 // acpPermissionModes are the session modes of bma-dsh-acp.
 var acpPermissionModes = []string{"default", "accept_edits"}
 
+// acpReasoningEfforts are the thinking levels a host may declare for a model
+// (AgentModel.ThinkingLevels): the reasoning effort values of the model APIs,
+// lowest first (OpenAI reasoning_effort; Claude Code effort levels are
+// low..max). bma-dsh-acp sends the level as the request's reasoning_effort.
+var acpReasoningEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+
 // ACP profiles: which agent the ACPAgent hosts.
 const (
 	// ACPProfileDSH is bma-dsh-acp (ADR-0027), the default.
@@ -120,7 +127,9 @@ const (
 type ACPModelUpstream struct {
 	// BaseURL ends in /v1; requests go to BaseURL + "/chat/completions".
 	BaseURL string
-	// Model replaces the model of each request when set.
+	// Model is the default model of a turn (ACPAgentOptions.Model defaults
+	// to it). A request goes upstream with the turn's model: this one, or the
+	// one of ACPAgentOptions.Models the turn chose.
 	Model string
 	// Header adds the credential (for example Authorization) to a forwarded request.
 	Header func(*http.Request)
@@ -201,6 +210,21 @@ type ACPAgentOptions struct {
 	HarnessID string
 	// Model is the model name the agent uses when the turn config has none (default Upstream.Model).
 	Model string
+	// Models are the models the host lets a turn choose (agent capability
+	// models), for example the models the node owner's account may use: a
+	// turn.start config.model must be one of their ids or the turn is refused
+	// (-32602, never another model), and the turn's model requests go
+	// upstream with that model. A model's ThinkingLevels are the reasoning
+	// effort values (acpReasoningEfforts: none, minimal, low, medium, high,
+	// xhigh, max) a turn may set with config.thinking_level, or
+	// DefaultThinkingLevel when it sets none; the agent sends the level as the
+	// request's reasoning_effort. An agent that does not take a reasoning
+	// effort (bma-dsh-acp before 0.2.1) gets no levels declared, so a turn
+	// naming one is refused rather than run without it. A model without
+	// levels ignores config.thinking_level. Empty: config.model and
+	// config.thinking_level are ignored (contract) and every turn runs on
+	// Model. The DSH profile only.
+	Models []AgentModel
 	// SystemPrompt is the base system prompt, with one %s for the working directory (default DefaultACPSystemPrompt).
 	SystemPrompt string
 	MaxSessions  int64
@@ -235,7 +259,10 @@ type ACPInteractionEvent struct {
 
 // ACPAgent hosts an ACP agent process; see the comment at the top of agent_acp.go.
 type ACPAgent struct {
-	opts    ACPAgentOptions
+	opts ACPAgentOptions
+	// models is the capability's models: opts.Models with the thinking levels
+	// the agent takes (see ACPAgentOptions.Models).
+	models  []AgentModel
 	proxy   *acpModelProxy
 	mcp     *acpToolServer // Claude Code profile: the platform tools as an MCP server
 	harness AgentHarnessCapability
@@ -359,6 +386,9 @@ type acpTurn struct {
 	// policy is the effective permission of each tool (see acpEffectivePolicy);
 	// the executor enforces it, whatever the agent does.
 	policy map[string]string
+	// effort is the turn's thinking level, sent with each prompt as
+	// _meta.bma.reasoningEffort ("" for none).
+	effort string
 
 	mu       sync.Mutex
 	messages map[string]string // messageId -> event id
@@ -399,6 +429,14 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 		}
 	}
 	opts.ToolPolicy = maps.Clone(opts.ToolPolicy)
+	models, err := acpCheckModels(opts.Models)
+	if err != nil {
+		return nil, err
+	}
+	if len(models) > 0 && opts.Profile == ACPProfileClaudeCode {
+		return nil, errors.New("bmaexecutor: ACPAgentOptions.Models is for the DSH profile; Claude Code uses the model its owner configured")
+	}
+	opts.Models = models
 	if opts.SessionFilesRoot != "" && !filepath.IsAbs(opts.SessionFilesRoot) {
 		return nil, fmt.Errorf("bmaexecutor: ACPAgentOptions.SessionFilesRoot must be an absolute path, got %q", opts.SessionFilesRoot)
 	}
@@ -481,6 +519,10 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 		Streaming: init.Meta.Bma.Streaming, PermissionRelay: init.Meta.Bma.PermissionRelay,
 		SessionLoad: init.AgentCapabilities.LoadSession, ImageInputs: false,
 	}
+	a.models = acpAgentModels(opts.Models, init.Meta.Bma.ReasoningEfforts)
+	if len(opts.Models) > 0 && len(init.Meta.Bma.ReasoningEfforts) == 0 && slices.ContainsFunc(opts.Models, func(m AgentModel) bool { return len(m.ThinkingLevels) > 0 }) {
+		a.log(LogWarn, "the agent takes no reasoning effort (bma-dsh-acp >= 0.2.1 does); the models are declared without thinking levels", nil)
+	}
 	return a, nil
 }
 
@@ -496,6 +538,7 @@ func (a *ACPAgent) Capability() AgentCapability {
 		// interrupted by an executor restart is not continued (ADR-0013: failed).
 		TurnResume:  !a.claude(),
 		MaxSessions: a.opts.MaxSessions, Harness: &h, Harnesses: []AgentHarnessCapability{a.harness},
+		Models: a.models,
 	}
 	if a.opts.PlatformModel {
 		c.PlatformCredentials = append(c.PlatformCredentials, PlatformCredentialHarnessModel)
@@ -577,12 +620,9 @@ func (a *ACPAgent) OpenTurn(ctx context.Context, params TurnStartParams) (TurnSt
 	if remote {
 		promptCwd = handsCwd
 	}
-	model := config.Model
-	if model == "" {
-		model = a.opts.Model
-	}
-	if a.claude() {
-		model = "" // Claude Code uses the model the node owner configured for it
+	model, level, err := a.turnModel(config)
+	if err != nil {
+		return TurnStartResult{}, err
 	}
 	// Opening the agent's session (session/new, which for Claude Code starts a
 	// Claude process) is not done here: turn.start is answered as soon as the
@@ -602,7 +642,7 @@ func (a *ACPAgent) OpenTurn(ctx context.Context, params TurnStartParams) (TurnSt
 	if mountNote != "" {
 		system = strings.TrimSpace(system + "\n\n" + mountNote)
 	}
-	s.plan = acpOpenPlan{params: params, cwd: cwd, promptCwd: promptCwd, model: model, mode: mode, system: system, hands: config.EnvironmentInfo}
+	s.plan = acpOpenPlan{params: params, cwd: cwd, promptCwd: promptCwd, model: model, effort: level, mode: mode, system: system, hands: config.EnvironmentInfo}
 	a.mu.Unlock()
 	if err := a.opts.Core.openLocal(acpBrain, params.SessionID, cwd); err != nil {
 		return TurnStartResult{}, err
@@ -624,7 +664,7 @@ func (a *ACPAgent) OpenTurn(ctx context.Context, params TurnStartParams) (TurnSt
 	}
 	return TurnStartResult{
 		Accepted: true, TurnID: params.TurnID, ExecutorSessionRef: ref, Resumed: resumed,
-		Effective: AgentTurnConfig{Model: model, PermissionMode: mode, Cwd: promptCwd, Harness: a.harness.ID},
+		Effective: AgentTurnConfig{Model: model, ThinkingLevel: level, PermissionMode: mode, Cwd: promptCwd, Harness: a.harness.ID},
 	}, nil
 }
 
@@ -643,7 +683,10 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 	if err != nil {
 		return err
 	}
-	route := a.route(turn)
+	a.mu.Lock()
+	plan := s.plan
+	a.mu.Unlock()
+	route := a.route(turn, plan.model)
 	if !a.claude() && route.baseURL == "" && route.platform == nil {
 		return errors.New("the platform handed no model credential for this turn (turn.start metadata model_base_url, model_token)")
 	}
@@ -667,7 +710,7 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 	a.mu.Unlock()
 	policy := acpCapPolicy(a.withHostTools(acpEffectivePolicy(mode, overrides)), a.opts.ToolPolicy)
 	a.mu.Lock()
-	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: policy,
+	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: policy, effort: plan.effort,
 		messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}, questions: map[string]string{}}
 	if remoteRoute != nil {
 		t.toolRoute = remoteRoute(ledger)
@@ -738,7 +781,7 @@ func (a *ACPAgent) runInput(ctx context.Context, proc *acpProcess, t *acpTurn, s
 	if t.ledger.inputDone(inputID) {
 		return nil
 	}
-	err := a.prompt(ctx, proc, sessionID, inputID, text, policy)
+	err := a.prompt(ctx, proc, sessionID, inputID, text, policy, t.effort)
 	if a.claude() {
 		t.flushMessages()
 		if violation := t.violationError(); violation != nil {
@@ -754,12 +797,15 @@ func (a *ACPAgent) runInput(ctx context.Context, proc *acpProcess, t *acpTurn, s
 	return t.ledger.markInputDone(inputID)
 }
 
-func (a *ACPAgent) prompt(ctx context.Context, proc *acpProcess, sessionID, inputID, text string, policy map[string]string) error {
+func (a *ACPAgent) prompt(ctx context.Context, proc *acpProcess, sessionID, inputID, text string, policy map[string]string, effort string) error {
 	params := map[string]any{"sessionId": sessionID, "prompt": []any{map[string]any{"type": "text", "text": text}}}
 	if !a.claude() {
 		meta := map[string]any{"inputId": inputID}
 		if len(policy) > 0 {
 			meta["toolPolicy"] = policy
+		}
+		if effort != "" {
+			meta["reasoningEffort"] = effort
 		}
 		params["_meta"] = map[string]any{acpMetaKey: meta}
 	}
@@ -880,8 +926,9 @@ func (a *ACPAgent) modelMeta(s *acpSession, model string, metadata map[string]st
 	return meta
 }
 
-// route is the platform's per-turn model endpoint when turn.start hands one, otherwise Upstream.
-func (a *ACPAgent) route(turn *AgentTurn) acpRoute {
+// route is the platform's per-turn model endpoint when turn.start hands one,
+// otherwise Upstream with the turn's model.
+func (a *ACPAgent) route(turn *AgentTurn, model string) acpRoute {
 	if a.claude() {
 		return acpRoute{} // the agent's model is the node owner's own; nothing is forwarded
 	}
@@ -892,7 +939,82 @@ func (a *ACPAgent) route(turn *AgentTurn) acpRoute {
 		return acpRoute{platform: &acpPlatformModel{agent: a, turn: turn, base: strings.TrimRight(base, "/"), token: token, expiresAt: expiresAt}}
 	}
 	u := a.opts.Upstream
-	return acpRoute{baseURL: strings.TrimRight(u.BaseURL, "/"), model: u.Model, header: u.Header}
+	return acpRoute{baseURL: strings.TrimRight(u.BaseURL, "/"), model: model, header: u.Header}
+}
+
+// turnModel is the model and thinking level of a turn (see
+// ACPAgentOptions.Models); "" for the Claude Code profile, which runs on the
+// model its owner configured.
+func (a *ACPAgent) turnModel(config AgentTurnConfig) (model, level string, err error) {
+	if a.claude() {
+		return "", "", nil
+	}
+	if len(a.models) == 0 {
+		return a.opts.Model, "", nil // the contract: no models declared, config.model is ignored
+	}
+	model = cmp.Or(config.Model, a.opts.Model)
+	i := slices.IndexFunc(a.models, func(m AgentModel) bool { return m.ID == model })
+	if i < 0 {
+		if config.Model == "" {
+			return model, "", nil // the host's default, not a choice of the turn
+		}
+		return "", "", &RPCError{Code: CodeInvalidParams, Message: "invalid params: model " + model + " is not one of this executor's models"}
+	}
+	m := a.models[i]
+	switch {
+	case len(m.ThinkingLevels) == 0:
+		return model, "", nil
+	case config.ThinkingLevel == "":
+		return model, m.DefaultThinkingLevel, nil
+	case !slices.Contains(m.ThinkingLevels, config.ThinkingLevel):
+		return "", "", &RPCError{Code: CodeInvalidParams, Message: "invalid params: thinking_level " + config.ThinkingLevel + " is not one the model " + model + " takes (" + strings.Join(m.ThinkingLevels, ", ") + ")"}
+	}
+	return model, config.ThinkingLevel, nil
+}
+
+// acpCheckModels validates ACPAgentOptions.Models and returns a copy.
+func acpCheckModels(models []AgentModel) ([]AgentModel, error) {
+	out := make([]AgentModel, 0, len(models))
+	for _, m := range models {
+		if m.ID == "" || slices.ContainsFunc(out, func(o AgentModel) bool { return o.ID == m.ID }) {
+			return nil, fmt.Errorf("bmaexecutor: ACPAgentOptions.Models: model ids must be set and distinct, got %q", m.ID)
+		}
+		for i, level := range m.ThinkingLevels {
+			if !slices.Contains(acpReasoningEfforts, level) || slices.Contains(m.ThinkingLevels[:i], level) {
+				return nil, fmt.Errorf("bmaexecutor: ACPAgentOptions.Models[%s].ThinkingLevels: %q must be one of %s, once", m.ID, level, strings.Join(acpReasoningEfforts, ", "))
+			}
+		}
+		if m.DefaultThinkingLevel != "" && !slices.Contains(m.ThinkingLevels, m.DefaultThinkingLevel) {
+			return nil, fmt.Errorf("bmaexecutor: ACPAgentOptions.Models[%s].DefaultThinkingLevel %q is not one of its ThinkingLevels", m.ID, m.DefaultThinkingLevel)
+		}
+		m.ThinkingLevels = slices.Clone(m.ThinkingLevels)
+		out = append(out, m)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+// acpAgentModels is the capability's models: the host's, keeping only the
+// thinking levels the agent takes (initialize _meta.bma.reasoningEfforts).
+func acpAgentModels(models []AgentModel, efforts []string) []AgentModel {
+	if len(models) == 0 {
+		return nil
+	}
+	out := make([]AgentModel, len(models))
+	for i, m := range models {
+		levels := slices.DeleteFunc(slices.Clone(m.ThinkingLevels), func(l string) bool { return !slices.Contains(efforts, l) })
+		m.ThinkingLevels = nil
+		if len(levels) > 0 {
+			m.ThinkingLevels = levels
+		}
+		if !slices.Contains(levels, m.DefaultThinkingLevel) {
+			m.DefaultThinkingLevel = ""
+		}
+		out[i] = m
+	}
+	return out
 }
 
 func (a *ACPAgent) turnCwd(sessionID, requested string) (string, error) {
@@ -1348,6 +1470,8 @@ type acpInitializeResponse struct {
 			HostTools       []string `json:"hostTools"`
 			Streaming       string   `json:"streaming"`
 			PermissionRelay string   `json:"permissionRelay"`
+			// ReasoningEfforts are the levels prompt _meta.bma.reasoningEffort takes (bma-dsh-acp >= 0.2.1).
+			ReasoningEfforts []string `json:"reasoningEfforts"`
 		} `json:"bma"`
 	} `json:"_meta"`
 }

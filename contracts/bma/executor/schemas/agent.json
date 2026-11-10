@@ -159,13 +159,14 @@
         },
         "thinking_levels": {
           "type": "array",
-          "description": "Thinking or reasoning-effort levels the model accepts, for example off, low, medium, high.",
+          "description": "Thinking or reasoning-effort levels the model accepts, lowest first. Use the reasoning effort values of the model APIs: none, minimal, low, medium, high, xhigh, max (OpenAI reasoning_effort; Claude Code effort levels are low, medium, high, xhigh, max). An executor that drives an OpenAI-compatible endpoint sends the level as reasoning_effort unchanged. Empty or absent: the model takes no level and AgentTurnConfig.thinking_level is not applied.",
           "items": {
             "type": "string"
           }
         },
         "default_thinking_level": {
-          "type": "string"
+          "type": "string",
+          "description": "Level applied when the turn names none; one of thinking_levels. Absent: no level is sent and the model uses its own default."
         }
       },
       "required": [
@@ -178,13 +179,16 @@
       "description": "Requested (turn.start) or effective (TurnStartResult.effective) turn configuration. Every member is optional in a request; the executor reports the values it actually applied.",
       "properties": {
         "model": {
-          "type": "string"
+          "type": "string",
+          "description": "Model the turn runs on. When the capability lists models it must be one of models[].id: an executor answers any other with -32602 invalid params and never substitutes another model. When the capability lists no models the executor picks its own model and ignores this member; effective then reports the model it used."
         },
         "thinking_level": {
-          "type": "string"
+          "type": "string",
+          "description": "Reasoning effort of the turn: one of the thinking_levels of the turn's model (AgentModel). Absent: the model's default_thinking_level, or none. A level the model does not list answers -32602 invalid params; for a model that lists no levels the member is ignored and effective omits it."
         },
         "permission_mode": {
-          "type": "string"
+          "type": "string",
+          "description": "One of the capability permission_modes. Absent: the executor's default mode. turn.start metadata tool_policy, when present, refines the permission of single tools on top of the mode."
         },
         "cwd": {
           "type": "string",
