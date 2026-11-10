@@ -137,6 +137,15 @@ type ACPModelUpstream struct {
 	Model string
 	// Header adds the credential (for example Authorization) to a forwarded request.
 	Header func(*http.Request)
+	// SessionHeader, when set, names a request header that every request
+	// forwarded to this endpoint carries, with the platform session id of the
+	// turn it belongs to (turn.start session_id) as its value, so the endpoint
+	// can account a request to its session. It is set before Header runs. The
+	// value never comes from the agent: a forwarded request is built anew and
+	// takes no such header from the agent's request. Requests that go to the
+	// platform's own model endpoint (turn.start metadata model_base_url) do
+	// not carry it.
+	SessionHeader string
 }
 
 // ACPAgentOptions configures NewACPAgent.
@@ -343,6 +352,8 @@ type acpRoute struct {
 	baseURL  string
 	model    string
 	header   func(*http.Request)
+	// sessionHeader is Upstream.SessionHeader; never set with platform.
+	sessionHeader string
 }
 
 // acpPlatformModel is the platform's model credential of one turn (turn.start
@@ -449,6 +460,9 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 		opts.Upstream = ACPModelUpstream{}
 	} else if opts.Upstream.BaseURL == "" && !opts.PlatformModel {
 		return nil, errors.New("bmaexecutor: ACPAgentOptions.Upstream.BaseURL is required unless PlatformModel is set")
+	}
+	if name := opts.Upstream.SessionHeader; name != "" && !acpHeaderName(name) {
+		return nil, fmt.Errorf("bmaexecutor: ACPAgentOptions.Upstream.SessionHeader %q is not an HTTP header name", name)
 	}
 	for tool, permission := range opts.ToolPolicy {
 		if tool == "" || (permission != "allow" && permission != "ask" && permission != "deny") {
@@ -1012,7 +1026,7 @@ func (a *ACPAgent) route(turn *AgentTurn, model string) acpRoute {
 		return acpRoute{platform: &acpPlatformModel{agent: a, turn: turn, base: strings.TrimRight(base, "/"), token: token, expiresAt: expiresAt}}
 	}
 	u := a.opts.Upstream
-	return acpRoute{baseURL: strings.TrimRight(u.BaseURL, "/"), model: model, header: u.Header}
+	return acpRoute{baseURL: strings.TrimRight(u.BaseURL, "/"), model: model, header: u.Header, sessionHeader: u.SessionHeader}
 }
 
 // turnModel is the model and thinking level of a turn (see
