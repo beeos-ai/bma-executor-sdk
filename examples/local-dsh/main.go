@@ -23,11 +23,25 @@
 // -platform-tools lets this machine be the brain of a session whose hands are
 // on another machine (platform credential brain_tools).
 //
+// -cua-driver names the Cua Driver executable (https://github.com/trycua/cua,
+// MIT): when its daemon runs in this user's desktop session, the local brain
+// gets computer_observe and computer_action (each call approved on the
+// platform by default); otherwise they are left out and a warning is logged.
+// -cua-socket names the daemon a host app started for itself
+// (`cua-driver serve --embedded --socket <path>`); -cua-serve instead starts
+// that daemon here, on a private socket, for the executor's lifetime (an
+// embedding app such as a desktop app passes it, so macOS attributes the
+// Accessibility and Screen Recording grants to the app).
+// -ask-user-question offers ask_user_question: a question is a custom tool
+// call of the session, answered on any client (user.custom_tool_result), and
+// the same turn continues. Give it only when the clients answer custom tools.
+//
 // Output is one JSON object per line on stderr (a supervisor such as a desktop
 // app reads it): "executor registered" with executor_id, connection log lines,
 // and "interaction requested" / "interaction ended" with the platform
-// interaction id, so a local UI can show the same approval card as every other
-// client of the session and drop it when it is answered anywhere.
+// interaction id and its kind (permission, or question for ask_user_question
+// with the custom tool call's event id), so a local UI can show the same card
+// as every other client of the session and drop it when it is answered anywhere.
 package main
 
 import (
@@ -39,6 +53,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -62,6 +77,10 @@ func main() {
 	labels := flag.String("labels", "", "comma separated executor labels (a-z 0-9 . _ -)")
 	remoteBrain := flag.Bool("remote-brain", false, "allow a brain on another machine to use this machine as its hands")
 	platformTools := flag.Bool("platform-tools", false, "may be the brain of a session whose hands are on another machine")
+	askUser := flag.Bool("ask-user-question", false, "offer ask_user_question (the session's clients answer custom tool calls)")
+	cuaDriver := flag.String("cua-driver", "", "absolute path of the cua-driver executable (computer use when its daemon runs)")
+	cuaServe := flag.Bool("cua-serve", false, "start `cua-driver serve --embedded` on a private socket for this executor's lifetime")
+	cuaSocket := flag.String("cua-socket", "", "the cua-driver daemon's socket (a host that runs `cua-driver serve --embedded --socket` passes it); default the driver's own")
 	lifeline := flag.Bool("stdin-lifeline", false, "exit when stdin closes (a supervising app passes a pipe, so its exit or crash stops this executor)")
 	flag.Parse()
 	token, key := os.Getenv("BMA_MACHINE_TOKEN"), os.Getenv("BMA_LOCAL_MODEL_KEY")
@@ -93,16 +112,35 @@ func main() {
 		emit(line)
 	}
 	onInteraction := func(e bmaexecutor.ACPInteractionEvent) {
-		emit(map[string]any{"level": "info", "msg": "interaction " + e.Phase, "interaction_id": e.InteractionID,
+		emit(map[string]any{"level": "info", "msg": "interaction " + e.Phase, "interaction_id": e.InteractionID, "kind": e.Kind,
 			"session_id": e.SessionID, "tool_name": e.ToolName, "tool_input": e.ToolInput, "outcome": e.Outcome})
 	}
 
-	core, err := bmaexecutor.NewCore(bmaexecutor.CoreOptions{WorkRoot: *workRoot, OnLog: logf})
+	coreOptions := bmaexecutor.CoreOptions{WorkRoot: *workRoot, OnLog: logf}
+	if *cuaDriver != "" {
+		if !filepath.IsAbs(*cuaDriver) {
+			log.Fatal("-cua-driver must be an absolute path")
+		}
+		if *cuaServe {
+			socket, stopDaemon, err := serveCuaDriver(ctx, *cuaDriver)
+			check(err)
+			cleanups = append(cleanups, stopDaemon)
+			defer stopDaemon()
+			*cuaSocket = socket
+		}
+		if driver, err := newCuaDriver(ctx, *cuaDriver, *cuaSocket, *cuaServe); err != nil {
+			emit(map[string]any{"level": "warn", "msg": "computer use unavailable", "error": err.Error()})
+		} else {
+			coreOptions.ComputerUse = driver
+			emit(map[string]any{"level": "info", "msg": "computer use available"})
+		}
+	}
+	core, err := bmaexecutor.NewCore(coreOptions)
 	check(err)
 	defer core.Close()
 	agentOptions := bmaexecutor.ACPAgentOptions{
 		Profile: *profile, Command: command, StateDir: *state, Core: core, OnLog: logf, OnInteraction: onInteraction,
-		PlatformTools: *platformTools,
+		PlatformTools: *platformTools, AskUserQuestion: *askUser,
 	}
 	if claude {
 		for _, kv := range os.Environ() { // the owner's own credentials, for Claude Code only
@@ -149,8 +187,14 @@ func emit(line map[string]any) {
 	_ = out.Encode(line)
 }
 
+// cleanups run before a fatal exit too (log.Fatal skips deferred calls).
+var cleanups []func()
+
 func check(err error) {
 	if err != nil {
+		for _, cleanup := range cleanups {
+			cleanup()
+		}
 		log.Fatal(err)
 	}
 }
@@ -163,4 +207,39 @@ func splitLabels(s string) []string {
 		}
 	}
 	return labels
+}
+
+// serveCuaDriver starts `cua-driver serve --embedded` on a private socket
+// and returns the socket and a stop function (the daemon also ends with this
+// process: it is in its process group's lifetime via exec.CommandContext).
+func serveCuaDriver(ctx context.Context, driver string) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "bma-cua-")
+	if err != nil {
+		return "", nil, err
+	}
+	socket := filepath.Join(dir, "s.sock")
+	cmd := exec.CommandContext(ctx, driver, "serve", "--embedded", "--socket", socket)
+	cmd.Env = append(os.Environ(), "CUA_TELEMETRY=0")
+	if err := cmd.Start(); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", nil, fmt.Errorf("start cua-driver serve: %w", err)
+	}
+	go func() { _ = cmd.Wait() }()
+	return socket, func() {
+		_ = cmd.Process.Kill()
+		_ = os.RemoveAll(dir)
+	}, nil
+}
+
+// newCuaDriver checks the driver; a daemon this process just started gets up
+// to 15 s to come up.
+func newCuaDriver(ctx context.Context, path, socket string, started bool) (*bmaexecutor.CuaDriver, error) {
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		driver, err := bmaexecutor.NewCuaDriver(ctx, bmaexecutor.CuaDriverOptions{Path: path, Socket: socket})
+		if err == nil || !started || time.Now().After(deadline) || ctx.Err() != nil {
+			return driver, err
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }

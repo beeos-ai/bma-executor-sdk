@@ -119,7 +119,7 @@ func (a *ACPAgent) doOpen(ctx context.Context, s *acpSession, plan acpOpenPlan) 
 		if err != nil {
 			return acpOpenError(proc, "agent session", err)
 		}
-		if violation := acpCatalogViolation(res.Meta.Bma.ToolCatalog); violation != "" {
+		if violation := a.catalogViolation(res.Meta.Bma.ToolCatalog); violation != "" {
 			return &AgentError{Code: AgentErrorCodeAgentProtocolError, Message: violation}
 		}
 		a.mu.Lock()

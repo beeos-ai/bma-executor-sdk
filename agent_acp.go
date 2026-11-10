@@ -164,6 +164,12 @@ type ACPAgentOptions struct {
 	// there, never to this machine's Core (fail closed). A turn without
 	// tools_mcp_* runs its tools here.
 	PlatformTools bool
+	// AskUserQuestion offers the DSH agent the ask_user_question tool (see
+	// agent_acp_host_tools.go): a question is a custom tool call of the session
+	// (capability custom_tools), so turn it on only when the session's clients
+	// answer custom tool calls (user.custom_tool_result); a client that does not
+	// leaves the session waiting.
+	AskUserQuestion bool
 	// DisablePrewarm turns off the background prewarm of the Claude Code
 	// profile (see WaitPrewarm); the DSH profile has none.
 	DisablePrewarm bool
@@ -188,7 +194,11 @@ type ACPAgentOptions struct {
 // ACPInteractionEvent is one step of a platform interaction asked by the local agent.
 type ACPInteractionEvent struct {
 	// Phase is "requested" or "ended".
-	Phase         string
+	Phase string
+	// Kind is InteractionKindPermission (an approval; InteractionID is the
+	// platform interaction) or InteractionKindQuestion (ask_user_question;
+	// InteractionID is the agent.custom_tool_use event id the session waits on).
+	Kind          string
 	SessionID     string
 	InteractionID string
 	ToolName      string
@@ -211,6 +221,8 @@ type ACPAgent struct {
 	proc     *acpProcess
 	sessions map[string]*acpSession
 	closed   bool
+	// accepted are the host tools the running agent took (agent_acp_host_tools.go).
+	accepted []string
 
 	// hook, set by tests only, runs at named points of tool execution; it
 	// may block until ctx ends to stand in for a crash there.
@@ -328,6 +340,8 @@ type acpTurn struct {
 	messages map[string]string // messageId -> event id
 	index    map[string]int64  // event id -> next delta index
 	tools    map[string]string // toolCallId -> agent.tool_use event id
+	// questions maps an ask_user_question toolCallId to its agent.custom_tool_use event id.
+	questions map[string]string
 }
 
 // NewACPAgent starts the agent process, checks it (ACP initialize, the six
@@ -443,6 +457,8 @@ func (a *ACPAgent) Capability() AgentCapability {
 	h := a.harness
 	c := AgentCapability{
 		Enabled: true, PermissionModes: acpPermissionModes, InteractionKinds: []string{InteractionKindPermission},
+		// ask_user_question is a custom tool call of the session (agent_acp_host_tools.go).
+		CustomTools: a.opts.AskUserQuestion && !a.claude(),
 		// Claude Code repeats a re-sent prompt as a new user message, so a turn
 		// interrupted by an executor restart is not continued (ADR-0013: failed).
 		TurnResume:  !a.claude(),
@@ -604,8 +620,12 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 		}
 	}
 	a.mu.Lock()
-	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: acpEffectivePolicy(s.mode, overrides),
-		messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}}
+	mode := s.mode
+	a.mu.Unlock()
+	policy := a.withHostTools(acpEffectivePolicy(mode, overrides))
+	a.mu.Lock()
+	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: policy,
+		messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}, questions: map[string]string{}}
 	if remoteRoute != nil {
 		t.toolRoute = remoteRoute(ledger)
 	} else {
@@ -626,15 +646,14 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 		}
 		a.mu.Unlock()
 	}()
-	policy := overrides
-	if err := a.runInput(ctx, proc, t, s.wire(), params.InputID, inputText(params.Input), policy); err != nil {
+	if err := a.runInput(ctx, proc, t, s.wire(), params.InputID, inputText(params.Input), overrides); err != nil {
 		return err
 	}
 	// turn.input received while the turn ran: prompted in order, in the same turn.
 	for {
 		select {
 		case input := <-turn.Inputs():
-			if err := a.runInput(ctx, proc, t, s.wire(), input.InputID, inputText(input.Input), policy); err != nil {
+			if err := a.runInput(ctx, proc, t, s.wire(), input.InputID, inputText(input.Input), overrides); err != nil {
 				return err
 			}
 		default:
@@ -871,8 +890,23 @@ func (a *ACPAgent) turnFor(proc *acpProcess, wireID string) *acpTurn {
 
 func (a *ACPAgent) claude() bool { return a.opts.Profile == ACPProfileClaudeCode }
 
+// catalogViolation checks a session's tool catalog is exactly the platform
+// tools and the declared host tools.
+func (a *ACPAgent) catalogViolation(catalog []string) string {
+	var want []string
+	for name := range a.toolNames() {
+		want = append(want, name)
+	}
+	sort.Strings(want)
+	return acpToolsViolation(want, catalog)
+}
+
 func acpCatalogViolation(catalog []string) string {
 	want := []string{ToolNameBash, ToolNameEdit, ToolNameGlob, ToolNameGrep, ToolNameRead, ToolNameWrite}
+	return acpToolsViolation(want, catalog)
+}
+
+func acpToolsViolation(want, catalog []string) string {
 	got := append([]string(nil), catalog...)
 	sort.Strings(got)
 	if strings.Join(got, ",") != strings.Join(want, ",") {
@@ -1040,10 +1074,21 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 			return nil, &RPCError{Code: CodeInvalidParams, Message: err.Error()}
 		}
 		result := refused("stale_turn", "no turn of this session is running in this agent process")
-		if t != nil {
+		switch {
+		case t == nil:
+		case p.Name == ToolNameAskUserQuestion && !a.claude():
+			result = refused("permission_denied", "the ask_user_question tool is not allowed in this session")
+			if t.policyOf(p.Name) != "deny" {
+				result = t.askUser(ctx, p.ToolCallID, p.Input)
+			}
+		default:
 			result = t.toolRoute.Call(ctx, RouteCall{ID: p.ToolCallID, Name: p.Name, Input: p.Input})
 		}
-		return map[string]any{"text": result.Text, "isError": result.IsError, "outcome": result.Outcome, "errorCode": result.Code}, nil
+		response := map[string]any{"text": result.Text, "isError": result.IsError, "outcome": result.Outcome, "errorCode": result.Code}
+		if images := acpImages(result.Images); len(images) > 0 {
+			response["images"] = images
+		}
+		return response, nil
 	}
 	return nil, &RPCError{Code: CodeMethodNotFound, Message: "method not found: " + method}
 }
@@ -1109,6 +1154,9 @@ func (t *acpTurn) update(u acpUpdate) {
 		name := u.Meta.Bma.Name
 		if name == "" {
 			name = u.Title
+		}
+		if name == ToolNameAskUserQuestion {
+			return // its agent.custom_tool_use is the call's event (askUser)
 		}
 		permission := u.Meta.Bma.Permission
 		if permission == "" {
@@ -1235,6 +1283,7 @@ type acpInitializeResponse struct {
 		Bma struct {
 			DSH             string   `json:"dsh"`
 			Tools           []string `json:"tools"`
+			HostTools       []string `json:"hostTools"`
 			Streaming       string   `json:"streaming"`
 			PermissionRelay string   `json:"permissionRelay"`
 		} `json:"bma"`
@@ -1287,6 +1336,7 @@ func (a *ACPAgent) ensureProcess(ctx context.Context) (*acpProcess, error) {
 		return a.proc, nil
 	}
 	a.proc = proc
+	a.accepted = proc.init.Meta.Bma.HostTools
 	return proc, nil
 }
 
@@ -1350,8 +1400,11 @@ func (a *ACPAgent) startProcess(ctx context.Context) (*acpProcess, error) {
 	}()
 	initCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if err := p.call(initCtx, "initialize", map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{},
-		"clientInfo": map[string]any{"name": "bma-executor-sdk"}}, &p.init); err != nil {
+	initialize := map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{}, "clientInfo": map[string]any{"name": "bma-executor-sdk"}}
+	if meta := a.initializeMeta(); meta != nil {
+		initialize["_meta"] = meta
+	}
+	if err := p.call(initCtx, "initialize", initialize, &p.init); err != nil {
 		p.kill(a.opts.KillGrace)
 		return nil, fmt.Errorf("agent initialize: %w (stderr: %s)", err, p.stderr.String())
 	}
@@ -1366,7 +1419,11 @@ func (a *ACPAgent) startProcess(ctx context.Context) (*acpProcess, error) {
 		}
 		return p, nil
 	}
-	if violation := acpCatalogViolation(p.init.Meta.Bma.Tools); violation != "" {
+	violation := acpCatalogViolation(p.init.Meta.Bma.Tools)
+	if violation == "" {
+		violation = a.hostToolsViolation(p.init.Meta.Bma.HostTools)
+	}
+	if violation != "" {
 		p.kill(a.opts.KillGrace)
 		return nil, errors.New(violation)
 	}
