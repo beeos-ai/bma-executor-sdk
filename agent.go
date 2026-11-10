@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,8 @@ const (
 	agentInputBuffer    = 16
 	agentResendDelay    = 200 * time.Millisecond
 	agentCloseFlushWait = 30 * time.Second
+	// agentSuspendWait bounds one SuspendSession; a turn.start waits for it.
+	agentSuspendWait = 5 * time.Second
 )
 
 // AgentError is an error of RunTurn that names its cause with one of the
@@ -57,6 +60,34 @@ type AgentHandler interface {
 	CloseSession(ctx context.Context, sessionID, reason string) error
 }
 
+// AgentSessionSuspender is an optional extension of AgentHandler for a handler
+// that holds local resources per session (a process, a conversation in memory,
+// a Core session). The SDK counts two things apart:
+//
+//   - running turns, bounded by AgentCapability.MaxSessions: a turn.start that
+//     would exceed it answers executor_busy, and the slot is free again when
+//     the turn ends;
+//   - resident sessions, bounded by MaxResidentSessions: sessions whose
+//     resources are held, running or idle. A session with no running turn
+//     costs no slot; it only keeps its resources until it is the least
+//     recently used idle one when the limit is passed.
+//
+// Past the limit the SDK calls SuspendSession for the least recently used idle
+// session before it opens the next turn. A suspended session is not ended: the
+// platform still has it, its events keep their numbering, and its next
+// turn.start goes to OpenTurn like any other, where the handler loads the
+// conversation again (turn.start carries the executor_session_ref). Without
+// this extension resident sessions are not bounded.
+type AgentSessionSuspender interface {
+	// MaxResidentSessions is the limit; 0 means unbounded.
+	MaxResidentSessions() int
+	// SuspendSession releases the resources of an idle session and keeps its
+	// conversation so that a later OpenTurn can continue it. It must be safe
+	// for a session the handler no longer has. An error keeps the session
+	// resident; the SDK then suspends the next candidate.
+	SuspendSession(ctx context.Context, sessionID string) error
+}
+
 // ServeAgent advertises the agent capability and routes the agent methods to
 // handler. Call it before Start.
 func (c *Client) ServeAgent(handler AgentHandler, capability AgentCapability) {
@@ -90,6 +121,9 @@ type agentRuntime struct {
 
 	mu       sync.Mutex
 	sessions map[string]*agentSession
+	// active counts the turns holding a slot (AgentCapability.MaxSessions):
+	// reserved by turn.start, released when the turn ends or is refused.
+	active atomic.Int64
 }
 
 // agentSession is one platform session on this executor: its outbox of
@@ -98,17 +132,24 @@ type agentSession struct {
 	runtime *agentRuntime
 	id      string
 
-	mu       sync.Mutex
-	nextSeq  int64
-	nextID   uint64
-	outbox   []agentOutboxEvent
-	wake     chan struct{}
-	drained  chan struct{} // closed while the outbox is empty
-	closed   bool
-	turn     *AgentTurn
-	results  map[string]TurnStartResult // by turn_id, for idempotent turn.start
-	pending  map[string]chan InteractionResponseParams
-	answered map[string]bool
+	mu      sync.Mutex
+	nextSeq int64
+	nextID  uint64
+	outbox  []agentOutboxEvent
+	wake    chan struct{}
+	drained chan struct{} // closed while the outbox is empty
+	closed  bool
+	turn    *AgentTurn
+	// lastUsed orders idle sessions for suspension (least recent first).
+	lastUsed time.Time
+	// suspended: the handler released the session's resources (SuspendSession);
+	// the next turn.start loads them again. suspending is non-nil, and closed
+	// when done, while SuspendSession runs.
+	suspended  bool
+	suspending chan struct{}
+	results    map[string]TurnStartResult // by turn_id, for idempotent turn.start
+	pending    map[string]chan InteractionResponseParams
+	answered   map[string]bool
 	// customTools: waiters by tool_use_id; customDone: ids no longer waited on.
 	customTools map[string]chan AgentCustomToolResultParams
 	customDone  map[string]bool
@@ -405,13 +446,10 @@ func (r *agentRuntime) session(id string, create bool) (*agentSession, error) {
 	if !create {
 		return nil, nil
 	}
-	if max := r.capability.MaxSessions; max > 0 && int64(len(r.sessions)) >= max {
-		return nil, &RPCError{Code: CodeExecutorBusy, Message: "executor_busy"}
-	}
 	drained := make(chan struct{})
 	close(drained)
 	s := &agentSession{
-		runtime: r, id: id, nextSeq: 1, wake: make(chan struct{}, 1), drained: drained,
+		runtime: r, id: id, nextSeq: 1, lastUsed: time.Now(), wake: make(chan struct{}, 1), drained: drained,
 		results: map[string]TurnStartResult{}, pending: map[string]chan InteractionResponseParams{}, answered: map[string]bool{},
 		customTools: map[string]chan AgentCustomToolResultParams{}, customDone: map[string]bool{},
 	}
@@ -428,26 +466,70 @@ func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (T
 	if params.SessionID == "" || params.TurnID == "" || len(params.Input) == 0 {
 		return TurnStartResult{}, &RPCError{Code: CodeInvalidParams, Message: "session_id, turn_id and input are required"}
 	}
+	// A turn.start of a turn the session already knows is answered as before,
+	// slot or no slot.
+	if existing, _ := r.session(params.SessionID, false); existing != nil {
+		existing.mu.Lock()
+		result, known := existing.results[params.TurnID]
+		running := existing.turn != nil
+		existing.mu.Unlock()
+		if known {
+			return result, nil
+		}
+		if running {
+			return TurnStartResult{}, &RPCError{Code: CodeConflict, Message: "a turn is already running; use turn.input"}
+		}
+	}
+	// One slot per running turn (MaxSessions); an idle session holds none.
+	if !r.acquireSlot() {
+		return TurnStartResult{}, &RPCError{Code: CodeExecutorBusy, Message: "executor_busy"}
+	}
+	slot := true
+	defer func() {
+		if slot {
+			r.active.Add(-1)
+		}
+	}()
 	s, err := r.session(params.SessionID, true)
 	if err != nil {
 		return TurnStartResult{}, err
-	}
-	s.mu.Lock()
-	if result, ok := s.results[params.TurnID]; ok {
-		s.mu.Unlock()
-		return result, nil
-	}
-	if s.turn != nil {
-		s.mu.Unlock()
-		return TurnStartResult{}, &RPCError{Code: CodeConflict, Message: "a turn is already running; use turn.input"}
 	}
 	turnCtx, cancel := context.WithCancel(r.client.rootCtx)
 	if params.DeadlineMS > 0 {
 		turnCtx, cancel = context.WithTimeout(r.client.rootCtx, time.Duration(params.DeadlineMS)*time.Millisecond)
 	}
 	turn := &AgentTurn{session: s, params: params, inputs: make(chan TurnInputParams, agentInputBuffer), seen: map[string]bool{params.InputID: true}, cancel: cancel, done: make(chan struct{})}
+	for {
+		s.mu.Lock()
+		if done := s.suspending; done != nil {
+			// The session is being suspended: open it only after that ended.
+			s.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				cancel()
+				return TurnStartResult{}, ctx.Err()
+			}
+		}
+		break
+	}
+	if result, ok := s.results[params.TurnID]; ok {
+		s.mu.Unlock()
+		cancel()
+		return result, nil
+	}
+	if s.turn != nil {
+		s.mu.Unlock()
+		cancel()
+		return TurnStartResult{}, &RPCError{Code: CodeConflict, Message: "a turn is already running; use turn.input"}
+	}
 	s.turn = turn // reserve the session before OpenTurn
+	s.suspended = false
+	s.lastUsed = time.Now()
 	s.mu.Unlock()
+	slot = false // the turn owns it now, see finishTurn
+	r.suspendSurplus(ctx, s)
 
 	result, err := r.handler.OpenTurn(ctx, params)
 	if err == nil && !result.Accepted {
@@ -455,8 +537,8 @@ func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (T
 	}
 	s.mu.Lock()
 	if err != nil {
-		s.turn = nil
 		s.mu.Unlock()
+		s.finishTurn(turn)
 		cancel()
 		return TurnStartResult{}, err
 	}
@@ -465,6 +547,120 @@ func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (T
 	s.mu.Unlock()
 	go r.runTurn(turnCtx, turn)
 	return result, nil
+}
+
+// acquireSlot reserves one running-turn slot; false when MaxSessions turns run.
+func (r *agentRuntime) acquireSlot() bool {
+	max := int64(r.capability.MaxSessions)
+	for {
+		current := r.active.Load()
+		if max > 0 && current >= max {
+			return false
+		}
+		if r.active.CompareAndSwap(current, current+1) {
+			return true
+		}
+	}
+}
+
+// finishTurn ends the session's running turn (if turn still is it): the
+// session is idle, most recently used now, and the turn's slot is free.
+func (s *agentSession) finishTurn(turn *AgentTurn) {
+	s.mu.Lock()
+	owned := s.turn == turn
+	if owned {
+		s.turn = nil
+		s.lastUsed = time.Now()
+	}
+	s.mu.Unlock()
+	if owned {
+		s.runtime.active.Add(-1)
+	}
+}
+
+// suspendSurplus suspends the least recently used idle sessions until at most
+// MaxResidentSessions are resident, never keep (the session about to run) and
+// never one with a running turn; a candidate's unacknowledged events are
+// settled first.
+// A session whose suspension fails stays resident, so the limit is soft: it
+// can be passed when nothing else is idle.
+func (r *agentRuntime) suspendSurplus(ctx context.Context, keep *agentSession) {
+	suspender, ok := r.handler.(AgentSessionSuspender)
+	if !ok {
+		return
+	}
+	limit := suspender.MaxResidentSessions()
+	if limit <= 0 {
+		return
+	}
+	failed := map[*agentSession]bool{}
+	for {
+		victim := r.claimVictim(limit, keep, failed)
+		if victim == nil {
+			return
+		}
+		suspendCtx, cancel := context.WithTimeout(ctx, agentSuspendWait)
+		// Its last events may still be unacknowledged: their callbacks use the
+		// handler's state, so they are settled before that is released.
+		err := victim.flush(suspendCtx)
+		if err == nil {
+			err = suspender.SuspendSession(suspendCtx, victim.id)
+		}
+		cancel()
+		victim.mu.Lock()
+		done := victim.suspending
+		victim.suspending = nil
+		victim.suspended = err == nil
+		victim.mu.Unlock()
+		close(done)
+		if err != nil {
+			failed[victim] = true
+			r.client.log(LogWarn, "suspending idle session "+victim.id+" failed; it stays resident", err)
+		}
+	}
+}
+
+// claimVictim marks the least recently used idle resident session as being
+// suspended and returns it, or nil when the resident sessions are within limit
+// or none can be suspended. Sessions being suspended already do not count.
+func (r *agentRuntime) claimVictim(limit int, keep *agentSession, failed map[*agentSession]bool) *agentSession {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	resident := 0
+	var candidates []*agentSession
+	for _, s := range r.sessions {
+		s.mu.Lock()
+		if !s.suspended && s.suspending == nil && !s.closed {
+			resident++
+			if s != keep && s.turn == nil && !failed[s] {
+				candidates = append(candidates, s)
+			}
+		}
+		s.mu.Unlock()
+	}
+	if resident <= limit {
+		return nil
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		candidates[i].mu.Lock()
+		a := candidates[i].lastUsed
+		candidates[i].mu.Unlock()
+		candidates[j].mu.Lock()
+		b := candidates[j].lastUsed
+		candidates[j].mu.Unlock()
+		return a.Before(b)
+	})
+	for _, s := range candidates {
+		s.mu.Lock()
+		// Check again: a turn.start may have taken it since the scan.
+		if !s.suspended && s.suspending == nil && !s.closed && s.turn == nil {
+			s.suspending = make(chan struct{})
+			s.mu.Unlock()
+			return s
+		}
+		s.mu.Unlock()
+	}
+	return nil
 }
 
 func (r *agentRuntime) runTurn(ctx context.Context, turn *AgentTurn) {
@@ -493,11 +689,7 @@ func (r *agentRuntime) runTurn(ctx context.Context, turn *AgentTurn) {
 	_ = s.enqueue(turnID, turn.NewEventID(), SessionStatusIdleEvent{
 		Type: AgentEventTypeSessionStatusIdle, StopReason: StopReason{Type: StopReasonTypeEndTurn}, TurnOutcome: outcome,
 	})
-	s.mu.Lock()
-	if s.turn == turn {
-		s.turn = nil
-	}
-	s.mu.Unlock()
+	s.finishTurn(turn)
 }
 
 func (r *agentRuntime) turnInput(_ context.Context, params TurnInputParams) (Ack, error) {
@@ -546,8 +738,15 @@ func (r *agentRuntime) sessionClose(ctx context.Context, params SessionClosePara
 		return SessionCloseResult{Closed: false}, nil
 	}
 	s.mu.Lock()
-	turn := s.turn
+	turn, suspending := s.turn, s.suspending
 	s.mu.Unlock()
+	if suspending != nil {
+		select {
+		case <-suspending:
+		case <-ctx.Done():
+			return SessionCloseResult{}, ctx.Err()
+		}
+	}
 	if turn != nil {
 		turn.cancel()
 		<-turn.done

@@ -37,6 +37,7 @@ This chapter is the wire contract an integrator implements or relies on. Names a
 ```
 
 - The platform sends agent methods only to v1.1 executors with `agent.enabled=true`; otherwise the executor answers `-32012`.
+- `max_sessions` bounds the turns running at once. A session whose turn is over keeps its conversation but no slot, so an executor serves any number of sessions one after another. An executor that keeps local resources per session may release those of the least recently used idle session (it still has `executor_session_ref`); the platform notices nothing: the session stays alive, its events keep their numbering, and its next `turn.start` carries the `executor_session_ref` to load it again.
 - `permission_modes` values are defined by the executor; the platform sends back one of them.
 - Identity: the computer's machine identity (option A: bmad advertises it once the local brain attaches; option B: the desktop app). No separate identity.
 
@@ -71,7 +72,7 @@ Result `TurnStartResult{accepted, turn_id, executor_session_ref, resumed, effect
 
 - Mapping: one platform session ↔ one local conversation; turns use the platform `turn_id` / `input_id`.
 - Repeating a `turn_id` returns the first result; nothing runs twice.
-- A running turn → `-32013` (use `turn.input`); a new session beyond `max_sessions` → `-32009`; `cwd` outside allowed roots → `-32001`.
+- A running turn → `-32013` (use `turn.input`); a `turn.start` while `max_sessions` turns are running → `-32009` (retryable; an idle session holds no slot, only a running turn does); `cwd` outside allowed roots → `-32001`.
 - Files are `file_id` references downloaded through the files API; no bytes on the control channel.
 - `deadline_ms` expiry: `session.error{error:{type:"timeout"}}` + `session.status_idle turn_outcome:"failed"`.
 

@@ -113,6 +113,18 @@ func (s *localState) ledger(path, sessionID string) (*acpLedger, error) {
 	return l, nil
 }
 
+// forgetLedgers drops the in-memory turn state of a session and keeps its file,
+// so the ledger is read again when the session's next turn opens.
+func (s *localState) forgetLedgers(sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for path, l := range s.ledgers {
+		if l.sessionID() == sessionID {
+			delete(s.ledgers, path)
+		}
+	}
+}
+
 // dropLedgers removes the turn state of a session from memory and disk.
 func (s *localState) dropLedgers(sessionID string) {
 	s.mu.Lock()

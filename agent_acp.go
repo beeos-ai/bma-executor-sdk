@@ -72,6 +72,10 @@ const (
 	DefaultACPKillGrace = 3 * time.Second
 	// DefaultACPMaxSessions bounds the agent sessions of one ACPAgent.
 	DefaultACPMaxSessions = 8
+	// DefaultACPResidentSessions is the share of the Core's MaxSessions (in
+	// percent) that resident sessions may use by default; the rest stays for
+	// sessions assigned to the Core as hands.
+	DefaultACPResidentSessions = 75
 
 	acpBrain   = "acp"
 	acpMetaKey = "bma"
@@ -203,10 +207,21 @@ type ACPAgentOptions struct {
 	Model string
 	// SystemPrompt is the base system prompt, with one %s for the working directory (default DefaultACPSystemPrompt).
 	SystemPrompt string
-	MaxSessions  int64
-	CancelGrace  time.Duration
-	KillGrace    time.Duration
-	OnLog        func(LogEvent)
+	// MaxSessions bounds the turns running at once (default
+	// DefaultACPMaxSessions): a turn.start past it answers executor_busy, and an
+	// idle session holds no slot.
+	MaxSessions int64
+	// MaxResidentSessions bounds the sessions whose agent session and Core
+	// session are held, running or idle (default DefaultACPResidentSessions of the
+	// Core's capacity, at least MaxSessions; it must not exceed the Core's
+	// MaxSessions). Past it the least recently used idle session is suspended
+	// (ACP session/close; the agent keeps its conversation) and loaded again by
+	// its next turn (session/load with the executor_session_ref). A session with
+	// a bash command left running is not suspended.
+	MaxResidentSessions int
+	CancelGrace         time.Duration
+	KillGrace           time.Duration
+	OnLog               func(LogEvent)
 	// OnInteraction, when set, is told when an approval is asked of the
 	// platform and when it ends (answered on any client, expired or
 	// withdrawn), so a local UI can show the same card under the same id and
@@ -244,7 +259,10 @@ type ACPAgent struct {
 	mu       sync.Mutex
 	proc     *acpProcess
 	sessions map[string]*acpSession
-	closed   bool
+	// suspended maps the sessions SuspendSession released to the id the agent
+	// knows them by, for a platform that sent no executor_session_ref.
+	suspended map[string]string
+	closed    bool
 	// accepted are the host tools the running agent took (agent_acp_host_tools.go).
 	accepted []string
 
@@ -420,6 +438,12 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 	if opts.MaxSessions <= 0 {
 		opts.MaxSessions = DefaultACPMaxSessions
 	}
+	if coreMax := opts.Core.opts.MaxSessions; opts.MaxResidentSessions > coreMax {
+		return nil, fmt.Errorf("bmaexecutor: ACPAgentOptions.MaxResidentSessions %d exceeds the Core's MaxSessions %d", opts.MaxResidentSessions, coreMax)
+	} else if opts.MaxResidentSessions <= 0 {
+		opts.MaxResidentSessions = coreMax * DefaultACPResidentSessions / 100
+	}
+	opts.MaxResidentSessions = max(opts.MaxResidentSessions, int(opts.MaxSessions))
 	if opts.CancelGrace <= 0 {
 		opts.CancelGrace = DefaultACPCancelGrace
 	}
@@ -445,7 +469,7 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 			return nil, err
 		}
 	}
-	a := &ACPAgent{opts: opts, sessions: map[string]*acpSession{}}
+	a := &ACPAgent{opts: opts, sessions: map[string]*acpSession{}, suspended: map[string]string{}}
 	if a.claude() {
 		// No model proxy: the agent never reaches the platform's model endpoint.
 		server, err := startACPToolServer(a)
@@ -592,6 +616,14 @@ func (a *ACPAgent) OpenTurn(ctx context.Context, params TurnStartParams) (TurnSt
 	// refused above.
 	s := a.session(params.SessionID)
 	a.mu.Lock()
+	if wire, ok := a.suspended[params.SessionID]; ok {
+		// Suspended while idle: load its conversation again, by the id the
+		// agent knows it by when the platform did not send one.
+		delete(a.suspended, params.SessionID)
+		if params.ExecutorSessionRef == "" {
+			params.ExecutorSessionRef = wire
+		}
+	}
 	resumed := params.ExecutorSessionRef != "" || (s.proc != nil && s.proc.alive())
 	ref := s.wire()
 	if a.claude() && s.agentID == "" {
@@ -713,17 +745,54 @@ func (a *ACPAgent) CloseSession(ctx context.Context, sessionID, _ string) error 
 	a.mu.Lock()
 	s := a.sessions[sessionID]
 	delete(a.sessions, sessionID)
+	delete(a.suspended, sessionID) // a suspended session has no agent session left to close
 	a.mu.Unlock()
-	if s == nil {
-		return nil
-	}
-	if s.proc != nil && s.proc.alive() {
+	if s != nil && s.proc != nil && s.proc.alive() {
 		if err := s.proc.call(ctx, "session/close", map[string]any{"sessionId": s.wire()}, nil); err != nil {
 			a.log(LogDebug, "acp session/close "+sessionID, err)
 		}
 	}
 	a.opts.Core.closeLocalSession(sessionID)
 	_ = os.Remove(ledgerPath(a.opts.StateDir, sessionID))
+	return nil
+}
+
+// MaxResidentSessions implements AgentSessionSuspender.
+func (a *ACPAgent) MaxResidentSessions() int { return a.opts.MaxResidentSessions }
+
+// SuspendSession implements AgentSessionSuspender: it releases an idle
+// session's agent session (ACP session/close: the agent frees the memory or
+// process and keeps the conversation for session/load) and its Core session.
+// The next OpenTurn of the session loads the conversation again.
+func (a *ACPAgent) SuspendSession(ctx context.Context, sessionID string) error {
+	a.mu.Lock()
+	s := a.sessions[sessionID]
+	if s != nil && (s.turn != nil || s.opening != nil) {
+		a.mu.Unlock()
+		return errors.New("the session has a turn in progress")
+	}
+	a.mu.Unlock()
+	if a.opts.Core.local.background.hasLive(sessionID) {
+		return errors.New("the session has a command running in the background")
+	}
+	wire := sessionID
+	if s != nil {
+		wire = s.wire()
+		if s.proc != nil && s.proc.alive() {
+			err := s.proc.call(ctx, "session/close", map[string]any{"sessionId": wire}, nil)
+			var acpErr *acpError
+			if err != nil && !(errors.As(err, &acpErr) && acpErr.Code == CodeNotFound) && s.proc.alive() {
+				return fmt.Errorf("agent session/close: %w", err)
+			}
+		}
+	}
+	a.mu.Lock()
+	if a.sessions[sessionID] == s {
+		delete(a.sessions, sessionID)
+		a.suspended[sessionID] = wire
+	}
+	a.mu.Unlock()
+	a.opts.Core.suspendLocalSession(sessionID)
 	return nil
 }
 
