@@ -1,6 +1,6 @@
 {
   "source_repository": "beeos-ai/beeos-managed-agents",
-  "source_commit": "9578b3a20f05a0479cec8646aa9fe8d524338b72",
+  "source_commit": "d394a5ebf834da4b3b58d49360cc6d2a8bf54e54",
   "protocols": [
     "bma.executor.v1",
     "bma.executor.v1.1"
