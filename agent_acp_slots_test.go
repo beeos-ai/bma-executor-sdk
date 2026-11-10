@@ -2,10 +2,15 @@ package bmaexecutor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -125,5 +130,73 @@ func TestACPAgentResidentLimitDefaultsFromTheCore(t *testing.T) {
 	f := startACPFixture(t, ctx, ACPAgentOptions{})
 	if got := f.agent.MaxResidentSessions(); got != DefaultCoreMaxSessions*DefaultACPResidentSessions/100 {
 		t.Fatalf("default resident limit = %d", got)
+	}
+}
+
+// TestACPAgentManySessionsWithBmaDshAcp is TestACPAgentManySessionsOneAfterAnother
+// against the real bma-dsh-acp (BMA_DSH_ACP_BIN, as in TestACPAgentWithBmaDshAcp):
+// twelve sessions through one process with three resident; a session that was
+// closed in the agent comes back with its earlier user messages in the model's
+// context (DSH's session log survives session/close).
+func TestACPAgentManySessionsWithBmaDshAcp(t *testing.T) {
+	bin := os.Getenv("BMA_DSH_ACP_BIN")
+	if bin == "" {
+		t.Skip("BMA_DSH_ACP_BIN is not set")
+	}
+	command := []string{bin}
+	if strings.HasSuffix(bin, ".mjs") {
+		node, err := exec.LookPath("node")
+		if err != nil {
+			t.Skip("node not found for the .mjs bundle")
+		}
+		command = []string{node, bin}
+	}
+	var mu sync.Mutex
+	var lastUsers []string // the user messages of the latest model request
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content any    `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		var users []string
+		for _, m := range body.Messages {
+			if m.Role == "user" {
+				users = append(users, fmt.Sprint(m.Content))
+			}
+		}
+		mu.Lock()
+		lastUsers = users
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": "ok"}, "finish_reason": nil}}})
+		fmt.Fprintf(w, "data: %s\n\n", b)
+		b, _ = json.Marshal(map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", b)
+	}))
+	defer model.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	f := startACPFixture(t, ctx, ACPAgentOptions{Command: command, MaxSessions: 2, MaxResidentSessions: 3,
+		Upstream: ACPModelUpstream{BaseURL: model.URL + "/v1", Model: "scripted"}})
+	for i := 1; i <= 12; i++ {
+		turn := fmt.Sprintf("turn_%d", i)
+		f.start(t, ctx, fmt.Sprintf("sesn_%d", i), turn, fmt.Sprintf("question %d", i))
+		assertIdle(t, f.platform.waitIdle(t, turn), TurnOutcomeCompleted)
+	}
+	if n := len(f.agent.opts.Core.sessions); n > 3 {
+		t.Fatalf("Core holds %d sessions, want at most 3", n)
+	}
+	result := f.start(t, ctx, "sesn_1", "turn_back", "and again", func(p *TurnStartParams) { p.ExecutorSessionRef = "sesn_1" })
+	if !result.Resumed {
+		t.Fatalf("turn.start of a suspended session: %+v", result)
+	}
+	assertIdle(t, f.platform.waitIdle(t, "turn_back"), TurnOutcomeCompleted)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(lastUsers) < 2 || !strings.Contains(lastUsers[0], "question 1") || !strings.Contains(lastUsers[len(lastUsers)-1], "and again") {
+		t.Fatalf("model context after the session came back = %q, want the earlier question first", lastUsers)
 	}
 }
