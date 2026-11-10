@@ -198,3 +198,58 @@ func TestPlatformToolRouteKeepsItsTokenToItself(t *testing.T) {
 		}
 	}
 }
+
+// The executor reconnected while a call was in flight: the session moved to a
+// new epoch, so the gateway refuses the turn's old credential (401). The route
+// gets a fresh one through tools_token.refresh and sends the same call (same
+// key) again, which returns the saved reply (E4); without a fresh credential
+// the refusal stands.
+func TestPlatformToolRouteRenewsAStaleCredentialAndRetries(t *testing.T) {
+	shortRetries(t, 5*time.Second)
+	var keys, tokens []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, r.ContentLength)
+		_, _ = io.ReadFull(r.Body, buf)
+		body := string(buf)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Header.Get("Authorization") != "Bearer tok-2" && len(keys) > 0 {
+			w.WriteHeader(http.StatusUnauthorized) // the old epoch's token after the reconnect
+			return
+		}
+		if !strings.Contains(body, `"tools/call"`) {
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+			return
+		}
+		keys = append(keys, regexp.MustCompile(`bma-tool-[0-9a-f]{32}`).FindString(body))
+		tokens = append(tokens, r.Header.Get("Authorization"))
+		id := regexp.MustCompile(`"id":(\d+)`).FindStringSubmatch(body)[1]
+		if len(keys) == 1 { // sent, then the brain's network drops
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			_ = conn.Close()
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"ran"}],"structuredContent":{"outcome":"executed","replayed":true}}}`, id)
+	}))
+	t.Cleanup(srv.Close)
+	refreshes := 0
+	route := newPlatformToolRoute(PlatformToolRouteOptions{SessionID: rigSession, Endpoint: srv.URL, Token: "tok-1", TurnID: rigTurn,
+		ExpiresAt: time.Now().Add(time.Hour),
+		Refresh: func(context.Context) (ToolsTokenRefreshResult, error) {
+			refreshes++
+			return ToolsTokenRefreshResult{ToolsMCPURL: srv.URL, ToolsMCPToken: "tok-2",
+				ExpiresAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339)}, nil
+		}})
+	got := platformCall(t, route, context.Background(), "c1")
+	if got.Outcome != RouteOutcomeExecuted || !got.Replayed || refreshes != 1 {
+		t.Fatalf("answer = %+v after %d refreshes", got, refreshes)
+	}
+	if len(keys) != 2 || keys[0] != keys[1] || tokens[1] != "Bearer tok-2" {
+		t.Fatalf("tools/call keys %v tokens %v, want the same key twice, the second with the fresh token", keys, tokens)
+	}
+
+	// Refresh refused (the turn is over): the refusal stands, nothing ran.
+	refusing := newPlatformToolRoute(PlatformToolRouteOptions{SessionID: rigSession, Endpoint: srv.URL, Token: "tok-1", TurnID: rigTurn,
+		ExpiresAt: time.Now().Add(time.Hour),
+		Refresh: func(context.Context) (ToolsTokenRefreshResult, error) { return ToolsTokenRefreshResult{}, fmt.Errorf("turn_inactive") }})
+	wantRefused(t, platformCall(t, refusing, context.Background(), "c2"), "stale_turn")
+}

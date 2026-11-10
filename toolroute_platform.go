@@ -149,6 +149,26 @@ func (c *toolsCredential) current(ctx context.Context) (string, string) {
 	if c.refresh == nil || c.expiresAt.IsZero() || c.expiresAt.Sub(now) > toolsTokenRefreshWindow || now.Before(c.retryAt) {
 		return c.endpoint, c.token
 	}
+	c.refreshLocked(ctx, now)
+	return c.endpoint, c.token
+}
+
+// renew replaces the credential now, whatever its expiry: the gateway refused
+// it (stale_turn), as it does once the executor reconnected and the session
+// moved to a new epoch while the turn goes on. It reports whether a new
+// credential was installed; a refusal (the turn is over) leaves the old one.
+func (c *toolsCredential) renew(ctx context.Context) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.refresh == nil {
+		return false
+	}
+	return c.refreshLocked(ctx, c.now())
+}
+
+// refreshLocked calls tools_token.refresh once and installs its credential;
+// a failure is logged and backs off the next due refresh.
+func (c *toolsCredential) refreshLocked(ctx context.Context, now time.Time) bool {
 	ctx, cancel := context.WithTimeout(ctx, toolsTokenRefreshTimeout)
 	defer cancel()
 	result, err := c.refresh(ctx)
@@ -166,13 +186,13 @@ func (c *toolsCredential) current(ctx context.Context) (string, string) {
 			c.log(LogError, fmt.Sprintf("tools token refresh failed (attempt %d, token expires %s); calling with the current token, next try after %s",
 				c.failures, c.expiresAt.Format(time.RFC3339), c.retryAt.Format(time.RFC3339)), err)
 		}
-		return c.endpoint, c.token
+		return false
 	}
 	c.endpoint, c.token, c.expiresAt, c.failures, c.retryAt = result.ToolsMCPURL, result.ToolsMCPToken, expiresAt, 0, time.Time{}
 	if c.log != nil {
 		c.log(LogInfo, "tools token refreshed (expires "+expiresAt.Format(time.RFC3339)+")", nil)
 	}
-	return c.endpoint, c.token
+	return true
 }
 
 // prepare refreshes the credential when it is due and reopens the MCP session
@@ -184,6 +204,19 @@ func (r *PlatformToolRoute) prepare(ctx context.Context) {
 	if endpoint != r.endpoint {
 		r.endpoint, r.mcpSession, r.initialized = endpoint, "", false
 	}
+}
+
+// renew replaces the credential (toolsCredential.renew) and, when it did,
+// opens a new MCP session with it.
+func (r *PlatformToolRoute) renew(ctx context.Context) bool {
+	if !r.cred.renew(ctx) {
+		return false
+	}
+	endpoint, _ := r.cred.peek()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.endpoint, r.mcpSession, r.initialized = endpoint, "", false
+	return true
 }
 
 // String keeps the credential out of %v / %+v / %s.
@@ -235,8 +268,18 @@ func (r *PlatformToolRoute) Call(ctx context.Context, c RouteCall) *RouteResult 
 	var lost *RouteResult // the first answer that left the call's fate open
 	deadline := time.Now().Add(platformRetryWindow)
 	delay := platformRetryBase
+	renewed := false
 	for {
 		got, sent := r.attempt(ctx, c)
+		if got.Code == "stale_turn" && !renewed {
+			// Refused before it ran. After a reconnect the session is in a new
+			// epoch while the turn goes on: a fresh credential for the turn,
+			// then the same call (same key) again, at once.
+			renewed = true
+			if r.renew(ctx) {
+				continue
+			}
+		}
 		switch {
 		case lost == nil && !sent:
 			return got // nothing of the call was ever sent: certainly not run
