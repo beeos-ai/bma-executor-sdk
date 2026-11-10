@@ -25,7 +25,7 @@
     declares `custom_tools`. Default allow: asking is not an operation and an
     answer grants no permission.
   - `ACPInteractionEvent.Kind` (`permission` or `question`); examples/local-dsh
-    logs it and takes `-cua-driver <abs path>` and `-ask-user-question`.
+    logs it and takes `-cua-driver <abs path>` (with `-cua-socket` for a host-started `cua-driver serve --embedded --socket`) and `-ask-user-question`.
 
 - **Go: `LocalToolRoute`, the local counterpart of `PlatformToolRoute`.**
   `NewLocalToolRoute(LocalToolRouteOptions{Core, StateDir, SessionID, TurnID,

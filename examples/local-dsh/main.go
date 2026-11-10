@@ -27,6 +27,8 @@
 // MIT): when its daemon runs in this user's desktop session, the local brain
 // gets computer_observe and computer_action (each call approved on the
 // platform by default); otherwise they are left out and a warning is logged.
+// -cua-socket names the daemon a host app started for itself
+// (`cua-driver serve --embedded --socket <path>`).
 // -ask-user-question offers ask_user_question: a question is a custom tool
 // call of the session, answered on any client (user.custom_tool_result), and
 // the same turn continues. Give it only when the clients answer custom tools.
@@ -73,6 +75,7 @@ func main() {
 	platformTools := flag.Bool("platform-tools", false, "may be the brain of a session whose hands are on another machine")
 	askUser := flag.Bool("ask-user-question", false, "offer ask_user_question (the session's clients answer custom tool calls)")
 	cuaDriver := flag.String("cua-driver", "", "absolute path of the cua-driver executable (computer use when its daemon runs)")
+	cuaSocket := flag.String("cua-socket", "", "the cua-driver daemon's socket (a host that runs `cua-driver serve --embedded --socket` passes it); default the driver's own")
 	lifeline := flag.Bool("stdin-lifeline", false, "exit when stdin closes (a supervising app passes a pipe, so its exit or crash stops this executor)")
 	flag.Parse()
 	token, key := os.Getenv("BMA_MACHINE_TOKEN"), os.Getenv("BMA_LOCAL_MODEL_KEY")
@@ -113,7 +116,7 @@ func main() {
 		if !filepath.IsAbs(*cuaDriver) {
 			log.Fatal("-cua-driver must be an absolute path")
 		}
-		if driver, err := bmaexecutor.NewCuaDriver(ctx, bmaexecutor.CuaDriverOptions{Path: *cuaDriver}); err != nil {
+		if driver, err := bmaexecutor.NewCuaDriver(ctx, bmaexecutor.CuaDriverOptions{Path: *cuaDriver, Socket: *cuaSocket}); err != nil {
 			emit(map[string]any{"level": "warn", "msg": "computer use unavailable", "error": err.Error()})
 		} else {
 			coreOptions.ComputerUse = driver
