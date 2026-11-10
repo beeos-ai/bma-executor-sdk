@@ -16,7 +16,7 @@
   (the reasoning effort values `none, minimal, low, medium, high, xhigh, max`;
   -32602 otherwise, a model without levels ignores it) and defaults to the
   model's `default_thinking_level`; the agent sends it as the request's
-  `reasoning_effort` (prompt `_meta.bma.reasoningEffort`, bma-dsh-acp >= 0.2.1;
+  `reasoning_effort` (prompt `_meta.bma.reasoningEffort`, bma-dsh-acp >= 0.2.2;
   with an older agent the levels are not declared, so a turn naming one is
   refused instead of running without it). `TurnStartResult.effective` reports
   the model and level applied. Without `Models` nothing changes for a turn

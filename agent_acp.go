@@ -219,7 +219,7 @@ type ACPAgentOptions struct {
 	// xhigh, max) a turn may set with config.thinking_level, or
 	// DefaultThinkingLevel when it sets none; the agent sends the level as the
 	// request's reasoning_effort. An agent that does not take a reasoning
-	// effort (bma-dsh-acp before 0.2.1) gets no levels declared, so a turn
+	// effort (bma-dsh-acp before 0.2.2) gets no levels declared, so a turn
 	// naming one is refused rather than run without it. A model without
 	// levels ignores config.thinking_level. Empty: config.model and
 	// config.thinking_level are ignored (contract) and every turn runs on
@@ -521,7 +521,7 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 	}
 	a.models = acpAgentModels(opts.Models, init.Meta.Bma.ReasoningEfforts)
 	if len(opts.Models) > 0 && len(init.Meta.Bma.ReasoningEfforts) == 0 && slices.ContainsFunc(opts.Models, func(m AgentModel) bool { return len(m.ThinkingLevels) > 0 }) {
-		a.log(LogWarn, "the agent takes no reasoning effort (bma-dsh-acp >= 0.2.1 does); the models are declared without thinking levels", nil)
+		a.log(LogWarn, "the agent takes no reasoning effort (bma-dsh-acp >= 0.2.2 does); the models are declared without thinking levels", nil)
 	}
 	return a, nil
 }
@@ -1470,7 +1470,7 @@ type acpInitializeResponse struct {
 			HostTools       []string `json:"hostTools"`
 			Streaming       string   `json:"streaming"`
 			PermissionRelay string   `json:"permissionRelay"`
-			// ReasoningEfforts are the levels prompt _meta.bma.reasoningEffort takes (bma-dsh-acp >= 0.2.1).
+			// ReasoningEfforts are the levels prompt _meta.bma.reasoningEffort takes (bma-dsh-acp >= 0.2.2).
 			ReasoningEfforts []string `json:"reasoningEfforts"`
 		} `json:"bma"`
 	} `json:"_meta"`

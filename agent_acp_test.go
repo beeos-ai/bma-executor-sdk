@@ -643,7 +643,7 @@ func fakeHandle(c *fakeConn, method string, raw json.RawMessage) (any, map[strin
 	switch method {
 	case "initialize":
 		bma := map[string]any{"dsh": "0.2.1-rc.5", "tools": fakeTools, "streaming": "token", "permissionRelay": "full"}
-		if os.Getenv("BMA_ACP_FAKE_NO_EFFORTS") == "" { // BMA_ACP_FAKE_NO_EFFORTS: an agent before bma-dsh-acp 0.2.1
+		if os.Getenv("BMA_ACP_FAKE_NO_EFFORTS") == "" { // BMA_ACP_FAKE_NO_EFFORTS: an agent before bma-dsh-acp 0.2.2
 			bma["reasoningEfforts"] = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 		}
 		return map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": true},

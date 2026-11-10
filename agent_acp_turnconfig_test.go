@@ -148,7 +148,7 @@ func TestACPAgentRefusesInvalidModels(t *testing.T) {
 	}
 }
 
-// TestACPAgentWithBmaDshAcpTurnConfig drives the real bma-dsh-acp (>= 0.2.1,
+// TestACPAgentWithBmaDshAcpTurnConfig drives the real bma-dsh-acp (>= 0.2.2,
 // BMA_DSH_ACP_BIN as for TestACPAgentWithBmaDshAcp): a turn's model and
 // thinking level reach the model endpoint as model and reasoning_effort.
 func TestACPAgentWithBmaDshAcpTurnConfig(t *testing.T) {
@@ -182,7 +182,7 @@ func TestACPAgentWithBmaDshAcpTurnConfig(t *testing.T) {
 	f := startACPFixture(t, ctx, ACPAgentOptions{Command: command, Upstream: ACPModelUpstream{BaseURL: model.URL + "/v1", Model: "m-b"},
 		Models: []AgentModel{{ID: "m-a", ThinkingLevels: []string{"low", "high"}}, {ID: "m-b"}}})
 	if c := f.agent.Capability(); len(c.Models) != 2 || !slices.Equal(c.Models[0].ThinkingLevels, []string{"low", "high"}) {
-		t.Fatalf("capability models = %+v (bma-dsh-acp before 0.2.1 declares no levels)", c.Models)
+		t.Fatalf("capability models = %+v (bma-dsh-acp before 0.2.2 declares no levels)", c.Models)
 	}
 	f.start(t, ctx, "sesn_real_tc", "turn_1", "hi", func(p *TurnStartParams) { p.Config.Model, p.Config.ThinkingLevel = "m-a", "high" })
 	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
