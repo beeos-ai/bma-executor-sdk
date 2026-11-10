@@ -74,7 +74,7 @@ func TestACPAgentHostToolPolicyCapsThePlatform(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			f := startACPFixture(t, ctx, ACPAgentOptions{ToolPolicy: map[string]string{"bash": ceiling}})
-			f.start(t, ctx, "sesn_hp", "turn_1", "bypass", allowBash)
+			f.start(t, ctx, "sesn_hp", "turn_1", "bypass", func(p *TurnStartParams) { p.Metadata = map[string]string{"tool_policy": `{"bash":"allow"}`} })
 			got := reported(t, f, "turn_1")
 			if len(got) != 1 || !strings.HasPrefix(got[0], wantCode+": ") || !strings.HasSuffix(got[0], "|true|not_forwarded|"+wantCode) {
 				t.Fatalf("answer = %q", got)

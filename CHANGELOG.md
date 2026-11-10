@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **Go: `CoreOptions.FileAccess`, the host's check before a file tool.** It
+  runs before every `read`, `write`, `edit`, `glob` and `grep` of a `tool.call`
+  and of a `LocalToolRoute` (so also `ACPAgent`'s), with a `FileAccessRequest`
+  (`SessionID`, `AgentSessionID`, `Tool`, `ToolCallID`, `Operation` =
+  `FileOperationRead`/`FileOperationWrite`, workspace-relative `Path`; `edit`
+  asks read then write) and refuses by returning an error: an `*RPCError`
+  (`NewReasonError`) gives its `data.reason` as the code, any other error
+  `permission_denied`. Nothing is read or written then; a `LocalToolRoute` call
+  is `not_forwarded` with the code as `Code` and recorded like a result (the
+  same call id gets the same answer), a `tool.call` fails with
+  `<code>: <message>`. Hosts use it for read-only sessions, protected paths
+  and revoked or stopped turns. Without the option nothing changes.
+- **Go: `ACPAgentOptions.ToolPolicy`, the host's ceiling on tool permissions.**
+  A map of tool name to `allow`, `ask` or `deny`; the permission of a tool in
+  a turn is the stricter of it and what the permission mode and the platform's
+  `tool_policy` give (`deny` over `ask` over `allow`), so they can only
+  tighten it. A host that has not wired the checks for a tool sets `deny`
+  (fail closed). `NewACPAgent` rejects other values. Without it nothing
+  changes.
 - **Go (security): the file tools stay inside the session workspace.**
   `read`, `write`, `edit`, `glob` and `grep` (`tool.call` and `LocalToolRoute`,
   so also `ACPAgent`) checked the path only lexically, so a symbolic link in
