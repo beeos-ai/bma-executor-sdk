@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+- **Fix, Go: the ninth session never started - idle sessions no longer hold a
+  slot, and resident sessions are bounded apart (`ACPAgent`, `ServeAgent`).**
+  `AgentCapability.MaxSessions` (`ACPAgentOptions.MaxSessions`, default 8)
+  counted every session the executor had seen until `session.close`, which the
+  platform sends only when a session is archived. So after eight sessions,
+  finished and idle ones included, `turn.start` for a ninth answered
+  `executor_busy` (the platform keeps retrying: the task stayed "preparing")
+  until the executor was restarted. Now it bounds the turns running at once
+  (the slot is taken by `turn.start`, freed when the turn ends, is canceled or
+  is refused), and a `turn.start` of an idle session is subject to it like a
+  new one. Resident sessions are a separate, soft bound:
+  `ACPAgentOptions.MaxResidentSessions` (default 75 % of the Core's
+  `MaxSessions`, at least `MaxSessions`; more than the Core's is refused) - past
+  it the least recently used idle session is suspended: ACP `session/close`
+  (bma-dsh-acp releases the agent scope and keeps the JSONL; the transcript is
+  not lost), its Core session and the memory of its turn state are released,
+  and its next `turn.start` loads the conversation again (`session/load`, with
+  the platform's `executor_session_ref` or the id the agent remembers). The
+  platform keeps the session; event numbering and `ActiveSessions` do not
+  change. A session with a running turn, or a bash command left running, is
+  never suspended (the limit is passed instead), and the events of the session
+  are acknowledged first. New optional interface `AgentSessionSuspender`
+  (`MaxResidentSessions`, `SuspendSession`) lets a custom `AgentHandler` do the
+  same; without it resident sessions are unbounded as before. `session.close`
+  of a suspended session still cleans up (ledger file included).
+
 ## 1.4.1
 
 - **Go: `PlatformToolRoute` renews a refused credential once and sends the

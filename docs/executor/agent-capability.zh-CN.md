@@ -37,6 +37,7 @@
 ```
 
 - 平台只向 `agent.enabled=true` 的 v1.1 executor 发 agent 方法；否则 executor 答 `-32012`。
+- `max_sessions` 限制同时运行的轮次。轮次结束的会话保留对话但不占槽，因此执行端可依次服务任意多个会话。按会话持有本地资源的执行端可以释放最久未用的空闲会话的资源（`executor_session_ref` 仍在）；平台无感知：会话仍存活、事件序号延续，下一次 `turn.start` 带 `executor_session_ref` 重新加载。
 - `permission_modes` 的取值由 executor 定义，平台只回传其中之一。
 - 身份：用这台电脑的机器身份（方案 A 由 bmad 在本机脑挂上后声明；方案 B 由 Desktop 声明），不另建身份。
 
@@ -71,7 +72,7 @@ agent 会话**不需要** `session.assign`：首个 `turn.start` 即打开；exe
 
 - ID 映射：平台 session ↔ 本地对话一对一；一轮用平台 `turn_id` / `input_id` 关联。
 - 同一 `turn_id` 重发返回首次结果，不会跑第二次。
-- 会话已有运行中的轮次 → `-32013`（改用 `turn.input`）；新会话超过 `max_sessions` → `-32009`；`cwd` 不在允许根内 → `-32001`。
+- 会话已有运行中的轮次 → `-32013`（改用 `turn.input`）；正在运行的轮次已达 `max_sessions` 时的 `turn.start` → `-32009`（可重试；空闲会话不占槽，只有运行中的轮次占）；`cwd` 不在允许根内 → `-32001`。
 - 文件输入只传 `file_id`，executor 经文件 API 下载，控制通道不传字节。
 - `deadline_ms` 到期：`session.error{error:{type:"timeout"}}` + `session.status_idle turn_outcome:"failed"`。
 

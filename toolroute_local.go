@@ -263,6 +263,14 @@ func (c *Core) closeLocalSession(sessionID string) {
 	c.local.dropLedgers(sessionID)
 }
 
+// suspendLocalSession releases a local session's Core session and the memory
+// of its turn state while it is idle; its workspace, bash output files and
+// ledger file stay for the turn that opens it again.
+func (c *Core) suspendLocalSession(sessionID string) {
+	c.closeLocal(acpBrain, sessionID)
+	c.local.forgetLedgers(sessionID)
+}
+
 func refused(code, detail string) *RouteResult {
 	return &RouteResult{Outcome: RouteOutcomeNotForwarded, Code: code, Text: code + ": " + detail, IsError: true}
 }
