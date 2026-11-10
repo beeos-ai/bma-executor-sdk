@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0
 
 - **Behavior change, Go `PlatformToolRoute` (and so `ACPAgent` with remote
   hands): a lost answer is fetched again, not given up.** A tool call whose
@@ -93,8 +93,6 @@
   (`spawn_failed` for a plain error) and is recorded like a result, so the
   same call id gets the same answer, as behind the platform gateway. File
   tools do not call the hook. Without the option nothing changes.
-
-## 1.4.0
 
 - **Contract snapshot synced to beeos-managed-agents f872a540b (contract
   1.4.0):** `FsCapability.skills_per_session` (Go `SkillsPerSession`, TS/Python
