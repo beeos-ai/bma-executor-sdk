@@ -471,25 +471,20 @@ func (r *LocalToolRoute) replaceAll(input ToolInput) (string, bool) {
 	if session == nil {
 		return "session_not_active: the session is not open", true
 	}
-	path, err := session.resolve(input.Path)
-	if err != nil {
-		return err.Error(), true
+	if r.core.opts.RunAs != nil {
+		return `tool "edit" is unavailable: this executor runs workloads as another OS user; use bash`, true
 	}
 	if input.OldString == "" {
 		return "edit requires old_string and new_string", true
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
+	n, err := r.core.editFile(session, input, true)
+	switch {
+	case err != nil:
 		return err.Error(), true
-	}
-	n := strings.Count(string(raw), input.OldString)
-	if n == 0 {
+	case n == 0:
 		return "old_string was not found", true
 	}
-	if err := os.WriteFile(path, []byte(strings.ReplaceAll(string(raw), input.OldString, input.NewString)), 0o600); err != nil {
-		return err.Error(), true
-	}
-	return fmt.Sprintf("edited %s (%d replacements)", filepath.Base(path), n), false
+	return fmt.Sprintf("edited %s (%d replacements)", filepath.Base(input.Path), n), false
 }
 
 // grepOutput reshapes Core's "file:line:text" matches for output_mode.

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Go (security): the file tools stay inside the session workspace.**
+  `read`, `write`, `edit`, `glob` and `grep` (`tool.call` and `LocalToolRoute`,
+  so also `ACPAgent`) checked the path only lexically, so a symbolic link in
+  the workspace pointing out of it could be read or written, and a directory
+  swapped for a link between the check and the use was followed. They now go
+  through an `os.Root` opened on the workspace (Go 1.24+; go.mod says 1.25):
+  `..`, absolute paths outside it and links leading out of it are refused by
+  the system call, whatever the timing. Links that stay inside the workspace
+  keep working; `glob` and `grep` do not cross a link out of it. `grep` of a
+  path that does not exist is now an error instead of an empty answer, and
+  `edit` with `replace_all` of a `LocalToolRoute` is refused under
+  `CoreOptions.RunAs` like the other file tools. The session's own output
+  files under `ToolOutputDir` are still readable with `read`.
 - **Go: host tools of a local DSH brain (`ACPAgent`, bma-dsh-acp >= 0.2.0).**
   `ACPAgent` declares the tools this machine adds to the six in `initialize`
   `_meta.bma.hostTools`; bma-dsh-acp registers them, asks for them by their
