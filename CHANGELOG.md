@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0
 
 - **Go: `ACPAgentOptions.SessionFilesRoot` (and `LocalToolRouteOptions.SessionFilesRoot`),
   a sandbox brain reads the session's mounted files with its own file tools.**
@@ -123,8 +123,6 @@
   (`spawn_failed` for a plain error) and is recorded like a result, so the
   same call id gets the same answer, as behind the platform gateway. File
   tools do not call the hook. Without the option nothing changes.
-
-## 1.4.0
 
 - **Contract snapshot synced to beeos-managed-agents f872a540b (contract
   1.4.0):** `FsCapability.skills_per_session` (Go `SkillsPerSession`, TS/Python
