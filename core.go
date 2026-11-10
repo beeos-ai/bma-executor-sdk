@@ -244,6 +244,9 @@ type CoreSession struct {
 	stopped bool
 	wg      sync.WaitGroup
 	values  map[any]any
+	// mounts are the session's mounted file directories the file tools may
+	// reach besides the workspace (core_mounts.go); empty for most sessions.
+	mounts []*sessionMount
 }
 
 func (s *CoreSession) ID() string        { return s.key.session }

@@ -27,6 +27,28 @@ func (s *CoreSession) workspaceDir() string {
 	return s.workspace
 }
 
+// relUnder is p as a clean path below one of roots, in OS form ("." for the
+// root itself). It is lexical; os.Root enforces the rest when a file is used.
+func relUnder(p string, roots ...string) (string, bool) {
+	p = filepath.Clean(p)
+	for _, root := range roots {
+		if rel, err := filepath.Rel(root, p); err == nil && filepath.IsLocal(rel) {
+			return rel, true
+		}
+	}
+	return "", false
+}
+
+// dirAndReal returns dir and, when it differs, dir with its symbolic links
+// resolved: an absolute path may name either.
+func dirAndReal(dir string) []string {
+	roots := []string{dir}
+	if real, err := filepath.EvalSymlinks(dir); err == nil && real != dir {
+		roots = append(roots, real)
+	}
+	return roots
+}
+
 // relPath is path as a clean, workspace-relative path in OS form ("." for the
 // workspace itself), or an error when it is outside the workspace. It is a
 // lexical check; os.Root enforces the rest when the file is used.
@@ -43,42 +65,80 @@ func (s *CoreSession) relPath(p string) (string, error) {
 		}
 		return rel, nil
 	}
-	p = filepath.Clean(p)
-	roots := []string{workspace}
-	if real, err := filepath.EvalSymlinks(workspace); err == nil && real != workspace {
-		roots = append(roots, real)
-	}
-	for _, root := range roots {
-		if rel, err := filepath.Rel(root, p); err == nil && filepath.IsLocal(rel) {
-			return rel, nil
-		}
+	if rel, ok := relUnder(p, dirAndReal(workspace)...); ok {
+		return rel, nil
 	}
 	return "", outside
 }
 
-// openRoot opens the workspace as a root; the caller closes it.
-func (s *CoreSession) openRoot() (*os.Root, error) {
+// fileTarget is where a file tool's path points: the workspace (mount nil) or
+// one of the session's mounted directories (core_mounts.go). rel is relative
+// to that directory.
+type fileTarget struct {
+	mount *sessionMount
+	rel   string
+}
+
+// target resolves a tool's path. The workspace comes first; an absolute path
+// below one of the session's own mounts is the second choice, and a write
+// there is refused unless the mount is writable. Anything else is outside.
+func (s *CoreSession) target(p string, write bool) (fileTarget, error) {
+	rel, err := s.relPath(p)
+	if err == nil {
+		return fileTarget{rel: rel}, nil
+	}
+	if !filepath.IsAbs(p) {
+		return fileTarget{}, err
+	}
+	for _, m := range s.sessionMounts() {
+		rel, ok := m.rel(p)
+		switch {
+		case !ok:
+		case write && !m.writable:
+			return fileTarget{}, fmt.Errorf("path %q is read-only (the session's %s)", p, m.name)
+		default:
+			return fileTarget{mount: m, rel: rel}, nil
+		}
+	}
+	return fileTarget{}, err
+}
+
+// open opens the directory the target is relative to as a root; the caller
+// closes it.
+func (s *CoreSession) open(t fileTarget) (*os.Root, error) {
+	if t.mount != nil {
+		return t.mount.open()
+	}
 	return os.OpenRoot(s.workspaceDir())
 }
 
-// withRoot runs fn with the workspace root and the workspace-relative form of
-// path.
-func (s *CoreSession) withRoot(p string, fn func(root *os.Root, rel string) error) error {
-	rel, err := s.relPath(p)
+// show is a path below the target's directory as the tools report it:
+// relative to the workspace, absolute for a mount (the model passes it back).
+func (t fileTarget) show(rel string) string {
+	if t.mount != nil {
+		return filepath.Join(t.mount.dir, rel)
+	}
+	return rel
+}
+
+// withRoot runs fn with the root of the directory path is in and the
+// root-relative form of path. write says the call changes the file.
+func (s *CoreSession) withRoot(p string, write bool, fn func(root *os.Root, rel string) error) error {
+	t, err := s.target(p, write)
 	if err != nil {
 		return err
 	}
-	root, err := s.openRoot()
+	root, err := s.open(t)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
-	return fn(root, rel)
+	return fn(root, t.rel)
 }
 
 func (c *Core) read(session *CoreSession, input ToolInput) (ToolResultParams, error) {
 	var result ToolResultParams
-	err := session.withRoot(input.Path, func(root *os.Root, rel string) error {
+	err := session.withRoot(input.Path, false, func(root *os.Root, rel string) error {
 		file, err := root.Open(rel)
 		if err != nil {
 			return err
@@ -130,7 +190,7 @@ func (c *Core) readFrom(file io.Reader, input ToolInput) (ToolResultParams, erro
 }
 
 func (c *Core) write(session *CoreSession, input ToolInput) (ToolResultParams, error) {
-	err := session.withRoot(input.Path, func(root *os.Root, rel string) error {
+	err := session.withRoot(input.Path, true, func(root *os.Root, rel string) error {
 		if dir := filepath.Dir(rel); dir != "." {
 			if err := root.MkdirAll(dir, 0o700); err != nil {
 				return err
@@ -151,7 +211,7 @@ func (c *Core) editFile(session *CoreSession, input ToolInput, all bool) (matche
 	if input.OldString == "" {
 		return 0, errors.New("edit requires old_string and new_string")
 	}
-	err = session.withRoot(input.Path, func(root *os.Root, rel string) error {
+	err = session.withRoot(input.Path, true, func(root *os.Root, rel string) error {
 		raw, err := root.ReadFile(rel)
 		if err != nil {
 			return err
@@ -181,24 +241,26 @@ func (c *Core) glob(session *CoreSession, input ToolInput) (ToolResultParams, er
 	if input.Pattern == "" {
 		return ToolResultParams{}, errors.New("glob requires pattern")
 	}
-	base, err := session.relPath(input.Path)
+	t, err := session.target(input.Path, false)
 	if err != nil {
 		return ToolResultParams{}, err
 	}
-	pattern := filepath.Join(base, input.Pattern)
+	pattern := filepath.Join(t.rel, input.Pattern)
 	if !filepath.IsLocal(pattern) {
 		return ToolResultParams{}, fmt.Errorf("path %q is outside the session workspace", filepath.Join(input.Path, input.Pattern))
 	}
-	var matches []string
-	err = session.withRoot(".", func(root *os.Root, _ string) error {
-		found, err := fs.Glob(root.FS(), filepath.ToSlash(pattern))
-		for _, match := range found {
-			matches = append(matches, filepath.FromSlash(match))
-		}
-		return err
-	})
+	root, err := session.open(t)
 	if err != nil {
 		return ToolResultParams{}, err
+	}
+	defer func() { _ = root.Close() }()
+	found, err := fs.Glob(root.FS(), filepath.ToSlash(pattern))
+	if err != nil {
+		return ToolResultParams{}, err
+	}
+	matches := make([]string, len(found))
+	for i, match := range found {
+		matches[i] = t.show(filepath.FromSlash(match))
 	}
 	return textResult(false, strings.Join(matches, "\n")), nil
 }
@@ -211,36 +273,43 @@ func (c *Core) grep(session *CoreSession, input ToolInput) (ToolResultParams, er
 	if err != nil {
 		return ToolResultParams{}, err
 	}
+	t, err := session.target(input.Path, false)
+	if err != nil {
+		return ToolResultParams{}, err
+	}
+	root, err := session.open(t)
+	if err != nil {
+		return ToolResultParams{}, err
+	}
+	defer func() { _ = root.Close() }()
 	var matches []string
-	err = session.withRoot(input.Path, func(root *os.Root, start string) error {
-		fsys := root.FS()
-		return fs.WalkDir(fsys, filepath.ToSlash(start), func(p string, entry fs.DirEntry, err error) error {
-			if err != nil && p == filepath.ToSlash(start) {
-				return err // the search root itself cannot be used
-			}
-			if err != nil || entry.IsDir() || len(matches) >= maxGrepMatches {
-				return nil
-			}
-			if input.Glob != "" {
-				if ok, _ := path.Match(input.Glob, entry.Name()); !ok {
-					return nil
-				}
-			}
-			// Opening goes through the root: a link out of the workspace fails.
-			file, err := fsys.Open(p)
-			if err != nil {
-				return nil
-			}
-			defer file.Close()
-			rel := filepath.FromSlash(p)
-			scanner := bufio.NewScanner(file)
-			for line := 1; scanner.Scan() && len(matches) < maxGrepMatches; line++ {
-				if expression.Match(scanner.Bytes()) {
-					matches = append(matches, fmt.Sprintf("%s:%d:%s", rel, line, scanner.Text()))
-				}
-			}
+	fsys, start := root.FS(), filepath.ToSlash(t.rel)
+	err = fs.WalkDir(fsys, start, func(p string, entry fs.DirEntry, err error) error {
+		if err != nil && p == start {
+			return err // the search root itself cannot be used
+		}
+		if err != nil || entry.IsDir() || len(matches) >= maxGrepMatches {
 			return nil
-		})
+		}
+		if input.Glob != "" {
+			if ok, _ := path.Match(input.Glob, entry.Name()); !ok {
+				return nil
+			}
+		}
+		// Opening goes through the root: a link out of it fails.
+		file, err := fsys.Open(p)
+		if err != nil {
+			return nil
+		}
+		defer file.Close()
+		name := t.show(filepath.FromSlash(p))
+		scanner := bufio.NewScanner(file)
+		for line := 1; scanner.Scan() && len(matches) < maxGrepMatches; line++ {
+			if expression.Match(scanner.Bytes()) {
+				matches = append(matches, fmt.Sprintf("%s:%d:%s", name, line, scanner.Text()))
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return ToolResultParams{}, err
@@ -269,9 +338,16 @@ type FileAccessRequest struct {
 	// directory, not about each file under it.
 	Operation string
 	// Path is the file or directory, relative to the session workspace,
-	// cleaned and slash-separated ("." is the workspace itself). A call whose
-	// path leaves the workspace fails without asking the hook.
+	// cleaned and slash-separated ("." is the workspace itself); when Mount
+	// is set it is relative to that mount's directory instead. A call whose
+	// path is outside the workspace and the session's mounts fails without
+	// asking the hook.
 	Path string
+	// Mount names the session's mounted directory Path is in: "uploads",
+	// "skills" or "outputs" (see ACPAgentOptions.SessionFilesRoot). Empty for
+	// the workspace. A hook that guards the workspace only should treat a
+	// request with a Mount as outside its scope or check it explicitly.
+	Mount string
 }
 
 // FileAccessFunc is CoreOptions.FileAccess.
@@ -287,7 +363,8 @@ func fileAccessChecked(ctx context.Context) context.Context {
 
 // checkFileAccess asks CoreOptions.FileAccess about a file tool call and
 // returns its first refusal. It does nothing without a hook, for another
-// tool, for a ctx already checked or for a path outside the workspace.
+// tool, for a ctx already checked or for a path outside the session's
+// directories.
 func (c *Core) checkFileAccess(ctx context.Context, session *CoreSession, agentSessionID, callID, tool string, input ToolInput) error {
 	if c.opts.FileAccess == nil || ctx.Value(fileAccessCheckedKey{}) != nil {
 		return nil
@@ -303,13 +380,16 @@ func (c *Core) checkFileAccess(ctx context.Context, session *CoreSession, agentS
 	default:
 		return nil
 	}
-	rel, err := session.relPath(input.Path)
-	if err != nil {
-		return nil
-	}
 	for _, operation := range operations {
+		t, err := session.target(input.Path, operation == FileOperationWrite)
+		if err != nil {
+			return nil // outside the session's directories (or read-only): the tool itself refuses
+		}
 		req := FileAccessRequest{SessionID: session.ID(), AgentSessionID: agentSessionID, Tool: tool, ToolCallID: callID,
-			Operation: operation, Path: filepath.ToSlash(rel)}
+			Operation: operation, Path: filepath.ToSlash(t.rel)}
+		if t.mount != nil {
+			req.Mount = t.mount.name
+		}
 		if err := c.opts.FileAccess(ctx, req); err != nil {
 			return &fileAccessError{err}
 		}

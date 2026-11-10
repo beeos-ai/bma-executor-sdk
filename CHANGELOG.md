@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- **Go: `ACPAgentOptions.SessionFilesRoot` (and `LocalToolRouteOptions.SessionFilesRoot`),
+  a sandbox brain reads the session's mounted files with its own file tools.**
+  Set it to the executor's `capabilities.session_files.root`. The file tools of
+  a turn whose tools run on this machine then reach, besides the workspace,
+  exactly the three directories of that one session below the root
+  (ADR-0021): `<root>/<session id>/uploads` and `.../skills` read-only (`read`,
+  `glob`, `grep`), and `.../outputs` readable and writable (`write`, `edit`
+  too). On an executor with the FUSE session mounts (ADR-0021, `fs.fuse`) a
+  file written there is committed by the mount when it is closed, so
+  deliverables reach the platform without a separate upload; the SDK's own
+  `SessionFiles` (copy and scan, anchored on a `process.start`) does not upload
+  the outputs of a session that only has ACP turns: its daemon routes need a
+  process anchor, which would take a contract addition. Before, a model could
+  read the mounted skills and uploads only through `bash` (an approval each
+  time). Each directory is opened
+  as an `os.Root` of its own and has to be a real directory: `..`, another
+  session's directory, any other path below the root, a symbolic link that
+  leaves a directory (also one swapped in after the check) and a link in place
+  of a session directory or mount are refused by the system call. Paths are
+  absolute; `glob` and `grep` report absolute paths for a mount (workspace
+  results stay relative). `write` and `edit` anywhere else stay confined to
+  the workspace. `CoreOptions.FileAccess` is asked about mount paths too:
+  `FileAccessRequest.Mount` names the directory (`uploads`, `skills`,
+  `outputs`; empty for the workspace) and `Path` is relative to it. The turn's
+  system prompt names the three directories. The permission of `read`, `glob`
+  and `grep` is unchanged (default `allow`; `ToolPolicy` still caps it). A
+  session id that is no single safe directory name gets no mounts. Without the
+  option nothing changes. The conformance suite (T1–T11) is unaffected: the
+  platform's tool gateway reaches the hands' files, and a brain on the
+  platform's route sees the same files through its own machine's mounts.
 - **Behavior change, Go `PlatformToolRoute` (and so `ACPAgent` with remote
   hands): a lost answer is fetched again, not given up.** A tool call whose
   request reached the gateway and whose answer was lost (the brain's network

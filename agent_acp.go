@@ -181,6 +181,19 @@ type ACPAgentOptions struct {
 	// tools, and is enforced by the executor's gate whatever the agent does.
 	// NewACPAgent rejects other values. Nil caps nothing.
 	ToolPolicy map[string]string
+	// SessionFilesRoot is the executor's capabilities.session_files.root: the
+	// directory below which the platform mounts each session's files as
+	// <root>/<session id>/{uploads,skills,outputs} (ADR-0021). When set, the
+	// file tools of a turn whose tools run on this machine reach, besides the
+	// workspace, exactly these three directories of that session: read,
+	// glob and grep in uploads and skills (read-only) and in outputs, and
+	// write and edit in outputs (deliverables the platform collects). Another
+	// session's directories, a path below the root that is none of the three,
+	// a "..", and a symbolic link that leaves a directory stay refused;
+	// write and edit anywhere else stay confined to the workspace. The session
+	// id must be a single safe directory name. Absolute, or empty for
+	// the workspace only.
+	SessionFilesRoot string
 	// DisablePrewarm turns off the background prewarm of the Claude Code
 	// profile (see WaitPrewarm); the DSH profile has none.
 	DisablePrewarm bool
@@ -386,6 +399,9 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 		}
 	}
 	opts.ToolPolicy = maps.Clone(opts.ToolPolicy)
+	if opts.SessionFilesRoot != "" && !filepath.IsAbs(opts.SessionFilesRoot) {
+		return nil, fmt.Errorf("bmaexecutor: ACPAgentOptions.SessionFilesRoot must be an absolute path, got %q", opts.SessionFilesRoot)
+	}
 	if opts.HarnessID == "" {
 		opts.HarnessID = "dsh"
 		if opts.Profile == ACPProfileClaudeCode {
@@ -581,10 +597,20 @@ func (a *ACPAgent) OpenTurn(ctx context.Context, params TurnStartParams) (TurnSt
 	if a.claude() && s.agentID == "" {
 		ref = params.ExecutorSessionRef // not known before session/new; see CHANGELOG
 	}
-	s.plan = acpOpenPlan{params: params, cwd: cwd, promptCwd: promptCwd, model: model, mode: mode, system: config.System, hands: config.EnvironmentInfo}
+	system := config.System
+	mountNote := a.sessionFilesNote(params.SessionID, remote)
+	if mountNote != "" {
+		system = strings.TrimSpace(system + "\n\n" + mountNote)
+	}
+	s.plan = acpOpenPlan{params: params, cwd: cwd, promptCwd: promptCwd, model: model, mode: mode, system: system, hands: config.EnvironmentInfo}
 	a.mu.Unlock()
 	if err := a.opts.Core.openLocal(acpBrain, params.SessionID, cwd); err != nil {
 		return TurnStartResult{}, err
+	}
+	if mountNote != "" {
+		if err := a.opts.Core.setLocalMounts(params.SessionID, a.opts.SessionFilesRoot); err != nil {
+			return TurnStartResult{}, &RPCError{Code: CodeInternalError, Message: "session files: " + err.Error()}
+		}
 	}
 	a.mu.Lock()
 	s.cwd = cwd
@@ -823,6 +849,25 @@ func (a *ACPAgent) systemPrompt(cwd, system string, hands *EnvironmentInfo) stri
 		prompt += "\n\n" + system
 	}
 	return prompt
+}
+
+// sessionFilesNote tells the model where the session's files are and what it
+// may do there ("" without ACPAgentOptions.SessionFilesRoot, and when the
+// tools run on another machine). A session id that is no safe directory name
+// has no files directory; the note is then left out and the tools stay on the
+// workspace.
+func (a *ACPAgent) sessionFilesNote(sessionID string, remote bool) string {
+	if a.opts.SessionFilesRoot == "" || remote {
+		return ""
+	}
+	mounts, err := sessionMountsFor(a.opts.SessionFilesRoot, sessionID)
+	if err != nil {
+		a.log(LogWarn, "session files are not reachable for session "+sessionID, err)
+		return ""
+	}
+	return fmt.Sprintf("Session files (absolute paths; use the read, glob and grep tools): the files the user gave this session are in %s and its skills in %s, both read-only. "+
+		"Write the deliverables you want the user to get into %s (write and edit work there and nowhere outside the working directory).",
+		mounts[0].dir, mounts[1].dir, mounts[2].dir)
 }
 
 func (a *ACPAgent) modelMeta(s *acpSession, model string, metadata map[string]string) map[string]any {
