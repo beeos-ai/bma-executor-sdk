@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.0
+
+- Add contract 1.5.0 types for per-input selected skill documents, explicit executor capability and applied-version receipts across Go, TypeScript and Python. SDK agents without the capability refuse selections before opening a session or invoking the handler; caller-supplied effective receipts are invalid. Ordinary inputs retain their previous behavior. A host opting in must verify and install the exact bytes and return the input-bound receipt; types alone do not implement skill execution.
+
 ## 1.5.2
 
 - **Go: the host's model endpoint learns which session a request belongs to

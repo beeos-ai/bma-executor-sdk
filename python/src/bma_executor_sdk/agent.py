@@ -12,6 +12,8 @@ Harness side (Go: agent_harness.go): ``Harness(agent=platform)`` with an
 
 from __future__ import annotations
 
+from ._input_skills import validate_input_skill_request
+
 import asyncio
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -228,6 +230,9 @@ class _AgentRuntime:
         return session
 
     async def turn_start(self, params: TurnStartParams) -> TurnStartResult:
+        selected = validate_input_skill_request(params.get("config"))
+        if selected and self.capability.get("input_skills") is not True:
+            raise RPCError(JsonRpcErrorCode.CapabilityUnavailable, "input_skills is not supported")
         if not params.get("session_id") or not params.get("turn_id") or not params.get("input"):
             raise RPCError(JsonRpcErrorCode.InvalidParams, "session_id, turn_id and input are required")
         s = self.session(params["session_id"], True)

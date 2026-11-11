@@ -311,3 +311,24 @@ describe('agent capability', () => {
     }
   })
 })
+
+
+test('selected skills and forged effective receipts are refused before an unsupported handler runs', async () => {
+  const platform = new MemoryPlatform()
+  const env = await setup(platform, inProcess)
+  try {
+    const params = turnStart('as_skills', 't_skills', 'review')
+    const doc = {skill_id:'skl_review',revision_id:'skr_v1',name:'Review',body:'skill',body_sha256:'a'.repeat(64)}
+    await assert.rejects(env.executor.startTurn({...params,config:{input_skills:[doc]}}),
+      (error:unknown)=>error instanceof RpcError && error.code === JsonRpcErrorCode.CapabilityUnavailable)
+    await assert.rejects(env.executor.startTurn({...params,config:{input_skill_receipt:{input_id:params.input_id,skills:[{skill_id:doc.skill_id,revision_id:doc.revision_id,body_sha256:doc.body_sha256}]}}}),
+      (error:unknown)=>error instanceof RpcError && error.code === JsonRpcErrorCode.InvalidParams)
+    for (const value of [{}, [], null, false, [null], [{skill_id:'skl_only'}]]) {
+      await assert.rejects(env.executor.startTurn({...params,config:{input_skills:value} as never}),
+        (error:unknown)=>error instanceof RpcError && error.code === JsonRpcErrorCode.InvalidParams)
+    }
+    await assert.rejects(env.executor.startTurn({...params,config:{input_skill_receipt:null} as never}),
+      (error:unknown)=>error instanceof RpcError && error.code === JsonRpcErrorCode.InvalidParams)
+    assert.equal(platform.events.length,0)
+  } finally { await env.close() }
+})

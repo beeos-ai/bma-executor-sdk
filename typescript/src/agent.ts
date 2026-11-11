@@ -1,3 +1,4 @@
+import { validateInputSkillRequest } from './input-skills.js'
 // Agent capability, executor side: a complete local agent served over the
 // executor protocol. The SDK owns turn.start/input/cancel, session.close,
 // event ids and sequences, ACK tracking and resend after reconnect,
@@ -468,6 +469,10 @@ export class AgentRuntime {
   }
 
   private async turnStart(params: TurnStartParams): Promise<TurnStartResult> {
+    const selected = validateInputSkillRequest(params?.config)
+    if (selected && this.capability.input_skills !== true) {
+      throw new RpcError(JsonRpcErrorCode.CapabilityUnavailable, 'input_skills is not supported')
+    }
     if (!params?.session_id || !params.turn_id || !params.input?.length) {
       throw new RpcError(JsonRpcErrorCode.InvalidParams, 'session_id, turn_id and input are required')
     }

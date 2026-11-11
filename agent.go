@@ -96,7 +96,7 @@ func (c *Client) ServeAgent(handler AgentHandler, capability AgentCapability) {
 	c.mu.Lock()
 	c.agent = runtime
 	c.mu.Unlock()
-	c.onRequest(MethodTurnStart, decodeThen(runtime.turnStart))
+	c.onRequest(MethodTurnStart, runtime.turnStartRaw)
 	c.onRequest(MethodTurnInput, decodeThen(runtime.turnInput))
 	c.onRequest(MethodTurnCancel, decodeThen(runtime.turnCancel))
 	c.onRequest(MethodSessionClose, decodeThen(runtime.sessionClose))
@@ -463,6 +463,17 @@ func (r *agentRuntime) session(id string, create bool) (*agentSession, error) {
 }
 
 func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (TurnStartResult, error) {
+	if params.Config != nil {
+		if params.Config.InputSkillReceipt != nil {
+			return TurnStartResult{}, &RPCError{Code: CodeInvalidParams, Message: "input_skill_receipt is effective-only"}
+		}
+		if err := validateInputSkillDocuments(params.Config.InputSkills); err != nil {
+			return TurnStartResult{}, err
+		}
+		if len(params.Config.InputSkills) > 0 && !r.capability.InputSkills {
+			return TurnStartResult{}, &RPCError{Code: CodeCapabilityUnavailable, Message: "input_skills is not supported"}
+		}
+	}
 	if params.SessionID == "" || params.TurnID == "" || len(params.Input) == 0 {
 		return TurnStartResult{}, &RPCError{Code: CodeInvalidParams, Message: "session_id, turn_id and input are required"}
 	}
