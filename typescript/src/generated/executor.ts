@@ -1040,6 +1040,15 @@ export interface SessionCloseResult {
   closed: boolean
 }
 
+/** A durable publication fence or the already-applied receipt. settled is filled by the SDK, independently from the handler's fence. */
+export interface SessionCompactCancelResult {
+  session_id: string
+  operation_id: string
+  canceled: boolean
+  settled: boolean
+  receipt?: SessionCompactResult
+}
+
 /** Durable context replacement receipt. No user message or ordinary turn is created. The operation id and original version identify an immutable retry even after newer compactions. */
 export interface SessionCompactResult {
   session_id: string
@@ -1660,6 +1669,9 @@ export interface SessionCompactParams {
 export interface SessionCompactCancelParams {
   session_id: string
   operation_id: string
+  expected_context_version: number
+  expected_last_input_id: string
+  model: string
 }
 
 /** Params object of session.close. */
@@ -1914,7 +1926,7 @@ export interface MethodResultMap {
   'turn.input': Ack
   'turn.cancel': TurnCancelResult
   'session.compact': SessionCompactResult
-  'session.compact_cancel': TurnCancelResult
+  'session.compact_cancel': SessionCompactCancelResult
   'session.close': SessionCloseResult
   'interaction.request': InteractionRequestResult
   'interaction.response': InteractionResponseResult

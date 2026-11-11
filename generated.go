@@ -985,6 +985,15 @@ type SessionCloseResult struct {
 	Closed bool `json:"closed"`
 }
 
+// SessionCompactCancelResult A durable publication fence or the already-applied receipt. settled is filled by the SDK, independently from the handler's fence.
+type SessionCompactCancelResult struct {
+	SessionID   string                `json:"session_id"`
+	OperationID string                `json:"operation_id"`
+	Canceled    bool                  `json:"canceled"`
+	Settled     bool                  `json:"settled"`
+	Receipt     *SessionCompactResult `json:"receipt,omitempty"`
+}
+
 // SessionCompactResult Durable context replacement receipt. No user message or ordinary turn is created. The operation id and original version identify an immutable retry even after newer compactions.
 type SessionCompactResult struct {
 	SessionID              string `json:"session_id"`
@@ -1675,8 +1684,11 @@ type SessionCompactParams struct {
 
 // SessionCompactCancelParams is the params object of session.compact_cancel.
 type SessionCompactCancelParams struct {
-	SessionID   string `json:"session_id"`
-	OperationID string `json:"operation_id"`
+	SessionID              string `json:"session_id"`
+	OperationID            string `json:"operation_id"`
+	ExpectedContextVersion int64  `json:"expected_context_version"`
+	ExpectedLastInputID    string `json:"expected_last_input_id"`
+	Model                  string `json:"model"`
 }
 
 // SessionCloseParams is the params object of session.close.
@@ -1919,7 +1931,7 @@ func NewResult(method string) any {
 	case MethodSessionCompact:
 		return new(SessionCompactResult)
 	case MethodSessionCompactCancel:
-		return new(TurnCancelResult)
+		return new(SessionCompactCancelResult)
 	case MethodSessionClose:
 		return new(SessionCloseResult)
 	case MethodInteractionRequest:

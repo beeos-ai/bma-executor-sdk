@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { RpcError } from './errors.js'
-import { JsonRpcErrorCode, type SessionCompactParams, type SessionCompactResult } from './generated/executor.js'
+import { JsonRpcErrorCode, type SessionCompactParams, type SessionCompactResult, type SessionCompactCancelParams, type SessionCompactCancelResult } from './generated/executor.js'
 
 const id = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9_:-]{1,160}$/.test(value)
 const operation = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value)
@@ -29,4 +29,17 @@ export function validateCompactReceipt(request: SessionCompactParams, result: Se
       typeof result.summary !== 'string' || !result.summary.trim() || Buffer.byteLength(result.summary) > 524288 ||
       result.summary_sha256 !== createHash('sha256').update(result.summary).digest('hex') ||
       Object.keys(result).some(key => !['session_id', 'operation_id', 'previous_context_version', 'context_version', 'summary', 'summary_sha256', 'source_event_count'].includes(key))) throw invalid()
+}
+
+
+export function cancelAsCompact(value:SessionCompactCancelParams):SessionCompactParams {
+  return {...value,deadline_ms:1,metadata:{}}
+}
+export function validateCompactCancel(value:SessionCompactCancelParams):void {
+  validateCompactRequest(cancelAsCompact(value))
+  if(Object.keys(value).some(key=>!['session_id','operation_id','expected_context_version','expected_last_input_id','model'].includes(key)))throw invalid()
+}
+export function validateCompactCancelReceipt(request:SessionCompactCancelParams,result:SessionCompactCancelResult):void {
+  if(!result || result.session_id!==request.session_id || result.operation_id!==request.operation_id || typeof result.canceled!=='boolean' || ('receipt' in result && !result.receipt) || result.canceled===!!result.receipt || Object.keys(result).some(key=>!['session_id','operation_id','canceled','settled','receipt'].includes(key)))throw invalid()
+  if(result.receipt)validateCompactReceipt(cancelAsCompact(request),result.receipt)
 }

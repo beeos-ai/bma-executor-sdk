@@ -1549,10 +1549,11 @@ methods:
   - name: session.compact_cancel
     summary: Request cancellation of one context maintenance operation.
     description: >-
-      Cancels only the matching in-flight operation. A settled operation answers
-      canceled=false. canceled=true acknowledges the request, not settlement: the platform retains
-      its reservation until compact has settled or its immutable receipt is reconciled. It does not
-      close the conversation or cancel an ordinary turn.
+      Durably fences publication of the exact operation or returns its already-applied receipt.
+      It never closes the conversation or cancels an ordinary turn. canceled=true means the
+      operation cannot publish, including a late retry; settled=false means its SDK reservation
+      still belongs to work that has not settled. The platform retains its admission barrier until
+      settled=true, and reconciles uncertain replies by repeating this exact cancel request.
     tags:
       - name: agent
     x-bma-direction: harness-to-executor
@@ -1569,10 +1570,24 @@ methods:
         required: true
         schema:
           type: string
+      - name: expected_context_version
+        required: true
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740990
+      - name: expected_last_input_id
+        required: true
+        schema:
+          type: string
+      - name: model
+        required: true
+        schema:
+          type: string
     result:
-      name: TurnCancelResult
+      name: SessionCompactCancelResult
       schema:
-        $ref: schemas/agent.json#/$defs/TurnCancelResult
+        $ref: schemas/agent.json#/$defs/SessionCompactCancelResult
     errors:
       - $ref: "#/components/errors/InvalidParams"
       - $ref: "#/components/errors/CapabilityUnavailable"

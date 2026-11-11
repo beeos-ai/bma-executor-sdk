@@ -30,6 +30,7 @@ from .generated import (
     ProcessWriteParams,
     ProcessWriteResult,
     SessionCompactCancelParams,
+    SessionCompactCancelResult,
     SessionCompactParams,
     SessionCompactResult,
     SessionEndedParams,
@@ -50,7 +51,6 @@ from .generated import (
     ToolResultParams,
     ToolsTokenRefreshParams,
     ToolsTokenRefreshResult,
-    TurnCancelResult,
     WorkspaceBackupParams,
     WorkspaceBackupResult,
 )
@@ -102,7 +102,7 @@ WORKSPACE_BACKUP: Request[WorkspaceBackupParams, WorkspaceBackupResult] = Reques
 FS_MOUNT: Request[FsMountParams, FsMountResult] = Request("fs.mount")
 FS_UNMOUNT: Request[FsUnmountParams, FsUnmountResult] = Request("fs.unmount")
 SESSION_COMPACT: Request[SessionCompactParams, SessionCompactResult] = Request("session.compact")
-SESSION_COMPACT_CANCEL: Request[SessionCompactCancelParams, TurnCancelResult] = Request("session.compact_cancel")
+SESSION_COMPACT_CANCEL: Request[SessionCompactCancelParams, SessionCompactCancelResult] = Request("session.compact_cancel")
 AGENT_CUSTOM_TOOL_RESULT: Request[AgentCustomToolResultParams, CustomToolResultResult] = Request("agent.custom_tool_result")
 
 # Executor-to-harness requests a client sends with call.

@@ -17,6 +17,9 @@ import (
 // No tool may run and the operation must honor cancellation before publication.
 type AgentSessionCompactor interface {
 	CompactSession(context.Context, SessionCompactParams) (SessionCompactResult, error)
+	// Persist a fence against late publication, or return the applied receipt.
+	// The SDK owns Settled and overwrites that field after this returns.
+	CancelSessionCompaction(context.Context, SessionCompactCancelParams) (SessionCompactCancelResult, error)
 }
 
 type agentContextMaintenance struct {
@@ -135,22 +138,72 @@ func (r *agentRuntime) sessionCompact(ctx context.Context, p SessionCompactParam
 		return work.result, work.err
 	}
 }
-func (r *agentRuntime) compactCancel(_ context.Context, p SessionCompactCancelParams) (TurnCancelResult, error) {
-	if !r.capability.ContextMaintenance {
-		return TurnCancelResult{}, &RPCError{Code: CodeCapabilityUnavailable, Message: "context maintenance is not supported"}
+func cancelAsCompact(p SessionCompactCancelParams) SessionCompactParams {
+	return SessionCompactParams{SessionID: p.SessionID, OperationID: p.OperationID, ExpectedContextVersion: p.ExpectedContextVersion, ExpectedLastInputID: p.ExpectedLastInputID, Model: p.Model, DeadlineMS: 1, Metadata: map[string]string{}}
+}
+func (r *agentRuntime) compactCancelRaw(ctx context.Context, raw json.RawMessage) (any, error) {
+	var p SessionCompactCancelParams
+	var members map[string]json.RawMessage
+	if json.Unmarshal(raw, &members) != nil || len(members) != 5 || bytes.Equal(members["expected_context_version"], []byte("null")) {
+		return nil, invalidContext()
 	}
-	if !contextIdentityPattern.MatchString(p.SessionID) || !contextOperationPattern.MatchString(p.OperationID) {
-		return TurnCancelResult{}, invalidContext()
+	for _, key := range []string{"session_id", "operation_id", "expected_context_version", "expected_last_input_id", "model"} {
+		if _, ok := members[key]; !ok {
+			return nil, invalidContext()
+		}
 	}
-	s, _ := r.session(p.SessionID, false)
-	if s == nil {
-		return TurnCancelResult{Canceled: false}, nil
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&p) != nil {
+		return nil, invalidContext()
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if work := s.maintenance; work != nil && work.operation == p.OperationID {
-		work.cancel()
-		return TurnCancelResult{Canceled: true}, nil
+	return r.compactCancel(ctx, p)
+}
+func (r *agentRuntime) compactCancel(ctx context.Context, p SessionCompactCancelParams) (SessionCompactCancelResult, error) {
+	var empty SessionCompactCancelResult
+	handler, ok := r.handler.(AgentSessionCompactor)
+	if !r.capability.ContextMaintenance || !ok {
+		return empty, &RPCError{Code: CodeCapabilityUnavailable, Message: "context maintenance is not supported"}
 	}
-	return TurnCancelResult{Canceled: false}, nil
+	request := cancelAsCompact(p)
+	if err := validateCompactRequest(request); err != nil {
+		return empty, err
+	}
+	identityBytes, _ := json.Marshal([]any{p.SessionID, p.OperationID, p.ExpectedContextVersion, p.ExpectedLastInputID, p.Model})
+	identity := string(identityBytes)
+	session, _ := r.session(p.SessionID, false)
+	if session != nil {
+		session.mu.Lock()
+		if work := session.maintenance; work != nil && work.operation == p.OperationID {
+			if work.identity != identity {
+				session.mu.Unlock()
+				return empty, &RPCError{Code: CodeConflict, Message: "context operation identity changed"}
+			}
+			work.cancel()
+		}
+		session.mu.Unlock()
+	}
+	// The host must persist its publication fence even if this SDK process
+	// has never seen the delayed operation, or just restarted.
+	result, err := handler.CancelSessionCompaction(ctx, p)
+	if err != nil {
+		return empty, err
+	}
+	if result.SessionID != p.SessionID || result.OperationID != p.OperationID || result.Canceled == (result.Receipt != nil) {
+		return empty, invalidContext()
+	}
+	if result.Receipt != nil {
+		if err := validateCompactResult(request, *result.Receipt); err != nil {
+			return empty, err
+		}
+	}
+	result.Settled = true
+	if session != nil {
+		session.mu.Lock()
+		if work := session.maintenance; work != nil && work.operation == p.OperationID {
+			result.Settled = false
+		}
+		session.mu.Unlock()
+	}
+	return result, nil
 }

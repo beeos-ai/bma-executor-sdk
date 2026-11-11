@@ -1694,7 +1694,10 @@
         "method": "session.compact_cancel",
         "params": {
           "session_id": "sesn_example",
-          "operation_id": "context_example"
+          "operation_id": "context_example",
+          "expected_context_version": 0,
+          "expected_last_input_id": "in_context_source",
+          "model": "deepseek-v4-flash"
         }
       }
     },
@@ -1703,7 +1706,10 @@
       "method": "session.compact_cancel",
       "kind": "result",
       "result": {
-        "canceled": true
+        "session_id": "sesn_example",
+        "operation_id": "context_example",
+        "canceled": true,
+        "settled": true
       }
     }
   ]

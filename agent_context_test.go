@@ -1,6 +1,7 @@
 package bmaexecutor
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,10 +15,20 @@ import (
 type compactTestAgent struct {
 	nopAgent
 	compact func(context.Context, SessionCompactParams) (SessionCompactResult, error)
+	cancel  func(context.Context, SessionCompactCancelParams) (SessionCompactCancelResult, error)
 }
 
 func (a compactTestAgent) CompactSession(ctx context.Context, p SessionCompactParams) (SessionCompactResult, error) {
 	return a.compact(ctx, p)
+}
+func (a compactTestAgent) CancelSessionCompaction(ctx context.Context, p SessionCompactCancelParams) (SessionCompactCancelResult, error) {
+	if a.cancel != nil {
+		return a.cancel(ctx, p)
+	}
+	return SessionCompactCancelResult{SessionID: p.SessionID, OperationID: p.OperationID, Canceled: true}, nil
+}
+func compactCancelParams(p SessionCompactParams) SessionCompactCancelParams {
+	return SessionCompactCancelParams{SessionID: p.SessionID, OperationID: p.OperationID, ExpectedContextVersion: p.ExpectedContextVersion, ExpectedLastInputID: p.ExpectedLastInputID, Model: p.Model}
 }
 func compactParams() SessionCompactParams {
 	return SessionCompactParams{SessionID: "session_compact", OperationID: "context_once", ExpectedContextVersion: 0, ExpectedLastInputID: "input_source", Model: "model-1", DeadlineMS: 2000, Metadata: map[string]string{}}
@@ -111,12 +122,14 @@ func TestContextMaintenanceCancelRemainsReservedUntilSettled(t *testing.T) {
 	finished := make(chan error, 1)
 	go func() { _, err := r.sessionCompact(context.Background(), p); finished <- err }()
 	<-started
-	wrong, err := r.compactCancel(context.Background(), SessionCompactCancelParams{SessionID: p.SessionID, OperationID: "another"})
-	if err != nil || wrong.Canceled {
+	other := compactCancelParams(p)
+	other.OperationID = "another"
+	wrong, err := r.compactCancel(context.Background(), other)
+	if err != nil || !wrong.Canceled || !wrong.Settled {
 		t.Fatal(wrong, err)
 	}
-	right, err := r.compactCancel(context.Background(), SessionCompactCancelParams{SessionID: p.SessionID, OperationID: p.OperationID})
-	if err != nil || !right.Canceled {
+	right, err := r.compactCancel(context.Background(), compactCancelParams(p))
+	if err != nil || !right.Canceled || right.Settled {
 		t.Fatal(right, err)
 	}
 	<-aborted
@@ -185,5 +198,42 @@ func TestContextMaintenanceCapabilityRequiresItsHandler(t *testing.T) {
 		t.Fatal("unsupported maintenance advertised")
 	}
 	_, err := client.agent.sessionCompact(context.Background(), compactParams())
+	requireContextCode(t, err, CodeCapabilityUnavailable)
+}
+
+func TestContextCancelAfterRestartReturnsAppliedReceiptOrDurableFence(t *testing.T) {
+	p := compactParams()
+	receipt := compactResult(p)
+	var calls atomic.Int64
+	r := compactRuntime(t, compactTestAgent{cancel: func(_ context.Context, in SessionCompactCancelParams) (SessionCompactCancelResult, error) {
+		calls.Add(1)
+		return SessionCompactCancelResult{SessionID: in.SessionID, OperationID: in.OperationID, Receipt: &receipt}, nil
+	}})
+	applied, err := r.compactCancel(context.Background(), compactCancelParams(p))
+	if err != nil || applied.Canceled || !applied.Settled || applied.Receipt == nil || applied.Receipt.SummarySHA256 != receipt.SummarySHA256 {
+		t.Fatal(applied, err)
+	}
+	raw, _ := json.Marshal(compactCancelParams(p))
+	for _, invalid := range []json.RawMessage{[]byte(`{}`), bytes.Replace(raw, []byte(`"expected_context_version":0`), []byte(`"expected_context_version":null`), 1), bytes.Replace(raw, []byte(`"model":"model-1"`), []byte(`"model":"model-1","extra":true`), 1)} {
+		_, err = r.compactCancelRaw(context.Background(), invalid)
+		requireContextCode(t, err, CodeInvalidParams)
+	}
+	if calls.Load() != 1 {
+		t.Fatal("invalid cancel reached durable handler", calls.Load())
+	}
+}
+
+type incompleteContextAgent struct{ nopAgent }
+
+func (incompleteContextAgent) CompactSession(context.Context, SessionCompactParams) (SessionCompactResult, error) {
+	panic("must not be reached")
+}
+func TestContextCapabilityNeedsTheDurableCancellationPort(t *testing.T) {
+	c := &Client{requestHandlers: map[string]func(context.Context, json.RawMessage) (any, error){}}
+	c.ServeAgent(incompleteContextAgent{}, AgentCapability{ContextMaintenance: true})
+	if c.agent.capability.ContextMaintenance {
+		t.Fatal("partial maintenance handler advertised")
+	}
+	_, err := c.agent.compactCancel(context.Background(), compactCancelParams(compactParams()))
 	requireContextCode(t, err, CodeCapabilityUnavailable)
 }

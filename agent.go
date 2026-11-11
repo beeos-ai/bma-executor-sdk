@@ -105,7 +105,7 @@ func (c *Client) ServeAgent(handler AgentHandler, capability AgentCapability) {
 	c.onRequest(MethodTurnCancel, decodeThen(runtime.turnCancel))
 	c.onRequest(MethodSessionClose, decodeThen(runtime.sessionClose))
 	c.onRequest(MethodSessionCompact, runtime.sessionCompactRaw)
-	c.onRequest(MethodSessionCompactCancel, decodeThen(runtime.compactCancel))
+	c.onRequest(MethodSessionCompactCancel, runtime.compactCancelRaw)
 	c.onRequest(MethodInteractionResponse, decodeThen(runtime.interactionResponse))
 	c.onRequest(MethodAgentCustomToolResult, decodeThen(runtime.customToolResult))
 }

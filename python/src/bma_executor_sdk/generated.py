@@ -769,6 +769,14 @@ class SessionCloseResult(TypedDict):
     """session.close result."""
     closed: bool
 
+class SessionCompactCancelResult(TypedDict):
+    """A durable publication fence or the already-applied receipt. settled is filled by the SDK, independently from the handler's fence."""
+    session_id: str
+    operation_id: str
+    canceled: bool
+    settled: bool
+    receipt: NotRequired[SessionCompactResult]
+
 class SessionCompactResult(TypedDict):
     """Durable context replacement receipt. No user message or ordinary turn is created. The operation id and original version identify an immutable retry even after newer compactions."""
     session_id: str
@@ -1254,6 +1262,9 @@ class SessionCompactCancelParams(TypedDict):
     "Params object of session.compact_cancel."
     session_id: str
     operation_id: str
+    expected_context_version: int
+    expected_last_input_id: str
+    model: str
 
 class SessionCloseParams(TypedDict):
     "Params object of session.close."
@@ -1409,7 +1420,7 @@ METHODS: dict[str, MethodSpec] = {
     "turn.input": MethodSpec(name="turn.input", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="TurnInputParams", result_type="Ack", capability="agent", idempotent_by="input_id"),
     "turn.cancel": MethodSpec(name="turn.cancel", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="TurnCancelParams", result_type="TurnCancelResult", capability="agent", idempotent_by=None),
     "session.compact": MethodSpec(name="session.compact", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="SessionCompactParams", result_type="SessionCompactResult", capability="agent.context_maintenance", idempotent_by="operation_id"),
-    "session.compact_cancel": MethodSpec(name="session.compact_cancel", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="SessionCompactCancelParams", result_type="TurnCancelResult", capability="agent.context_maintenance", idempotent_by=None),
+    "session.compact_cancel": MethodSpec(name="session.compact_cancel", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="SessionCompactCancelParams", result_type="SessionCompactCancelResult", capability="agent.context_maintenance", idempotent_by=None),
     "session.close": MethodSpec(name="session.close", direction="harness-to-executor", kind="request", since="bma.executor.v1.1", params_type="SessionCloseParams", result_type="SessionCloseResult", capability="agent", idempotent_by=None),
     "session.event_delta": MethodSpec(name="session.event_delta", direction="executor-to-harness", kind="notification", since="bma.executor.v1.1", params_type="SessionEventDeltaParams", result_type=None, capability="agent", idempotent_by=None),
     "interaction.request": MethodSpec(name="interaction.request", direction="executor-to-harness", kind="request", since="bma.executor.v1.1", params_type="InteractionRequestParams", result_type="InteractionRequestResult", capability="agent", idempotent_by="interaction_id"),

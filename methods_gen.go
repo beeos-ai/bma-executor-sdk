@@ -19,7 +19,7 @@ var Requests = struct {
 	FsMount               RequestMethod[FsMountParams, FsMountResult]
 	FsUnmount             RequestMethod[FsUnmountParams, FsUnmountResult]
 	SessionCompact        RequestMethod[SessionCompactParams, SessionCompactResult]
-	SessionCompactCancel  RequestMethod[SessionCompactCancelParams, TurnCancelResult]
+	SessionCompactCancel  RequestMethod[SessionCompactCancelParams, SessionCompactCancelResult]
 	AgentCustomToolResult RequestMethod[AgentCustomToolResultParams, CustomToolResultResult]
 }{
 	ProcessStart:          RequestMethod[ProcessStartParams, ProcessState]{Method: "process.start"},
@@ -36,7 +36,7 @@ var Requests = struct {
 	FsMount:               RequestMethod[FsMountParams, FsMountResult]{Method: "fs.mount"},
 	FsUnmount:             RequestMethod[FsUnmountParams, FsUnmountResult]{Method: "fs.unmount"},
 	SessionCompact:        RequestMethod[SessionCompactParams, SessionCompactResult]{Method: "session.compact"},
-	SessionCompactCancel:  RequestMethod[SessionCompactCancelParams, TurnCancelResult]{Method: "session.compact_cancel"},
+	SessionCompactCancel:  RequestMethod[SessionCompactCancelParams, SessionCompactCancelResult]{Method: "session.compact_cancel"},
 	AgentCustomToolResult: RequestMethod[AgentCustomToolResultParams, CustomToolResultResult]{Method: "agent.custom_tool_result"},
 }
 

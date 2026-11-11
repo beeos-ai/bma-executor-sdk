@@ -488,7 +488,7 @@ export class ExecutorClient {
 
   /** Advertises the agent capability and serves turn.*, session.close, interaction.response and agent.custom_tool_result. Call before start. */
   serveAgent(handler: AgentHandler, capability: Omit<AgentCapability, 'enabled'> = {}): void {
-    if (capability.context_maintenance === true && !handler.compactSession) throw new Error('context_maintenance requires a compactSession handler')
+    if (capability.context_maintenance === true && (!handler.compactSession || !handler.cancelCompactSession)) throw new Error('context_maintenance requires compactSession and cancelCompactSession handlers')
     this.agent = new AgentRuntime(this.agentHost(), handler, { ...capability, enabled: true })
   }
 

@@ -1,5 +1,5 @@
 import { validateInputSkillRequest, validateInputSkillReceipt } from './input-skills.js'
-import { compactIdentity, validateCompactRequest, validateCompactReceipt } from './context-maintenance.js'
+import { compactIdentity, validateCompactRequest, validateCompactReceipt, cancelAsCompact, validateCompactCancel, validateCompactCancelReceipt } from './context-maintenance.js'
 // Agent capability, executor side: a complete local agent served over the
 // executor protocol. The SDK owns turn.start/input/cancel, session.close,
 // event ids and sequences, ACK tracking and resend after reconnect,
@@ -30,6 +30,7 @@ import {
   type SessionCompactParams,
   type SessionCompactResult,
   type SessionCompactCancelParams,
+  type SessionCompactCancelResult,
   type SessionEndedParams,
   type SessionEvent,
   type SessionEventDeltaParams,
@@ -54,6 +55,9 @@ export interface AgentHandler {
   /** Optional idle-context maintenance. Must persist pointer and receipt before
    * resolving, retain original history on failure, and never execute tools. */
   compactSession?(params: SessionCompactParams, signal: AbortSignal): Promise<SessionCompactResult>
+  /** Durably fence publication or return the applied receipt, including after
+   * restart. The SDK fills settled independently from the handler's result. */
+  cancelCompactSession?(params: SessionCompactCancelParams): Promise<SessionCompactCancelResult>
   /**
    * Decides whether to accept a turn.start and reports the configuration the
    * agent will apply. It runs before turn.start is answered, so it must not
@@ -616,7 +620,7 @@ export class AgentRuntime {
   }
 
   private async sessionCompact(params: SessionCompactParams): Promise<SessionCompactResult> {
-    if (this.capability.context_maintenance !== true || !this.handler.compactSession) throw new RpcError(JsonRpcErrorCode.CapabilityUnavailable, 'context maintenance is not supported')
+    if (this.capability.context_maintenance !== true || (!this.handler.compactSession || !this.handler.cancelCompactSession)) throw new RpcError(JsonRpcErrorCode.CapabilityUnavailable, 'context maintenance is not supported')
     validateCompactRequest(params)
     const session = this.session(params.session_id, true)!
     if (session.closed || session.closing || session.turn || session.pending.size || session.customTools.size) throw new RpcError(JsonRpcErrorCode.Conflict, 'context maintenance requires a settled idle session')
@@ -641,13 +645,18 @@ export class AgentRuntime {
     finally { if (session.maintenance?.done === done) session.maintenance = undefined }
   }
 
-  private compactCancel(params: SessionCompactCancelParams): TurnCancelResult {
-    if (this.capability.context_maintenance !== true || !this.handler.compactSession) throw new RpcError(JsonRpcErrorCode.CapabilityUnavailable, 'context maintenance is not supported')
-    if (!params?.session_id || !params.operation_id) throw new RpcError(JsonRpcErrorCode.InvalidParams, 'session and operation are required')
-    const maintenance = this.session(params.session_id, false)?.maintenance
-    if (!maintenance || maintenance.operationId !== params.operation_id) return { canceled: false }
-    maintenance.abort.abort(new Error('session.compact_cancel'))
-    return { canceled: true }
+  private async compactCancel(params: SessionCompactCancelParams): Promise<SessionCompactCancelResult> {
+    if(this.capability.context_maintenance!==true || !this.handler.compactSession || !this.handler.cancelCompactSession)throw new RpcError(JsonRpcErrorCode.CapabilityUnavailable,'context maintenance is not supported')
+    validateCompactCancel(params)
+    const session=this.session(params.session_id,false)
+    const work=session?.maintenance
+    if(work?.operationId===params.operation_id){
+      if(work.identity!==compactIdentity(cancelAsCompact(params)))throw new RpcError(JsonRpcErrorCode.Conflict,'context operation identity changed')
+      work.abort.abort(new Error('session.compact_cancel'))
+    }
+    const result=await this.handler.cancelCompactSession(params)
+    validateCompactCancelReceipt(params,result)
+    return {...result,settled:session?.maintenance?.operationId!==params.operation_id}
   }
 
   private interactionResponse(params: InteractionResponseParams): InteractionResponseResult {

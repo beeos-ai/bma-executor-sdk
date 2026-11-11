@@ -1032,6 +1032,34 @@
         "source_event_count"
       ],
       "additionalProperties": false
+    },
+    "SessionCompactCancelResult": {
+      "type": "object",
+      "description": "A durable publication fence or the already-applied receipt. settled is filled by the SDK, independently from the handler's fence.",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "canceled": {
+          "type": "boolean"
+        },
+        "settled": {
+          "type": "boolean"
+        },
+        "receipt": {
+          "$ref": "agent.json#/$defs/SessionCompactResult"
+        }
+      },
+      "required": [
+        "session_id",
+        "operation_id",
+        "canceled",
+        "settled"
+      ],
+      "additionalProperties": false
     }
   }
 }
