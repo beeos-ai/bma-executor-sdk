@@ -552,6 +552,7 @@ export class AgentRuntime {
       throw new RpcError(JsonRpcErrorCode.Conflict, 'turn is not running; start a new turn')
     }
     if (turn.seen.has(params.input_id)) return { accepted: true }
+    if (turn.params.config?.input_skills?.length) throw new RpcError(JsonRpcErrorCode.Conflict, 'selected-skill input requires its own turn')
     turn.seen.add(params.input_id)
     turn.pushInput(params)
     return { accepted: true }

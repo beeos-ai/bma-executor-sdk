@@ -39,3 +39,18 @@ func TestSelectedSkillWirePresenceAndShape(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSelectedSkillInputRejectsAnotherMidTurnInput(t *testing.T) {
+	runtime := &agentRuntime{sessions: map[string]*agentSession{}}
+	turn := &AgentTurn{params: TurnStartParams{TurnID: "t", Config: &AgentTurnConfig{InputSkills: []InputSkillDocument{{SkillID: "skl_one"}}}}, seen: map[string]bool{"opening": true}}
+	runtime.sessions["s"] = &agentSession{turn: turn}
+	_, err := runtime.turnInput(context.Background(), TurnInputParams{SessionID: "s", TurnID: "t", InputID: "other"})
+	var rpc *RPCError
+	if !errors.As(err, &rpc) || rpc.Code != CodeConflict {
+		t.Fatal(err)
+	}
+	ack, err := runtime.turnInput(context.Background(), TurnInputParams{SessionID: "s", TurnID: "t", InputID: "opening"})
+	if err != nil || !ack.Accepted {
+		t.Fatal(ack, err)
+	}
+}

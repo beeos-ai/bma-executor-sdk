@@ -28,3 +28,14 @@ async def test_null_receipt_is_still_effective_only():
     with pytest.raises(RPCError) as failure:
         await runtime.turn_start({"config":{"input_skill_receipt":None}})
     assert failure.value.code == JsonRpcErrorCode.InvalidParams
+
+async def test_selected_skill_turn_refuses_another_input():
+    from bma_executor_sdk.agent import AgentTurn, _AgentSession
+    runtime = _AgentRuntime(None, None, {"enabled": True, "input_skills":True})
+    session = _AgentSession(runtime,"s")
+    session.turn = AgentTurn(session,{"turn_id":"t","input_id":"opening","config":{"input_skills":[{}]}})
+    runtime.sessions["s"] = session
+    with pytest.raises(RPCError) as failure:
+        await runtime.turn_input({"session_id":"s","turn_id":"t","input_id":"other"})
+    assert failure.value.code == JsonRpcErrorCode.Conflict
+    assert await runtime.turn_input({"session_id":"s","turn_id":"t","input_id":"opening"}) == {"accepted":True}

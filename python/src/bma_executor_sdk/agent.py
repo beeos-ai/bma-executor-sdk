@@ -293,6 +293,8 @@ class _AgentRuntime:
             raise RPCError(JsonRpcErrorCode.Conflict, "turn is not running; start a new turn")
         if params.get("input_id") in turn._seen:  # noqa: SLF001
             return {"accepted": True}
+        if (turn.params.get("config") or {}).get("input_skills"):
+            raise RPCError(JsonRpcErrorCode.Conflict, "selected-skill input requires its own turn")
         turn._seen.add(params.get("input_id", ""))  # noqa: SLF001
         put = asyncio.ensure_future(turn.inputs.put(params))
         ended = asyncio.ensure_future(turn._done.wait())  # noqa: SLF001

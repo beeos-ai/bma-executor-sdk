@@ -718,6 +718,10 @@ func (r *agentRuntime) turnInput(_ context.Context, params TurnInputParams) (Ack
 		s.mu.Unlock()
 		return Ack{Accepted: true}, nil
 	}
+	if turn.params.Config != nil && len(turn.params.Config.InputSkills) > 0 {
+		s.mu.Unlock()
+		return Ack{}, &RPCError{Code: CodeConflict, Message: "selected-skill input requires its own turn"}
+	}
 	turn.seen[params.InputID] = true
 	s.mu.Unlock()
 	select {
