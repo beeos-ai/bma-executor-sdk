@@ -121,7 +121,7 @@ func (r *agentRuntime) sessionCompact(ctx context.Context, p SessionCompactParam
 			if s.maintenance == work {
 				s.maintenance = nil
 			}
-			s.lastUsed = time.Now()
+			s.lastUsed = r.useSequence.Add(1)
 			s.mu.Unlock()
 			close(work.done)
 		}()

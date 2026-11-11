@@ -2,6 +2,8 @@
 
 ## 1.7.0
 
+- Order idle-session eviction by a monotonic activity sequence rather than wall-clock timestamps, which could tie on Windows and select the wrong least-recent session. Snapshot ordering before sorting; maintenance remains ineligible for eviction.
+
 - Add contract 1.6.0 typed session.compact and session.compact_cancel methods. Go and TypeScript agent runtimes offer an optional, explicitly enabled maintenance handler, exclude turns and close while it settles, join exact concurrent retries and validate the durable receipt and summary hash. Cancel acknowledgment alone does not release the reservation. No ordinary turn or message event is generated. Handlers must provide durable idempotent context publication and use fresh session maintenance credentials supplied by the platform.
 - Python includes generated methods and types, explicitly refuses maintenance RPCs and refuses to advertise the unsupported agent capability. Existing Python agents retain their behavior.
 - This SDK does not itself authorize platform users, implement context compaction, expose a public platform API or enable a product capability.
