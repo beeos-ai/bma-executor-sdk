@@ -485,6 +485,9 @@ func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (T
 		running := existing.turn != nil
 		existing.mu.Unlock()
 		if known {
+			if err := validateInputSkillReceipt(params, result); err != nil {
+				return TurnStartResult{}, err
+			}
 			return result, nil
 		}
 		if running {
@@ -528,6 +531,9 @@ func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (T
 	if result, ok := s.results[params.TurnID]; ok {
 		s.mu.Unlock()
 		cancel()
+		if err := validateInputSkillReceipt(params, result); err != nil {
+			return TurnStartResult{}, err
+		}
 		return result, nil
 	}
 	if s.turn != nil {
@@ -546,11 +552,16 @@ func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (T
 	if err == nil && !result.Accepted {
 		err = &RPCError{Code: CodeExecutorBusy, Message: "turn not accepted"}
 	}
+	if err == nil {
+		err = validateInputSkillReceipt(params, result)
+	}
 	s.mu.Lock()
 	if err != nil {
 		s.mu.Unlock()
+		turn.ended.Store(true)
 		s.finishTurn(turn)
 		cancel()
+		close(turn.done)
 		return TurnStartResult{}, err
 	}
 	result.TurnID = params.TurnID

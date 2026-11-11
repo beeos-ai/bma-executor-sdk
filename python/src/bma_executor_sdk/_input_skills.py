@@ -39,3 +39,16 @@ def validate_input_skill_request(config: object) -> bool:
             raise invalid()
         seen.add(doc["skill_id"])
     return True
+
+
+def validate_input_skill_receipt(params: dict, result: dict) -> None:
+    selected = (params.get("config") or {}).get("input_skills", [])
+    receipt = (result.get("effective") or {}).get("input_skill_receipt")
+    if not selected and receipt is None:
+        return
+    if (not isinstance(receipt, dict) or receipt.get("input_id") != params.get("input_id")
+        or not isinstance(receipt.get("skills"), list) or len(receipt["skills"]) != len(selected) or not selected):
+        raise RPCError(JsonRpcErrorCode.InvalidParams, "input skill receipt does not match the opening input")
+    for expected, actual in zip(selected, receipt["skills"]):
+        if not isinstance(actual, dict) or any(actual.get(key) != expected[key] for key in ("skill_id", "revision_id", "body_sha256")):
+            raise RPCError(JsonRpcErrorCode.InvalidParams, "input skill receipt does not match the opening input")

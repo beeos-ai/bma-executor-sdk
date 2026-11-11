@@ -12,7 +12,7 @@ Harness side (Go: agent_harness.go): ``Harness(agent=platform)`` with an
 
 from __future__ import annotations
 
-from ._input_skills import validate_input_skill_request
+from ._input_skills import validate_input_skill_request, validate_input_skill_receipt
 
 import asyncio
 from collections import deque
@@ -238,6 +238,7 @@ class _AgentRuntime:
         s = self.session(params["session_id"], True)
         assert s is not None
         if params["turn_id"] in s.results:
+            validate_input_skill_receipt(params,s.results[params["turn_id"]])
             return s.results[params["turn_id"]]
         if s.turn is not None:
             raise RPCError(JsonRpcErrorCode.Conflict, "a turn is already running; use turn.input")
@@ -247,8 +248,12 @@ class _AgentRuntime:
             result = dict(await self.handler.open_turn(params))
             if not result.get("accepted"):
                 raise RPCError(JsonRpcErrorCode.ExecutorBusy, "turn not accepted")
+            validate_input_skill_receipt(params,result)
         except BaseException:
+            _cancel_turn(turn)
+            turn.ended = True
             s.turn = None
+            turn._done.set()  # noqa: SLF001
             raise
         result["turn_id"] = params["turn_id"]
         s.results[params["turn_id"]] = result  # type: ignore[assignment]

@@ -55,3 +55,26 @@ func validateInputSkillDocuments(documents []InputSkillDocument) error {
 	}
 	return nil
 }
+
+// A handler cannot opt in and silently ignore the intent: validate its applied
+// receipt before scheduling RunTurn, and when replaying a cached turn.start.
+func validateInputSkillReceipt(params TurnStartParams, result TurnStartResult) error {
+	var selected []InputSkillDocument
+	if params.Config != nil {
+		selected = params.Config.InputSkills
+	}
+	receipt := result.Effective.InputSkillReceipt
+	if len(selected) == 0 && receipt == nil {
+		return nil
+	}
+	if receipt == nil || receipt.InputID != params.InputID || len(receipt.Skills) != len(selected) || len(selected) == 0 {
+		return invalidInputSkills()
+	}
+	for i, doc := range selected {
+		actual := receipt.Skills[i]
+		if actual.SkillID != doc.SkillID || actual.RevisionID != doc.RevisionID || actual.BodySHA256 != doc.BodySHA256 {
+			return invalidInputSkills()
+		}
+	}
+	return nil
+}

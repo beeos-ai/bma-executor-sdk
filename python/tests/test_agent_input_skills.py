@@ -39,3 +39,51 @@ async def test_selected_skill_turn_refuses_another_input():
         await runtime.turn_input({"session_id":"s","turn_id":"t","input_id":"other"})
     assert failure.value.code == JsonRpcErrorCode.Conflict
     assert await runtime.turn_input({"session_id":"s","turn_id":"t","input_id":"opening"}) == {"accepted":True}
+
+def test_exact_receipt_bound_to_opening_input_and_revision():
+    from bma_executor_sdk._input_skills import validate_input_skill_receipt
+    from copy import deepcopy
+    doc = {"skill_id":"skl_one","revision_id":"skr_one","body_sha256":"a"*64}
+    params = {"input_id":"opening","config":{"input_skills":[doc]}}
+    result = {"effective":{"input_skill_receipt":{"input_id":"opening","skills":[doc]}}}
+    validate_input_skill_receipt(params,result)
+    invalid = [{}, {"effective":{"input_skill_receipt":{"input_id":"other","skills":[doc]}}}, {"effective":{"input_skill_receipt":{"input_id":"opening","skills":[]}}}]
+    changed = deepcopy(result);changed["effective"]["input_skill_receipt"]["skills"][0]["revision_id"] = "skr_other";invalid.append(changed)
+    for receipt in invalid:
+        with pytest.raises(RPCError):
+            validate_input_skill_receipt(params,receipt)
+
+async def test_receipt_refusal_unblocks_concurrent_close():
+    import asyncio
+    from types import SimpleNamespace
+    started, release = asyncio.Event(), asyncio.Event()
+    ran = []
+    async def opened(params):
+        started.set();await release.wait()
+        return {"accepted":True,"turn_id":"t","effective":{}}
+    async def run(turn):
+        ran.append(True)
+    async def close(sid,reason):
+        pass
+    async def call(*args):
+        return {"accepted":True}
+    tasks = []
+    def spawn(work):
+        task=asyncio.create_task(work);tasks.append(task);return task
+    client=SimpleNamespace(_sessions=set(),_spawn=spawn,_registered=asyncio.Event(),_call=call,_log=lambda *args:None)
+    runtime=_AgentRuntime(client,SimpleNamespace(open_turn=opened,run_turn=run,close_session=close),{"enabled":True,"input_skills":True})
+    params={"session_id":"s","turn_id":"t","input_id":"i","input":[{"type":"text","text":"x"}],"config":{"input_skills":[{"skill_id":"skl_one","revision_id":"skr_one","name":"One","body":"skill","body_sha256":"a"*64}]}}
+    opening=asyncio.create_task(runtime.turn_start(params))
+    await started.wait()
+    closing=asyncio.create_task(runtime.session_close({"session_id":"s","reason":"test"}))
+    # Wait for session.close's cancellation, proving it captured this turn.
+    async def captured():
+        while not runtime.sessions["s"].turn._canceled:
+            await asyncio.sleep(0)
+    await asyncio.wait_for(captured(),1)
+    release.set()
+    with pytest.raises(RPCError):
+        await opening
+    assert await asyncio.wait_for(closing,1)=={"closed":True}
+    assert not ran
+    await asyncio.gather(*tasks)

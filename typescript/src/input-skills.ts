@@ -1,5 +1,5 @@
 import { RpcError } from './errors.js'
-import { JsonRpcErrorCode } from './generated/executor.js'
+import { JsonRpcErrorCode, type TurnStartParams, type TurnStartResult } from './generated/executor.js'
 
 /** Shape gate only. An opted-in handler must verify and install the exact bytes. */
 export function validateInputSkillRequest(config: unknown): boolean {
@@ -25,3 +25,12 @@ export function validateInputSkillRequest(config: unknown): boolean {
   return true
 }
 function invalid(): RpcError { return new RpcError(JsonRpcErrorCode.InvalidParams, 'invalid input_skills') }
+
+
+export function validateInputSkillReceipt(params: TurnStartParams, result: TurnStartResult): void {
+  const selected = params.config?.input_skills ?? []
+  const receipt = result.effective?.input_skill_receipt
+  if (!selected.length && receipt === undefined) return
+  if (!receipt || receipt.input_id !== params.input_id || !Array.isArray(receipt.skills) || receipt.skills.length !== selected.length || !selected.length) throw invalid()
+  if (selected.some((doc,i) => receipt.skills[i]?.skill_id !== doc.skill_id || receipt.skills[i]?.revision_id !== doc.revision_id || receipt.skills[i]?.body_sha256 !== doc.body_sha256)) throw invalid()
+}
