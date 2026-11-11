@@ -89,13 +89,21 @@ function echoAgent(closed: string[]): AgentHandler {
   }
 }
 
-async function setup(platform: MemoryPlatform, dialer: (harness: Harness) => Promise<{ dialer: Dialer; close(): Promise<void> }>) {
+async function setup(platform: MemoryPlatform, dialer: (harness: Harness) => Promise<{ dialer: Dialer; close(): Promise<void> }>, selectedSkills = false, appliedReceipt = true) {
   const ended: string[] = []
   const harness = new Harness({ agent: platform })
   const transport = await dialer(harness)
   const closed: string[] = []
   const client = new ExecutorClient({ environmentId: 'env_test', executor: executorInfo, dialer: transport.dialer, reconnectBaseDelayMs: 10 })
-  client.serveAgent(echoAgent(closed), { models: [{ id: 'echo-1' }], interaction_kinds: ['permission'] })
+  const agent = echoAgent(closed)
+  if (selectedSkills && appliedReceipt) {
+    const open = agent.openTurn
+    agent.openTurn = async params => {
+      const result = await open(params)
+      return {...result,effective:{...result.effective,...(params.config?.input_skills ? {input_skill_receipt:{input_id:params.input_id,skills:params.config.input_skills.map(({skill_id,revision_id,body_sha256})=>({skill_id,revision_id,body_sha256}))}} : {})}}
+    }
+  }
+  client.serveAgent(agent, { models: [{ id: 'echo-1' }], interaction_kinds: ['permission'], ...(selectedSkills ? {input_skills:true} : {}) })
   await client.start()
   const executor = await harness.waitExecutor()
   return {
@@ -310,4 +318,50 @@ describe('agent capability', () => {
       await env.close()
     }
   })
+})
+
+
+test('selected skills and forged effective receipts are refused before an unsupported handler runs', async () => {
+  const platform = new MemoryPlatform()
+  const env = await setup(platform, inProcess)
+  try {
+    const params = turnStart('as_skills', 't_skills', 'review')
+    const doc = {skill_id:'skl_review',revision_id:'skr_v1',name:'Review',body:'skill',body_sha256:'a'.repeat(64)}
+    await assert.rejects(env.executor.startTurn({...params,config:{input_skills:[doc]}}),
+      (error:unknown)=>error instanceof RpcError && error.code === JsonRpcErrorCode.CapabilityUnavailable)
+    await assert.rejects(env.executor.startTurn({...params,config:{input_skill_receipt:{input_id:params.input_id,skills:[{skill_id:doc.skill_id,revision_id:doc.revision_id,body_sha256:doc.body_sha256}]}}}),
+      (error:unknown)=>error instanceof RpcError && error.code === JsonRpcErrorCode.InvalidParams)
+    for (const value of [{}, [], null, false, [null], [{skill_id:'skl_only'}]]) {
+      await assert.rejects(env.executor.startTurn({...params,config:{input_skills:value} as never}),
+        (error:unknown)=>error instanceof RpcError && error.code === JsonRpcErrorCode.InvalidParams)
+    }
+    await assert.rejects(env.executor.startTurn({...params,config:{input_skill_receipt:null} as never}),
+      (error:unknown)=>error instanceof RpcError && error.code === JsonRpcErrorCode.InvalidParams)
+    assert.equal(platform.events.length,0)
+  } finally { await env.close() }
+})
+
+
+test('selected-skill opening input is isolated from mid-turn additions', async () => {
+  const platform = new MemoryPlatform()
+  const env = await setup(platform,inProcess,true)
+  try {
+    const params = {...turnStart('as_isolated','t_isolated','block'),config:{input_skills:[{skill_id:'skl_review',revision_id:'skr_v1',name:'Review',body:'skill',body_sha256:'a'.repeat(64)}]}}
+    await env.executor.startTurn(params)
+    await assert.rejects(env.executor.sendTurnInput({session_id:params.session_id,turn_id:params.turn_id,input_id:'in_other',input:[{type:'text',text:'other'}]}),
+      (error:unknown)=>error instanceof RpcError && error.code===JsonRpcErrorCode.Conflict)
+    assert.deepEqual(await env.executor.sendTurnInput({session_id:params.session_id,turn_id:params.turn_id,input_id:params.input_id,input:params.input}),{accepted:true})
+    await env.executor.cancelTurn({session_id:params.session_id,turn_id:params.turn_id})
+  } finally { await env.close() }
+})
+
+
+test('an opted-in handler missing its skill receipt cannot start execution', async () => {
+  const platform = new MemoryPlatform()
+  const env = await setup(platform,inProcess,true,false)
+  try {
+    await assert.rejects(env.executor.startTurn({...turnStart('as_missing','t_missing','block'),config:{input_skills:[{skill_id:'skl_review',revision_id:'skr_v1',name:'Review',body:'skill',body_sha256:'a'.repeat(64)}]}}),
+      (error:unknown)=>error instanceof RpcError && error.code === JsonRpcErrorCode.InvalidParams)
+    assert.equal(platform.events.length,0)
+  } finally { await env.close() }
 })

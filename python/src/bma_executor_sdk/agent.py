@@ -12,6 +12,8 @@ Harness side (Go: agent_harness.go): ``Harness(agent=platform)`` with an
 
 from __future__ import annotations
 
+from ._input_skills import validate_input_skill_request, validate_input_skill_receipt
+
 import asyncio
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -228,11 +230,15 @@ class _AgentRuntime:
         return session
 
     async def turn_start(self, params: TurnStartParams) -> TurnStartResult:
+        selected = validate_input_skill_request(params.get("config"))
+        if selected and self.capability.get("input_skills") is not True:
+            raise RPCError(JsonRpcErrorCode.CapabilityUnavailable, "input_skills is not supported")
         if not params.get("session_id") or not params.get("turn_id") or not params.get("input"):
             raise RPCError(JsonRpcErrorCode.InvalidParams, "session_id, turn_id and input are required")
         s = self.session(params["session_id"], True)
         assert s is not None
         if params["turn_id"] in s.results:
+            validate_input_skill_receipt(params,s.results[params["turn_id"]])
             return s.results[params["turn_id"]]
         if s.turn is not None:
             raise RPCError(JsonRpcErrorCode.Conflict, "a turn is already running; use turn.input")
@@ -242,8 +248,12 @@ class _AgentRuntime:
             result = dict(await self.handler.open_turn(params))
             if not result.get("accepted"):
                 raise RPCError(JsonRpcErrorCode.ExecutorBusy, "turn not accepted")
+            validate_input_skill_receipt(params,result)
         except BaseException:
+            _cancel_turn(turn)
+            turn.ended = True
             s.turn = None
+            turn._done.set()  # noqa: SLF001
             raise
         result["turn_id"] = params["turn_id"]
         s.results[params["turn_id"]] = result  # type: ignore[assignment]
@@ -288,6 +298,8 @@ class _AgentRuntime:
             raise RPCError(JsonRpcErrorCode.Conflict, "turn is not running; start a new turn")
         if params.get("input_id") in turn._seen:  # noqa: SLF001
             return {"accepted": True}
+        if (turn.params.get("config") or {}).get("input_skills"):
+            raise RPCError(JsonRpcErrorCode.Conflict, "selected-skill input requires its own turn")
         turn._seen.add(params.get("input_id", ""))  # noqa: SLF001
         put = asyncio.ensure_future(turn.inputs.put(params))
         ended = asyncio.ensure_future(turn._done.wait())  # noqa: SLF001

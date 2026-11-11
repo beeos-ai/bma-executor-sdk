@@ -1593,6 +1593,63 @@
         "event_id": "evt_0004",
         "acked_sequence": 4
       }
+    },
+    {
+      "name": "turn.start selected skills request",
+      "method": "turn.start",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_selected_skills",
+        "method": "turn.start",
+        "params": {
+          "session_id": "sesn_selected_skills",
+          "turn_id": "turn_selected_skills",
+          "input_id": "in_selected_skill",
+          "input": [
+            {
+              "type": "text",
+              "text": "Review this"
+            }
+          ],
+          "config": {
+            "model": "model-selected",
+            "input_skills": [
+              {
+                "skill_id": "skl_review",
+                "revision_id": "skr_fixed",
+                "name": "Review",
+                "body": "# Exact skill\n",
+                "body_sha256": "f35eb9921d4fe1ae3ee838d9c839974815700152b78d32fb904b0c5824cb2596"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "turn.start selected skills result",
+      "method": "turn.start",
+      "kind": "result",
+      "result": {
+        "accepted": true,
+        "turn_id": "turn_selected_skills",
+        "executor_session_ref": "sesn_selected_skills",
+        "effective": {
+          "model": "model-selected",
+          "input_skill_receipt": {
+            "input_id": "in_selected_skill",
+            "skills": [
+              {
+                "skill_id": "skl_review",
+                "revision_id": "skr_fixed",
+                "body_sha256": "f35eb9921d4fe1ae3ee838d9c839974815700152b78d32fb904b0c5824cb2596"
+              }
+            ]
+          }
+        },
+        "resumed": false
+      }
     }
   ]
 }

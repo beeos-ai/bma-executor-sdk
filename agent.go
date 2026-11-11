@@ -96,7 +96,7 @@ func (c *Client) ServeAgent(handler AgentHandler, capability AgentCapability) {
 	c.mu.Lock()
 	c.agent = runtime
 	c.mu.Unlock()
-	c.onRequest(MethodTurnStart, decodeThen(runtime.turnStart))
+	c.onRequest(MethodTurnStart, runtime.turnStartRaw)
 	c.onRequest(MethodTurnInput, decodeThen(runtime.turnInput))
 	c.onRequest(MethodTurnCancel, decodeThen(runtime.turnCancel))
 	c.onRequest(MethodSessionClose, decodeThen(runtime.sessionClose))
@@ -463,6 +463,17 @@ func (r *agentRuntime) session(id string, create bool) (*agentSession, error) {
 }
 
 func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (TurnStartResult, error) {
+	if params.Config != nil {
+		if params.Config.InputSkillReceipt != nil {
+			return TurnStartResult{}, &RPCError{Code: CodeInvalidParams, Message: "input_skill_receipt is effective-only"}
+		}
+		if err := validateInputSkillDocuments(params.Config.InputSkills); err != nil {
+			return TurnStartResult{}, err
+		}
+		if len(params.Config.InputSkills) > 0 && !r.capability.InputSkills {
+			return TurnStartResult{}, &RPCError{Code: CodeCapabilityUnavailable, Message: "input_skills is not supported"}
+		}
+	}
 	if params.SessionID == "" || params.TurnID == "" || len(params.Input) == 0 {
 		return TurnStartResult{}, &RPCError{Code: CodeInvalidParams, Message: "session_id, turn_id and input are required"}
 	}
@@ -474,6 +485,9 @@ func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (T
 		running := existing.turn != nil
 		existing.mu.Unlock()
 		if known {
+			if err := validateInputSkillReceipt(params, result); err != nil {
+				return TurnStartResult{}, err
+			}
 			return result, nil
 		}
 		if running {
@@ -517,6 +531,9 @@ func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (T
 	if result, ok := s.results[params.TurnID]; ok {
 		s.mu.Unlock()
 		cancel()
+		if err := validateInputSkillReceipt(params, result); err != nil {
+			return TurnStartResult{}, err
+		}
 		return result, nil
 	}
 	if s.turn != nil {
@@ -535,11 +552,16 @@ func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (T
 	if err == nil && !result.Accepted {
 		err = &RPCError{Code: CodeExecutorBusy, Message: "turn not accepted"}
 	}
+	if err == nil {
+		err = validateInputSkillReceipt(params, result)
+	}
 	s.mu.Lock()
 	if err != nil {
 		s.mu.Unlock()
+		turn.ended.Store(true)
 		s.finishTurn(turn)
 		cancel()
+		close(turn.done)
 		return TurnStartResult{}, err
 	}
 	result.TurnID = params.TurnID
@@ -706,6 +728,10 @@ func (r *agentRuntime) turnInput(_ context.Context, params TurnInputParams) (Ack
 	if turn.seen[params.InputID] {
 		s.mu.Unlock()
 		return Ack{Accepted: true}, nil
+	}
+	if turn.params.Config != nil && len(turn.params.Config.InputSkills) > 0 {
+		s.mu.Unlock()
+		return Ack{}, &RPCError{Code: CodeConflict, Message: "selected-skill input requires its own turn"}
 	}
 	turn.seen[params.InputID] = true
 	s.mu.Unlock()

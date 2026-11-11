@@ -1,3 +1,4 @@
+import { validateInputSkillRequest, validateInputSkillReceipt } from './input-skills.js'
 // Agent capability, executor side: a complete local agent served over the
 // executor protocol. The SDK owns turn.start/input/cancel, session.close,
 // event ids and sequences, ACK tracking and resend after reconnect,
@@ -468,12 +469,16 @@ export class AgentRuntime {
   }
 
   private async turnStart(params: TurnStartParams): Promise<TurnStartResult> {
+    const selected = validateInputSkillRequest(params?.config)
+    if (selected && this.capability.input_skills !== true) {
+      throw new RpcError(JsonRpcErrorCode.CapabilityUnavailable, 'input_skills is not supported')
+    }
     if (!params?.session_id || !params.turn_id || !params.input?.length) {
       throw new RpcError(JsonRpcErrorCode.InvalidParams, 'session_id, turn_id and input are required')
     }
     const session = this.session(params.session_id, true)!
     const recorded = session.results.get(params.turn_id)
-    if (recorded) return recorded
+    if (recorded) { validateInputSkillReceipt(params,recorded); return recorded }
     if (session.turn) throw new RpcError(JsonRpcErrorCode.Conflict, 'a turn is already running; use turn.input')
     const turn = new AgentTurn(session, params)
     session.turn = turn // reserve the session before openTurn
@@ -481,8 +486,12 @@ export class AgentRuntime {
     try {
       result = await this.handler.openTurn(params)
       if (!result.accepted) throw new RpcError(JsonRpcErrorCode.ExecutorBusy, 'turn not accepted')
+      validateInputSkillReceipt(params,result)
     } catch (error) {
+      turn.abort.abort(error)
+      turn.finish()
       session.turn = undefined
+      turn.done.resolve()
       throw error
     }
     result = { ...result, turn_id: params.turn_id }
@@ -547,6 +556,7 @@ export class AgentRuntime {
       throw new RpcError(JsonRpcErrorCode.Conflict, 'turn is not running; start a new turn')
     }
     if (turn.seen.has(params.input_id)) return { accepted: true }
+    if (turn.params.config?.input_skills?.length) throw new RpcError(JsonRpcErrorCode.Conflict, 'selected-skill input requires its own turn')
     turn.seen.add(params.input_id)
     turn.pushInput(params)
     return { accepted: true }
