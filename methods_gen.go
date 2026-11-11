@@ -18,6 +18,8 @@ var Requests = struct {
 	WorkspaceBackup       RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]
 	FsMount               RequestMethod[FsMountParams, FsMountResult]
 	FsUnmount             RequestMethod[FsUnmountParams, FsUnmountResult]
+	SessionCompact        RequestMethod[SessionCompactParams, SessionCompactResult]
+	SessionCompactCancel  RequestMethod[SessionCompactCancelParams, TurnCancelResult]
 	AgentCustomToolResult RequestMethod[AgentCustomToolResultParams, CustomToolResultResult]
 }{
 	ProcessStart:          RequestMethod[ProcessStartParams, ProcessState]{Method: "process.start"},
@@ -33,6 +35,8 @@ var Requests = struct {
 	WorkspaceBackup:       RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]{Method: "workspace.backup"},
 	FsMount:               RequestMethod[FsMountParams, FsMountResult]{Method: "fs.mount"},
 	FsUnmount:             RequestMethod[FsUnmountParams, FsUnmountResult]{Method: "fs.unmount"},
+	SessionCompact:        RequestMethod[SessionCompactParams, SessionCompactResult]{Method: "session.compact"},
+	SessionCompactCancel:  RequestMethod[SessionCompactCancelParams, TurnCancelResult]{Method: "session.compact_cancel"},
 	AgentCustomToolResult: RequestMethod[AgentCustomToolResultParams, CustomToolResultResult]{Method: "agent.custom_tool_result"},
 }
 

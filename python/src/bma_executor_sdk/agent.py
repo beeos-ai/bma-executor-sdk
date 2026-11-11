@@ -28,6 +28,8 @@ from .generated import (
     METHOD_INTERACTION_REQUEST,
     METHOD_INTERACTION_RESPONSE,
     METHOD_SESSION_CLOSE,
+    METHOD_SESSION_COMPACT,
+    METHOD_SESSION_COMPACT_CANCEL,
     METHOD_SESSION_ENDED,
     METHOD_SESSION_EVENT,
     METHOD_SESSION_EVENT_DELTA,
@@ -212,9 +214,14 @@ class _AgentRuntime:
             METHOD_TURN_INPUT: self.turn_input,
             METHOD_TURN_CANCEL: self.turn_cancel,
             METHOD_SESSION_CLOSE: self.session_close,
+            METHOD_SESSION_COMPACT: self.context_unavailable,
+            METHOD_SESSION_COMPACT_CANCEL: self.context_unavailable,
             METHOD_INTERACTION_RESPONSE: self.interaction_response,
             METHOD_AGENT_CUSTOM_TOOL_RESULT: self.custom_tool_result,
         }
+
+    async def context_unavailable(self, _params: Any) -> Any:
+        raise RPCError(JsonRpcErrorCode.CapabilityUnavailable, "context maintenance is not supported by the Python agent runtime")
 
     def session(self, session_id: str, create: bool) -> _AgentSession | None:
         session = self.sessions.get(session_id)

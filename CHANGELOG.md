@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.0
+
+- Add contract 1.6.0 typed session.compact and session.compact_cancel methods. Go and TypeScript agent runtimes offer an optional, explicitly enabled maintenance handler, exclude turns and close while it settles, join exact concurrent retries and validate the durable receipt and summary hash. Cancel acknowledgment alone does not release the reservation. No ordinary turn or message event is generated. Handlers must provide durable idempotent context publication and use fresh session maintenance credentials supplied by the platform.
+- Python includes generated methods and types, explicitly refuses maintenance RPCs and refuses to advertise the unsupported agent capability. Existing Python agents retain their behavior.
+- This SDK does not itself authorize platform users, implement context compaction, expose a public platform API or enable a product capability.
+
 ## 1.6.0
 
 - Add contract 1.5.0 types for per-input selected skill documents, explicit executor capability and applied-version receipts across Go, TypeScript and Python. SDK agents without the capability refuse selections before opening a session or invoking the handler; caller-supplied effective receipts are invalid. Ordinary inputs retain their previous behavior. A host opting in must verify and install the exact bytes and return the input-bound receipt; types alone do not implement skill execution.

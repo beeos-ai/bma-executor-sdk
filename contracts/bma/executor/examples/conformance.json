@@ -1650,6 +1650,61 @@
         },
         "resumed": false
       }
+    },
+    {
+      "name": "session.compact request",
+      "method": "session.compact",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_context_compact",
+        "method": "session.compact",
+        "params": {
+          "session_id": "sesn_example",
+          "operation_id": "context_example",
+          "expected_context_version": 0,
+          "expected_last_input_id": "in_example",
+          "model": "model-1",
+          "deadline_ms": 120000,
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "name": "session.compact result",
+      "method": "session.compact",
+      "kind": "result",
+      "result": {
+        "session_id": "sesn_example",
+        "operation_id": "context_example",
+        "previous_context_version": 0,
+        "context_version": 1,
+        "summary": "Retain the agreed decision and file references.",
+        "summary_sha256": "5b863d4dd129386aca15b411ba3c7c4d5e2780b9a61385c496d03c0b57fda3cd",
+        "source_event_count": 30
+      }
+    },
+    {
+      "name": "session.compact_cancel request",
+      "method": "session.compact_cancel",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_context_cancel",
+        "method": "session.compact_cancel",
+        "params": {
+          "session_id": "sesn_example",
+          "operation_id": "context_example"
+        }
+      }
+    },
+    {
+      "name": "session.compact_cancel result",
+      "method": "session.compact_cancel",
+      "kind": "result",
+      "result": {
+        "canceled": true
+      }
     }
   ]
 }
