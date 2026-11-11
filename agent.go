@@ -125,8 +125,9 @@ type agentRuntime struct {
 	handler    AgentHandler
 	capability AgentCapability
 
-	mu       sync.Mutex
-	sessions map[string]*agentSession
+	mu              sync.Mutex
+	sessions        map[string]*agentSession
+	contextOutcomes map[string]contextCancelOutcome
 	// active counts the turns holding a slot (AgentCapability.MaxSessions):
 	// reserved by turn.start, released when the turn ends or is refused.
 	active atomic.Int64

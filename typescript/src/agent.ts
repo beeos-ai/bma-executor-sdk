@@ -442,6 +442,7 @@ class AgentSession {
 
 /** @internal Routes agent methods for one ExecutorClient. */
 export class AgentRuntime {
+  private readonly contextOutcomes=new Map<string,{identity:string;canceled:boolean;receipt?:SessionCompactResult}>()
   private readonly sessions = new Map<string, AgentSession>()
 
   constructor(
@@ -629,6 +630,12 @@ export class AgentRuntime {
       if (session.maintenance.identity === identity) return session.maintenance.done
       throw new RpcError(JsonRpcErrorCode.Conflict, 'another context operation owns this session')
     }
+    const saved=this.contextOutcomes.get(JSON.stringify([params.session_id,params.operation_id]))
+    if(saved){
+      if(saved.identity!==identity)throw new RpcError(JsonRpcErrorCode.Conflict,'context operation identity changed')
+      if(saved.canceled)throw new RpcError(JsonRpcErrorCode.Conflict,'context preparation did not publish',{reason:'context_not_published'})
+      return structuredClone(saved.receipt!)
+    }
     const abort = new AbortController()
     const signal = AbortSignal.any([abort.signal, this.host.stopSignal, AbortSignal.timeout(params.deadline_ms)])
     // Reserve synchronously before any wait; a racing turn.start cannot slip in.
@@ -648,6 +655,8 @@ export class AgentRuntime {
   private async compactCancel(params: SessionCompactCancelParams): Promise<SessionCompactCancelResult> {
     if(this.capability.context_maintenance!==true || !this.handler.compactSession || !this.handler.cancelCompactSession)throw new RpcError(JsonRpcErrorCode.CapabilityUnavailable,'context maintenance is not supported')
     validateCompactCancel(params)
+    const recorded=this.contextOutcomes.get(JSON.stringify([params.session_id,params.operation_id]))
+    if(recorded && recorded.identity!==compactIdentity(cancelAsCompact(params)))throw new RpcError(JsonRpcErrorCode.Conflict,'context operation identity changed')
     const session=this.session(params.session_id,false)
     const work=session?.maintenance
     if(work?.operationId===params.operation_id){
@@ -656,7 +665,11 @@ export class AgentRuntime {
     }
     const result=await this.handler.cancelCompactSession(params)
     validateCompactCancelReceipt(params,result)
-    return {...result,settled:session?.maintenance?.operationId!==params.operation_id}
+    const identity=compactIdentity(cancelAsCompact(params))
+    this.contextOutcomes.set(JSON.stringify([params.session_id,params.operation_id]),{identity,canceled:result.canceled,...(result.receipt?{receipt:structuredClone(result.receipt)}:{})})
+    const current=this.session(params.session_id,false)?.maintenance
+    if(current?.operationId===params.operation_id && current.identity===identity)current.abort.abort(new Error('session.compact_cancel'))
+    return {...result,settled:current?.operationId!==params.operation_id}
   }
 
   private interactionResponse(params: InteractionResponseParams): InteractionResponseResult {

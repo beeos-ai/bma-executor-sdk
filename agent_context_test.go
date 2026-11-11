@@ -237,3 +237,61 @@ func TestContextCapabilityNeedsTheDurableCancellationPort(t *testing.T) {
 	_, err := c.agent.compactCancel(context.Background(), compactCancelParams(compactParams()))
 	requireContextCode(t, err, CodeCapabilityUnavailable)
 }
+
+func TestContextCancelSeesSessionCreatedWhileItsDurableCallbackWaited(t *testing.T) {
+	beganCancel, releaseCancel := make(chan struct{}), make(chan struct{})
+	beganWork, releaseWork, aborted := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var cancelCalls, workCalls atomic.Int64
+	r := compactRuntime(t, compactTestAgent{compact: func(ctx context.Context, _ SessionCompactParams) (SessionCompactResult, error) {
+		workCalls.Add(1)
+		close(beganWork)
+		<-ctx.Done()
+		close(aborted)
+		<-releaseWork
+		return SessionCompactResult{}, ctx.Err()
+	}, cancel: func(_ context.Context, p SessionCompactCancelParams) (SessionCompactCancelResult, error) {
+		if cancelCalls.Add(1) == 1 {
+			close(beganCancel)
+		}
+		<-releaseCancel
+		return SessionCompactCancelResult{SessionID: p.SessionID, OperationID: p.OperationID, Canceled: true}, nil
+	}})
+	p := compactParams()
+	delete(r.sessions, p.SessionID)
+	type answer struct {
+		result SessionCompactCancelResult
+		err    error
+	}
+	answers := make(chan answer, 1)
+	go func() {
+		result, err := r.compactCancel(context.Background(), compactCancelParams(p))
+		answers <- answer{result, err}
+	}()
+	<-beganCancel
+	finished := make(chan error, 1)
+	go func() { _, err := r.sessionCompact(context.Background(), p); finished <- err }()
+	<-beganWork
+	close(releaseCancel)
+	first := <-answers
+	if first.err != nil || first.result.Settled || !first.result.Canceled {
+		t.Fatal(first)
+	}
+	select {
+	case <-aborted:
+	case <-time.After(time.Second):
+		t.Fatal("late reservation was not canceled")
+	}
+	close(releaseWork)
+	if err := <-finished; !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	again, err := r.compactCancel(context.Background(), compactCancelParams(p))
+	if err != nil || !again.Settled || !again.Canceled {
+		t.Fatal(again, err)
+	}
+	_, err = r.sessionCompact(context.Background(), p)
+	requireContextCode(t, err, CodeConflict)
+	if workCalls.Load() != 1 {
+		t.Fatal("late request re-entered a fenced handler", workCalls.Load())
+	}
+}

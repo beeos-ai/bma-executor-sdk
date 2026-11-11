@@ -22,6 +22,14 @@ type AgentSessionCompactor interface {
 	CancelSessionCompaction(context.Context, SessionCompactCancelParams) (SessionCompactCancelResult, error)
 }
 
+type contextCancelOutcome struct {
+	identity string
+	canceled bool
+	receipt  *SessionCompactResult
+}
+
+func contextKey(session, operation string) string { return session + "\x00" + operation }
+
 type agentContextMaintenance struct {
 	operation, identity string
 	cancel              context.CancelFunc
@@ -91,26 +99,38 @@ func (r *agentRuntime) sessionCompact(ctx context.Context, p SessionCompactParam
 	}
 	identityBytes, _ := json.Marshal([]any{p.SessionID, p.OperationID, p.ExpectedContextVersion, p.ExpectedLastInputID, p.Model})
 	identity := string(identityBytes)
+	r.mu.Lock()
 	s.mu.Lock()
+	unlock := func() { s.mu.Unlock(); r.mu.Unlock() }
 	if s.closed || s.closing || s.turn != nil || s.suspending != nil || len(s.pending) > 0 || len(s.customTools) > 0 {
-		s.mu.Unlock()
+		unlock()
 		return empty, &RPCError{Code: CodeConflict, Message: "context maintenance requires a settled idle session"}
 	}
 	work := s.maintenance
 	if work != nil && work.identity != identity {
-		s.mu.Unlock()
+		unlock()
 		return empty, &RPCError{Code: CodeConflict, Message: "another context operation owns this session"}
 	}
 	if work == nil {
+		if saved, ok := r.contextOutcomes[contextKey(p.SessionID, p.OperationID)]; ok {
+			unlock()
+			if saved.identity != identity {
+				return empty, &RPCError{Code: CodeConflict, Message: "context operation identity changed"}
+			}
+			if saved.canceled {
+				return empty, &RPCError{Code: CodeConflict, Message: "context preparation did not publish", Data: &JSONRPCErrorData{Reason: "context_not_published"}}
+			}
+			return *saved.receipt, nil
+		}
 		if !r.acquireSlot() {
-			s.mu.Unlock()
+			unlock()
 			return empty, &RPCError{Code: CodeExecutorBusy, Message: "executor_busy"}
 		}
 		operationCtx, cancel := context.WithTimeout(r.client.rootCtx, time.Duration(p.DeadlineMS)*time.Millisecond)
 		work = &agentContextMaintenance{operation: p.OperationID, identity: identity, cancel: cancel, done: make(chan struct{})}
 		s.maintenance = work
 		s.suspended = false
-		s.mu.Unlock()
+		unlock()
 		go func() {
 			defer cancel()
 			defer r.active.Add(-1)
@@ -129,7 +149,7 @@ func (r *agentRuntime) sessionCompact(ctx context.Context, p SessionCompactParam
 			close(work.done)
 		}()
 	} else {
-		s.mu.Unlock()
+		unlock()
 	}
 	select {
 	case <-ctx.Done():
@@ -171,6 +191,12 @@ func (r *agentRuntime) compactCancel(ctx context.Context, p SessionCompactCancel
 	}
 	identityBytes, _ := json.Marshal([]any{p.SessionID, p.OperationID, p.ExpectedContextVersion, p.ExpectedLastInputID, p.Model})
 	identity := string(identityBytes)
+	r.mu.Lock()
+	saved, recorded := r.contextOutcomes[contextKey(p.SessionID, p.OperationID)]
+	r.mu.Unlock()
+	if recorded && saved.identity != identity {
+		return empty, &RPCError{Code: CodeConflict, Message: "context operation identity changed"}
+	}
 	session, _ := r.session(p.SessionID, false)
 	if session != nil {
 		session.mu.Lock()
@@ -197,13 +223,29 @@ func (r *agentRuntime) compactCancel(ctx context.Context, p SessionCompactCancel
 			return empty, err
 		}
 	}
+	if result.Receipt != nil {
+		copy := *result.Receipt
+		result.Receipt = &copy
+	}
 	result.Settled = true
+	r.mu.Lock()
+	if r.contextOutcomes == nil {
+		r.contextOutcomes = map[string]contextCancelOutcome{}
+	}
+	r.contextOutcomes[contextKey(p.SessionID, p.OperationID)] = contextCancelOutcome{identity: identity, canceled: result.Canceled, receipt: result.Receipt}
+	// A session may have appeared while the durable callback was blocked.
+	// Cache and snapshot are serialized with maintenance reservation creation.
+	session = r.sessions[p.SessionID]
 	if session != nil {
 		session.mu.Lock()
 		if work := session.maintenance; work != nil && work.operation == p.OperationID {
+			if work.identity == identity {
+				work.cancel()
+			}
 			result.Settled = false
 		}
 		session.mu.Unlock()
 	}
+	r.mu.Unlock()
 	return result, nil
 }

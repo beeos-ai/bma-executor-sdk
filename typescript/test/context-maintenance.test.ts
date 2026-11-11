@@ -118,3 +118,23 @@ test('the public capability cannot be advertised without durable cancellation',(
  const client=new ExecutorClient({environmentId:'env_test',executor:executorInfo,dialer:new Harness().inProcessDialer()})
  assert.throws(()=>client.serveAgent({async openTurn(p){return {accepted:true,turn_id:p.turn_id,executor_session_ref:p.session_id,resumed:true,effective:{}}},async runTurn(){},async closeSession(){},async compactSession(p){return result(p)}},{context_maintenance:true}),/cancelCompactSession/)
 })
+
+
+test('cancellation observes and cancels a session created while its durable callback waited',async t=>{
+ let beganCancel!:()=>void,releaseCancel!:()=>void,beganWork!:()=>void,releaseWork!:()=>void
+ const cancelStarted=new Promise<void>(resolve=>beganCancel=resolve),cancelHeld=new Promise<void>(resolve=>releaseCancel=resolve)
+ const workStarted=new Promise<void>(resolve=>beganWork=resolve),workHeld=new Promise<void>(resolve=>releaseWork=resolve)
+ let calls=0,signal:AbortSignal|undefined
+ const env=await setup(t,async(_p,abort)=>{calls++;signal=abort;beganWork();await workHeld;throw abort.reason},async p=>{beganCancel();await cancelHeld;return canceled(p.operation_id)})
+ const cancel=env.executor.call('session.compact_cancel',cancelArgs())
+ await cancelStarted
+ const work=env.executor.call('session.compact',params),failed=assert.rejects(work)
+ await workStarted;releaseCancel()
+ assert.deepEqual(await cancel,canceled(params.operation_id,false))
+ assert.equal(signal?.aborted,true)
+ releaseWork();await failed
+ assert.deepEqual(await env.executor.call('session.compact_cancel',cancelArgs()),canceled())
+ await assert.rejects(env.executor.call('session.compact',params),code(JsonRpcErrorCode.Conflict))
+ assert.equal(calls,1,'late redelivery must not re-enter a fenced handler')
+ assert.deepEqual(env.events,[])
+})
