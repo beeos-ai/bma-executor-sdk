@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/jpeg"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +38,9 @@ var ErrComputerUseUnavailable = errors.New("bmaexecutor: computer use backend is
 type ComputerObserveRequest struct {
 	// PID and WindowID name one window; both zero observes the whole screen.
 	PID, WindowID int
+	// ImageFormat optionally requests JPEG for a viewer. Empty keeps lossless PNG.
+	// Encoding never changes the screenshot dimensions or coordinate space.
+	ImageFormat string
 }
 
 // ComputerActionRequest is a computer_action call. Coordinates are pixels of
@@ -63,6 +68,7 @@ type ComputerUseBackend interface {
 // computerInput is the superset input of computer_observe and computer_action
 // (contract: additionalProperties true).
 type computerInput struct {
+	ImageFormat     string    `json:"image_format"`
 	Action          string    `json:"action"`
 	Display         string    `json:"display"`
 	Coordinate      []float64 `json:"coordinate"`
@@ -92,7 +98,10 @@ func (c *Core) computerTool(ctx context.Context, params ToolCallParams) (ToolRes
 	var blocks []ContentBlock
 	var err error
 	if params.Tool == ToolNameComputerObserve {
-		blocks, err = c.opts.ComputerUse.Observe(ctx, ComputerObserveRequest{PID: input.PID, WindowID: input.WindowID})
+		if err := validateObserveFormat(input.ImageFormat); err != nil {
+			return ToolResultParams{}, err
+		}
+		blocks, err = c.opts.ComputerUse.Observe(ctx, ComputerObserveRequest{PID: input.PID, WindowID: input.WindowID, ImageFormat: input.ImageFormat})
 	} else {
 		var request ComputerActionRequest
 		if request, err = input.actionRequest(); err == nil {
@@ -276,8 +285,11 @@ func (d *CuaDriver) screenshot(ctx context.Context, tool string, args map[string
 // Observe returns a screenshot with a text description: the screen size and
 // the window list, or one window's accessibility tree (UIA on Windows).
 func (d *CuaDriver) Observe(ctx context.Context, req ComputerObserveRequest) ([]ContentBlock, error) {
+	if err := validateObserveFormat(req.ImageFormat); err != nil {
+		return nil, err
+	}
 	if req.WindowID != 0 {
-		state, image, err := d.screenshot(ctx, "get_window_state", map[string]any{
+		state, image, err := d.observeScreenshot(ctx, req.ImageFormat, "get_window_state", map[string]any{
 			"pid": req.PID, "window_id": req.WindowID, "tree_format": "markdown",
 		})
 		if err != nil {
@@ -288,7 +300,7 @@ func (d *CuaDriver) Observe(ctx context.Context, req ComputerObserveRequest) ([]
 			"window pid=%d window_id=%d screenshot %vx%v (coordinates are window-local)\n%s",
 			req.PID, req.WindowID, state["screenshot_width"], state["screenshot_height"], tree)}}, nil
 	}
-	state, image, err := d.screenshot(ctx, "get_desktop_state", map[string]any{})
+	state, image, err := d.observeScreenshot(ctx, req.ImageFormat, "get_desktop_state", map[string]any{})
 	if err != nil {
 		return nil, err
 	}
@@ -378,4 +390,53 @@ func cuaAction(req ComputerActionRequest) (string, map[string]any) {
 		args["to_x"], args["to_y"] = req.Coordinate[0], req.Coordinate[1]
 		return "drag", args
 	}
+}
+
+// Viewer encoding is opt-in; ordinary model observations remain unchanged.
+func validateObserveFormat(format string) error {
+	switch format {
+	case "", "png", "jpeg":
+		return nil
+	}
+	return errors.New("image_format must be png or jpeg")
+}
+
+func (d *CuaDriver) observeScreenshot(ctx context.Context, format, tool string, args map[string]any) (map[string]any, ContentBlock, error) {
+	state, block, err := d.screenshot(ctx, tool, args)
+	if err != nil {
+		return nil, ContentBlock{}, err
+	}
+	block, err = encodeObservationImage(block, format)
+	return state, block, err
+}
+
+func encodeObservationImage(block ContentBlock, format string) (ContentBlock, error) {
+	if err := validateObserveFormat(format); err != nil {
+		return ContentBlock{}, err
+	}
+	if format != "jpeg" {
+		return block, nil
+	}
+	if block.MimeType != "image/png" || len(block.Data) > 24*1024*1024 {
+		return ContentBlock{}, errors.New("invalid observation PNG")
+	}
+	raw, err := base64.StdEncoding.DecodeString(block.Data)
+	if err != nil {
+		return ContentBlock{}, errors.New("invalid observation encoding")
+	}
+	cfg, err := png.DecodeConfig(bytes.NewReader(raw))
+	if err != nil || cfg.Width < 1 || cfg.Height < 1 || cfg.Width > 16384 || cfg.Height > 16384 || int64(cfg.Width)*int64(cfg.Height) > 64*1024*1024 {
+		return ContentBlock{}, errors.New("invalid observation dimensions")
+	}
+	img, err := png.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return ContentBlock{}, errors.New("invalid observation PNG")
+	}
+	var out bytes.Buffer
+	if err := jpeg.Encode(&out, img, &jpeg.Options{Quality: 75}); err != nil {
+		return ContentBlock{}, err
+	}
+	block.MimeType = "image/jpeg"
+	block.Data = base64.StdEncoding.EncodeToString(out.Bytes())
+	return block, nil
 }
