@@ -371,6 +371,8 @@ class ExecutorClient:
         handler. Call it before start()."""
         from .agent import _AgentRuntime
 
+        if (capability or {}).get("context_maintenance"):
+            raise ValueError("context maintenance is not supported by the Python agent runtime")
         self._agent = _AgentRuntime(self, handler, dict(capability or {}, enabled=True))  # type: ignore[arg-type]
 
     # --- RPC ---

@@ -29,6 +29,10 @@ from .generated import (
     ProcessStatusParams,
     ProcessWriteParams,
     ProcessWriteResult,
+    SessionCompactCancelParams,
+    SessionCompactCancelResult,
+    SessionCompactParams,
+    SessionCompactResult,
     SessionEndedParams,
     SessionEventDeltaParams,
     SessionEventParams,
@@ -65,6 +69,8 @@ __all__ = [
     "WORKSPACE_BACKUP",
     "FS_MOUNT",
     "FS_UNMOUNT",
+    "SESSION_COMPACT",
+    "SESSION_COMPACT_CANCEL",
     "AGENT_CUSTOM_TOOL_RESULT",
     "SESSION_READY",
     "SESSION_EVENT",
@@ -95,6 +101,8 @@ SKILL_INSTALL: Request[SkillInstallParams, SkillInstallResult] = Request("skill.
 WORKSPACE_BACKUP: Request[WorkspaceBackupParams, WorkspaceBackupResult] = Request("workspace.backup")
 FS_MOUNT: Request[FsMountParams, FsMountResult] = Request("fs.mount")
 FS_UNMOUNT: Request[FsUnmountParams, FsUnmountResult] = Request("fs.unmount")
+SESSION_COMPACT: Request[SessionCompactParams, SessionCompactResult] = Request("session.compact")
+SESSION_COMPACT_CANCEL: Request[SessionCompactCancelParams, SessionCompactCancelResult] = Request("session.compact_cancel")
 AGENT_CUSTOM_TOOL_RESULT: Request[AgentCustomToolResultParams, CustomToolResultResult] = Request("agent.custom_tool_result")
 
 # Executor-to-harness requests a client sends with call.

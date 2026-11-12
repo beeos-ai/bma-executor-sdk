@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 1.5.0
+  version: 1.6.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -1477,6 +1477,120 @@ methods:
     errors:
       - $ref: "#/components/errors/InvalidParams"
       - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/InternalError"
+  - name: session.compact
+    summary: Compact an idle agent context without sending a turn.
+    description: >-
+      Explicit idle-session maintenance. The platform reserves the session against new inputs,
+      pending decisions and automatic continuations before calling. The executor independently
+      rejects an active turn, pending interactions or another maintenance operation. It keeps the
+      original transcript, compacts an isolated durable context and atomically publishes its pointer
+      and immutable receipt only after success. Failed or cancelled preparation preserves the old
+      context. Unknown publication is reconciled with the same operation_id and expected version,
+      never a fresh id. Metadata contains maintenance-only platform credentials, not a historical
+      turn token. No tool may run during summarization. Older handlers explicitly refuse this method.
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent.context_maintenance
+    x-bma-idempotent-by: operation_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: operation_id
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[a-zA-Z0-9_-]+$'
+      - name: expected_context_version
+        required: true
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740990
+      - name: expected_last_input_id
+        required: true
+        description: Exact platform input whose settled context the reservation owns.
+        schema:
+          type: string
+      - name: model
+        required: true
+        schema:
+          type: string
+      - name: deadline_ms
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 300000
+      - name: metadata
+        required: true
+        schema:
+          type: object
+          additionalProperties:
+            type: string
+    result:
+      name: SessionCompactResult
+      schema:
+        $ref: schemas/agent.json#/$defs/SessionCompactResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+  - name: session.compact_cancel
+    summary: Request cancellation of one context maintenance operation.
+    description: >-
+      Durably fences publication of the exact operation or returns its already-applied receipt.
+      It never closes the conversation or cancels an ordinary turn. canceled=true means the
+      operation cannot publish, including a late retry; settled=false means its SDK reservation
+      still belongs to work that has not settled. The platform retains its admission barrier until
+      settled=true, and reconciles uncertain replies by repeating this exact cancel request.
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent.context_maintenance
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: operation_id
+        required: true
+        schema:
+          type: string
+      - name: expected_context_version
+        required: true
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740990
+      - name: expected_last_input_id
+        required: true
+        schema:
+          type: string
+      - name: model
+        required: true
+        schema:
+          type: string
+    result:
+      name: SessionCompactCancelResult
+      schema:
+        $ref: schemas/agent.json#/$defs/SessionCompactCancelResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
       - $ref: "#/components/errors/InternalError"
   - name: session.close
     summary: Close an agent session.

@@ -92,6 +92,10 @@ type AgentSessionSuspender interface {
 // handler. Call it before Start.
 func (c *Client) ServeAgent(handler AgentHandler, capability AgentCapability) {
 	capability.Enabled = true
+	if _, supported := handler.(AgentSessionCompactor); capability.ContextMaintenance && !supported {
+		capability.ContextMaintenance = false
+		c.log(LogWarn, "context maintenance requires AgentSessionCompactor; capability withheld", nil)
+	}
 	runtime := &agentRuntime{client: c, handler: handler, capability: capability, sessions: map[string]*agentSession{}}
 	c.mu.Lock()
 	c.agent = runtime
@@ -100,6 +104,8 @@ func (c *Client) ServeAgent(handler AgentHandler, capability AgentCapability) {
 	c.onRequest(MethodTurnInput, decodeThen(runtime.turnInput))
 	c.onRequest(MethodTurnCancel, decodeThen(runtime.turnCancel))
 	c.onRequest(MethodSessionClose, decodeThen(runtime.sessionClose))
+	c.onRequest(MethodSessionCompact, runtime.sessionCompactRaw)
+	c.onRequest(MethodSessionCompactCancel, runtime.compactCancelRaw)
 	c.onRequest(MethodInteractionResponse, decodeThen(runtime.interactionResponse))
 	c.onRequest(MethodAgentCustomToolResult, decodeThen(runtime.customToolResult))
 }
@@ -119,11 +125,14 @@ type agentRuntime struct {
 	handler    AgentHandler
 	capability AgentCapability
 
-	mu       sync.Mutex
-	sessions map[string]*agentSession
+	mu              sync.Mutex
+	sessions        map[string]*agentSession
+	contextOutcomes map[string]contextCancelOutcome
 	// active counts the turns holding a slot (AgentCapability.MaxSessions):
 	// reserved by turn.start, released when the turn ends or is refused.
 	active atomic.Int64
+	// Activity order must not depend on platform wall-clock resolution.
+	useSequence atomic.Uint64
 }
 
 // agentSession is one platform session on this executor: its outbox of
@@ -132,16 +141,18 @@ type agentSession struct {
 	runtime *agentRuntime
 	id      string
 
-	mu      sync.Mutex
-	nextSeq int64
-	nextID  uint64
-	outbox  []agentOutboxEvent
-	wake    chan struct{}
-	drained chan struct{} // closed while the outbox is empty
-	closed  bool
-	turn    *AgentTurn
+	mu          sync.Mutex
+	nextSeq     int64
+	nextID      uint64
+	outbox      []agentOutboxEvent
+	wake        chan struct{}
+	drained     chan struct{} // closed while the outbox is empty
+	closed      bool
+	closing     bool
+	maintenance *agentContextMaintenance
+	turn        *AgentTurn
 	// lastUsed orders idle sessions for suspension (least recent first).
-	lastUsed time.Time
+	lastUsed uint64
 	// suspended: the handler released the session's resources (SuspendSession);
 	// the next turn.start loads them again. suspending is non-nil, and closed
 	// when done, while SuspendSession runs.
@@ -449,7 +460,7 @@ func (r *agentRuntime) session(id string, create bool) (*agentSession, error) {
 	drained := make(chan struct{})
 	close(drained)
 	s := &agentSession{
-		runtime: r, id: id, nextSeq: 1, lastUsed: time.Now(), wake: make(chan struct{}, 1), drained: drained,
+		runtime: r, id: id, nextSeq: 1, lastUsed: r.useSequence.Add(1), wake: make(chan struct{}, 1), drained: drained,
 		results: map[string]TurnStartResult{}, pending: map[string]chan InteractionResponseParams{}, answered: map[string]bool{},
 		customTools: map[string]chan AgentCustomToolResultParams{}, customDone: map[string]bool{},
 	}
@@ -536,14 +547,14 @@ func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (T
 		}
 		return result, nil
 	}
-	if s.turn != nil {
+	if s.turn != nil || s.maintenance != nil || s.closing || s.closed {
 		s.mu.Unlock()
 		cancel()
 		return TurnStartResult{}, &RPCError{Code: CodeConflict, Message: "a turn is already running; use turn.input"}
 	}
 	s.turn = turn // reserve the session before OpenTurn
 	s.suspended = false
-	s.lastUsed = time.Now()
+	s.lastUsed = s.runtime.useSequence.Add(1)
 	s.mu.Unlock()
 	slot = false // the turn owns it now, see finishTurn
 	r.suspendSurplus(ctx, s)
@@ -592,7 +603,7 @@ func (s *agentSession) finishTurn(turn *AgentTurn) {
 	owned := s.turn == turn
 	if owned {
 		s.turn = nil
-		s.lastUsed = time.Now()
+		s.lastUsed = s.runtime.useSequence.Add(1)
 	}
 	s.mu.Unlock()
 	if owned {
@@ -649,13 +660,17 @@ func (r *agentRuntime) claimVictim(limit int, keep *agentSession, failed map[*ag
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	resident := 0
-	var candidates []*agentSession
+	type candidate struct {
+		session *agentSession
+		order   uint64
+	}
+	var candidates []candidate
 	for _, s := range r.sessions {
 		s.mu.Lock()
 		if !s.suspended && s.suspending == nil && !s.closed {
 			resident++
-			if s != keep && s.turn == nil && !failed[s] {
-				candidates = append(candidates, s)
+			if s != keep && s.turn == nil && s.maintenance == nil && !s.closing && !failed[s] {
+				candidates = append(candidates, candidate{s, s.lastUsed})
 			}
 		}
 		s.mu.Unlock()
@@ -664,18 +679,16 @@ func (r *agentRuntime) claimVictim(limit int, keep *agentSession, failed map[*ag
 		return nil
 	}
 	sort.Slice(candidates, func(i, j int) bool {
-		candidates[i].mu.Lock()
-		a := candidates[i].lastUsed
-		candidates[i].mu.Unlock()
-		candidates[j].mu.Lock()
-		b := candidates[j].lastUsed
-		candidates[j].mu.Unlock()
-		return a.Before(b)
+		if candidates[i].order == candidates[j].order {
+			return candidates[i].session.id < candidates[j].session.id
+		}
+		return candidates[i].order < candidates[j].order
 	})
-	for _, s := range candidates {
+	for _, candidate := range candidates {
+		s := candidate.session
 		s.mu.Lock()
 		// Check again: a turn.start may have taken it since the scan.
-		if !s.suspended && s.suspending == nil && !s.closed && s.turn == nil {
+		if !s.suspended && s.suspending == nil && !s.closed && s.turn == nil && s.maintenance == nil && !s.closing {
 			s.suspending = make(chan struct{})
 			s.mu.Unlock()
 			return s
@@ -764,8 +777,18 @@ func (r *agentRuntime) sessionClose(ctx context.Context, params SessionClosePara
 		return SessionCloseResult{Closed: false}, nil
 	}
 	s.mu.Lock()
+	s.closing = true
+	maintenance := s.maintenance
 	turn, suspending := s.turn, s.suspending
 	s.mu.Unlock()
+	if maintenance != nil {
+		maintenance.cancel()
+		select {
+		case <-maintenance.done:
+		case <-ctx.Done():
+			return SessionCloseResult{}, ctx.Err()
+		}
+	}
 	if suspending != nil {
 		select {
 		case <-suspending:

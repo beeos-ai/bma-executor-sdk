@@ -1,4 +1,5 @@
 import { validateInputSkillRequest, validateInputSkillReceipt } from './input-skills.js'
+import { compactIdentity, validateCompactRequest, validateCompactReceipt, cancelAsCompact, validateCompactCancel, validateCompactCancelReceipt } from './context-maintenance.js'
 // Agent capability, executor side: a complete local agent served over the
 // executor protocol. The SDK owns turn.start/input/cancel, session.close,
 // event ids and sequences, ACK tracking and resend after reconnect,
@@ -26,6 +27,10 @@ import {
   type InteractionResponseResult,
   type SessionCloseParams,
   type SessionCloseResult,
+  type SessionCompactParams,
+  type SessionCompactResult,
+  type SessionCompactCancelParams,
+  type SessionCompactCancelResult,
   type SessionEndedParams,
   type SessionEvent,
   type SessionEventDeltaParams,
@@ -47,6 +52,12 @@ export type { ConnectionState }
 
 /** A complete local agent (model loop and tools). */
 export interface AgentHandler {
+  /** Optional idle-context maintenance. Must persist pointer and receipt before
+   * resolving, retain original history on failure, and never execute tools. */
+  compactSession?(params: SessionCompactParams, signal: AbortSignal): Promise<SessionCompactResult>
+  /** Durably fence publication or return the applied receipt, including after
+   * restart. The SDK fills settled independently from the handler's result. */
+  cancelCompactSession?(params: SessionCompactCancelParams): Promise<SessionCompactCancelResult>
   /**
    * Decides whether to accept a turn.start and reports the configuration the
    * agent will apply. It runs before turn.start is answered, so it must not
@@ -311,6 +322,8 @@ class AgentSession {
   private wake = deferred()
   private drained = deferred()
   closed = false
+  closing = false
+  maintenance?: { operationId: string; identity: string; abort: AbortController; done: Promise<SessionCompactResult> }
   turn?: AgentTurn
   readonly results = new Map<string, TurnStartResult>()
   readonly pending = new Map<string, Deferred<InteractionResponseParams>>()
@@ -429,6 +442,7 @@ class AgentSession {
 
 /** @internal Routes agent methods for one ExecutorClient. */
 export class AgentRuntime {
+  private readonly contextOutcomes=new Map<string,{identity:string;canceled:boolean;receipt?:SessionCompactResult}>()
   private readonly sessions = new Map<string, AgentSession>()
 
   constructor(
@@ -448,6 +462,10 @@ export class AgentRuntime {
         return Promise.resolve(this.turnCancel(params as TurnCancelParams))
       case 'session.close':
         return this.sessionClose(params as SessionCloseParams)
+      case 'session.compact':
+        return this.sessionCompact(params as SessionCompactParams)
+      case 'session.compact_cancel':
+        return Promise.resolve(this.compactCancel(params as SessionCompactCancelParams))
       case 'interaction.response':
         return Promise.resolve(this.interactionResponse(params as InteractionResponseParams))
       case 'agent.custom_tool_result':
@@ -479,6 +497,7 @@ export class AgentRuntime {
     const session = this.session(params.session_id, true)!
     const recorded = session.results.get(params.turn_id)
     if (recorded) { validateInputSkillReceipt(params,recorded); return recorded }
+    if (session.closed || session.closing || session.maintenance) throw new RpcError(JsonRpcErrorCode.Conflict, 'session is reserved for maintenance or close')
     if (session.turn) throw new RpcError(JsonRpcErrorCode.Conflict, 'a turn is already running; use turn.input')
     const turn = new AgentTurn(session, params)
     session.turn = turn // reserve the session before openTurn
@@ -572,6 +591,11 @@ export class AgentRuntime {
   private async sessionClose(params: SessionCloseParams): Promise<SessionCloseResult> {
     const session = this.session(params.session_id, false)
     if (!session) return { closed: false }
+    session.closing = true
+    if (session.maintenance) {
+      session.maintenance.abort.abort(new Error('session.close'))
+      await session.maintenance.done.catch(() => undefined)
+    }
     const turn = session.turn
     if (turn) {
       turn.abort.abort(new Error('session.close'))
@@ -594,6 +618,58 @@ export class AgentRuntime {
       )
       .catch((error) => this.host.log('warn', `session.ended for ${session.id} failed`, error))
     return { closed: true }
+  }
+
+  private async sessionCompact(params: SessionCompactParams): Promise<SessionCompactResult> {
+    if (this.capability.context_maintenance !== true || (!this.handler.compactSession || !this.handler.cancelCompactSession)) throw new RpcError(JsonRpcErrorCode.CapabilityUnavailable, 'context maintenance is not supported')
+    validateCompactRequest(params)
+    const session = this.session(params.session_id, true)!
+    if (session.closed || session.closing || session.turn || session.pending.size || session.customTools.size) throw new RpcError(JsonRpcErrorCode.Conflict, 'context maintenance requires a settled idle session')
+    const identity = compactIdentity(params)
+    if (session.maintenance) {
+      if (session.maintenance.identity === identity) return session.maintenance.done
+      throw new RpcError(JsonRpcErrorCode.Conflict, 'another context operation owns this session')
+    }
+    const saved=this.contextOutcomes.get(JSON.stringify([params.session_id,params.operation_id]))
+    if(saved){
+      if(saved.identity!==identity)throw new RpcError(JsonRpcErrorCode.Conflict,'context operation identity changed')
+      if(saved.canceled)throw new RpcError(JsonRpcErrorCode.Conflict,'context preparation did not publish',{reason:'context_not_published'})
+      return structuredClone(saved.receipt!)
+    }
+    const abort = new AbortController()
+    const signal = AbortSignal.any([abort.signal, this.host.stopSignal, AbortSignal.timeout(params.deadline_ms)])
+    // Reserve synchronously before any wait; a racing turn.start cannot slip in.
+    const done = Promise.resolve().then(async () => {
+      signal.throwIfAborted()
+      await session.flush(signal)
+      signal.throwIfAborted()
+      const result = await this.handler.compactSession!(params, signal)
+      validateCompactReceipt(params, result)
+      return result
+    })
+    session.maintenance = { operationId: params.operation_id, identity, abort, done }
+    try { return await done }
+    finally { if (session.maintenance?.done === done) session.maintenance = undefined }
+  }
+
+  private async compactCancel(params: SessionCompactCancelParams): Promise<SessionCompactCancelResult> {
+    if(this.capability.context_maintenance!==true || !this.handler.compactSession || !this.handler.cancelCompactSession)throw new RpcError(JsonRpcErrorCode.CapabilityUnavailable,'context maintenance is not supported')
+    validateCompactCancel(params)
+    const recorded=this.contextOutcomes.get(JSON.stringify([params.session_id,params.operation_id]))
+    if(recorded && recorded.identity!==compactIdentity(cancelAsCompact(params)))throw new RpcError(JsonRpcErrorCode.Conflict,'context operation identity changed')
+    const session=this.session(params.session_id,false)
+    const work=session?.maintenance
+    if(work?.operationId===params.operation_id){
+      if(work.identity!==compactIdentity(cancelAsCompact(params)))throw new RpcError(JsonRpcErrorCode.Conflict,'context operation identity changed')
+      work.abort.abort(new Error('session.compact_cancel'))
+    }
+    const result=await this.handler.cancelCompactSession(params)
+    validateCompactCancelReceipt(params,result)
+    const identity=compactIdentity(cancelAsCompact(params))
+    this.contextOutcomes.set(JSON.stringify([params.session_id,params.operation_id]),{identity,canceled:result.canceled,...(result.receipt?{receipt:structuredClone(result.receipt)}:{})})
+    const current=this.session(params.session_id,false)?.maintenance
+    if(current?.operationId===params.operation_id && current.identity===identity)current.abort.abort(new Error('session.compact_cancel'))
+    return {...result,settled:current?.operationId!==params.operation_id}
   }
 
   private interactionResponse(params: InteractionResponseParams): InteractionResponseResult {

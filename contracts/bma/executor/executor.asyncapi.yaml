@@ -2,7 +2,7 @@ asyncapi: 3.0.0
 id: https://contracts.bma.beeos.ai/executor.asyncapi
 info:
   title: BMA Executor Protocol channels
-  version: 1.5.0
+  version: 1.6.0
   description: "WebSocket channels for bma.executor.v1 and bma.executor.v1.1. The control channel carries JSON-RPC 2.0 requests, notifications, and responses. The mcp channel carries raw MCP JSON-RPC with no BMA wrapper. PTY bytes travel on per-attach outbound host sockets (subprotocol bma.terminal.v1), not on these channels. Contract 1.4.0 adds the platform tools endpoint (x-bma-platform-tools): the HTTP MCP endpoint a brain on one machine calls to run its tools on the session's hands machine."
   license:
     name: Apache-2.0
@@ -139,6 +139,10 @@ channels:
         $ref: "#/components/messages/turnInput"
       turnCancel:
         $ref: "#/components/messages/turnCancel"
+      sessionCompact:
+        $ref: "#/components/messages/sessionCompact"
+      sessionCompactCancel:
+        $ref: "#/components/messages/sessionCompactCancel"
       sessionClose:
         $ref: "#/components/messages/sessionClose"
       sessionEventDelta:
@@ -384,6 +388,18 @@ operations:
       $ref: "#/channels/control"
     messages:
       - $ref: "#/components/messages/turnCancel"
+  sessionCompactReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/sessionCompact"
+  sessionCompactCancelReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/sessionCompactCancel"
   sessionCloseReceive:
     action: receive
     channel:
@@ -1981,6 +1997,118 @@ components:
           - method
           - params
       x-bma-jsonrpc-method: turn.cancel
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+    sessionCompact:
+      name: session.compact
+      title: session.compact
+      summary: Compact an idle agent context without sending a turn.
+      description: Explicit idle-session maintenance. The platform reserves the session against new inputs, pending decisions and automatic continuations before calling. The executor independently rejects an active turn, pending interactions or another maintenance operation. It keeps the original transcript, compacts an isolated durable context and atomically publishes its pointer and immutable receipt only after success. Failed or cancelled preparation preserves the old context. Unknown publication is reconciled with the same operation_id and expected version, never a fresh id. Metadata contains maintenance-only platform credentials, not a historical turn token. No tool may run during summarization. Older handlers explicitly refuse this method.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: session.compact
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              operation_id:
+                type: string
+                minLength: 1
+                maxLength: 128
+                pattern: ^[a-zA-Z0-9_-]+$
+              expected_context_version:
+                type: integer
+                minimum: 0
+                maximum: 9007199254740990
+              expected_last_input_id:
+                type: string
+              model:
+                type: string
+              deadline_ms:
+                type: integer
+                minimum: 1
+                maximum: 300000
+              metadata:
+                type: object
+                additionalProperties:
+                  type: string
+            required:
+              - session_id
+              - operation_id
+              - expected_context_version
+              - expected_last_input_id
+              - model
+              - deadline_ms
+              - metadata
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: session.compact
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: operation_id
+    sessionCompactCancel:
+      name: session.compact_cancel
+      title: session.compact_cancel
+      summary: Request cancellation of one context maintenance operation.
+      description: Durably fences publication of the exact operation or returns its already-applied receipt. It never closes the conversation or cancels an ordinary turn. canceled=true means the operation cannot publish, including a late retry; settled=false means its SDK reservation still belongs to work that has not settled. The platform retains its admission barrier until settled=true, and reconciles uncertain replies by repeating this exact cancel request.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: session.compact_cancel
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              operation_id:
+                type: string
+              expected_context_version:
+                type: integer
+                minimum: 0
+                maximum: 9007199254740990
+              expected_last_input_id:
+                type: string
+              model:
+                type: string
+            required:
+              - session_id
+              - operation_id
+              - expected_context_version
+              - expected_last_input_id
+              - model
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: session.compact_cancel
       x-bma-direction: harness-to-executor
       x-bma-kind: request
       x-bma-channel: control

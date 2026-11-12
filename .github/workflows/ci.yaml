@@ -7,6 +7,12 @@ on:
   # release.yaml runs this same check suite before publishing.
   workflow_call:
 
+# A newer PR commit supersedes its old checks. Keep main/tag callers (including
+# the release workflow) running to completion.
+concurrency:
+  group: executor-sdk-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 

@@ -75,6 +75,10 @@
         "input_skills": {
           "type": "boolean",
           "description": "Accepts exact, input-bound selected skill documents and reports their installed versions in TurnStartResult.effective.input_skill_receipt. Absent or false: do not send selected skills."
+        },
+        "context_maintenance": {
+          "type": "boolean",
+          "description": "Explicit idle session.compact and session.compact_cancel with durable versioned receipts. Absent means unsupported. The executor reserves the session independently of ordinary turns, preserves original history, and publishes replacement context only after durable success. It must not declare this before the complete maintenance contract is implemented."
         }
       },
       "required": [
@@ -981,6 +985,79 @@
       "required": [
         "input_id",
         "skills"
+      ],
+      "additionalProperties": false
+    },
+    "SessionCompactResult": {
+      "type": "object",
+      "description": "Durable context replacement receipt. No user message or ordinary turn is created. The operation id and original version identify an immutable retry even after newer compactions.",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "previous_context_version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "context_version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 524288
+        },
+        "summary_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "source_event_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "session_id",
+        "operation_id",
+        "previous_context_version",
+        "context_version",
+        "summary",
+        "summary_sha256",
+        "source_event_count"
+      ],
+      "additionalProperties": false
+    },
+    "SessionCompactCancelResult": {
+      "type": "object",
+      "description": "A durable publication fence or the already-applied receipt. settled is filled by the SDK, independently from the handler's fence.",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "canceled": {
+          "type": "boolean"
+        },
+        "settled": {
+          "type": "boolean"
+        },
+        "receipt": {
+          "$ref": "agent.json#/$defs/SessionCompactResult"
+        }
+      },
+      "required": [
+        "session_id",
+        "operation_id",
+        "canceled",
+        "settled"
       ],
       "additionalProperties": false
     }
