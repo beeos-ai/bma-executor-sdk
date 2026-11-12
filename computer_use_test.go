@@ -84,7 +84,7 @@ func TestComputerUseWithCuaDriver(t *testing.T) {
 		`press_key {"key":"return","scope":"desktop"}`,
 		`scroll {"amount":4,"direction":"down","scope":"desktop","x":5,"y":6}`,
 		`drag {"from_x":1,"from_y":2,"scope":"desktop","to_x":3,"to_y":4}`,
-		`click {"pid":1208,"window_id":983170,"x":7,"y":8}`,
+		`"window_id":983170,"x":7,"y":8}`,
 	} {
 		if !strings.Contains(log, want) {
 			t.Errorf("driver log lacks %q:\n%s", want, log)
@@ -157,4 +157,60 @@ func mustJSON(t *testing.T, value any) json.RawMessage {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+// A real macOS 0.34.0 observation failed before reaching the screenshot because
+// tree_format is not in that version's input schema. The default response still
+// contains tree_markdown; verify both it and the image survive the compatibility fix.
+func TestComputerObserveWindowLegacySchema(t *testing.T) {
+	driver, _, err := fakeCua(t, "BMA_TEST_CUA_STRICT_WINDOW=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, format := range []string{"", "jpeg"} {
+		content, err := driver.Observe(context.Background(), ComputerObserveRequest{PID: 1208, WindowID: 983170, ImageFormat: format})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(content) != 2 || content[0].Data == "" || !strings.Contains(content[1].Text, `[0] Edit "Text Editor"`) {
+			t.Fatalf("window result lost image or tree: %+v", content)
+		}
+	}
+}
+
+func TestComputerWindowContextIsStableAndIsolated(t *testing.T) {
+	driver, logPath, err := fakeCua(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range []string{"first", "second"} {
+		_, err = driver.Observe(context.Background(), ComputerObserveRequest{SessionID: session, PID: 1208, WindowID: 983170})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = driver.Action(context.Background(), ComputerActionRequest{SessionID: session, PID: 1208, WindowID: 983170, Action: "click", Coordinate: &[2]float64{7, 8}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, _ := os.ReadFile(logPath)
+	var labels []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(line, "get_window_state ") && !strings.HasPrefix(line, "click ") {
+			continue
+		}
+		payload := line[strings.Index(line, " ")+1 : strings.LastIndex(line, " telemetry=")]
+		var args map[string]any
+		if err := json.Unmarshal([]byte(payload), &args); err != nil {
+			t.Fatal(err)
+		}
+		label, _ := args["session"].(string)
+		if label == "" || label == "default" {
+			t.Fatal("disposable driver context")
+		}
+		labels = append(labels, label)
+	}
+	if len(labels) != 4 || labels[0] != labels[1] || labels[2] != labels[3] || labels[0] == labels[2] {
+		t.Fatalf("window contexts: %v", labels)
+	}
 }

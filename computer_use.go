@@ -3,6 +3,8 @@ package bmaexecutor
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -36,6 +38,8 @@ var ErrComputerUseUnavailable = errors.New("bmaexecutor: computer use backend is
 
 // ComputerObserveRequest is a computer_observe call.
 type ComputerObserveRequest struct {
+	// SessionID is assigned by Core, not taken from model tool arguments.
+	SessionID string
 	// PID and WindowID name one window; both zero observes the whole screen.
 	PID, WindowID int
 	// ImageFormat optionally requests JPEG for a viewer. Empty keeps lossless PNG.
@@ -46,6 +50,8 @@ type ComputerObserveRequest struct {
 // ComputerActionRequest is a computer_action call. Coordinates are pixels of
 // the last observation: screen pixels, or window-local ones with PID/WindowID.
 type ComputerActionRequest struct {
+	// SessionID keeps observation and action in the same driver context.
+	SessionID     string
 	Action        string
 	PID, WindowID int
 	Coordinate    *[2]float64
@@ -101,10 +107,11 @@ func (c *Core) computerTool(ctx context.Context, params ToolCallParams) (ToolRes
 		if err := validateObserveFormat(input.ImageFormat); err != nil {
 			return ToolResultParams{}, err
 		}
-		blocks, err = c.opts.ComputerUse.Observe(ctx, ComputerObserveRequest{PID: input.PID, WindowID: input.WindowID, ImageFormat: input.ImageFormat})
+		blocks, err = c.opts.ComputerUse.Observe(ctx, ComputerObserveRequest{SessionID: params.SessionID, PID: input.PID, WindowID: input.WindowID, ImageFormat: input.ImageFormat})
 	} else {
 		var request ComputerActionRequest
 		if request, err = input.actionRequest(); err == nil {
+			request.SessionID = params.SessionID
 			blocks, err = c.opts.ComputerUse.Action(ctx, request)
 		}
 	}
@@ -196,9 +203,10 @@ type CuaDriverOptions struct {
 // owns the desktop. Input is delivered in the background when a window is
 // named; screenshots and the accessibility tree come from the same daemon.
 type CuaDriver struct {
-	path, socket string
-	env          []string
-	timeout      time.Duration
+	path, socket     string
+	sessionNamespace string
+	env              []string
+	timeout          time.Duration
 }
 
 // NewCuaDriver checks that the driver and its daemon work (a screen-size call)
@@ -215,7 +223,11 @@ func NewCuaDriver(ctx context.Context, opts CuaDriverOptions) (*CuaDriver, error
 	if opts.Timeout <= 0 {
 		opts.Timeout = 30 * time.Second
 	}
-	driver := &CuaDriver{path: resolved, socket: opts.Socket, env: opts.Env, timeout: opts.Timeout}
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrComputerUseUnavailable, err)
+	}
+	driver := &CuaDriver{path: resolved, socket: opts.Socket, env: opts.Env, timeout: opts.Timeout, sessionNamespace: fmt.Sprintf("%x", nonce)}
 	if _, err := driver.call(ctx, "get_screen_size", map[string]any{}, ""); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrComputerUseUnavailable, err)
 	}
@@ -290,7 +302,9 @@ func (d *CuaDriver) Observe(ctx context.Context, req ComputerObserveRequest) ([]
 	}
 	if req.WindowID != 0 {
 		state, image, err := d.observeScreenshot(ctx, req.ImageFormat, "get_window_state", map[string]any{
-			"pid": req.PID, "window_id": req.WindowID, "tree_format": "markdown",
+			// tree_markdown is part of the default response. Do not send
+			// tree_format: bundled macOS 0.34.0 rejects that newer option.
+			"pid": req.PID, "window_id": req.WindowID, "session": d.windowSession(req.SessionID),
 		})
 		if err != nil {
 			return nil, err
@@ -330,9 +344,20 @@ func windowList(result map[string]any) string {
 	return out.String()
 }
 
+// Each one-shot CLI call discards its anonymous snapshot context. A stable,
+// non-secret label keeps the window pixel frame alive for the next action.
+// Hash the Core session ID and namespace it per driver to isolate sessions.
+func (d *CuaDriver) windowSession(sessionID string) string {
+	sum := sha256.Sum256([]byte(d.sessionNamespace + "\x00" + sessionID))
+	return fmt.Sprintf("bma-%x", sum[:16])
+}
+
 // Action performs one computer_action and returns the driver's summary.
 func (d *CuaDriver) Action(ctx context.Context, req ComputerActionRequest) ([]ContentBlock, error) {
 	tool, args := cuaAction(req)
+	if req.WindowID != 0 {
+		args["session"] = d.windowSession(req.SessionID)
+	}
 	result, err := d.call(ctx, tool, args, "")
 	if err != nil {
 		return nil, err
