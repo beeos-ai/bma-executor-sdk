@@ -35,6 +35,22 @@ func (e *AgentError) Error() string { return e.Message }
 // ErrAgentSessionClosed is returned by AgentTurn methods after session.close.
 var ErrAgentSessionClosed = errors.New("bmaexecutor: agent session closed")
 
+// EventRejectedError is the cause (context.Cause) of a turn the SDK ended
+// because the platform rejected one of its events for good: the turn cannot go
+// on without that event, so it ends with session.error (agent_error,
+// "event_rejected: ...") and session.status_idle (retries_exhausted, failed) at
+// the rejected sequence, and its later events are not sent.
+type EventRejectedError struct {
+	EventID string
+	Cause   *RPCError
+}
+
+func (e *EventRejectedError) Error() string {
+	return fmt.Sprintf("event_rejected: the platform rejected event %s of this turn (%d: %s); the turn cannot go on without it", e.EventID, e.Cause.Code, e.Cause.Message)
+}
+
+func (e *EventRejectedError) Unwrap() error { return e.Cause }
+
 // AgentHandler is a complete local agent (model loop and tools) served over
 // the executor protocol. The SDK owns the wire: turn.start/input/cancel,
 // session.close, event ids and sequences, ACK tracking and resend after
@@ -153,12 +169,18 @@ type agentSession struct {
 	// customTools: waiters by tool_use_id; customDone: ids no longer waited on.
 	customTools map[string]chan AgentCustomToolResultParams
 	customDone  map[string]bool
+	// failedTurns: turns ended after a permanent rejection; their later
+	// events are not sent.
+	failedTurns map[string]bool
 }
 
 type agentOutboxEvent struct {
 	params agentSessionEventParams
 	// onAck runs once the platform acknowledged the event.
 	onAck func()
+	// terminal: an event the SDK wrote to end a turn whose event the
+	// platform rejected for good.
+	terminal bool
 }
 
 // agentSessionEventParams is session.event with the agent members; the v1
@@ -184,8 +206,10 @@ type AgentTurn struct {
 	inputs  chan TurnInputParams
 	seen    map[string]bool
 	cancel  context.CancelFunc
-	done    chan struct{}
-	ended   atomic.Bool
+	// abort cancels the turn with a cause (EventRejectedError).
+	abort context.CancelCauseFunc
+	done  chan struct{}
+	ended atomic.Bool
 
 	toolsOnce sync.Once
 	tools     ToolRoute
@@ -451,7 +475,7 @@ func (r *agentRuntime) session(id string, create bool) (*agentSession, error) {
 	s := &agentSession{
 		runtime: r, id: id, nextSeq: 1, lastUsed: time.Now(), wake: make(chan struct{}, 1), drained: drained,
 		results: map[string]TurnStartResult{}, pending: map[string]chan InteractionResponseParams{}, answered: map[string]bool{},
-		customTools: map[string]chan AgentCustomToolResultParams{}, customDone: map[string]bool{},
+		customTools: map[string]chan AgentCustomToolResultParams{}, customDone: map[string]bool{}, failedTurns: map[string]bool{},
 	}
 	r.sessions[id] = s
 	c := r.client
@@ -508,11 +532,14 @@ func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (T
 	if err != nil {
 		return TurnStartResult{}, err
 	}
-	turnCtx, cancel := context.WithCancel(r.client.rootCtx)
+	turnCtx, abort := context.WithCancelCause(r.client.rootCtx)
+	cancel := func() { abort(nil) }
 	if params.DeadlineMS > 0 {
-		turnCtx, cancel = context.WithTimeout(r.client.rootCtx, time.Duration(params.DeadlineMS)*time.Millisecond)
+		var cancelDeadline context.CancelFunc
+		turnCtx, cancelDeadline = context.WithTimeout(turnCtx, time.Duration(params.DeadlineMS)*time.Millisecond)
+		cancel = func() { cancelDeadline(); abort(nil) }
 	}
-	turn := &AgentTurn{session: s, params: params, inputs: make(chan TurnInputParams, agentInputBuffer), seen: map[string]bool{params.InputID: true}, cancel: cancel, done: make(chan struct{})}
+	turn := &AgentTurn{session: s, params: params, inputs: make(chan TurnInputParams, agentInputBuffer), seen: map[string]bool{params.InputID: true}, cancel: cancel, abort: abort, done: make(chan struct{})}
 	for {
 		s.mu.Lock()
 		if done := s.suspending; done != nil {
@@ -858,6 +885,10 @@ func (s *agentSession) enqueueAck(turnID, eventID string, event any, onAck func(
 		s.mu.Unlock()
 		return ErrAgentSessionClosed
 	}
+	if s.failedTurns[turnID] {
+		s.mu.Unlock()
+		return nil // the turn already ended on the channel
+	}
 	params := agentSessionEventParams{SessionID: s.id, TurnID: turnID, EventID: eventID, Sequence: s.nextSeq, Event: raw}
 	s.nextSeq++
 	if len(s.outbox) == 0 {
@@ -891,7 +922,10 @@ func (s *agentSession) flush(ctx context.Context) error {
 // sendLoop delivers the outbox head first, one event at a time, so the
 // platform sees every session in sequence order. A transport failure keeps
 // the event and waits for the next registration; that is the resend after
-// reconnect.
+// reconnect. No failure leaves a hole in the sequence: the platform's own
+// failure (-32603) is resent, a gap answer (-32013 with expected_sequence)
+// renumbers the unacknowledged events from it, and any other rejection ends
+// the event's turn at that sequence (endTurn).
 func (s *agentSession) sendLoop() {
 	c := s.runtime.client
 	for {
@@ -916,13 +950,33 @@ func (s *agentSession) sendLoop() {
 			var result agentSessionEventResult
 			return c.callInto(ctx, MethodSessionEvent, head.params, &result)
 		})
-		if err != nil && c.rootCtx.Err() != nil {
+		if err != nil && (c.rootCtx.Err() != nil || errors.Is(err, ErrClientStopped)) {
 			return
 		}
+		var rpcErr *RPCError
+		if err != nil && (!errors.As(err, &rpcErr) || rpcErr.Code == CodeInternalError) {
+			// The platform's own failure (a storage conflict or outage): the
+			// event is idempotent, send it again.
+			c.log(LogWarn, fmt.Sprintf("session.event %s failed on the platform; resending", head.params.EventID), err)
+			select {
+			case <-time.After(agentResendDelay):
+			case <-c.rootCtx.Done():
+				return
+			}
+			continue
+		}
+		if err != nil && rpcErr.Code == CodeConflict && rpcErr.Data != nil && rpcErr.Data.ExpectedSequence > 0 {
+			s.resync(rpcErr.Data.ExpectedSequence)
+			continue
+		}
 		if err != nil {
-			// A permanent rejection (invalid event, unknown session) cannot be
-			// fixed by resending; it is surfaced instead of blocking the session.
 			c.log(LogError, fmt.Sprintf("session.event %s rejected", head.params.EventID), err)
+			if !head.terminal {
+				// Going on past a rejected event would leave a hole in the
+				// session: end its turn at this sequence.
+				s.endTurn(head.params, rpcErr)
+				continue
+			}
 		} else if head.onAck != nil {
 			head.onAck()
 		}
@@ -932,6 +986,63 @@ func (s *agentSession) sendLoop() {
 			close(s.drained)
 		}
 		s.mu.Unlock()
+	}
+}
+
+// resync follows the platform's expected_sequence: events below it are
+// persisted, the rest are numbered from it.
+func (s *agentSession) resync(expected int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if expected > s.outbox[0].params.Sequence {
+		for len(s.outbox) > 0 && s.outbox[0].params.Sequence < expected {
+			s.outbox = s.outbox[1:]
+		}
+		if len(s.outbox) == 0 {
+			close(s.drained)
+		}
+		return
+	}
+	s.renumber(expected)
+}
+
+// renumber numbers the outbox from first; s.mu is held.
+func (s *agentSession) renumber(first int64) {
+	for i := range s.outbox {
+		s.outbox[i].params.Sequence = first + int64(i)
+	}
+	s.nextSeq = first + int64(len(s.outbox))
+}
+
+// endTurn replaces the rejected event and every later event of its turn by
+// session.error + session.status_idle (retries_exhausted, failed) at the
+// rejected sequence, and stops the turn with an EventRejectedError cause.
+func (s *agentSession) endTurn(rejected agentSessionEventParams, cause *RPCError) {
+	reason := &EventRejectedError{EventID: rejected.EventID, Cause: cause}
+	errorEvent, _ := json.Marshal(SessionErrorEvent{Type: AgentEventTypeSessionError, Error: AgentErrorInfo{Type: AgentErrorCodeAgentError, Message: reason.Error()}})
+	idleEvent, _ := json.Marshal(SessionStatusIdleEvent{
+		Type: AgentEventTypeSessionStatusIdle, StopReason: StopReason{Type: StopReasonTypeRetriesExhausted}, TurnOutcome: TurnOutcomeFailed,
+	})
+	s.mu.Lock()
+	s.failedTurns[rejected.TurnID] = true
+	end := func(event json.RawMessage) agentOutboxEvent {
+		s.nextID++
+		return agentOutboxEvent{terminal: true, params: agentSessionEventParams{
+			SessionID: s.id, TurnID: rejected.TurnID, EventID: fmt.Sprintf("evt_%s_%d", s.id, s.nextID), Event: event,
+		}}
+	}
+	outbox := []agentOutboxEvent{end(errorEvent), end(idleEvent)}
+	for _, item := range s.outbox {
+		if item.params.TurnID != rejected.TurnID {
+			outbox = append(outbox, item)
+		}
+	}
+	s.outbox = outbox
+	s.renumber(rejected.Sequence)
+	turn := s.turn
+	s.mu.Unlock()
+	if turn != nil && turn.params.TurnID == rejected.TurnID {
+		turn.abort(reason)
 	}
 }
 

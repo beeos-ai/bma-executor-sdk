@@ -68,6 +68,21 @@ class AgentSessionClosedError(ExecutorError):
         super().__init__("agent session closed")
 
 
+class EventRejectedError(ExecutorError):
+    """Why the SDK ended a turn: the platform rejected one of its events for
+    good, and the turn cannot go on without it. The turn ends with
+    session.error (agent_error, "event_rejected: ...") and session.status_idle
+    (retries_exhausted, failed) at the rejected sequence, its task is canceled
+    (AgentTurn.event_rejected is set first) and its later events are not sent."""
+
+    def __init__(self, event_id: str, cause: RPCError) -> None:
+        super().__init__(
+            f"event_rejected: the platform rejected event {event_id} of this turn ({cause.code}: {cause.message}); the turn cannot go on without it"
+        )
+        self.event_id = event_id
+        self.cause = cause
+
+
 # --- executor side ---
 
 
@@ -102,6 +117,8 @@ class AgentTurn:
         self._canceled = False
         self._done = asyncio.Event()
         self.ended = False
+        self.event_rejected: EventRejectedError | None = None
+        """Set when the SDK ended the turn because the platform rejected one of its events for good."""
 
     @property
     def session_id(self) -> str:
@@ -404,6 +421,8 @@ class _AgentSession:
         self.custom_done: set[str] = set()
         self.answered: set[str] = set()
         self.sender: asyncio.Task[Any] | None = None
+        self.failed_turns: set[str] = set()
+        """Turns ended after a permanent rejection: their later events are not sent."""
 
     def new_event_id(self) -> str:
         self.next_id += 1
@@ -412,6 +431,8 @@ class _AgentSession:
     def enqueue(self, turn_id: str, event_id: str, event: Any) -> None:
         if self.closed:
             raise AgentSessionClosedError()
+        if turn_id in self.failed_turns:
+            return  # the turn already ended on the channel
         self.outbox.append({"session_id": self.id, "turn_id": turn_id, "event_id": event_id, "sequence": self.next_seq, "event": event})
         self.next_seq += 1
         self.drained.clear()
@@ -429,7 +450,11 @@ class _AgentSession:
     async def send_loop(self) -> None:
         """Deliver the outbox head first, one event at a time, so the platform
         sees every session in sequence order. A transport failure keeps the
-        event and waits for the next registration: the resend after reconnect."""
+        event and waits for the next registration: the resend after reconnect.
+        No failure leaves a hole in the sequence: the platform's own failure
+        (-32603) is resent, a gap answer (-32013 with expected_sequence)
+        renumbers the unacknowledged events from it, and any other rejection
+        ends the event's turn at that sequence (_end_turn)."""
         client = self.runtime.client
         while True:
             if not self.outbox:
@@ -440,16 +465,69 @@ class _AgentSession:
                 continue
             head = self.outbox[0]
             try:
-                await self.call_until_connected(lambda: client._call(METHOD_SESSION_EVENT, head))
+                await self.call_until_connected(lambda: client._call(METHOD_SESSION_EVENT, {k: v for k, v in head.items() if k != "terminal"}))
             except ClientStoppedError:
                 return
             except RPCError as error:
-                # A permanent rejection cannot be fixed by resending; surface it
-                # instead of blocking the session.
+                if error.code == JsonRpcErrorCode.InternalError:
+                    # The platform's own failure (a storage conflict or outage):
+                    # the event is idempotent, send it again.
+                    client._log("warn", f"session.event {head['event_id']} failed on the platform; resending", error)  # noqa: SLF001
+                    await asyncio.sleep(_AGENT_RESEND_DELAY)
+                    continue
+                expected = (error.data or {}).get("expected_sequence") if error.code == JsonRpcErrorCode.Conflict else None
+                if isinstance(expected, int) and expected > 0:
+                    self._resync(expected)
+                    continue
                 client._log("error", f"session.event {head['event_id']} rejected", error)  # noqa: SLF001
+                if not head.get("terminal"):
+                    # Going on past a rejected event would leave a hole in the
+                    # session: end its turn at this sequence.
+                    self._end_turn(head, error)
+                    continue
             self.outbox.popleft()
             if not self.outbox:
                 self.drained.set()
+
+    def _resync(self, expected: int) -> None:
+        """Follow the platform's expected_sequence: events below it are
+        persisted, the rest are numbered from it."""
+        if expected > self.outbox[0]["sequence"]:
+            while self.outbox and self.outbox[0]["sequence"] < expected:
+                self.outbox.popleft()
+            if not self.outbox:
+                self.drained.set()
+            return
+        self._renumber(expected)
+
+    def _renumber(self, first: int) -> None:
+        for index, item in enumerate(self.outbox):
+            item["sequence"] = first + index
+        self.next_seq = first + len(self.outbox)
+
+    def _end_turn(self, rejected: dict[str, Any], cause: RPCError) -> None:
+        """Replace the rejected event and every later event of its turn by
+        session.error + session.status_idle (retries_exhausted, failed) at the
+        rejected sequence, and cancel the turn's task."""
+        turn_id = rejected["turn_id"]
+        reason = EventRejectedError(rejected["event_id"], cause)
+        self.failed_turns.add(turn_id)
+        rest = [item for item in self.outbox if item["turn_id"] != turn_id]
+
+        def end(event: dict[str, Any]) -> dict[str, Any]:
+            return {"session_id": self.id, "turn_id": turn_id, "event_id": self.new_event_id(), "sequence": 0, "event": event, "terminal": True}
+
+        self.outbox.clear()
+        self.outbox.extend([
+            end(_session_error("agent_error", str(reason))),
+            end({"type": AgentEventType.SessionStatusIdle.value, "stop_reason": {"type": "retries_exhausted"}, "turn_outcome": TurnOutcome.Failed.value}),
+            *rest,
+        ])
+        self._renumber(rejected["sequence"])
+        turn = self.turn
+        if turn is not None and turn.turn_id == turn_id:
+            turn.event_rejected = reason
+            _cancel_turn(turn)
 
     async def call_until_connected(self, call: Callable[[], Awaitable[Any]]) -> Any:
         """Retry call across disconnects. Only transport failures,
