@@ -18,7 +18,7 @@ from ._rpc import (
     SessionContextNotFoundError,
 )
 from .session_context import SessionContext
-from .agent import AgentEventRecord, AgentHandler, AgentPlatform, AgentSessionClosedError, AgentTurn
+from .agent import AgentEventRecord, AgentHandler, AgentPlatform, AgentSessionClosedError, AgentTurn, EventRejectedError
 from .client import (
     DEFAULT_BASE_URL,
     MACHINE_ID_ENV,
@@ -75,6 +75,7 @@ __all__ = [
     "METADATA_AGENT_SESSION_ID",
     "DaemonHTTPError",
     "ErrorReason",
+    "EventRejectedError",
     "MachineTokenRequiredError",
     "SessionContext",
     "SessionContextNotFoundError",

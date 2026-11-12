@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.6.2
+
+- **Go and Python: a rejected `session.event` no longer leaves a hole in the
+  session** (`ServeAgent` / `serve_agent`), the fix TypeScript got in 1.6.1.
+  The outbox dropped an event the platform refused and went on, so the next
+  event hit a sequence gap and the session stalled on `expected_sequence` for
+  good. Now `-32603` (the platform's own failure; the event is idempotent) is
+  sent again; a gap answer (`-32013` with `data.expected_sequence`) renumbers
+  the unacknowledged events from it; any other rejection ends the turn at that
+  sequence with `session.error` (`agent_error`, message `event_rejected: …`)
+  and `session.status_idle` (`retries_exhausted`, `failed`), drops the turn's
+  later events and stops its run. Go: the turn's context is canceled with an
+  `*EventRejectedError` cause (`context.Cause`). Python: the turn's task is
+  canceled after `AgentTurn.event_rejected` is set to an `EventRejectedError`.
+  TypeScript is unchanged in this release.
+
 ## 1.6.1
 
 - **TypeScript: a rejected `session.event` no longer leaves a hole in the
