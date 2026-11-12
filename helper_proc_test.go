@@ -107,6 +107,16 @@ func runFakeCua() {
 		writePNG()
 		result = map[string]any{"screenshot_width": 1024, "screenshot_height": 768}
 	case "get_window_state":
+		// The bundled macOS 0.34.0 driver returns tree_markdown by default,
+		// but rejects the newer tree_format input field.
+		var input map[string]any
+		_ = json.Unmarshal([]byte(payload), &input)
+		if os.Getenv("BMA_TEST_CUA_STRICT_WINDOW") == "1" {
+			if _, present := input["tree_format"]; present {
+				fmt.Fprintln(os.Stderr, "get_window_state: unknown argument tree_format")
+				os.Exit(1)
+			}
+		}
 		writePNG()
 		result = map[string]any{"screenshot_width": 754, "screenshot_height": 512,
 			"tree_markdown": "- Window \"Untitled - Notepad\"\n  - [0] Edit \"Text Editor\""}
