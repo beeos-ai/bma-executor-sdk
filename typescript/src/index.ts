@@ -42,7 +42,7 @@ export {
   type ToolSlot,
   type WebSocketDialerOptions,
 } from './client.js'
-export { AgentTurn, type AgentHandler } from './agent.js'
+export { AgentTurn, EventRejectedError, type AgentHandler } from './agent.js'
 export {
   Harness,
   HarnessExecutor,

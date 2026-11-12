@@ -301,6 +301,18 @@ export class AgentTurn {
 
 interface OutboxEvent {
   params: SessionEventParams
+  /** An event the SDK wrote to end a turn whose event the platform rejected for good. */
+  terminal?: boolean
+}
+
+/** The abort reason of a turn ended because the platform rejected one of its events for good. */
+export class EventRejectedError extends Error {
+  constructor(
+    readonly eventId: string,
+    readonly cause: RpcError,
+  ) {
+    super(`event_rejected: the platform rejected event ${eventId} of this turn (${cause.code}: ${cause.message}); the turn cannot go on without it`)
+  }
 }
 
 /** One platform session on this executor: its outbox of durable events and at most one running turn. */
@@ -310,6 +322,8 @@ class AgentSession {
   private readonly outbox: OutboxEvent[] = []
   private wake = deferred()
   private drained = deferred()
+  /** Turns ended after a permanent rejection: their later events are not sent. */
+  private readonly failedTurns = new Set<string>()
   closed = false
   turn?: AgentTurn
   readonly results = new Map<string, TurnStartResult>()
@@ -333,6 +347,7 @@ class AgentSession {
 
   enqueue(turnId: string, eventId: string, event: AgentEvent): void {
     if (this.closed) throw new AgentSessionClosedError()
+    if (this.failedTurns.has(turnId)) return // the turn already ended on the channel
     const params: SessionEventParams = {
       session_id: this.id,
       turn_id: turnId,
@@ -378,12 +393,76 @@ class AgentSession {
         await this.callUntilConnected(() => this.host.call('session.event', head.params))
       } catch (error) {
         if (this.host.stopSignal.aborted) return
-        // A permanent rejection cannot be fixed by resending; surface it instead of blocking the session.
+        if (!(error instanceof RpcError) || error.code === JsonRpcErrorCode.InternalError) {
+          // The platform's own failure (a storage conflict or outage): the event is idempotent, send it again.
+          this.host.log('warn', `session.event ${head.params.event_id} failed on the platform; resending`, error)
+          await this.resendWait()
+          continue
+        }
+        const expected = error.code === JsonRpcErrorCode.Conflict ? Number(error.data?.expected_sequence) : NaN
+        if (Number.isInteger(expected) && expected > 0) {
+          this.resync(expected)
+          continue
+        }
         this.host.log('error', `session.event ${head.params.event_id} rejected`, error)
+        if (!head.terminal) {
+          // Going on past a rejected event would leave a hole in the session: end its turn at this sequence.
+          this.endTurn(head.params, error)
+          continue
+        }
       }
       this.outbox.shift()
       if (this.outbox.length === 0) this.drained.resolve()
     }
+  }
+
+  /** Follows the platform's expected_sequence: events below it are persisted, the rest are numbered from it. */
+  private resync(expected: number): void {
+    const head = this.outbox[0]!.params.sequence!
+    if (expected > head) {
+      while (this.outbox.length > 0 && this.outbox[0]!.params.sequence! < expected) this.outbox.shift()
+      if (this.outbox.length === 0) this.drained.resolve()
+      return
+    }
+    this.renumber(expected)
+  }
+
+  private renumber(first: number): void {
+    this.outbox.forEach((item, index) => (item.params.sequence = first + index))
+    this.nextSequence = first + this.outbox.length
+  }
+
+  /**
+   * Replaces the rejected event and every later event of its turn by
+   * session.error + session.status_idle (retries_exhausted, failed) at the
+   * rejected sequence, and stops the turn's run.
+   */
+  private endTurn(rejected: SessionEventParams, cause: RpcError): void {
+    const turnId = rejected.turn_id!
+    const reason = new EventRejectedError(rejected.event_id!, cause)
+    this.failedTurns.add(turnId)
+    const rest = this.outbox.filter((item) => item.params.turn_id !== turnId)
+    const end = (event: AgentEvent): OutboxEvent => ({
+      terminal: true,
+      params: { session_id: this.id, turn_id: turnId, event_id: this.newEventId(), event: event as unknown as SessionEvent },
+    })
+    this.outbox.splice(
+      0,
+      this.outbox.length,
+      end({ type: 'session.error', error: { type: 'agent_error', message: reason.message } } as AgentEvent),
+      end({ type: 'session.status_idle', stop_reason: { type: 'retries_exhausted' }, turn_outcome: 'failed' } as AgentEvent),
+      ...rest,
+    )
+    this.renumber(rejected.sequence!)
+    if (this.turn?.params.turn_id === turnId) this.turn.abort.abort(reason)
+  }
+
+  private async resendWait(): Promise<void> {
+    const stop = this.host.stopSignal
+    await Promise.race([
+      new Promise((resolve) => setTimeout(resolve, RESEND_DELAY_MS)),
+      new Promise((resolve) => stop.addEventListener('abort', resolve, { once: true })),
+    ])
   }
 
   /** Retries call across disconnects; only transport failures, executor_busy and retryable errors are retried. */
