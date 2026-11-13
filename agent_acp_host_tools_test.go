@@ -152,7 +152,7 @@ func TestACPAgentAskUserQuestionIsACustomToolCallAnsweredInTheSameTurn(t *testin
 		}
 		return false
 	})
-	if use.EventID != askUserID("sesn_q", "turn_1", "call_h1") {
+	if use.EventID != customToolUseID("sesn_q", "turn_1", "call_h1") {
 		t.Fatalf("custom tool use id = %s", use.EventID)
 	}
 	body := eventJSON(t, use)
@@ -197,7 +197,7 @@ func TestACPAgentAskUserQuestionCanceledWithTheTurn(t *testing.T) {
 	defer cancel()
 	f := startACPFixture(t, ctx, ACPAgentOptions{Command: command, AskUserQuestion: true, Upstream: ACPModelUpstream{BaseURL: model.server.URL + "/v1", Model: "scripted"}})
 	f.start(t, ctx, "sesn_qc", "turn_1", "ask")
-	id := askUserID("sesn_qc", "turn_1", "call_h1")
+	id := customToolUseID("sesn_qc", "turn_1", "call_h1")
 	f.platform.waitFor(t, "agent.custom_tool_use", func() bool { return hasEvent(f.platform.events, id) })
 	if _, err := f.executor.CancelTurn(ctx, TurnCancelParams{SessionID: "sesn_qc", TurnID: "turn_1"}); err != nil {
 		t.Fatal(err)

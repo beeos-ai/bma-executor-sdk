@@ -16,6 +16,8 @@ package bmaexecutor
 
 import (
 	"context"
+	"reflect"
+	"slices"
 	"time"
 )
 
@@ -125,29 +127,59 @@ type BrainEnv struct {
 	StateDir string
 	// RunAs is the identity the brain process runs as (CoreOptions.RunAs).
 	RunAs *RunAs
-	// HostTools are the host tools the host offers the brain besides the six
-	// platform tools; the brain reports those it takes in BrainCapabilities.HostTools.
-	HostTools []BrainHostTool
 	// PlatformModel and Upstream are the model routes the host can hand a
 	// turn (BrainInput.Model); an adapter whose brain uses only its owner's
 	// credentials refuses PlatformModel.
 	PlatformModel bool
 	Upstream      ACPModelUpstream
 	// Models are the models the host lets a turn choose (ACPAgentOptions.Models).
-	Models []AgentModel
-	// AllowedTools reports the tools the brain may offer the model in a
-	// session: the six platform tools and the host tools it took.
-	AllowedTools func() map[string]bool
-	CancelGrace  time.Duration
-	KillGrace    time.Duration
+	Models      []AgentModel
+	CancelGrace time.Duration
+	KillGrace   time.Duration
 	// HarnessID is the declared harness id ("" for the adapter's own).
 	HarnessID string
 	Log       func(LogLevel, string, error)
 }
 
-// BrainHostTool is a host tool the host offers: name, model-facing
-// description and JSON schema, and its default permission.
-type BrainHostTool = acpHostTool
+// BrainTool is one tool a turn offers the model besides the six platform
+// tools: a host tool (computer use of the session's hands machine,
+// ask_user_question) or a custom tool of the session's agent. The brain
+// offers exactly the six and these, under these names and schemas, and runs
+// every call through BrainSink.Call.
+type BrainTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+	// ReadOnly: the tool has no side effects (it may run concurrently).
+	ReadOnly bool `json:"readOnly"`
+	// Kind is the ACP tool kind (read, other, ...).
+	Kind string `json:"kind"`
+	// Permission is a host tool's default permission (allow or ask).
+	Permission string `json:"permission,omitempty"`
+	// Custom marks a custom tool of the agent: the user's application
+	// answers it (agent.custom_tool_use); it is never approved.
+	Custom bool `json:"-"`
+}
+
+// brainToolNames are the names of the six platform tools and of tools.
+func brainToolNames(tools []BrainTool) map[string]bool {
+	names := map[string]bool{}
+	for name := range coreTools {
+		names[name] = true
+	}
+	for _, t := range tools {
+		names[t.Name] = true
+	}
+	return names
+}
+
+// sameBrainTools reports whether two turns offer the same tools.
+func sameBrainTools(a, b []BrainTool) bool {
+	return slices.EqualFunc(a, b, func(x, y BrainTool) bool {
+		return x.Name == y.Name && x.Description == y.Description && x.ReadOnly == y.ReadOnly && x.Kind == y.Kind &&
+			x.Permission == y.Permission && x.Custom == y.Custom && reflect.DeepEqual(x.Parameters, y.Parameters)
+	})
+}
 
 // BrainCapabilities is what a started brain can do. The host reads these
 // fields only; it never asks which brain it is.
@@ -162,17 +194,19 @@ type BrainCapabilities struct {
 	// ModelChoice: a turn may choose the model (config.model) and the brain
 	// runs it. Without it config.model and thinking_level are ignored.
 	ModelChoice bool
-	// Models are the models the brain itself reports (nil: the host's
-	// ACPAgentOptions.Models).
+	// Models are the models the brain itself reports, for a brain on its
+	// owner's credentials (nil: the host's ACPAgentOptions.Models).
 	Models []AgentModel
 	// ThinkingLevels are the reasoning effort values the brain takes.
 	ThinkingLevels []string
 	// ImageInputs: the brain takes user images.
 	ImageInputs bool
-	// HostTools are the offered host tools the brain took.
-	HostTools []string
-	// CustomTools: the brain can call ask_user_question as a custom tool.
+	// HostTools: the brain offers a turn's host tools (BrainOpen.Tools).
+	HostTools bool
+	// CustomTools: the brain offers a turn's custom tools (BrainOpen.Tools).
 	CustomTools bool
+	// InputSkills: the brain takes the selected skills of an input (BrainInput.Skills).
+	InputSkills bool
 	// InputIdempotent: the same input id handed again does not become a
 	// second user message (with the host's ledger, turn_resume).
 	InputIdempotent bool
@@ -202,6 +236,8 @@ type BrainOpen struct {
 	Effort string
 	// Metadata is the turn.start metadata (model limits).
 	Metadata map[string]string
+	// Tools are the turn's tools besides the six (host tools, custom tools).
+	Tools []BrainTool
 }
 
 // BrainInput is one input of a turn.
@@ -216,6 +252,10 @@ type BrainInput struct {
 	// Model is where the brain's model requests go, for a brain whose model
 	// requests the host forwards (nil otherwise).
 	Model *BrainModelRoute
+	// Skills are the skills selected for this input (turn.start
+	// config.input_skills of the opening input; their bodies are checked):
+	// context for this input only.
+	Skills []InputSkillDocument
 }
 
 // BrainImage is one user image, downloaded and checked by the host.

@@ -1,13 +1,17 @@
 package bmaexecutor
 
-// Host tools: tools this machine adds to the six platform tools of a local
-// brain. The host offers them to the brain (BrainEnv.HostTools); the brain
-// takes those it can (BrainCapabilities.HostTools) and calls them like the six
-// (BrainSink.Call), so they run here, under the same policy, approval and turn
-// rules.
+// The tools of a turn besides the six platform tools (BrainOpen.Tools): host
+// tools and the custom tools of the session's agent. The brain offers them to
+// the model and calls them like the six (BrainSink.Call), under the same
+// policy, approval and turn rules.
 //
-//	computer_observe, computer_action  only with CoreOptions.ComputerUse (Core advertises computer_use then):
-//	                                   the machine's own desktop, the contract's computer use tools.
+//	custom tools                       turn.start config.custom_tools (contract 1.7.0): a call is an
+//	                                   agent.custom_tool_use of the session that the user's application
+//	                                   answers (agent.custom_tool_result); the same turn continues with
+//	                                   the answer. Never approved.
+//	computer_observe, computer_action  the hands' computer use tools: turn.start config.host_tools when the
+//	                                   hands are elsewhere (tools_mcp_*, contract 1.8.0, run there), or with
+//	                                   CoreOptions.ComputerUse this machine's own desktop.
 //	                                   Default ask: a screenshot leaves the machine for the model and
 //	                                   an action drives the real desktop, so each call is approved on
 //	                                   the platform (any client of the session) unless the turn's
@@ -23,26 +27,16 @@ package bmaexecutor
 //	                                   never grants a permission.
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"slices"
 	"strings"
 )
 
 // ToolNameAskUserQuestion is the host tool of a local brain that asks the
 // user (see agent_acp_host_tools.go).
 const ToolNameAskUserQuestion = "ask_user_question"
-
-// acpHostTool is one entry of initialize _meta.bma.hostTools.
-type acpHostTool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Parameters  map[string]any `json:"parameters"`
-	ReadOnly    bool           `json:"readOnly"`
-	Kind        string         `json:"kind"`
-	Permission  string         `json:"permission"`
-}
 
 func acpObject(required []string, properties map[string]any) map[string]any {
 	if required == nil {
@@ -55,7 +49,7 @@ func acpObject(required []string, properties map[string]any) map[string]any {
 // 1-4 questions, each with a short header and 2-4 options (label and
 // description), multiSelect for several answers; the user may always answer
 // in their own words instead.
-var acpAskUserQuestion = acpHostTool{
+var acpAskUserQuestion = BrainTool{
 	Name: ToolNameAskUserQuestion,
 	Description: "Ask the user one to four questions when you need a decision or information only they have, " +
 		"and wait for the answer. Give each question 2-4 concrete options; the user may also answer in their own words. " +
@@ -92,7 +86,7 @@ var acpAskUserQuestion = acpHostTool{
 var computerStepDescription = map[string]any{"type": "string", "description": "What this step does, in one sentence in the user's language, " +
 	`naming the app and the object, for example "在飞书里搜索联系人 Q". At most 40 characters; no coordinates.`}
 
-var acpComputerObserve = acpHostTool{
+var acpComputerObserve = BrainTool{
 	Name: ToolNameComputerObserve,
 	Description: "Take a screenshot of this computer's screen with the list of its windows (pid, window_id, app, title), " +
 		"or of one window (pid and window_id) with its accessibility tree. Coordinates for computer_action are pixels of the screenshot. " +
@@ -106,7 +100,7 @@ var acpComputerObserve = acpHostTool{
 	ReadOnly: true, Kind: "read", Permission: "ask",
 }
 
-var acpComputerAction = acpHostTool{
+var acpComputerAction = BrainTool{
 	Name: ToolNameComputerAction,
 	Description: "Use this computer's mouse and keyboard: click, type, key, scroll or drag; open_app opens an app by name or bundle id, " +
 		"brings it to the front and returns its pid and windows. Coordinates are pixels of the last computer_observe " +
@@ -129,47 +123,51 @@ var acpComputerAction = acpHostTool{
 	Kind: "other", Permission: "ask",
 }
 
-// offeredHostTools are the host tools this host offers the brain beyond the six.
-func (a *BrainHost) offeredHostTools() []acpHostTool {
-	var tools []acpHostTool
-	if a.opts.AskUserQuestion {
+// turnTools are a turn's tools besides the six: ask_user_question
+// (ACPAgentOptions.AskUserQuestion), the hands' computer use tools
+// (config.host_tools when the hands are elsewhere, this machine's own with
+// CoreOptions.ComputerUse) when the brain offers host tools, and the agent's
+// custom tools.
+func (a *BrainHost) turnTools(config AgentTurnConfig, remote bool) ([]BrainTool, error) {
+	var tools []BrainTool
+	switch {
+	case len(config.HostTools) > 0 && (!remote || !a.caps.HostTools):
+		return nil, &RPCError{Code: CodeInvalidParams, Message: "invalid params: host_tools are only for an executor that declared agent.host_tools, with tools_mcp_*"}
+	case a.caps.HostTools && a.opts.AskUserQuestion:
 		tools = append(tools, acpAskUserQuestion)
 	}
-	if a.opts.Core.opts.ComputerUse != nil {
-		tools = append(tools, acpComputerObserve, acpComputerAction)
-	}
-	return tools
-}
-
-// hostTools are the offered host tools the brain took
-// (BrainCapabilities.HostTools). A brain that takes none keeps exactly the six.
-func (a *BrainHost) hostTools() []acpHostTool {
-	var out []acpHostTool
-	for _, t := range a.offeredHostTools() {
-		if slices.Contains(a.caps.HostTools, t.Name) {
-			out = append(out, t)
+	if a.caps.HostTools {
+		for _, h := range config.HostTools {
+			kind := "other"
+			if h.ReadOnly {
+				kind = "read"
+			}
+			tools = append(tools, BrainTool{Name: h.Name, Description: h.Description, Parameters: h.InputSchema, ReadOnly: h.ReadOnly, Kind: kind,
+				Permission: cmp.Or(h.Permission, "ask")})
+		}
+		if !remote && a.opts.Core.opts.ComputerUse != nil {
+			tools = append(tools, acpComputerObserve, acpComputerAction)
 		}
 	}
-	return out
+	if len(config.CustomTools) > 0 && !a.caps.CustomTools {
+		return nil, &RPCError{Code: CodeCapabilityUnavailable, Message: "capability_unavailable: custom tools are not offered by this brain",
+			Data: &JSONRPCErrorData{Capability: "custom_tools"}}
+	}
+	for _, c := range config.CustomTools {
+		if brainToolNames(tools)[c.Name] {
+			return nil, &RPCError{Code: CodeInvalidParams, Message: "invalid params: custom tool " + c.Name + " has the name of one of the executor's tools"}
+		}
+		tools = append(tools, BrainTool{Name: c.Name, Description: c.Description, Parameters: c.InputSchema, Kind: "other", Custom: true})
+	}
+	return tools, nil
 }
 
-// toolNames are the platform tools and the host tools: exactly what the agent may offer the model.
-func (a *BrainHost) toolNames() map[string]bool {
-	names := map[string]bool{}
-	for name := range coreTools {
-		names[name] = true
-	}
-	for _, t := range a.hostTools() {
-		names[t.Name] = true
-	}
-	return names
-}
-
-// withHostTools adds each host tool's default permission to a policy that does not name it.
-func (a *BrainHost) withHostTools(policy map[string]string) map[string]string {
-	for _, t := range a.hostTools() {
+// withTurnTools adds each tool's default permission to a policy that does
+// not name it: a host tool's declared one, allow for a custom tool.
+func withTurnTools(policy map[string]string, tools []BrainTool) map[string]string {
+	for _, t := range tools {
 		if _, ok := policy[t.Name]; !ok {
-			policy[t.Name] = t.Permission
+			policy[t.Name] = cmp.Or(t.Permission, "allow")
 		}
 	}
 	return policy
@@ -200,37 +198,35 @@ func (t *acpTurn) hostAllows(ctx context.Context, sessionID, callID, tool string
 	return allowed
 }
 
-// askUserID is the event id of the agent.custom_tool_use of one
-// ask_user_question call: the same for the same session, turn and call after
-// an executor restart, so an answer given meanwhile comes back.
-func askUserID(sessionID, turnID, callID string) string {
+// customToolUseID is the event id of the agent.custom_tool_use of one call
+// of a custom tool or of ask_user_question: the same for the same session,
+// turn and call after an executor restart, so an answer given meanwhile
+// comes back.
+func customToolUseID(sessionID, turnID, callID string) string {
 	sum := sha256.Sum256([]byte(sessionID + "\x00" + turnID + "\x00" + callID))
 	return "evt_" + sessionID + "_ask_" + hex.EncodeToString(sum[:])[:16]
 }
 
-// askUser runs one ask_user_question call as a custom tool call of the
-// session and returns the user's answer as the tool result.
-func (t *acpTurn) askUser(ctx context.Context, callID string, input map[string]any) *RouteResult {
-	if questions, _ := input["questions"].([]any); len(questions) == 0 {
-		return &RouteResult{Outcome: RouteOutcomeNotForwarded, Code: "invalid_tool_input", Text: "invalid_tool_input: questions is required", IsError: true}
-	}
+// customTool runs one call as a custom tool call of the session
+// (agent.custom_tool_use) and returns the answer's text as the tool result.
+// When the turn ends first the call is given up (contract).
+func (t *acpTurn) customTool(ctx context.Context, callID, name string, input map[string]any) (text string, isError bool, ok bool) {
 	sessionID := t.turn.SessionID()
-	id := askUserID(sessionID, t.turnID, callID)
+	id := customToolUseID(sessionID, t.turnID, callID)
 	t.mu.Lock()
 	t.questions[callID] = id
 	t.mu.Unlock()
-	t.agent.interaction(ACPInteractionEvent{Phase: "requested", Kind: InteractionKindQuestion, SessionID: sessionID, InteractionID: id, ToolName: ToolNameAskUserQuestion, ToolInput: input})
-	_, answer, err := t.turn.requestCustomTool(ctx, id, ToolNameAskUserQuestion, input)
+	t.agent.interaction(ACPInteractionEvent{Phase: "requested", Kind: InteractionKindQuestion, SessionID: sessionID, InteractionID: id, ToolName: name, ToolInput: input})
+	_, answer, err := t.turn.requestCustomTool(ctx, id, name, input)
 	outcome := string(InteractionOutcomeAnswered)
 	if err != nil {
 		outcome = "withdrawn"
 	}
-	t.agent.interaction(ACPInteractionEvent{Phase: "ended", Kind: InteractionKindQuestion, SessionID: sessionID, InteractionID: id, ToolName: ToolNameAskUserQuestion, Outcome: outcome})
+	t.agent.interaction(ACPInteractionEvent{Phase: "ended", Kind: InteractionKindQuestion, SessionID: sessionID, InteractionID: id, ToolName: name, Outcome: outcome})
 	if err != nil {
-		// The turn ended (cancel, deadline) before an answer: the call is given up (contract).
 		_, _ = t.turn.Emit(toolResultEvent{Type: AgentEventTypeAgentToolResult, ToolUseID: id, IsError: true,
-			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "The question was withdrawn before the user answered."}}})
-		return &RouteResult{Outcome: RouteOutcomeNotForwarded, Code: "canceled", Text: "canceled: The question was withdrawn before the user answered.", IsError: true}
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "The call was withdrawn before the user answered."}}})
+		return "", false, false
 	}
 	var texts []string
 	for _, b := range answer.Content {
@@ -238,12 +234,27 @@ func (t *acpTurn) askUser(ctx context.Context, callID string, input map[string]a
 			texts = append(texts, b.Text)
 		}
 	}
-	text := strings.Join(texts, "\n")
-	if text == "" {
-		text = "The user gave no answer."
+	return strings.Join(texts, "\n"), answer.IsError, true
+}
+
+// withdrawnCall is the result the brain reads for a custom tool call the turn gave up.
+func withdrawnCall() *RouteResult {
+	return &RouteResult{Outcome: RouteOutcomeNotForwarded, Code: "canceled", Text: "canceled: The call was withdrawn before the user answered.", IsError: true}
+}
+
+// askUser runs one ask_user_question call and returns the user's answer.
+func (t *acpTurn) askUser(ctx context.Context, callID string, input map[string]any) *RouteResult {
+	if questions, _ := input["questions"].([]any); len(questions) == 0 {
+		return &RouteResult{Outcome: RouteOutcomeNotForwarded, Code: "invalid_tool_input", Text: "invalid_tool_input: questions is required", IsError: true}
 	}
-	if !answer.IsError {
+	text, isError, ok := t.customTool(ctx, callID, ToolNameAskUserQuestion, input)
+	switch {
+	case !ok:
+		return withdrawnCall()
+	case text == "":
+		text = "The user gave no answer."
+	case !isError:
 		text = "The user answered: " + text
 	}
-	return &RouteResult{Outcome: RouteOutcomeExecuted, Text: text, IsError: answer.IsError}
+	return &RouteResult{Outcome: RouteOutcomeExecuted, Text: text, IsError: isError}
 }

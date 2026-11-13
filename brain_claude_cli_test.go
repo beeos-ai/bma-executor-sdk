@@ -64,8 +64,8 @@ func TestClaudeCLIRunsAnApprovedPlatformTool(t *testing.T) {
 		!capability.Harnesses[0].ImageInputs || !slices.ContainsFunc(claudeCLIPins, func(p claudeCLIPin) bool { return p.Version == capability.Harnesses[0].Version }) {
 		t.Fatalf("capability = %+v, %v", capability, err)
 	}
-	if len(capability.PlatformCredentials) != 0 || capability.TurnResume || len(capability.Models) != 0 {
-		t.Fatalf("capability: no platform credentials, no turn_resume, no models: %+v", capability)
+	if len(capability.PlatformCredentials) != 0 || capability.TurnResume {
+		t.Fatalf("capability: no platform credentials, no turn_resume: %+v", capability)
 	}
 
 	result := f.start(t, ctx, "sesn_c", "turn_1", "run it")
@@ -201,7 +201,7 @@ func TestClaudeCLIAskUserQuestionIsACustomToolCall(t *testing.T) {
 		}
 		return false
 	})
-	if use.EventID != askUserID("sesn_q", "turn_1", "toolu_01") || len(f.platform.interactions) != 0 {
+	if use.EventID != customToolUseID("sesn_q", "turn_1", "toolu_01") || len(f.platform.interactions) != 0 {
 		t.Fatalf("custom tool use %s, interactions %+v", use.EventID, f.platform.interactions)
 	}
 	if _, err := f.executor.RespondCustomToolResult(ctx, AgentCustomToolResultParams{SessionID: "sesn_q", ToolUseID: use.EventID,
@@ -214,9 +214,10 @@ func TestClaudeCLIAskUserQuestionIsACustomToolCall(t *testing.T) {
 	}
 }
 
-// A user's image reaches the model as an image block. The CLI runs its
-// owner's model: the platform's config.model (the agent's model) is ignored.
-func TestClaudeCLIImageAndTheOwnersModel(t *testing.T) {
+// A user's image reaches the model as an image block. The models are those
+// the CLI reports for its owner (model_credentials owner): a turn's model
+// and thinking level are passed on unchanged, another model is refused.
+func TestClaudeCLIImageAndTheOwnersModels(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	model := newScriptedModel(t, "bash", map[string]any{"command": "true"})
@@ -225,14 +226,20 @@ func TestClaudeCLIImageAndTheOwnersModel(t *testing.T) {
 		return io.NopCloser(bytes.NewReader(png)), nil
 	}}, t.TempDir())
 	capability, _ := f.executor.AgentCapability()
-	if !capability.FileInputs || len(capability.Models) != 0 {
-		t.Fatalf("file_inputs, no models: %+v", capability)
+	h := capability.Harnesses[0]
+	sonnet := slices.IndexFunc(h.Models, func(m AgentModel) bool { return m.ID == "sonnet" })
+	if !capability.FileInputs || h.ModelCredentials != BrainModelOwner || sonnet < 0 || !slices.Contains(h.Models[sonnet].ThinkingLevels, "high") {
+		t.Fatalf("file_inputs, owner models: %+v", capability)
+	}
+	if _, err := f.executor.StartTurn(ctx, TurnStartParams{SessionID: "sesn_i", TurnID: "turn_0", InputID: "in_0",
+		Input: []AgentInputBlock{{Type: "text", Text: "x"}}, Config: &AgentTurnConfig{Model: "deepseek-flash"}}); err == nil {
+		t.Fatal("a model the CLI does not report was accepted")
 	}
 	result := f.start(t, ctx, "sesn_i", "turn_1", "describe it", func(p *TurnStartParams) {
 		p.Input = append(p.Input, fileBlock("file_1", "red.png", "image/png", len(png)))
-		p.Config.Model, p.Config.ThinkingLevel = "deepseek-flash", "high"
+		p.Config.Model, p.Config.ThinkingLevel = "sonnet", "high"
 	})
-	if result.Effective.Model != "" || result.Effective.ThinkingLevel != "" {
+	if result.Effective.Model != "sonnet" || result.Effective.ThinkingLevel != "high" {
 		t.Fatalf("effective = %+v", result.Effective)
 	}
 	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
@@ -242,6 +249,9 @@ func TestClaudeCLIImageAndTheOwnersModel(t *testing.T) {
 	}
 	if images != 1 {
 		t.Fatalf("image blocks in the model requests = %d, want 1", images)
+	}
+	if got := model.requests[len(model.requests)-1].Model; !strings.Contains(got, "sonnet") {
+		t.Fatalf("model of the request = %q, want the owner's sonnet", got)
 	}
 }
 

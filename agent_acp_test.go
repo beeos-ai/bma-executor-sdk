@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
@@ -210,7 +211,7 @@ func TestACPAgentCapabilityDeclaresDSHHarness(t *testing.T) {
 	}
 	h := capability.Harnesses[0]
 	if h.ID != "dsh" || h.Protocol != "acp/1" || h.Streaming != "token" || h.PermissionRelay != "full" || !h.SessionLoad ||
-		h.AgentName != "fake-dsh-acp" || h.Version != "9.9.9+dsh0.2.1-rc.5" || *capability.Harness != h {
+		h.AgentName != "fake-dsh-acp" || h.Version != "9.9.9+dsh0.2.1-rc.5" || !reflect.DeepEqual(*capability.Harness, h) {
 		t.Fatalf("harness = %+v", h)
 	}
 	if !capability.TurnResume || !contains(capability.InteractionKinds, InteractionKindPermission) || !contains(capability.PermissionModes, "accept_edits") {

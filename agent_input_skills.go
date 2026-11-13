@@ -3,6 +3,8 @@ package bmaexecutor
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"regexp"
 	"strings"
@@ -77,4 +79,22 @@ func validateInputSkillReceipt(params TurnStartParams, result TurnStartResult) e
 		}
 	}
 	return nil
+}
+
+// inputSkillReceipt checks the bytes of the selected skills of an opening
+// input against their body_sha256 and returns the receipt of what the brain
+// gets (nil without skills). A mismatch is invalid params.
+func inputSkillReceipt(inputID string, documents []InputSkillDocument) (*InputSkillReceipt, error) {
+	if len(documents) == 0 {
+		return nil, nil
+	}
+	receipt := &InputSkillReceipt{InputID: inputID}
+	for _, doc := range documents {
+		sum := sha256.Sum256([]byte(doc.Body))
+		if hex.EncodeToString(sum[:]) != doc.BodySHA256 {
+			return nil, &RPCError{Code: CodeInvalidParams, Message: "invalid params: input skill " + doc.SkillID + " body does not match its body_sha256"}
+		}
+		receipt.Skills = append(receipt.Skills, InputSkillVersionReceipt{SkillID: doc.SkillID, RevisionID: doc.RevisionID, BodySHA256: doc.BodySHA256})
+	}
+	return receipt, nil
 }

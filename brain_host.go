@@ -384,6 +384,8 @@ type acpTurn struct {
 	// hostAsk are the host tools whose ask is only their declared default:
 	// neither the turn's tool_policy nor the host's ceiling names them.
 	hostAsk map[string]bool
+	// custom are the turn's custom tools (agent.custom_tool_use, never approved).
+	custom map[string]bool
 	// hostAllowed is the ComputerUseApprover's answer per call id, asked
 	// once so the tool_use event and the permission request agree.
 	hostAllowed map[string]bool
@@ -470,8 +472,8 @@ func NewBrainHost(ctx context.Context, adapter BrainAdapter, opts ACPAgentOption
 	a := &BrainHost{opts: opts, adapter: adapter, sessions: map[string]*acpSession{}, suspended: map[string]string{}}
 	caps, err := adapter.Start(ctx, BrainEnv{
 		Command: opts.Command, Env: opts.Env, StateDir: opts.StateDir, RunAs: opts.Core.opts.RunAs,
-		HostTools: a.offeredHostTools(), PlatformModel: opts.PlatformModel, Upstream: opts.Upstream, Models: opts.Models,
-		AllowedTools: a.toolNames, CancelGrace: opts.CancelGrace, KillGrace: opts.KillGrace,
+		PlatformModel: opts.PlatformModel, Upstream: opts.Upstream, Models: opts.Models,
+		CancelGrace: opts.CancelGrace, KillGrace: opts.KillGrace,
 		HarnessID: opts.HarnessID, Log: a.log,
 	})
 	if err != nil {
@@ -480,6 +482,11 @@ func NewBrainHost(ctx context.Context, adapter BrainAdapter, opts ACPAgentOption
 	a.caps = caps
 	a.harness = caps.Harness
 	a.harness.ImageInputs = caps.ImageInputs
+	if caps.ModelCredentials == BrainModelOwner {
+		// The platform checks a session's model against these and hands it
+		// on unchanged (contract 1.10.0).
+		a.harness.ModelCredentials, a.harness.Models = BrainModelOwner, caps.Models
+	}
 	a.models = caps.Models
 	if a.models == nil {
 		a.models = acpAgentModels(opts.Models, caps.ThinkingLevels)
@@ -496,8 +503,11 @@ func (a *BrainHost) Capability() AgentCapability {
 	h := a.harness
 	c := AgentCapability{
 		Enabled: true, PermissionModes: acpPermissionModes, InteractionKinds: []string{InteractionKindPermission},
-		// ask_user_question is a custom tool call of the session (agent_acp_host_tools.go).
-		CustomTools: a.opts.AskUserQuestion && a.caps.CustomTools,
+		// Custom tools and ask_user_question are custom tool calls of the session (agent_acp_host_tools.go).
+		CustomTools: a.caps.CustomTools,
+		// Host tools come with tools_mcp_* (the hands are elsewhere).
+		HostTools:   a.caps.HostTools && a.opts.PlatformTools,
+		InputSkills: a.caps.InputSkills,
 		// A brain that repeats a re-sent input as a new user message cannot
 		// continue a turn an executor restart interrupted (ADR-0013: failed).
 		TurnResume:  a.caps.InputIdempotent,
@@ -576,6 +586,14 @@ func (a *BrainHost) OpenTurn(ctx context.Context, params TurnStartParams) (TurnS
 	if err != nil {
 		return TurnStartResult{}, err
 	}
+	tools, err := a.turnTools(config, remote)
+	if err != nil {
+		return TurnStartResult{}, err
+	}
+	receipt, err := inputSkillReceipt(params.InputID, config.InputSkills)
+	if err != nil {
+		return TurnStartResult{}, err
+	}
 	// Opening the brain's conversation is not done here: turn.start is
 	// answered as soon as the turn is accepted (contract) and the open runs
 	// first thing in RunTurn, where a failure ends the turn with session.error
@@ -601,7 +619,8 @@ func (a *BrainHost) OpenTurn(ctx context.Context, params TurnStartParams) (TurnS
 	if mountNote != "" {
 		system = strings.TrimSpace(system + "\n\n" + mountNote)
 	}
-	s.plan = acpOpenPlan{params: params, cwd: cwd, promptCwd: promptCwd, model: model, effort: level, mode: mode, system: system, hands: config.EnvironmentInfo}
+	s.plan = acpOpenPlan{params: params, cwd: cwd, promptCwd: promptCwd, model: model, effort: level, mode: mode, system: system, hands: config.EnvironmentInfo,
+		tools: tools, skills: config.InputSkills}
 	a.mu.Unlock()
 	if err := a.opts.Core.openLocal(acpBrain, params.SessionID, cwd); err != nil {
 		return TurnStartResult{}, err
@@ -623,7 +642,7 @@ func (a *BrainHost) OpenTurn(ctx context.Context, params TurnStartParams) (TurnS
 	}
 	return TurnStartResult{
 		Accepted: true, TurnID: params.TurnID, ExecutorSessionRef: ref, Resumed: resumed,
-		Effective: AgentTurnConfig{Model: model, ThinkingLevel: level, PermissionMode: mode, Cwd: promptCwd, Harness: a.harness.ID},
+		Effective: AgentTurnConfig{Model: model, ThinkingLevel: level, PermissionMode: mode, Cwd: promptCwd, Harness: a.harness.ID, InputSkillReceipt: receipt},
 	}, nil
 }
 
@@ -667,14 +686,16 @@ func (a *BrainHost) RunTurn(ctx context.Context, turn *AgentTurn) error {
 	a.mu.Unlock()
 	effective := acpEffectivePolicy(mode, overrides)
 	hostAsk := map[string]bool{}
-	for _, tool := range a.hostTools() {
+	custom := map[string]bool{}
+	for _, tool := range plan.tools {
 		_, named := effective[tool.Name]
 		_, capped := a.opts.ToolPolicy[tool.Name]
 		hostAsk[tool.Name] = tool.Permission == "ask" && !named && !capped
+		custom[tool.Name] = tool.Custom
 	}
-	policy := acpCapPolicy(a.withHostTools(effective), a.opts.ToolPolicy)
+	policy := acpCapPolicy(withTurnTools(effective, plan.tools), a.opts.ToolPolicy)
 	a.mu.Lock()
-	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: policy, hostAsk: hostAsk, hostAllowed: map[string]bool{}, effort: plan.effort,
+	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: policy, hostAsk: hostAsk, custom: custom, hostAllowed: map[string]bool{}, effort: plan.effort,
 		messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}, questions: map[string]string{}}
 	if remoteRoute != nil {
 		t.toolRoute = remoteRoute(ledger)
@@ -695,14 +716,14 @@ func (a *BrainHost) RunTurn(ctx context.Context, turn *AgentTurn) error {
 		}
 		a.mu.Unlock()
 	}()
-	if err := a.runInput(ctx, brain, t, params.InputID, params.Input, overrides); err != nil {
+	if err := a.runInput(ctx, brain, t, params.InputID, params.Input, plan.skills, overrides); err != nil {
 		return err
 	}
 	// turn.input received while the turn ran: prompted in order, in the same turn.
 	for {
 		select {
 		case input := <-turn.Inputs():
-			if err := a.runInput(ctx, brain, t, input.InputID, input.Input, overrides); err != nil {
+			if err := a.runInput(ctx, brain, t, input.InputID, input.Input, nil, overrides); err != nil {
 				return err
 			}
 		default:
@@ -773,7 +794,7 @@ func (a *BrainHost) SuspendSession(ctx context.Context, sessionID string) error 
 // event it produced is acknowledged by the platform. After a restart the
 // turn's inputs come again (turn.start, turn.input); the brain continues the
 // one it recorded without having finished it (same input id).
-func (a *BrainHost) runInput(ctx context.Context, brain BrainSession, t *acpTurn, inputID string, input []AgentInputBlock, policy map[string]string) error {
+func (a *BrainHost) runInput(ctx context.Context, brain BrainSession, t *acpTurn, inputID string, input []AgentInputBlock, skills []InputSkillDocument, policy map[string]string) error {
 	if t.ledger.inputDone(inputID) {
 		return nil
 	}
@@ -781,7 +802,7 @@ func (a *BrainHost) runInput(ctx context.Context, brain BrainSession, t *acpTurn
 	if err != nil {
 		return err
 	}
-	in.InputID, in.ToolPolicy, in.Effort = inputID, policy, t.effort
+	in.InputID, in.ToolPolicy, in.Effort, in.Skills = inputID, policy, t.effort, skills
 	if a.caps.ModelCredentials == BrainModelPlatform {
 		route := t.route
 		in.Model = &route
@@ -1000,9 +1021,14 @@ func (t *acpTurn) Message(kind, messageID, text string) {
 	_, _ = t.turn.EmitWithID(id, AgentMessageEvent{Type: AgentEventTypeAgentMessage, Content: content})
 }
 
+// customCall: the call's event is its agent.custom_tool_use (Call), and it is never approved.
+func (t *acpTurn) customCall(name string) bool {
+	return t.custom[name] || name == ToolNameAskUserQuestion
+}
+
 func (t *acpTurn) ToolUse(call BrainCall, permission string) {
-	if call.Name == ToolNameAskUserQuestion {
-		return // its agent.custom_tool_use is the call's event (askUser)
+	if t.customCall(call.Name) {
+		return
 	}
 	if permission == "" {
 		permission = t.policyOf(call.Name)
@@ -1068,9 +1094,9 @@ func (t *acpTurn) Permission(ctx context.Context, call BrainCall) BrainDecision 
 	sessionID := t.turn.SessionID()
 	interactionID := ApprovalID(sessionID, t.turnID, call.ID)
 	permission := t.policyOf(call.Name)
-	if call.Name == ToolNameAskUserQuestion {
-		// Asking is not an operation: its custom tool call is the event, and
-		// Call refuses it when the turn's policy denies it.
+	if t.customCall(call.Name) {
+		// Not an operation on a machine: its custom tool call is the event,
+		// and Call refuses it when the turn's policy denies it.
 		return BrainDecision{Outcome: BrainAllow}
 	}
 	decide := func(decision string) error {
@@ -1134,14 +1160,21 @@ func (t *acpTurn) Permission(ctx context.Context, call BrainCall) BrainDecision 
 // refusalText is what the model reads when the user denied a call.
 const refusalText = "The user denied this tool call."
 
-// Call runs one tool call: ask_user_question as a custom tool call of the
-// session, anything else through the turn's route.
+// Call runs one tool call: a custom tool and ask_user_question as a custom
+// tool call of the session, anything else through the turn's route.
 func (t *acpTurn) Call(ctx context.Context, call BrainCall) *RouteResult {
-	if call.Name == ToolNameAskUserQuestion && slices.Contains(t.agent.caps.HostTools, ToolNameAskUserQuestion) {
+	if t.customCall(call.Name) {
 		if t.policyOf(call.Name) == "deny" {
-			return refused("permission_denied", "the ask_user_question tool is not allowed in this session")
+			return refused("permission_denied", "the "+call.Name+" tool is not allowed in this session")
 		}
-		return t.askUser(ctx, call.ID, call.Input)
+		if call.Name == ToolNameAskUserQuestion {
+			return t.askUser(ctx, call.ID, call.Input)
+		}
+		text, isError, ok := t.customTool(ctx, call.ID, call.Name, call.Input)
+		if !ok {
+			return withdrawnCall()
+		}
+		return &RouteResult{Outcome: RouteOutcomeExecuted, Text: text, IsError: isError}
 	}
 	t.mu.Lock()
 	toolUseID := t.tools[call.ID]

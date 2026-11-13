@@ -46,8 +46,8 @@ func (p *acpModelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	route, sessionID, running := p.agent.routeFor(key)
-	if !running {
+	prompt, sessionID := p.agent.routeFor(key)
+	if prompt == nil {
 		reason := "unknown key"
 		if sessionID != "" {
 			reason = "no running turn in session " + sessionID
@@ -66,7 +66,8 @@ func (p *acpModelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if names := acpExtraTools(request["tools"], p.agent.env.AllowedTools()); len(names) > 0 {
+	route := prompt.route
+	if names := acpExtraTools(request["tools"], prompt.tools); len(names) > 0 {
 		p.agent.log(LogWarn, fmt.Sprintf("acp model proxy refused tools %v in session %s", names, sessionID), nil)
 		http.Error(w, "forbidden: tool catalog not allowed: "+strings.Join(names, ","), http.StatusForbidden)
 		return
