@@ -1,6 +1,6 @@
 package bmaexecutor
 
-// The ACP client the ACP adapters share (agent process, JSON-RPC over stdio,
+// The ACP client of the ACP adapter (agent process, JSON-RPC over stdio,
 // ACP v1): start and initialize the agent process, calls, notifications, the
 // agent's own requests, kill. What a method means is the adapter's business.
 
@@ -117,12 +117,7 @@ type acpUpdate struct {
 			Name       string `json:"name"`
 			Permission string `json:"permission"`
 		} `json:"bma"`
-		ClaudeCode struct {
-			ToolName string `json:"toolName"`
-		} `json:"claudeCode"`
 	} `json:"_meta"`
-	CurrentModeID string          `json:"currentModeId"`
-	ConfigOptions json.RawMessage `json:"configOptions"`
 }
 
 // chunkText is the text of an agent_message_chunk / agent_thought_chunk ("", false for another content type).
@@ -506,11 +501,6 @@ type acpPermissionRequest struct {
 		ToolCallID string         `json:"toolCallId"`
 		Title      string         `json:"title"`
 		RawInput   map[string]any `json:"rawInput"`
-		Meta       struct {
-			ClaudeCode struct {
-				ToolName string `json:"toolName"`
-			} `json:"claudeCode"`
-		} `json:"_meta"`
 	} `json:"toolCall"`
 	Options []acpPermissionOption `json:"options"`
 }

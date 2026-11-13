@@ -71,12 +71,12 @@ jobs:
           uv run -p ${{ matrix.python }} pytest -q
           uv run -p ${{ matrix.python }} pyright
 
-  # The Claude Code brain against the real, pinned claude-agent-acp and the
-  # claude CLI of its Agent SDK platform package (npm ci installs the locked,
-  # integrity-checked tree; the CLI is also checked against its sha256 pin). The
-  # model endpoint is scripted and the API key made up: no credential is used.
+  # The Claude Code brain against the real, pinned claude CLI (downloaded from
+  # Anthropic's release bucket, checked against its manifest and the SDK's
+  # pins). The model endpoint is scripted and the API key made up: no
+  # credential is used.
   claude-code:
-    name: ACPAgent with the pinned claude-agent-acp
+    name: Claude adapter with the pinned claude CLI
     runs-on: ubuntu-latest
     steps:
       - name: Check out
@@ -88,21 +88,14 @@ jobs:
           go-version: "1.26"
           cache-dependency-path: go.sum
 
-      - name: Set up Node
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
+      - name: Fetch the pinned claude CLI
+        run: tools/fetch_claude_cli.sh 2.1.318 testdata/claude-cli/claude
 
-      - name: Install the pinned claude-agent-acp
-        working-directory: testdata/claude-agent-acp
-        run: npm ci
-
-      - name: Claude Code tests, claude-agent-acp and the pinned claude CLI (they fail, not skip, when missing)
+      - name: Claude adapter tests (they fail, not skip, when the CLI is missing)
         env:
           BMA_REQUIRE_CLAUDE_CLI: "1"
         run: |
-          test -f testdata/claude-agent-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js
-          go test -race -count=1 -v -run 'ClaudeCode|ClaudeCLI' ./... | tee /tmp/claude.log
+          go test -race -count=1 -v -run 'ClaudeCLI' ./... | tee /tmp/claude.log
           ! grep -q -- '--- SKIP' /tmp/claude.log
 
   # The DSH profile of ACPAgent against the real, pinned bma-dsh-acp (npm ci

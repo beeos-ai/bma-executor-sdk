@@ -2,16 +2,21 @@
 
 ## 1.6.5
 
-- **Go: the Claude CLI adapter** (`NewClaudeCLIAdapter`, profile
-  `claude-code-cli`, harness id `claude-code`). The official `claude` binary
-  is driven directly over stream-json and its control protocol, with no
-  community adapter, Agent SDK or Node in between: a pinned release (version
-  and sha256), the platform tools, host tools and `ask_user_question` on a
-  loopback MCP server, permission requests answered by the host
-  (deterministic `appr_` ids from `tool_use_id`), a conversation id derived
-  from the platform session id with `--resume`, user images, `interrupt` on
-  cancel. It runs the owner's configured model (declares no `models`). CI runs it against the pinned
-  CLI. `examples/local-dsh -profile claude-code-cli`.
+- **Go: Claude Code is the official `claude` CLI, driven directly.** The
+  `claude-code` profile (`ACPProfileClaudeCode`, or `NewClaudeCLIAdapter`)
+  drives the unmodified binary over stream-json and its control protocol,
+  with no community adapter, Agent SDK or Node in between: a pinned release
+  (version and sha256 from Anthropic's release manifest), the platform tools,
+  host tools and `ask_user_question` on a loopback MCP server, permission
+  requests answered by the host (deterministic `appr_` ids from
+  `tool_use_id`), a conversation id derived from the platform session id with
+  `--resume`, user images, `interrupt` on cancel; it runs the owner's
+  configured model (declares no `models`). `ClaudeCLIOptions.Executable`
+  names the official binary when `Command` is the owner's launcher of it
+  (`examples/local-dsh -claude-executable`).
+- **Removed:** the claude-agent-acp adapter of the `claude-code` profile, its
+  pins and `testdata/claude-agent-acp`, and the prewarm that only it had
+  (`ACPAgentOptions.DisablePrewarm`, `ACPAgent.WaitPrewarm`).
 
 ## 1.6.4
 

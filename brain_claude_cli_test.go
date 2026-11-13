@@ -2,30 +2,28 @@ package bmaexecutor
 
 import (
 	"bytes"
+
 	"context"
 	"fmt"
+	"github.com/beeos-ai/bma-executor-sdk/conformance/gatewaystub"
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
-// claudeCLIBinary is the pinned official claude binary: BMA_CLAUDE_CLI, or the
-// one the Agent SDK platform package of testdata/claude-agent-acp installs (npm ci).
+// claudeCLIBinary is the pinned official claude binary: BMA_CLAUDE_CLI, or
+// testdata/claude-cli/claude (tools/fetch_claude_cli.sh 2.1.318 testdata/claude-cli/claude).
 func claudeCLIBinary(t *testing.T) string {
 	t.Helper()
-	if bin := os.Getenv("BMA_CLAUDE_CLI"); bin != "" {
-		return bin
+	bin := os.Getenv("BMA_CLAUDE_CLI")
+	if bin == "" {
+		bin = "testdata/claude-cli/claude"
 	}
-	dir := os.Getenv("BMA_CLAUDE_AGENT_ACP_DIR")
-	if dir == "" {
-		dir = "testdata/claude-agent-acp"
-	}
-	bin, err := filepath.Abs(filepath.Join(dir, "node_modules/@anthropic-ai", "claude-agent-sdk-"+runtime.GOOS+"-"+strings.Replace(runtime.GOARCH, "amd64", "x64", 1), "claude"))
+	bin, err := filepath.Abs(bin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +31,7 @@ func claudeCLIBinary(t *testing.T) string {
 		if os.Getenv("BMA_REQUIRE_CLAUDE_CLI") != "" {
 			t.Fatalf("the claude CLI is not installed: %v", err)
 		}
-		t.Skipf("the claude CLI is not installed (npm ci in testdata/claude-agent-acp): %v", err)
+		t.Skipf("the claude CLI is not installed (tools/fetch_claude_cli.sh): %v", err)
 	}
 	return bin
 }
@@ -45,7 +43,7 @@ func startClaudeCLIFixture(t *testing.T, ctx context.Context, model *scriptedMod
 	home := filepath.Join(root, "home")
 	noErr(t, os.MkdirAll(home, 0o755))
 	t.Setenv("HOME", home)
-	opts.Profile = ACPProfileClaudeCodeCLI
+	opts.Profile = ACPProfileClaudeCode
 	opts.Command = []string{claudeCLIBinary(t)}
 	opts.Env = append(opts.Env, "ANTHROPIC_BASE_URL="+model.server.URL, "ANTHROPIC_API_KEY="+claudeTestAPIKey,
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "DISABLE_TELEMETRY=1", "DISABLE_AUTOUPDATER=1")
@@ -245,6 +243,36 @@ func TestClaudeCLIImageAndTheOwnersModel(t *testing.T) {
 	}
 }
 
+func TestClaudeCLIRunsTheToolsOnTheRemoteHands(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	gw := newGateway(t, map[string]string{"bash": "allow"})
+	model := newScriptedModel(t, "bash", map[string]any{"command": "echo pwned > pwned.txt"})
+	f := startClaudeCLIFixture(t, ctx, model, ACPAgentOptions{PlatformTools: true}, t.TempDir())
+	capability, err := f.executor.AgentCapability()
+	if err != nil || len(capability.PlatformCredentials) != 1 || capability.PlatformCredentials[0] != PlatformCredentialBrainTools {
+		t.Fatalf("platform_credentials = %+v, %v", capability, err)
+	}
+	f.start(t, ctx, "sesn_c", "turn_1", "run it", remoteTurn(gw.URL(), "tok-1"))
+	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
+	if _, err := os.Stat(filepath.Join(gw.Workspace(), "pwned.txt")); err != nil {
+		t.Fatalf("the tool did not run on the hands machine: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "acp", "sesn_c", "pwned.txt")); err == nil {
+		t.Fatal("the tool also ran on the brain's machine")
+	}
+	// The MCP call to the gateway carried the CLI's call id as the idempotency identity and the tool_use id.
+	var call *gatewaystub.Request
+	for _, r := range gw.Recorded() {
+		if r.Method == "tools/call" {
+			call = &r
+		}
+	}
+	if call == nil || !strings.Contains(string(call.Params), platformIdempotencyKey("sesn_c", "turn_1", "toolu_01")) {
+		t.Fatalf("gateway calls: %+v", gw.Recorded())
+	}
+}
+
 func TestClaudeCLIRefusesAnUnpinnedBinary(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -254,16 +282,16 @@ func TestClaudeCLIRefusesAnUnpinnedBinary(t *testing.T) {
 	noErr(t, err)
 	t.Cleanup(core.Close)
 	// The test binary answers --version as claude 9.9.9 (fakeClaudeCLIVersion).
-	_, err = NewACPAgent(ctx, ACPAgentOptions{Profile: ACPProfileClaudeCodeCLI, Command: []string{exe}, Env: []string{"BMA_FAKE_CLAUDE_CLI=9.9.9"}, StateDir: t.TempDir(), Core: core})
+	_, err = NewACPAgent(ctx, ACPAgentOptions{Profile: ACPProfileClaudeCode, Command: []string{exe}, Env: []string{"BMA_FAKE_CLAUDE_CLI=9.9.9"}, StateDir: t.TempDir(), Core: core})
 	if err == nil || !strings.Contains(err.Error(), "not a pinned release") {
 		t.Fatalf("err = %v", err)
 	}
 	// The pinned version, but not its binary.
-	_, err = NewACPAgent(ctx, ACPAgentOptions{Profile: ACPProfileClaudeCodeCLI, Command: []string{exe}, Env: []string{"BMA_FAKE_CLAUDE_CLI=2.1.318"}, StateDir: t.TempDir(), Core: core})
+	_, err = NewACPAgent(ctx, ACPAgentOptions{Profile: ACPProfileClaudeCode, Command: []string{exe}, Env: []string{"BMA_FAKE_CLAUDE_CLI=2.1.318"}, StateDir: t.TempDir(), Core: core})
 	if err == nil || !strings.Contains(err.Error(), "is not the pinned claude 2.1.318 binary") {
 		t.Fatalf("err = %v", err)
 	}
-	_, err = NewACPAgent(ctx, ACPAgentOptions{Profile: ACPProfileClaudeCodeCLI, Command: []string{exe}, PlatformModel: true, StateDir: t.TempDir(), Core: core})
+	_, err = NewACPAgent(ctx, ACPAgentOptions{Profile: ACPProfileClaudeCode, Command: []string{exe}, PlatformModel: true, StateDir: t.TempDir(), Core: core})
 	if err == nil || !strings.Contains(err.Error(), "PlatformModel") {
 		t.Fatalf("err = %v", err)
 	}

@@ -204,9 +204,6 @@ type ACPAgentOptions struct {
 	// then sends image input. Without both, the platform is told the brain
 	// takes no image and refuses an image input.
 	InputFiles ACPInputFiles
-	// DisablePrewarm turns off a brain's background prewarm, if it has one
-	// (see WaitPrewarm).
-	DisablePrewarm bool
 	// HarnessID is the declared harness id (default: the brain's own id).
 	HarnessID string
 	// Model is the model name the brain uses when the turn config has none (default Upstream.Model).
@@ -475,8 +472,7 @@ func NewBrainHost(ctx context.Context, adapter BrainAdapter, opts ACPAgentOption
 		Command: opts.Command, Env: opts.Env, StateDir: opts.StateDir, RunAs: opts.Core.opts.RunAs,
 		HostTools: a.offeredHostTools(), PlatformModel: opts.PlatformModel, Upstream: opts.Upstream, Models: opts.Models,
 		AllowedTools: a.toolNames, CancelGrace: opts.CancelGrace, KillGrace: opts.KillGrace,
-		HarnessID: opts.HarnessID, DisablePrewarm: opts.DisablePrewarm, Log: a.log,
-		SystemPrompt: func(cwd string) string { return a.systemPrompt(cwd, "", nil) },
+		HarnessID: opts.HarnessID, Log: a.log,
 	})
 	if err != nil {
 		return nil, err
@@ -516,15 +512,6 @@ func (a *BrainHost) Capability() AgentCapability {
 		c.PlatformCredentials = append(c.PlatformCredentials, PlatformCredentialBrainTools)
 	}
 	return c
-}
-
-// WaitPrewarm waits for the brain's background prewarm, if its adapter has
-// one, and returns its error; otherwise it returns nil at once.
-func (a *BrainHost) WaitPrewarm(ctx context.Context) error {
-	if w, ok := a.adapter.(interface{ WaitPrewarm(context.Context) error }); ok {
-		return w.WaitPrewarm(ctx)
-	}
-	return nil
 }
 
 // Close stops the brain.
@@ -954,10 +941,6 @@ func (a *BrainHost) session(id string) *acpSession {
 	s := &acpSession{id: id}
 	a.sessions[id] = s
 	return s
-}
-
-func acpCatalogViolation(catalog []string) string {
-	return acpToolsViolation(slices.Sorted(slices.Values(acpPlatformTools)), catalog)
 }
 
 func acpToolsViolation(want, catalog []string) string {

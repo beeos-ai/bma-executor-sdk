@@ -31,10 +31,6 @@ func TestMain(m *testing.M) {
 		serveFakeMCP()
 		return
 	}
-	if mode := os.Getenv("BMA_ACP_FAKE_CLAUDE"); mode != "" {
-		fakeClaudeAgent(mode)
-		return
-	}
 	if os.Getenv("BMA_ACP_FAKE_AGENT") == "1" {
 		fakeACPAgent()
 		return

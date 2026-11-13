@@ -429,3 +429,10 @@ func (a *dshAdapter) onRequest(ctx context.Context, proc *acpProcess, method str
 	}
 	return nil, &RPCError{Code: CodeMethodNotFound, Message: "method not found: " + method}
 }
+
+// acpPlatformTools are the six platform tools (CMA agent_toolset names).
+var acpPlatformTools = []string{ToolNameBash, ToolNameEdit, ToolNameGlob, ToolNameGrep, ToolNameRead, ToolNameWrite}
+
+func acpCatalogViolation(catalog []string) string {
+	return acpToolsViolation(slices.Sorted(slices.Values(acpPlatformTools)), catalog)
+}

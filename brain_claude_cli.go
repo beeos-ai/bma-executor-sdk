@@ -33,6 +33,7 @@ package bmaexecutor
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -53,6 +54,15 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+)
+
+const (
+	claudeMCPServerName = "bma"
+	claudeToolPrefix    = "mcp__" + claudeMCPServerName + "__"
+	// claudeToolUseIDMeta is the tools/call _meta key the CLI names the call's tool_use_id with.
+	claudeToolUseIDMeta = "claudecode/toolUseId"
+	// cliMaxToolRequestBytes bounds one MCP request of the CLI.
+	cliMaxToolRequestBytes = 32 << 20
 )
 
 // claudeCLIPin is one release of the official claude CLI this SDK is tested
@@ -1062,7 +1072,7 @@ func (s *cliToolServer) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, acpMaxToolRequestBytes))
+	body, err := io.ReadAll(io.LimitReader(r.Body, cliMaxToolRequestBytes))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1166,4 +1176,47 @@ func (a *claudeCLIAdapter) toolList() []any {
 		tools = append(tools, map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.Parameters})
 	}
 	return tools
+}
+
+func newPlaceholder() string {
+	key := make([]byte, 16)
+	_, _ = rand.Read(key)
+	return "bma-local-" + hex.EncodeToString(key)
+}
+
+func claudeToolList() []any {
+	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
+	integer := func(desc string) map[string]any { return map[string]any{"type": "integer", "description": desc} }
+	boolean := func(desc string) map[string]any { return map[string]any{"type": "boolean", "description": desc} }
+	tool := func(name, desc string, required []string, props map[string]any) map[string]any {
+		return map[string]any{"name": name, "description": desc,
+			"inputSchema": map[string]any{"type": "object", "properties": props, "required": required}}
+	}
+	return []any{
+		tool(ToolNameBash, "Run a shell command in the working directory. A command that runs longer than the wait is left running; the call then returns its pid and the file its output goes to.",
+			[]string{"command"}, map[string]any{
+				"command":     str("The command to run."),
+				"timeout":     integer("How long to wait for the command, in milliseconds (default 120000, at most 600000)."),
+				"on_timeout":  map[string]any{"type": "string", "enum": []string{"background", "kill"}, "description": "At the end of the wait: leave the command running (default) or stop it."},
+				"description": str("What the command does."),
+			}),
+		tool(ToolNameRead, "Read a file.", []string{"file_path"}, map[string]any{
+			"file_path": str("Path of the file."), "offset": integer("First line to read."), "limit": integer("Number of lines to read."),
+		}),
+		tool(ToolNameWrite, "Write a file, replacing its content.", []string{"file_path", "content"}, map[string]any{
+			"file_path": str("Path of the file."), "content": str("The new content."),
+		}),
+		tool(ToolNameEdit, "Replace text in a file.", []string{"file_path", "old_string", "new_string"}, map[string]any{
+			"file_path": str("Path of the file."), "old_string": str("The text to replace."), "new_string": str("The replacement."),
+			"replace_all": boolean("Replace every occurrence instead of exactly one."),
+		}),
+		tool(ToolNameGlob, "Find files by glob pattern.", []string{"pattern"}, map[string]any{
+			"pattern": str("The glob pattern."), "path": str("Directory to search in."),
+		}),
+		tool(ToolNameGrep, "Search file contents with a regular expression.", []string{"pattern"}, map[string]any{
+			"pattern": str("The regular expression."), "path": str("File or directory to search in."), "glob": str("Only files matching this glob."),
+			"output_mode":      map[string]any{"type": "string", "enum": []string{"content", "files_with_matches", "count"}, "description": "What to return."},
+			"case_insensitive": boolean("Ignore case."),
+		}),
+	}
 }
