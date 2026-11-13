@@ -1069,7 +1069,7 @@
           "mounts": [
             {
               "view": "uploads",
-              "path": "/mnt/session/uploads",
+              "path": "/mnt/session/sesn_01JFS/uploads",
               "readonly": true,
               "token": "bma_cap_v1.example.example"
             }

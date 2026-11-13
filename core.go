@@ -150,7 +150,18 @@ type CoreOptions struct {
 	// core ends them (session.ended "completed") after the result is
 	// delivered. BMA's durable selfhost queue assigns such sessions.
 	EndAfterToolCall func(SessionAssignParams) bool
-	OnLog            func(LogEvent)
+	// OnAssign runs on every accepted session.assign of the core, the first
+	// one of a session (the session exists, workspace and MCP servers not yet
+	// prepared) and each replay (sent again before tool calls, on reconnect,
+	// to renew a grant). A host keeps per-session state from params.Metadata
+	// here: a replay carries the whole metadata again, a key it no longer
+	// holds is gone, and the session's Assignment shows the newest assign's
+	// once OnAssign returns. A returned error refuses the assign (invalid
+	// params naming it): a first assign creates no session, a replay leaves
+	// the previous metadata. End of the session is the session's Context.
+	// Nil does nothing.
+	OnAssign func(session *CoreSession, params SessionAssignParams) error
+	OnLog    func(LogEvent)
 }
 
 // RunAs is a workload OS identity (CoreOptions.RunAs).
@@ -258,7 +269,13 @@ func (s *CoreSession) Client() *Client   { return s.client }
 func (s *CoreSession) Context() context.Context { return s.ctx }
 
 // Assignment is the session.assign that created the session.
-func (s *CoreSession) Assignment() SessionAssignParams { return s.params }
+// A replayed session.assign replaces its metadata (the latest wins), so this
+// is the newest assign's, not necessarily the first's.
+func (s *CoreSession) Assignment() SessionAssignParams {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.params
+}
 
 // Value returns the per-session value for key, creating it with create on
 // first use. Capabilities keep their session state here.
@@ -449,7 +466,7 @@ func (c *Core) Attach(brain string, client *Client) error {
 	}
 	client.afterToolResult(func(params ToolCallParams) {
 		session := c.session(coreKey{brain, params.SessionID})
-		if session != nil && c.opts.EndAfterToolCall != nil && c.opts.EndAfterToolCall(session.params) {
+		if session != nil && c.opts.EndAfterToolCall != nil && c.opts.EndAfterToolCall(session.Assignment()) {
 			c.end(session.key, "completed")
 		}
 	})
@@ -547,9 +564,16 @@ func (c *Core) assign(brain string, client *Client, params SessionAssignParams) 
 		c.mu.Unlock()
 		return SessionAssignResult{Accepted: false, SessionID: params.SessionID}, nil
 	}
-	if _, exists := c.sessions[key]; exists {
-		// A replayed assign (for example after reconnect) is idempotent.
+	if existing, exists := c.sessions[key]; exists {
+		// A replayed assign (for example after reconnect) is idempotent; its
+		// metadata replaces the session's, as the newest assign's.
 		c.mu.Unlock()
+		if err := c.onAssign(existing, params); err != nil {
+			return SessionAssignResult{}, err
+		}
+		existing.mu.Lock()
+		existing.params.Metadata = maps.Clone(params.Metadata)
+		existing.mu.Unlock()
 		return SessionAssignResult{Accepted: true, SessionID: params.SessionID}, nil
 	}
 	perBrain := 0
@@ -575,12 +599,27 @@ func (c *Core) assign(brain string, client *Client, params SessionAssignParams) 
 	c.sessions[key] = session
 	c.mu.Unlock()
 
+	if err := c.onAssign(session, params); err != nil {
+		c.stop(key)
+		return SessionAssignResult{}, err
+	}
 	if err := c.createWorkspace(session.workspace); err != nil {
 		c.stop(key)
 		return SessionAssignResult{}, fmt.Errorf("create workspace: %w", err)
 	}
 	go c.prepare(client, session, params)
 	return SessionAssignResult{Accepted: true, SessionID: params.SessionID}, nil
+}
+
+// onAssign runs CoreOptions.OnAssign; its error is the assign's invalid params.
+func (c *Core) onAssign(session *CoreSession, params SessionAssignParams) error {
+	if c.opts.OnAssign == nil {
+		return nil
+	}
+	if err := c.opts.OnAssign(session, params); err != nil {
+		return &RPCError{Code: CodeInvalidParams, Message: err.Error()}
+	}
+	return nil
 }
 
 // createWorkspace creates a missing session workspace, owned by the RunAs
@@ -1051,7 +1090,7 @@ func launchRefusal(err error) (code, detail string, ok bool) {
 // sessionProcessContext is the ProcessContext of a bash tool call of a
 // harness session: its id, the session.assign metadata and client.
 func sessionProcessContext(session *CoreSession) ProcessContext {
-	metadata := session.params.Metadata
+	metadata := session.Assignment().Metadata
 	return ProcessContext{SessionID: session.ID(), AgentSessionID: metadata[MetadataAgentSessionID],
 		Metadata: maps.Clone(metadata), Client: session.client}
 }

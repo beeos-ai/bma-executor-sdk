@@ -252,11 +252,19 @@
     },
     "ComputerObserveInput": {
       "type": "object",
-      "description": "computer_observe input.",
+      "description": "computer_observe input. The result is a screenshot (an image content block) with the list of the screen's windows as text. pid and window_id (both or neither, contract 1.8.0) observe one window of that list.",
       "properties": {
         "display": {
           "type": "string",
           "description": "Display to observe."
+        },
+        "pid": {
+          "type": "integer",
+          "description": "Contract 1.8.0. Process id of the window to observe (with window_id)."
+        },
+        "window_id": {
+          "type": "integer",
+          "description": "Additive. Window id from the window list (with pid)."
         }
       },
       "required": [],
@@ -264,7 +272,7 @@
     },
     "ComputerActionInput": {
       "type": "object",
-      "description": "computer_action input.",
+      "description": "computer_action input, after Anthropic's computer-use tool over the ComputerAction enum. Coordinates are pixels of the last computer_observe screenshot (window-local with pid and window_id). The members after display are contract 1.8.0 (additive).",
       "properties": {
         "action": {
           "$ref": "tool.json#/$defs/ComputerAction"
@@ -272,6 +280,63 @@
         "display": {
           "type": "string",
           "description": "Display to act on."
+        },
+        "coordinate": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[x, y] for click, scroll and the end of drag."
+        },
+        "start_coordinate": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[x, y] where drag starts."
+        },
+        "text": {
+          "type": "string",
+          "description": "Text to type, or a key or chord such as Return or ctrl+s."
+        },
+        "button": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right",
+            "middle"
+          ]
+        },
+        "click_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "scroll_direction": {
+          "type": "string",
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ]
+        },
+        "scroll_amount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "pid": {
+          "type": "integer",
+          "description": "Process id of the target window (with window_id)."
+        },
+        "window_id": {
+          "type": "integer",
+          "description": "Target window id (with pid); input then goes to that window in the background."
         }
       },
       "required": [

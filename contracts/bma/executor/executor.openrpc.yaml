@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 1.5.0
+  version: 1.9.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -287,6 +287,16 @@ methods:
             $ref: schemas/mcp.json#/$defs/McpServerConfig
       - name: metadata
         required: false
+        description: >-
+          String key/value pairs. egress (contract 1.9.0, only to an executor that declared
+          egress.forwarder): the JSON text of the session's EgressHandoff (schemas/executor.json), for an
+          executor that runs the session's tools without running its turns (hands of a session whose brain
+          is elsewhere). The harness sends session.assign before the session's tool calls and again on
+          reconnect; every session.assign of a session, a repeated one included, replaces the session's
+          handoff with the one it carries, and one without egress removes it (the session's connections go
+          direct, so the sandbox's own network applies). The harness renews the token by a repeated
+          session.assign before expires_at. The handoff ends with the session on this executor
+          (session.stop, session.close). Never logged or echoed.
         schema:
           type: object
           additionalProperties:
@@ -340,7 +350,14 @@ methods:
       event_id and sequence; the harness deduplicates by (session_id, event_id), accepts a sequence at
       or below acked_sequence as a duplicate, and rejects a gap with -32013 conflict
       (data.expected_sequence). An agent event matches schemas/agent.json AgentEvent. The JSON-RPC response is the ACK; the executor keeps every unacked
-      event and resends them in sequence order after reconnect, before any new event.
+      event and resends them in sequence order after reconnect, before any new event. Contract 1.7.0
+      clarifies two rules that keep a session from stalling. A failure on the harness side that
+      resending can fix (storage conflict or outage) is answered with data.retryable true and the
+      executor resends the same event; only a rejection of the event itself (invalid params) is
+      permanent, and it ends the turn; the executor sends session.error (bma_error_code
+      event_rejected) and session.status_idle for the turn in place of the rejected event, renumbers
+      from data.expected_sequence only so that this session.error is accepted, and never continues
+      the turn.
     tags:
       - name: session
     x-bma-direction: executor-to-harness
@@ -1323,7 +1340,9 @@ methods:
       the executor resume its local conversation after a restart. The executor answers as soon as the
       turn is accepted and reports progress with session.event. Idempotent by turn_id. A session
       with a running turn answers -32013 conflict (use turn.input); a turn.start while
-      max_sessions turns are running answers -32009 (an idle session holds no slot).
+      max_sessions turns are running answers -32009 (an idle session holds no slot). A request that
+      would serialize to more than 48 KiB carries a single input_ref block as its input (contract
+      1.7.0, only to an executor that declared agent.input_by_reference).
     tags:
       - name: agent
     x-bma-direction: harness-to-executor
@@ -1386,6 +1405,10 @@ methods:
           applied over AgentTurnConfig.permission_mode; an executor may only make a tool stricter than its own
           ceiling, never looser, and a tool the object does not name keeps the mode's permission. Keys the
           executor does not know are ignored.
+          egress (contract 1.9.0, only to an executor that declared egress.forwarder): the JSON text of the
+          session's EgressHandoff (schemas/executor.json) for an executor that runs the turn and its tools
+          itself; it replaces the session's handoff as session.assign metadata egress does, and a turn.start
+          without it removes the handoff.
         schema:
           type: object
           additionalProperties:
@@ -1405,7 +1428,9 @@ methods:
     summary: Add user input to the running turn.
     description: Harness to executor request (capability agent). The local agent consumes the input
       at its next step. Idempotent by input_id. When turn_id is not the running turn the executor
-      answers -32013 conflict and the harness starts a new turn instead.
+      answers -32013 conflict and the harness starts a new turn instead. A request that would
+      serialize to more than 48 KiB carries a single input_ref block as its input (contract 1.7.0,
+      only to an executor that declared agent.input_by_reference).
     tags:
       - name: agent
     x-bma-direction: harness-to-executor

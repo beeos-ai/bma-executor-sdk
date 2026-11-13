@@ -36,6 +36,10 @@
           "type": "boolean",
           "description": "The executor fetches the bytes of the file blocks (file_id) of turn.start and turn.input itself. Declare it only when it can: through the tools endpoint of the turn (tools_mcp_url and tools_mcp_token in turn.start metadata, GET <tools_mcp_url without /mcp>/files/<file_id>/content), or, on a machine daemon token, through the turn input files routes (GET /v1/machines/{machine_id}/sessions/{session_id}/turns/{turn_id}/input_files and .../{file_id}/content, docs/architecture/executor-turn-input-files.md). Together with the agent accepting images (harness.image_inputs) it is what lets the platform accept an image input for the agent: without it the input is refused with 400, with it the platform sends the file blocks and never refuses an image the agent accepts. Absent means false."
         },
+        "input_by_reference": {
+          "type": "boolean",
+          "description": "Contract 1.7.0. The executor fetches a turn input the platform does not inline: when turn.start or turn.input would serialize to more than 48 KiB (the 64 KiB control frame limit with headroom), its input is a single input_ref block (AgentInputBlock type input_ref: input_id, size_bytes, sha256) instead of the blocks, and the executor reads them with its machine credential: GET /v1/machines/{machine_id}/inputs/{input_id} on the executor domain answers 200 with the AgentInputBlock array the input would have carried (404 unless the input belongs to a session of the credential's machine; readable until its turn ends). The executor checks size_bytes and sha256 and handles the blocks exactly as if they had come inline. Declare it only when it can make that request. Without it such an input ends its turn: session.error (bma_error_code input_too_large, not retried) and the turn fails; the platform never retries a request that cannot fit. Absent means false."
+        },
         "max_sessions": {
           "type": "integer",
           "minimum": 1,
@@ -59,7 +63,11 @@
         },
         "custom_tools": {
           "type": "boolean",
-          "description": "The executor runs custom tools defined by the platform agent: it emits agent.custom_tool_use for a call to one and waits for agent.custom_tool_result. Without it the platform never sends agent.custom_tool_result and answers a user.custom_tool_result for the session with an error."
+          "description": "The executor runs custom tools defined by the platform agent: it emits agent.custom_tool_use for a call to one and waits for agent.custom_tool_result. The platform sends the definitions of the turn's agent with every turn.start (AgentTurnConfig.custom_tools, contract 1.7.0) and only to an executor that declares this member. Without it the platform never sends agent.custom_tool_result and answers a user.custom_tool_result for the session with an error; a turn of an agent that has custom tools sent to an executor without it ends failed with session.error (bma_error_code custom_tools_unsupported), never with the tools silently dropped."
+        },
+        "host_tools": {
+          "type": "boolean",
+          "description": "Contract 1.8.0. The executor's brain offers the model the host tools a turn.start declares (AgentTurnConfig.host_tools) and runs them through the turn's tools endpoint. Without it the platform does not send host_tools, and a session whose hands machine has computer use gets no computer use tools from this brain. Absent means false."
         },
         "harness": {
           "$ref": "agent.json#/$defs/AgentHarnessCapability",
@@ -209,6 +217,14 @@
           "type": "string",
           "description": "Extra system instructions from the platform agent definition."
         },
+        "host_tools": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "$ref": "agent.json#/$defs/HostTool"
+          },
+          "description": "Contract 1.8.0. Requested only, sent only to an executor that declared agent.host_tools and only with tools_mcp_* in metadata. Tools of the session's hands machine the brain offers the model next to its own tools: computer_observe and computer_action when the hands machine declared computer_use, absent otherwise (absent = none, so a session without a desktop never sees them). Every entry is offered under its name and input_schema exactly, and runs like the brain's other tools through tools_mcp_url under that name. Its permission is metadata tool_policy[name] when present, else the entry's permission: an ask call is approved once per call (interaction kind permission, the brain's deterministic interaction id). A tool result image (an image content block of the tools endpoint answer) reaches the model with that result as an image and is never written to a session event (agent.tool_result carries the text only); the brain keeps the images of the session's 3 most recent such calls in memory and sends only those (older calls, and every call after a brain restart, keep their text). An invalid entry (a name that is not one of these two tools, a repeated name, a missing description, an input_schema that is not an object schema, a permission other than allow or ask) answers -32602 invalid params. The set may differ from turn to turn; a turn sees the set of its own turn.start."
+        },
         "harness": {
           "type": "string",
           "description": "Id of the hosted agent (one of the capability harnesses[].id) the turn runs on. Omitted: the executor's only harness. An id the executor does not host answers -32012 capability_unavailable."
@@ -225,22 +241,73 @@
         "input_skill_receipt": {
           "$ref": "agent.json#/$defs/InputSkillReceipt",
           "description": "Effective only. Returned after exact selected skill bytes have been installed for the opening input. Missing or mismatched receipt is not successful skill preparation."
+        },
+        "custom_tools": {
+          "type": "array",
+          "items": {
+            "$ref": "agent.json#/$defs/CustomToolDefinition"
+          },
+          "description": "Contract 1.7.0. Requested only. The custom tools of the turn's agent version, sent with every turn.start and only to an executor that declared agent.custom_tools (omitted when the agent has none). The executor exposes exactly these next to its own tools for the turn; a name that collides with one of its own tools answers -32602 invalid params."
         }
       },
       "required": [],
       "additionalProperties": true
     },
+    "HostTool": {
+      "type": "object",
+      "description": "Contract 1.8.0. One host tool of AgentTurnConfig.host_tools: the fields of the ACP initialize _meta.bma.hostTools entries the executor SDK declares for bma-dsh-acp (ADR-0027 2026-11-10), so a platform brain and a local brain offer the model the same tool. The platform sends the definitions of the executor SDK (computer_observe: input tool.json ComputerObserveInput; computer_action: input tool.json ComputerActionInput).",
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": [
+            "computer_observe",
+            "computer_action"
+          ],
+          "description": "Tool name the model sees and the tools endpoint runs (tool.json ToolName)."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool description the model sees."
+        },
+        "input_schema": {
+          "type": "object",
+          "description": "JSON Schema of the input object (type object), offered to the model as is.",
+          "additionalProperties": true
+        },
+        "read_only": {
+          "type": "boolean",
+          "description": "The tool has no side effects on the machine (computer_observe), so the brain may run it concurrently with other read-only calls."
+        },
+        "permission": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "ask"
+          ],
+          "description": "Permission when turn.start metadata tool_policy does not name the tool. Absent: ask."
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "input_schema",
+        "read_only"
+      ],
+      "additionalProperties": true
+    },
     "AgentInputBlockType": {
       "type": "string",
-      "description": "Agent input block type.",
+      "description": "Agent input block type. input_ref (contract 1.7.0) stands for a whole input the platform did not inline; see AgentInputBlock.",
       "enum": [
         "text",
-        "file"
+        "file",
+        "input_ref"
       ]
     },
     "AgentInputBlock": {
       "type": "object",
-      "description": "One block of user input. A file block references a platform session file by file_id; the executor downloads it through the executor files API. File bytes never travel on the control channel.",
+      "description": "One block of user input. A file block references a platform session file by file_id; the executor downloads it through the executor files API. File bytes never travel on the control channel. An input_ref block (contract 1.7.0, only to an executor that declared agent.input_by_reference) is the only block of an input the platform did not inline: input_id, size_bytes and sha256 describe the AgentInputBlock array that GET /v1/machines/{machine_id}/inputs/{input_id} answers.",
       "properties": {
         "type": {
           "$ref": "agent.json#/$defs/AgentInputBlockType"
@@ -260,6 +327,15 @@
         "size_bytes": {
           "type": "integer",
           "minimum": 0
+        },
+        "input_id": {
+          "type": "string",
+          "description": "input_ref only: the platform input id (ain_) to fetch."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "input_ref only: lowercase hex SHA-256 of the fetched JSON array."
         }
       },
       "required": [
@@ -983,6 +1059,31 @@
         "skills"
       ],
       "additionalProperties": false
+    },
+    "CustomToolDefinition": {
+      "type": "object",
+      "description": "Contract 1.7.0. One custom tool of the turn's agent: an Anthropic Managed Agents agent tools entry of type custom, as the agent version defines it (name, description, input_schema). The executor offers it to the model next to its own tools; a call to it is an agent.custom_tool_use.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": {
+          "type": "string"
+        },
+        "input_schema": {
+          "type": "object",
+          "description": "JSON Schema of the tool input (an object schema).",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "input_schema"
+      ],
+      "additionalProperties": true
     }
   }
 }

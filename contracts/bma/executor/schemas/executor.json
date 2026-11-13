@@ -243,7 +243,7 @@
     },
     "SessionFilesCapability": {
       "type": "object",
-      "description": "Executor-owned per-session file layout. The harness derives <root>/<agent_session_id>/uploads (read-only session inputs) and <root>/<agent_session_id>/outputs (deliverables) from it, with agent_session_id as sent in process.start metadata, and uses these real paths in prompts, tool descriptions, write rules and the session files manifest. Absent: the harness keeps /mnt/session/uploads and /mnt/session/outputs. With the fs capability skills_per_session the same tree also holds <root>/<agent_session_id>/skills (the session's skills view, read-only). Fixed at executor.register: executor.capabilities.update does not change it. Machine-scoped executors only.",
+      "description": "Executor-owned per-session file layout. The harness derives <root>/<agent_session_id>/uploads (read-only session inputs) and <root>/<agent_session_id>/outputs (deliverables) from it, with agent_session_id as sent in process.start metadata, and uses these real paths in prompts, tool descriptions, write rules and the session files manifest. Absent: the executor has no session files; the harness names no session path to it. There is no fixed /mnt/session/uploads or /mnt/session/outputs layout: the per-session <root>/<agent_session_id>/{uploads,outputs} is the only one, and platform-hosted machines declare root /mnt/session. With the fs capability skills_per_session the same tree also holds <root>/<agent_session_id>/skills (the session's skills view, read-only). Fixed at executor.register: executor.capabilities.update does not change it. Machine-scoped executors only.",
       "properties": {
         "root": {
           "type": "string",
@@ -268,6 +268,49 @@
         "enabled"
       ],
       "additionalProperties": true
+    },
+    "EgressCapability": {
+      "type": "object",
+      "description": "Contract 1.9.0. The executor runs the local egress forwarder (docs/architecture/env-networking-egress.md E6): a loopback HTTP proxy that the processes and terminals of a session are pointed at (HTTP(S)_PROXY, NO_PROXY and a trust store that includes the handoff's ca_bundle), and that tunnels each of their connections to executor.<domain>/v1/machines/{machine_id}/egress?host=<host>&port=<port> (WebSocket, Authorization: Bearer <the session's egress token>). The platform hands an egress handoff (EgressHandoff, session.assign and turn.start metadata egress) only to an executor that declared forwarder=true; a session that needs egress (limited networking or vault environment variables) on an executor that did not declare it is never run there: its turn ends with session.error bma_error_code egress_unsupported (fail closed). Machine-scoped executors only. Absent or forwarder=false: no forwarder, which is also what an executor that predates 1.9.0 means.",
+      "properties": {
+        "forwarder": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "forwarder"
+      ],
+      "additionalProperties": true
+    },
+    "EgressHandoff": {
+      "type": "object",
+      "description": "Contract 1.9.0. The egress of one session, carried as the JSON text of metadata egress (session.assign, turn.start). token is secret material: the executor keeps it in memory for the forwarder only, never puts it in a process environment, a log, a session.event or a tool result, and never uses one session's token for another session's connections (several sessions may share the machine). env maps a vault environment variable name to its placeholder: the executor sets these variables in the processes and terminals it starts for the session; the gateway replaces a placeholder with the secret only on hosts the credential allows, so the plaintext never reaches the machine. A refused host is not a protocol error: the forwarder answers the client with the gateway's HTTP status and body (403 naming the host; 401 expired or unknown token; 404 machine is not the token's; 502 unreachable).",
+      "properties": {
+        "token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ca_bundle": {
+          "type": "string",
+          "description": "PEM of the egress CA (the gateway terminates TLS only on hosts with a credential to substitute)."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "token",
+        "expires_at",
+        "ca_bundle"
+      ],
+      "additionalProperties": false
     },
     "Capabilities": {
       "type": "object",
@@ -326,6 +369,9 @@
         },
         "remote_brain": {
           "$ref": "executor.json#/$defs/RemoteBrainCapability"
+        },
+        "egress": {
+          "$ref": "executor.json#/$defs/EgressCapability"
         }
       },
       "required": [],

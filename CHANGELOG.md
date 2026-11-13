@@ -39,6 +39,22 @@
   bash for desktop apps (`open_app`, then observe the window) and to check the
   recipient before sending.
 
+- **Go: a host reads the session's egress from `session.assign`, and a replayed
+  assign updates it (`CoreOptions.OnAssign`, `Capabilities.Egress`).** Contract
+  1.9.0 hands a session's egress grant as `metadata.egress` of `session.assign`
+  (the platform repeats the assign before tool calls, on reconnect and before
+  the grant expires). A replayed assign was accepted and its metadata dropped,
+  so a renewed grant never arrived. Now the newest assign's metadata replaces the
+  session's (`CoreSession.Assignment`, and what a bash call's `LaunchRequest`
+  sees), and `OnAssign` runs on every accepted assign, first or replay, so the
+  host can keep per-session state from it; an error it returns refuses the assign
+  (invalid params; a first assign creates no session, a replay keeps the previous
+  metadata). `Capabilities.Egress` (`EgressCapability{forwarder}`) declares that
+  the executor runs the egress forwarder. The contract snapshot and the generated
+  types of all three languages are synced to contract 1.9.0 (`make contract-sdk`;
+  additive types only, `EgressHandoff` among them). Without `OnAssign` nothing
+  changes; TypeScript and Python behave as before.
+
 ## 1.6.4
 
 - **Go: `BrainHost` + `BrainAdapter`.** `ACPAgent` was the platform semantics

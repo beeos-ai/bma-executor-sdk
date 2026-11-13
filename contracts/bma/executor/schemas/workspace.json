@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.bma.beeos.ai/schemas/workspace.json",
   "title": "BMA executor workspace types",
-  "description": "workspace.backup (machine-scoped executors). The archive upload, the pending restore lookup and the restore result are machine-token HTTP routes, not executor methods.",
+  "description": "workspace.backup (machine-scoped executors) and the machine-token HTTP routes around it (contract 1.6.0, additive). Every route takes the machine credential as Authorization: Bearer <BMA_MACHINE_TOKEN>. Executor-domain path (ADR-0023 C.18) | legacy path: PUT /v1/machines/{machine_id}/backups/{backup_id}/archive | PUT /api/v1/daemon/machine-backups/{backup_id}/archive (request: application/octet-stream body = the archive, streamed, length may be unknown; header X-BMA-Backup-Fingerprint; 200 WorkspaceBackupArchiveStored; 409 when the backup is no longer uploading, a repeated upload included; 413 over the project's backup storage limit); GET /v1/machines/{machine_id}/backups/{backup_id}/archive | GET /api/v1/daemon/machine-backups/{backup_id}/archive (200 application/octet-stream, header X-BMA-File-Digest = digest; only a ready backup of the same machine); GET /v1/machines/{machine_id}/restore | GET /api/v1/daemon/machine-backup-restore (200 WorkspacePendingRestore, 204 nothing pending; read-only); POST /v1/machines/{machine_id}/backups/{backup_id}/restore/result | POST /api/v1/daemon/machine-backups/{backup_id}/restore-result (body WorkspaceRestoreReport, 204; 409 conflict when backup_id is not the machine's pending restore, which includes a repeat of an already recorded result, so an executor that retries after a lost answer treats 409 as recorded). The archive format is WorkspaceArchive.",
   "$defs": {
     "WorkspaceBackupResult": {
       "type": "object",
@@ -41,6 +41,105 @@
         "state"
       ],
       "additionalProperties": true
+    },
+    "WorkspaceBackupArchiveStored": {
+      "type": "object",
+      "description": "PUT …/archive 200 answer: the archive as the server stored it; the executor copies both into WorkspaceBackupResult.",
+      "properties": {
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "sha256 of the compressed archive bytes exactly as stored (not of the tar stream)."
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Length of the compressed archive in bytes."
+        }
+      },
+      "required": [
+        "digest",
+        "size_bytes"
+      ],
+      "additionalProperties": false
+    },
+    "WorkspacePendingRestore": {
+      "type": "object",
+      "description": "GET …/restore 200 answer: the backup a recreated machine restores before executor.register. The executor downloads GET …/backups/{backup_id}/archive, checks length = size_bytes and sha256 = digest before writing anything, restores it (WorkspaceArchive), then posts the result. Failures are retried with backoff before registering; when giving up it posts state failed.",
+      "properties": {
+        "backup_id": {
+          "type": "string",
+          "pattern": "^mbk_[a-z2-7]{26}$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "sha256 of the compressed archive bytes exactly as stored (not of the tar stream)."
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Length of the compressed archive in bytes."
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Absolute roots the backup covered; only entries under them are restored."
+        }
+      },
+      "required": [
+        "backup_id",
+        "digest",
+        "size_bytes",
+        "paths"
+      ],
+      "additionalProperties": false
+    },
+    "WorkspaceRestoreReport": {
+      "type": "object",
+      "description": "POST …/restore/result body. Unknown members are rejected (400). state restored also when some entries were skipped.",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "restored",
+            "failed"
+          ]
+        },
+        "entries": {
+          "type": "integer",
+          "minimum": 0,
+          "x-go-type": "int",
+          "description": "Entries written (directories, files, symbolic links)."
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0,
+          "x-go-type": "int",
+          "description": "Entries not written (WorkspaceArchive restore rules)."
+        },
+        "error": {
+          "type": "string",
+          "maxLength": 4096,
+          "description": "Why state is failed."
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "WorkspaceBackupFingerprint": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "X-BMA-Backup-Fingerprint and WorkspaceBackupResult.fingerprint: an opaque tree fingerprint (the reference executors use sha256:<hex>). The platform stores it and sends it back as skip_if_fingerprint; only equality with a value the same executor computed matters, so an executor may change the algorithm at the cost of one upload."
+    },
+    "WorkspaceArchive": {
+      "type": "string",
+      "contentMediaType": "application/zstd",
+      "description": "The archive bytes (no JSON). Format, as bmad 0.2.x writes it and bma-executor must read and write it: one zstd frame of a POSIX tar stream in PAX format (Go archive/tar FormatPAX: PaxHeaders.0 extended headers carry sub-second mtime, atime, ctime). Entries: for each path in paths, the path itself and everything below it in lexical walk order, minus exclude matches (an absolute exclude drops that path and its subtree; a relative one drops every entry whose base name equals it) and minus the executor's own BMA_HOME. Names are relative to / with no leading / or ./ (home/user/.bashrc); directory names end in /. Types: regular file (0), directory (5), symbolic link (2, target verbatim, absolute targets allowed); hard links, devices, FIFOs and sockets are not written (unreadable files neither; they count as skipped in WorkspaceBackupResult). Header fields: numeric uid/gid as on disk (root-owned entries stay 0:0), uname/gname empty, mode = permission bits only (0o7777), mtime. Restore rules (merge, never delete): an entry is written only if its cleaned name, read as /<name>, lies under one of WorkspacePendingRestore.paths, has no .. element, is not absolute, is a directory, regular file or symbolic link, and no existing parent on the way is a symbolic link; anything else is skipped and counted. Existing files are replaced, files not in the archive are kept, directories are created as needed. Ownership (numeric), permission bits and mtime are applied; atime and ctime are not restored. Symbolic links are created as recorded and never followed while restoring."
     }
   }
 }
