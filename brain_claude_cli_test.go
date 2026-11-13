@@ -64,8 +64,8 @@ func TestClaudeCLIRunsAnApprovedPlatformTool(t *testing.T) {
 		!capability.Harnesses[0].ImageInputs || !slices.ContainsFunc(claudeCLIPins, func(p claudeCLIPin) bool { return p.Version == capability.Harnesses[0].Version }) {
 		t.Fatalf("capability = %+v, %v", capability, err)
 	}
-	if len(capability.PlatformCredentials) != 0 || capability.TurnResume || len(capability.Models) == 0 {
-		t.Fatalf("capability: no platform credentials, no turn_resume, the CLI's models: %+v", capability)
+	if len(capability.PlatformCredentials) != 0 || capability.TurnResume || len(capability.Models) != 0 {
+		t.Fatalf("capability: no platform credentials, no turn_resume, no models: %+v", capability)
 	}
 
 	result := f.start(t, ctx, "sesn_c", "turn_1", "run it")
@@ -214,8 +214,9 @@ func TestClaudeCLIAskUserQuestionIsACustomToolCall(t *testing.T) {
 	}
 }
 
-// A user's image reaches the model as an image block; a thinking level is the CLI's effort.
-func TestClaudeCLIImageAndThinkingLevel(t *testing.T) {
+// A user's image reaches the model as an image block. The CLI runs its
+// owner's model: the platform's config.model (the agent's model) is ignored.
+func TestClaudeCLIImageAndTheOwnersModel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	model := newScriptedModel(t, "bash", map[string]any{"command": "true"})
@@ -224,20 +225,14 @@ func TestClaudeCLIImageAndThinkingLevel(t *testing.T) {
 		return io.NopCloser(bytes.NewReader(png)), nil
 	}}, t.TempDir())
 	capability, _ := f.executor.AgentCapability()
-	var effortModel AgentModel
-	for _, m := range capability.Models {
-		if len(m.ThinkingLevels) > 0 {
-			effortModel = m
-		}
-	}
-	if !capability.FileInputs || effortModel.ID == "" {
-		t.Fatalf("file_inputs and a model with thinking levels: %+v", capability)
+	if !capability.FileInputs || len(capability.Models) != 0 {
+		t.Fatalf("file_inputs, no models: %+v", capability)
 	}
 	result := f.start(t, ctx, "sesn_i", "turn_1", "describe it", func(p *TurnStartParams) {
 		p.Input = append(p.Input, fileBlock("file_1", "red.png", "image/png", len(png)))
-		p.Config.Model, p.Config.ThinkingLevel = effortModel.ID, effortModel.ThinkingLevels[0]
+		p.Config.Model, p.Config.ThinkingLevel = "deepseek-flash", "high"
 	})
-	if result.Effective.ThinkingLevel != effortModel.ThinkingLevels[0] || result.Effective.Model != effortModel.ID {
+	if result.Effective.Model != "" || result.Effective.ThinkingLevel != "" {
 		t.Fatalf("effective = %+v", result.Effective)
 	}
 	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
@@ -247,12 +242,6 @@ func TestClaudeCLIImageAndThinkingLevel(t *testing.T) {
 	}
 	if images != 1 {
 		t.Fatalf("image blocks in the model requests = %d, want 1", images)
-	}
-	// An unknown level is refused, never replaced.
-	_, err := f.executor.StartTurn(ctx, TurnStartParams{SessionID: "sesn_i", TurnID: "turn_2", InputID: "in_2",
-		Input: []AgentInputBlock{{Type: AgentInputBlockTypeText, Text: "x"}}, Config: &AgentTurnConfig{Model: effortModel.ID, ThinkingLevel: "turbo"}})
-	if err == nil || !strings.Contains(err.Error(), "thinking_level") {
-		t.Fatalf("err = %v", err)
 	}
 }
 

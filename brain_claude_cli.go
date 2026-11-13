@@ -131,10 +131,9 @@ func (a *claudeCLIAdapter) Start(ctx context.Context, env BrainEnv) (BrainCapabi
 		return BrainCapabilities{}, err
 	}
 	a.mcp = server
-	// One process that is never prompted: it proves the control protocol and
-	// reports the models (a prompt would spend the owner's credit).
-	models, err := a.probe(ctx)
-	if err != nil {
+	// One process that is never prompted proves the control protocol (a
+	// prompt would spend the owner's credit).
+	if err := a.probe(ctx); err != nil {
 		server.close()
 		return BrainCapabilities{}, err
 	}
@@ -152,18 +151,15 @@ func (a *claudeCLIAdapter) Start(ctx context.Context, env BrainEnv) (BrainCapabi
 			AgentName: "claude", AgentVersion: pin.Version,
 			Streaming: "token", PermissionRelay: "full", SessionResume: true, StructuredErrors: true,
 		},
+		// No per-turn model: the platform hands a turn its agent's model, a
+		// model of the tenant's provider config, not one of the owner's Claude
+		// models; the CLI runs the model its owner configured.
 		ModelCredentials: BrainModelOwner,
-		ModelChoice:      true,
-		Models:           models,
-		ThinkingLevels:   claudeEffortLevels,
 		ImageInputs:      true,
 		HostTools:        hostTools,
 		CustomTools:      true,
 	}, nil
 }
-
-// claudeEffortLevels are Claude Code's effort levels (--effort).
-var claudeEffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
 
 // checkPin finds the release of the configured binary: its version and its digest.
 func (a *claudeCLIAdapter) checkPin(ctx context.Context) (claudeCLIPin, error) {
@@ -241,19 +237,19 @@ func (a *claudeCLIAdapter) processEnv() []string {
 	return append(env, a.env.Env...)
 }
 
-// probe starts the CLI once without a prompt and asks it for its models.
-func (a *claudeCLIAdapter) probe(ctx context.Context) ([]AgentModel, error) {
+// probe starts the CLI once without a prompt: it must answer initialize.
+func (a *claudeCLIAdapter) probe(ctx context.Context) error {
 	dir, err := os.MkdirTemp(a.env.StateDir, "probe-")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer os.RemoveAll(dir)
 	p, err := a.spawn(ctx, cliLaunch{cwd: dir, placeholder: "bma-probe", noSession: true})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer p.stop(a.env.KillGrace)
-	return p.models, nil
+	p.stop(a.env.KillGrace)
+	return nil
 }
 
 func (a *claudeCLIAdapter) Ref(sessionID string) string { return claudeSessionUUID(sessionID) }
@@ -513,7 +509,6 @@ type cliProc struct {
 	done   chan struct{}
 	model  string
 	effort string
-	models []AgentModel
 
 	mu      sync.Mutex
 	nextID  int64
@@ -600,31 +595,13 @@ func (a *claudeCLIAdapter) spawn(ctx context.Context, l cliLaunch) (*cliProc, er
 	}()
 	ictx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	raw, err := p.control(ictx, map[string]any{"subtype": "initialize"})
-	if err != nil {
+	if _, err := p.control(ictx, map[string]any{"subtype": "initialize"}); err != nil {
 		p.stop(a.env.KillGrace)
 		text := p.exitText()
 		if strings.Contains(text, "No conversation found") {
 			return nil, &AgentError{Code: AgentErrorCodeAgentError, Message: "the local conversation " + l.uuid + " was not found; it is not recreated"}
 		}
 		return nil, &AgentError{Code: AgentErrorCodeAgentUnavailable, Message: "claude initialize: " + err.Error() + ": " + text}
-	}
-	var init struct {
-		Models []struct {
-			Value                 string   `json:"value"`
-			DisplayName           string   `json:"displayName"`
-			SupportedEffortLevels []string `json:"supportedEffortLevels"`
-		} `json:"models"`
-	}
-	_ = json.Unmarshal(raw, &init)
-	for _, m := range init.Models {
-		model := AgentModel{ID: m.Value, DisplayName: m.DisplayName}
-		for _, level := range m.SupportedEffortLevels {
-			if slices.Contains(claudeEffortLevels, level) {
-				model.ThinkingLevels = append(model.ThinkingLevels, level)
-			}
-		}
-		p.models = append(p.models, model)
 	}
 	return p, nil
 }
