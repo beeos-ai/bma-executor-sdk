@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.6.3
+
+- **Go: the host may decide which computer use calls need approval
+  (`ComputerUseApprover`).** `computer_observe` and `computer_action` were
+  asked on the platform every time, so one small desktop task meant dozens of
+  approvals. A `CoreOptions.ComputerUse` backend that also implements
+  `NeedsObserveApproval` / `NeedsActionApproval` now lets the calls it answers
+  `false` for run without asking: they are reported as `allow`, recorded as
+  allowed for the gate and get no `interaction.request`. Only the tools'
+  declared default is replaced: the platform's `metadata.tool_policy` and
+  `ACPAgentOptions.ToolPolicy` still apply when they name the tool. Backends
+  without it, TypeScript and Python are unchanged.
+
 ## 1.6.2
 
 - **Go and Python: a rejected `session.event` no longer leaves a hole in the
