@@ -32,6 +32,7 @@ package bmaexecutor
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
@@ -228,8 +229,16 @@ func fileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// claudeCLIEnv are the CLI settings that give its model requests the
+// executor's stop semantics: a stream that sends nothing for 90 s is stalled
+// (the DSH adapter's limit). The CLI asks again without streaming once a
+// stream stalled; the adapter lets that one fresh request answer a stall
+// before any content and ends the turn on a stall after content (onStream).
+// ACPAgentOptions.Env may override them.
+var claudeCLIEnv = []string{"CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS=90000"}
+
 // processEnv is the CLI's environment: PATH, HOME, USER, LANG, TMPDIR (HOME
-// and USER of RunAs), then the host's Env.
+// and USER of RunAs), claudeCLIEnv, then the host's Env.
 func (a *claudeCLIAdapter) processEnv() []string {
 	var env []string
 	runAs := a.env.RunAs
@@ -245,6 +254,7 @@ func (a *claudeCLIAdapter) processEnv() []string {
 			env = append(env, key+"="+value)
 		}
 	}
+	env = append(env, claudeCLIEnv...)
 	return append(env, a.env.Env...)
 }
 
@@ -439,6 +449,10 @@ type cliPrompt struct {
 	// reported are the calls whose result the tool server reported: what
 	// the tool returned, not the CLI's rendering of it for the model.
 	reported map[string]bool
+	// streamed: the current model response streamed content; fallback: it
+	// stalled before any, and the CLI's non-streaming request answers next.
+	streamed bool
+	fallback bool
 }
 
 // result reports a call's result once.
@@ -530,6 +544,10 @@ func (p *cliPrompt) end(r cliResult) error {
 	errText := p.errText
 	p.mu.Unlock()
 	switch {
+	case strings.Contains(r.Result, "Prompt is too long"):
+		return &AgentError{Code: AgentErrorCodeContextTooLarge, Message: AgentErrorCodeContextTooLarge + ": the conversation does not fit the model's context window even after compaction"}
+	case strings.Contains(r.Result, "Stream idle timeout"):
+		return &AgentError{Code: AgentErrorCodeModelStreamIdle, Message: AgentErrorCodeModelStreamIdle + ": " + r.Result}
 	case errText == "max_output_tokens" || r.StopReason == "max_tokens":
 		return &AgentError{Code: AgentErrorCodeOutputLimitReached, Message: AgentErrorCodeOutputLimitReached + ": the model reply was cut at its output limit"}
 	case slices.Contains([]string{"authentication_failed", "oauth_org_not_allowed", "billing_error", "cloud_credential_error", "account_on_hold", "verification_required"}, errText):
@@ -610,20 +628,19 @@ func (a *claudeCLIAdapter) args(l cliLaunch) []string {
 		args = append(args, "--session-id", l.uuid)
 	}
 	if l.system != "" {
-		args = append(args, "--append-system-prompt", l.system)
+		args = append(args, "--system-prompt", l.system)
 	}
 	if l.model != "" && l.model != "default" {
 		args = append(args, "--model", l.model)
-	}
-	if l.effort != "" {
-		args = append(args, "--effort", l.effort)
 	}
 	return args
 }
 
 func (a *claudeCLIAdapter) spawn(ctx context.Context, l cliLaunch) (*cliProc, error) {
 	cmd := exec.Command(a.env.Command[0], a.args(l)...)
-	cmd.Env = a.processEnv()
+	// The turn's thinking level, or none: the API applies the model's own
+	// default. The variable outranks --effort and the owner's settings.
+	cmd.Env = append(a.processEnv(), "CLAUDE_CODE_EFFORT_LEVEL="+cmp.Or(l.effort, "unset"))
 	cmd.Dir = l.cwd
 	setProcessGroupID(cmd)
 	setCredential(cmd, a.env.RunAs)
@@ -798,9 +815,11 @@ type cliMessage struct {
 	Error           string          `json:"error"`
 	Tools           []string        `json:"tools"`
 	PermissionMode  string          `json:"permissionMode"`
+	Abandoned       json.RawMessage `json:"abandoned_blocks"`
 }
 
 func (p *cliProc) dispatch(line []byte) {
+	p.a.log(LogDebug, fmt.Sprintf("claude stdout: %.2000s", line), nil)
 	var m cliMessage
 	if json.Unmarshal(line, &m) != nil {
 		p.a.log(LogWarn, "claude wrote a non-JSON line on stdout", nil)
@@ -836,16 +855,24 @@ func (p *cliProc) dispatch(line []byte) {
 	}
 	switch m.Type {
 	case "system":
-		if m.Subtype == "init" {
+		switch m.Subtype {
+		case "init":
 			p.checkInit(prompt, m)
+		case "api_retry":
+			p.onRetry(prompt, line)
 		}
 	case "stream_event":
-		p.onStream(prompt, m.Event)
+		p.onStream(prompt, m.Event, m.Abandoned != nil)
 	case "assistant":
+		prompt.mu.Lock()
 		if m.Error != "" {
-			prompt.mu.Lock()
 			prompt.errText = m.Error
-			prompt.mu.Unlock()
+		}
+		fallback := prompt.fallback && m.Error == ""
+		prompt.fallback = false
+		prompt.mu.Unlock()
+		if fallback {
+			p.onUnstreamed(prompt, m.Message)
 		}
 	case "user":
 		p.onUser(prompt, m.Message)
@@ -878,6 +905,28 @@ func (p *cliProc) checkInit(prompt *cliPrompt, m cliMessage) {
 	}
 }
 
+// onRetry ends the turn where the executor's semantics have no retry: a
+// request the API refused (credentials, an invalid or too large request).
+// Overload, rate limits and server errors are left to the CLI's retries.
+func (p *cliProc) onRetry(prompt *cliPrompt, line []byte) {
+	var r struct {
+		Status *int   `json:"error_status"`
+		Error  string `json:"error"`
+	}
+	_ = json.Unmarshal(line, &r)
+	switch {
+	case r.Status != nil && (*r.Status == http.StatusUnauthorized || *r.Status == http.StatusForbidden):
+		prompt.fail(AgentErrorCodeAgentAuthRequired, fmt.Sprintf("the model API refused the owner's credentials (%d %s)", *r.Status, r.Error))
+	case r.Status != nil && *r.Status == http.StatusRequestEntityTooLarge:
+		prompt.fail(AgentErrorCodeContextTooLarge, fmt.Sprintf("the request is too large for the model (%d %s)", *r.Status, r.Error))
+	case r.Status != nil && *r.Status >= 400 && *r.Status < 500 && *r.Status != http.StatusTooManyRequests && *r.Status != http.StatusRequestTimeout:
+		prompt.fail(AgentErrorCodeAgentError, fmt.Sprintf("the model API refused the request (%d %s)", *r.Status, r.Error))
+	default:
+		return
+	}
+	p.interrupt()
+}
+
 func (p *cliProc) interrupt() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), p.a.env.CancelGrace)
@@ -886,7 +935,9 @@ func (p *cliProc) interrupt() {
 	}()
 }
 
-func (p *cliProc) onStream(prompt *cliPrompt, raw json.RawMessage) {
+// onStream handles one stream event; abandoned marks the message_stop of a
+// stream that stalled (abandoned_blocks).
+func (p *cliProc) onStream(prompt *cliPrompt, raw json.RawMessage, abandoned bool) {
 	var e struct {
 		Type    string `json:"type"`
 		Index   int    `json:"index"`
@@ -903,6 +954,7 @@ func (p *cliProc) onStream(prompt *cliPrompt, raw json.RawMessage) {
 			Text        string `json:"text"`
 			Thinking    string `json:"thinking"`
 			PartialJSON string `json:"partial_json"`
+			StopReason  string `json:"stop_reason"`
 		} `json:"delta"`
 	}
 	if json.Unmarshal(raw, &e) != nil {
@@ -911,8 +963,27 @@ func (p *cliProc) onStream(prompt *cliPrompt, raw json.RawMessage) {
 	prompt.mu.Lock()
 	switch e.Type {
 	case "message_start":
-		prompt.message, prompt.blocks = e.Message.ID, map[int]*cliBlock{}
+		prompt.message, prompt.blocks, prompt.streamed = e.Message.ID, map[int]*cliBlock{}, false
 		prompt.mu.Unlock()
+		return
+	case "message_stop":
+		streamed := prompt.streamed
+		prompt.fallback = abandoned && !streamed
+		prompt.mu.Unlock()
+		if abandoned && streamed {
+			// The stream stalled after content: the turn fails, as for every brain.
+			prompt.fail(AgentErrorCodeModelStreamIdle, "the model stream stalled after it sent content")
+			p.interrupt()
+		}
+		return
+	case "message_delta":
+		prompt.mu.Unlock()
+		if e.Delta.StopReason == "max_tokens" {
+			// The reply was cut at its output limit: the turn fails here, as
+			// for every brain, instead of the CLI asking the model to go on.
+			prompt.fail(AgentErrorCodeOutputLimitReached, "the model reply was cut at its output limit")
+			p.interrupt()
+		}
 		return
 	case "content_block_start":
 		prompt.blocks[e.Index] = &cliBlock{kind: e.ContentBlock.Type, id: e.ContentBlock.ID, name: e.ContentBlock.Name}
@@ -921,6 +992,9 @@ func (p *cliProc) onStream(prompt *cliPrompt, raw json.RawMessage) {
 	}
 	b := prompt.blocks[e.Index]
 	key := fmt.Sprintf("%s:%d", prompt.message, e.Index)
+	if e.Type == "content_block_delta" {
+		prompt.streamed = true
+	}
 	prompt.mu.Unlock()
 	if b == nil {
 		return
@@ -955,6 +1029,42 @@ func (p *cliProc) onStream(prompt *cliPrompt, raw json.RawMessage) {
 				name = b.name
 			}
 			prompt.sink.ToolUse(BrainCall{ID: b.id, Name: name, Input: input}, "")
+		}
+	}
+}
+
+// onUnstreamed reports the content of a response the CLI asked for without
+// streaming (after a stream stalled before any content).
+func (p *cliProc) onUnstreamed(prompt *cliPrompt, raw json.RawMessage) {
+	var m struct {
+		ID      string `json:"id"`
+		Content []struct {
+			Type     string         `json:"type"`
+			Text     string         `json:"text"`
+			Thinking string         `json:"thinking"`
+			ID       string         `json:"id"`
+			Name     string         `json:"name"`
+			Input    map[string]any `json:"input"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(raw, &m) != nil {
+		return
+	}
+	for i, b := range m.Content {
+		key := fmt.Sprintf("%s:unstreamed:%d", m.ID, i)
+		switch b.Type {
+		case "text":
+			if strings.TrimSpace(b.Text) != "" {
+				prompt.sink.Message(BrainKindMessage, key, b.Text)
+			}
+		case "thinking":
+			prompt.sink.Message(BrainKindThinking, key, b.Thinking)
+		case "tool_use":
+			name, ok := claudeHostTool(b.Name, p.tools)
+			if !ok {
+				name = b.Name
+			}
+			prompt.sink.ToolUse(BrainCall{ID: b.ID, Name: name, Input: b.Input}, "")
 		}
 	}
 }
