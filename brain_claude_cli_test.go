@@ -319,15 +319,6 @@ func TestClaudeCLIArguments(t *testing.T) {
 	}
 }
 
-// fakeClaudeCLI stands in for a claude binary that answers --version only.
-func fakeClaudeCLI(version string) {
-	if len(os.Args) > 1 && os.Args[len(os.Args)-1] == "--version" {
-		fmt.Println(version + " (Claude Code)")
-		os.Exit(0)
-	}
-	os.Exit(2)
-}
-
 func TestClaudeSessionUUIDIsStableAndValid(t *testing.T) {
 	a, b := claudeSessionUUID("sesn_1"), claudeSessionUUID("sesn_1")
 	if a != b || a == claudeSessionUUID("sesn_2") || len(a) != 36 || a[14] != '5' || !strings.ContainsRune("89ab", rune(a[19])) {
