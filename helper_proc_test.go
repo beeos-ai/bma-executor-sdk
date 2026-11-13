@@ -126,6 +126,11 @@ func runFakeCua() {
 				"is_on_screen": true, "bounds": map[string]any{"x": 111, "y": 104, "width": 754, "height": 512}},
 			map[string]any{"app_name": "hidden.exe", "pid": 1, "window_id": 2, "title": "gone", "is_on_screen": false},
 		}}
+	case "launch_app":
+		result = map[string]any{"pid": 4242, "bundle_id": "com.apple.TextEdit", "name": "TextEdit", "windows": []any{
+			map[string]any{"app_name": "TextEdit", "pid": 4242, "window_id": 77, "title": "Untitled",
+				"is_on_screen": true, "bounds": map[string]any{"x": 10, "y": 20, "width": 600, "height": 400}},
+		}}
 	default:
 		result = map[string]any{"summary": "did " + tool + " " + strings.TrimSpace(payload)}
 	}
