@@ -850,6 +850,9 @@ func (p *cliProc) dispatch(line []byte) {
 	if prompt == nil || (m.ParentToolUseID != nil && *m.ParentToolUseID != "") {
 		return // nothing running, or a subagent's message
 	}
+	if prompt.failure.Load() != nil && m.Type != "result" {
+		return // the turn ended at a stop; what the CLI does until the interrupt lands is not the turn's
+	}
 	switch m.Type {
 	case "system":
 		switch m.Subtype {
@@ -1122,7 +1125,7 @@ func (p *cliProc) onControl(id string, raw json.RawMessage) {
 	prompt := p.current()
 	name, ok := claudeHostTool(r.ToolName, p.tools)
 	switch {
-	case prompt == nil:
+	case prompt == nil || prompt.failure.Load() != nil:
 		deny("No turn of this session is running.")
 		return
 	case !ok:

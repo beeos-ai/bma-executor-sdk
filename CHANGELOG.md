@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.7
+
+- **Go: nothing of a Claude Code turn follows its stop.** When a turn ended at
+  a stop (`output_limit_reached`, a stalled stream, a refused request), what
+  the CLI streamed before the interrupt reached it (it may already go on with
+  the reply) was still reported as the turn's messages. It is now dropped, and
+  a permission request in that window is refused.
+
 ## 1.6.6
 
 - **Go: Claude Code reports a tool call when the CLI asks to run it.** The
