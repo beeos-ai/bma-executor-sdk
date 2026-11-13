@@ -134,6 +134,8 @@ type agentRuntime struct {
 	client     *Client
 	handler    AgentHandler
 	capability AgentCapability
+	// uses counts session uses (agentSession.lastUsed).
+	uses atomic.Uint64
 
 	mu       sync.Mutex
 	sessions map[string]*agentSession
@@ -156,8 +158,9 @@ type agentSession struct {
 	drained chan struct{} // closed while the outbox is empty
 	closed  bool
 	turn    *AgentTurn
-	// lastUsed orders idle sessions for suspension (least recent first).
-	lastUsed time.Time
+	// lastUsed orders idle sessions for suspension (least recent first): a
+	// tick of agentRuntime.uses, so two uses never tie (a clock can).
+	lastUsed uint64
 	// suspended: the handler released the session's resources (SuspendSession);
 	// the next turn.start loads them again. suspending is non-nil, and closed
 	// when done, while SuspendSession runs.
@@ -473,7 +476,7 @@ func (r *agentRuntime) session(id string, create bool) (*agentSession, error) {
 	drained := make(chan struct{})
 	close(drained)
 	s := &agentSession{
-		runtime: r, id: id, nextSeq: 1, lastUsed: time.Now(), wake: make(chan struct{}, 1), drained: drained,
+		runtime: r, id: id, nextSeq: 1, lastUsed: r.uses.Add(1), wake: make(chan struct{}, 1), drained: drained,
 		results: map[string]TurnStartResult{}, pending: map[string]chan InteractionResponseParams{}, answered: map[string]bool{},
 		customTools: map[string]chan AgentCustomToolResultParams{}, customDone: map[string]bool{}, failedTurns: map[string]bool{},
 	}
@@ -570,7 +573,7 @@ func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (T
 	}
 	s.turn = turn // reserve the session before OpenTurn
 	s.suspended = false
-	s.lastUsed = time.Now()
+	s.lastUsed = r.uses.Add(1)
 	s.mu.Unlock()
 	slot = false // the turn owns it now, see finishTurn
 	r.suspendSurplus(ctx, s)
@@ -619,7 +622,7 @@ func (s *agentSession) finishTurn(turn *AgentTurn) {
 	owned := s.turn == turn
 	if owned {
 		s.turn = nil
-		s.lastUsed = time.Now()
+		s.lastUsed = s.runtime.uses.Add(1)
 	}
 	s.mu.Unlock()
 	if owned {
@@ -697,7 +700,7 @@ func (r *agentRuntime) claimVictim(limit int, keep *agentSession, failed map[*ag
 		candidates[j].mu.Lock()
 		b := candidates[j].lastUsed
 		candidates[j].mu.Unlock()
-		return a.Before(b)
+		return a < b
 	})
 	for _, s := range candidates {
 		s.mu.Lock()
