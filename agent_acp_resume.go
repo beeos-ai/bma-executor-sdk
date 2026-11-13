@@ -3,15 +3,21 @@ package bmaexecutor
 // TurnResume of ACPAgent: the state a restarted executor needs to continue a
 // turn the platform starts again (same turn_id, executor_session_ref).
 //
-// The conversation itself is the agent's (bma-dsh-acp keeps it durable;
-// session/load restores it and a repeated prompt with the same
-// _meta.bma.inputId continues the recorded input instead of adding it twice).
-// What only the executor knows is what already happened on this computer and
-// what the platform already has, so it keeps a small ledger per session,
-// one file under StateDir/executor-turns, for the turn that runs:
+// The conversation itself is the brain's (each adapter resumes it by its
+// executor_session_ref). What only the executor knows is what already
+// happened on this computer and what the platform already has, so it keeps
+// a small ledger per session, one file under StateDir/executor-turns, for the
+// turn that runs:
 //
 //   - Inputs: input ids whose prompt ended and whose events the platform
 //     acknowledged (the outbox was flushed), so they are not prompted again.
+//   - Begun: input ids the brain started working on (it reported output or a
+//     tool call, so its conversation holds the input). Such an input that is
+//     not done is not handed again: the host settles its unreported tool
+//     calls and hands the brain a recovery note instead (recover).
+//   - Calls[call].ToolUseID, ToolName, Input, Seq: the call's agent.tool_use
+//     event and what it asked for, in order, so a restarted executor can
+//     settle it under the same event and approval id.
 //   - Calls[call].Decision: the platform's allow/deny of a tool call, so an
 //     approval already answered is not asked again (a pending one is asked
 //     again under the same deterministic appr_ id, which the platform keeps
@@ -36,6 +42,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 )
 
@@ -62,6 +69,15 @@ type acpCallState struct {
 	Outcome  string `json:"outcome,omitempty"`
 	Code     string `json:"code,omitempty"`
 	Reported bool   `json:"reported,omitempty"`
+	// ToolUseID is the call's agent.tool_use event id; Input its input; Seq
+	// its place among the turn's calls.
+	ToolUseID string         `json:"tool_use_id,omitempty"`
+	Input     map[string]any `json:"input,omitempty"`
+	Seq       int            `json:"seq,omitempty"`
+	// Permission is the evaluated permission of its agent.tool_use, and
+	// UseReported that the platform acknowledged that event.
+	Permission  string `json:"permission,omitempty"`
+	UseReported bool   `json:"use_reported,omitempty"`
 }
 
 type acpLedger struct {
@@ -75,6 +91,7 @@ type acpLedgerState struct {
 	SessionID string                   `json:"session_id"`
 	TurnID    string                   `json:"turn_id"`
 	Inputs    map[string]bool          `json:"inputs,omitempty"`
+	Begun     map[string]bool          `json:"begun,omitempty"`
 	Calls     map[string]*acpCallState `json:"calls,omitempty"`
 }
 
@@ -173,7 +190,7 @@ func (l *acpLedger) update(callID string, change func(*acpCallState)) error {
 	}
 	c := l.state.Calls[callID]
 	if c == nil {
-		c = &acpCallState{}
+		c = &acpCallState{Seq: len(l.state.Calls) + 1}
 		l.state.Calls[callID] = c
 	}
 	change(c)
@@ -224,4 +241,46 @@ func (l *acpLedger) markInputDone(inputID string) error {
 	}
 	l.state.Inputs[inputID] = true
 	return l.saveLocked()
+}
+
+// inputBegun reports whether the brain started working on the input.
+func (l *acpLedger) inputBegun(inputID string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.state.Begun[inputID]
+}
+
+// markInputBegun records that the brain started working on the input (once).
+func (l *acpLedger) markInputBegun(inputID string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.state.Begun[inputID] {
+		return nil
+	}
+	if l.state.Begun == nil {
+		l.state.Begun = map[string]bool{}
+	}
+	l.state.Begun[inputID] = true
+	return l.saveLocked()
+}
+
+// acpPendingCall is a call of the turn whose result the platform does not have.
+type acpPendingCall struct {
+	ID string
+	acpCallState
+}
+
+// unreported are the turn's calls with an agent.tool_use event whose
+// agent.tool_result was not acknowledged, in order.
+func (l *acpLedger) unreported() []acpPendingCall {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []acpPendingCall
+	for id, c := range l.state.Calls {
+		if c.ToolUseID != "" && !c.Reported {
+			out = append(out, acpPendingCall{ID: id, acpCallState: *c})
+		}
+	}
+	slices.SortFunc(out, func(a, b acpPendingCall) int { return a.Seq - b.Seq })
+	return out
 }

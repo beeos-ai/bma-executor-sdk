@@ -13,7 +13,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -210,7 +212,7 @@ func TestACPAgentCapabilityDeclaresDSHHarness(t *testing.T) {
 	}
 	h := capability.Harnesses[0]
 	if h.ID != "dsh" || h.Protocol != "acp/1" || h.Streaming != "token" || h.PermissionRelay != "full" || !h.SessionLoad ||
-		h.AgentName != "fake-dsh-acp" || h.Version != "9.9.9+dsh0.2.1-rc.5" || *capability.Harness != h {
+		h.AgentName != "fake-dsh-acp" || h.Version != "9.9.9+dsh0.2.1-rc.5" || !reflect.DeepEqual(*capability.Harness, h) {
 		t.Fatalf("harness = %+v", h)
 	}
 	if !capability.TurnResume || !contains(capability.InteractionKinds, InteractionKindPermission) || !contains(capability.PermissionModes, "accept_edits") {
@@ -274,7 +276,8 @@ func TestACPAgentToolPermissionAndExecution(t *testing.T) {
 	request := f.platform.interactions[0]
 	sum := sha256.Sum256([]byte("sesn_t\x00turn_1\x00call_1"))
 	if request.InteractionID != "appr_"+hex.EncodeToString(sum[:])[:24] || request.ToolName != "bash" ||
-		request.ToolInput["command"] != "echo hi > out.txt && cat out.txt" || !hasEvent(f.platform.snapshot(), request.ToolUseID) {
+		request.ToolInput["command"] != "echo hi > out.txt && cat out.txt" || !hasEvent(f.platform.snapshot(), request.ToolUseID) ||
+		!slices.Equal(request.Scopes, []string{InteractionScopeOnce, InteractionScopeSession}) {
 		t.Fatalf("interaction.request = %+v", request)
 	}
 	if _, err := f.executor.RespondInteraction(ctx, InteractionResponseParams{SessionID: "sesn_t", InteractionID: request.InteractionID, Outcome: InteractionOutcomeAllow}); err != nil {
@@ -759,6 +762,11 @@ func fakeHandle(c *fakeConn, method string, raw json.RawMessage) (any, map[strin
 			}
 			tr.Inputs = append(tr.Inputs, block.Text)
 			tr.save(p.SessionID)
+		}
+		if strings.HasPrefix(block.Text, recoveryNote) {
+			// The host settled the interrupted calls; the brain finishes the task.
+			c.message(p.SessionID, "m-final", "message", "done")
+			return map[string]any{"stopReason": "end_turn"}, nil
 		}
 		if strings.HasPrefix(block.Text, "resume") {
 			inputID, _ := p.Meta.Bma["inputId"].(string)

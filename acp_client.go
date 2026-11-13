@@ -72,7 +72,6 @@ type acpInitializeResponse struct {
 		Bma struct {
 			DSH             string   `json:"dsh"`
 			Tools           []string `json:"tools"`
-			HostTools       []string `json:"hostTools"`
 			Streaming       string   `json:"streaming"`
 			PermissionRelay string   `json:"permissionRelay"`
 			// ReasoningEfforts are the levels prompt _meta.bma.reasoningEffort takes (bma-dsh-acp >= 0.2.2).
@@ -164,7 +163,6 @@ func (u acpUpdate) toolResult() (content []ContentBlock, isError, done bool) {
 type acpLaunch struct {
 	env      BrainEnv
 	extraEnv []string
-	initMeta map[string]any
 }
 
 // startACPProcess starts the agent and answers its initialize.
@@ -226,9 +224,6 @@ func startACPProcess(ctx context.Context, l acpLaunch, h acpHandler) (*acpProces
 	initCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	initialize := map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{}, "clientInfo": map[string]any{"name": "bma-executor-sdk"}}
-	if l.initMeta != nil {
-		initialize["_meta"] = l.initMeta
-	}
 	if err := p.call(initCtx, "initialize", initialize, &p.init); err != nil {
 		p.kill(l.env.KillGrace)
 		return nil, fmt.Errorf("agent initialize: %w (stderr: %s)", err, p.stderr.String())
@@ -554,7 +549,12 @@ type acpError struct {
 	Data    json.RawMessage
 }
 
-func (e *acpError) Error() string { return fmt.Sprintf("acp error %d: %s", e.Code, e.Message) }
+func (e *acpError) Error() string {
+	if len(e.Data) > 0 && string(e.Data) != "null" {
+		return fmt.Sprintf("acp error %d: %s: %.500s", e.Code, e.Message, e.Data)
+	}
+	return fmt.Sprintf("acp error %d: %s", e.Code, e.Message)
+}
 
 // tailBuffer keeps the last max bytes written (the agent's stderr, for errors and logs).
 type tailBuffer struct {

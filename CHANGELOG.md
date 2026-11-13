@@ -10,8 +10,18 @@
   host tools and `ask_user_question` on a loopback MCP server, permission
   requests answered by the host (deterministic `appr_` ids from
   `tool_use_id`), a conversation id derived from the platform session id with
-  `--resume`, user images, `interrupt` on cancel; it runs the owner's
-  configured model (declares no `models`). `ClaudeCLIOptions.Executable`
+  `--resume`, user images, `interrupt` on cancel. It runs on its owner's
+  credentials (`model_credentials: owner`) and declares the models and
+  effort levels the CLI reports at `initialize` (`AgentHarnessCapability.models`,
+  contract 1.10.0); a turn's `model` and `thinking_level` are checked
+  against them and passed unchanged (`--model`, `CLAUDE_CODE_EFFORT_LEVEL`;
+  no level: none is sent). It gets the platform's complete system prompt
+  (`--system-prompt`), and its stops follow the contract as for every brain:
+  a reply cut at `max_tokens` fails with `output_limit_reached` (no automatic
+  continuation), a stream that stalls after content with `model_stream_idle`
+  (before content the CLI's one non-streaming retry answers), a request the
+  API refuses (401/403, other 4xx) is not retried, a context overflow that
+  compaction cannot fix is `context_too_large`. `ClaudeCLIOptions.Executable`
   names the official binary when `Command` is the owner's launcher of it
   (`examples/local-dsh -claude-executable`).
 - **Go: brain parity with the platform brains** (brain conformance gate):
@@ -54,6 +64,33 @@
   types of all three languages are synced to contract 1.9.0 (`make contract-sdk`;
   additive types only, `EgressHandoff` among them). Without `OnAssign` nothing
   changes; TypeScript and Python behave as before.
+
+- **Go: a turn's own tools and skills, in both adapters.** `BrainOpen.Tools`
+  are a turn's tools besides the six: the agent's custom tools
+  (`config.custom_tools`, contract 1.7.0; a call is an
+  `agent.custom_tool_use` the user's application answers, never approved),
+  the hands' computer use tools (`config.host_tools` when the hands are
+  elsewhere, contract 1.8.0, run through the tools endpoint; this machine's
+  own with `CoreOptions.ComputerUse`) and `ask_user_question`. The agent
+  capability declares `custom_tools`, `host_tools` (with `PlatformTools`)
+  and `input_skills`; selected skills are checked against `body_sha256`,
+  reported in `effective.input_skill_receipt` and handed to the brain for
+  their input only (`BrainInput.Skills`). Image blocks of a tools endpoint
+  answer reach the model. bma-dsh-acp 0.3.0 takes the custom tools at
+  `session/new|load` and the host tools and skills per `session/prompt`.
+- **Go: the host continues a turn an executor restart interrupted, for every
+  brain.** An input the brain had begun is not handed again: the host
+  settles its tool calls the platform has no result of, under their own
+  `agent.tool_use` events and approval ids (an answered approval is not asked
+  again, a call that ran is not run again, one of unknown outcome is
+  reported as such), and hands the brain a recovery note. Both adapters
+  declare `turn_resume`.
+- **Go: "always allow" is the platform's.** Permission interactions offer
+  the scopes `once` and `session`; a session grant is recorded by the
+  platform, which answers the session's later requests for the tool
+  (contract 1.10.0), so the executor asks for every call and keeps no grant
+  of its own.
+- The contract snapshot and the generated types are at contract 1.10.0.
 
 ## 1.6.4
 

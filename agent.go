@@ -326,10 +326,15 @@ func (t *AgentTurn) EmitWithID(eventID string, event any) (string, error) {
 
 // emitAcked is Emit that calls onAck when the platform acknowledged the event.
 func (t *AgentTurn) emitAcked(event any, onAck func()) error {
+	return t.emitAckedWithID(t.NewEventID(), event, onAck)
+}
+
+// emitAckedWithID is emitAcked with a caller-chosen event id.
+func (t *AgentTurn) emitAckedWithID(eventID string, event any, onAck func()) error {
 	if t.ended.Load() {
 		return errors.New("bmaexecutor: turn already ended")
 	}
-	return t.session.enqueueAck(t.params.TurnID, t.NewEventID(), event, onAck)
+	return t.session.enqueueAck(t.params.TurnID, eventID, event, onAck)
 }
 
 // Delta streams a transient preview of the durable event eventID. It is

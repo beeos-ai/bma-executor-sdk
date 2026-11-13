@@ -360,8 +360,10 @@ func (r *PlatformToolRoute) attempt(ctx context.Context, c RouteCall) (result *R
 	}
 	var reply struct {
 		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Data     string `json:"data"`
+			MimeType string `json:"mimeType"`
 		} `json:"content"`
 		IsError           bool `json:"isError"`
 		StructuredContent struct {
@@ -384,8 +386,12 @@ func (r *PlatformToolRoute) attempt(ctx context.Context, c RouteCall) (result *R
 	}
 	var texts []string
 	for _, block := range reply.Content {
-		if block.Type == "text" && block.Text != "" {
+		switch {
+		case block.Type == "text" && block.Text != "":
 			texts = append(texts, block.Text)
+		case block.Type == "image" && block.Data != "" && !reply.StructuredContent.Replayed:
+			// MCP image content (a computer_observe screenshot): for the model, never for an event.
+			out.Images = append(out.Images, ContentBlock{Type: ContentBlockTypeImage, Data: block.Data, MimeType: block.MimeType})
 		}
 	}
 	out.Text = strings.Join(texts, "\n")

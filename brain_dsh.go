@@ -4,9 +4,10 @@ package bmaexecutor
 // (ADR-0027), driven over ACP v1 on stdio.
 //
 //	BrainHost / BrainSink                 DSH adapter                       bma-dsh-acp (ACP)
-//	Open                                  open/load the session             session/new | session/load (_meta.bma)
+//	Open                                  open/load the session             session/new | session/load (_meta.bma, customTools)
 //	                                      permission mode                   session/set_mode
-//	Prompt                                prompt                            session/prompt (_meta.bma.inputId, toolPolicy, reasoningEffort)
+//	Prompt                                prompt                            session/prompt (_meta.bma.inputId, toolPolicy, reasoningEffort,
+//	                                                                        hostTools, inputSkills)
 //	Delta                                 <-                                agent_message_chunk / agent_thought_chunk (messageId)
 //	Message                               <-                                _bma/message (durable text of a messageId)
 //	ToolUse                               <-                                tool_call (_meta.bma.name, permission)
@@ -35,7 +36,6 @@ import (
 	"maps"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 )
 
@@ -60,7 +60,10 @@ type dshConv struct {
 	placeholder string
 	proc        *acpProcess
 	mode        string
-	prompt      *dshPrompt
+	// tools are the turn's tools besides the six (BrainOpen.Tools); the
+	// custom tools among them are bound when the session opens.
+	tools  []BrainTool
+	prompt *dshPrompt
 }
 
 // dshPrompt is the input the conversation is running.
@@ -68,6 +71,18 @@ type dshPrompt struct {
 	ctx   context.Context
 	sink  BrainSink
 	route BrainModelRoute
+	// tools are the tools its model requests may carry.
+	tools map[string]bool
+}
+
+// dshCustomTools are the custom tools among tools, as session _meta.bma.customTools.
+func dshCustomTools(tools []BrainTool) []BrainTool {
+	return slices.DeleteFunc(slices.Clone(tools), func(t BrainTool) bool { return !t.Custom })
+}
+
+// dshHostTools are the host tools among tools, as prompt _meta.bma.hostTools.
+func dshHostTools(tools []BrainTool) []BrainTool {
+	return slices.DeleteFunc(slices.Clone(tools), func(t BrainTool) bool { return t.Custom })
 }
 
 func (a *dshAdapter) log(level LogLevel, message string, err error) {
@@ -107,9 +122,9 @@ func (a *dshAdapter) Start(ctx context.Context, env BrainEnv) (BrainCapabilities
 		ModelChoice:      true,
 		ThinkingLevels:   init.Meta.Bma.ReasoningEfforts,
 		ImageInputs:      init.AgentCapabilities.PromptCapabilities.Image,
-		HostTools:        init.Meta.Bma.HostTools,
+		HostTools:        true,
 		CustomTools:      true,
-		InputIdempotent:  true,
+		InputSkills:      true,
 	}, nil
 }
 
@@ -142,19 +157,11 @@ func (a *dshAdapter) ensureProcess(ctx context.Context) (*acpProcess, error) {
 		return proc, nil
 	}
 	a.mu.Unlock()
-	launch := acpLaunch{env: a.env, extraEnv: []string{"BMA_DSH_ACP_HOME=" + a.env.StateDir}}
-	if len(a.env.HostTools) > 0 {
-		launch.initMeta = map[string]any{acpMetaKey: map[string]any{"hostTools": a.env.HostTools}}
-	}
-	proc, err := startACPProcess(ctx, launch, a)
+	proc, err := startACPProcess(ctx, acpLaunch{env: a.env, extraEnv: []string{"BMA_DSH_ACP_HOME=" + a.env.StateDir}}, a)
 	if err != nil {
 		return nil, err
 	}
-	violation := acpCatalogViolation(proc.init.Meta.Bma.Tools)
-	if violation == "" {
-		violation = a.hostToolsViolation(proc.init.Meta.Bma.HostTools)
-	}
-	if violation != "" {
+	if violation := acpCatalogViolation(proc.init.Meta.Bma.Tools); violation != "" {
 		proc.kill(a.env.KillGrace)
 		return nil, errors.New(violation)
 	}
@@ -168,30 +175,27 @@ func (a *dshAdapter) ensureProcess(ctx context.Context) (*acpProcess, error) {
 	return proc, nil
 }
 
-// hostToolsViolation checks the agent took only offered host tools.
-func (a *dshAdapter) hostToolsViolation(got []string) string {
-	var want []string
-	for _, t := range a.env.HostTools {
-		want = append(want, t.Name)
-	}
-	for _, name := range got {
-		if !slices.Contains(want, name) {
-			raw, _ := json.Marshal(got)
-			return fmt.Sprintf("agent took host tools %s, not among the declared [%s]: refused (fail-closed)", raw, strings.Join(want, ","))
-		}
-	}
-	return ""
-}
-
 func (a *dshAdapter) Open(ctx context.Context, req BrainOpen) (BrainSession, error) {
 	proc, err := a.ensureProcess(ctx)
 	if err != nil {
 		return nil, &AgentError{Code: AgentErrorCodeAgentUnavailable, Message: "agent unavailable: " + err.Error()}
 	}
 	c, _ := req.Current.(*dshConv)
+	if c != nil && c.proc == proc && !sameBrainTools(dshCustomTools(c.tools), dshCustomTools(req.Tools)) {
+		// The agent binds its custom tools when the session opens: close it
+		// and load it again (its conversation is durable) with the new ones.
+		if err := c.Suspend(ctx); err != nil {
+			return nil, acpOpenError(proc, "agent session/close", err)
+		}
+		req.Ref = c.id
+		c.proc = nil
+	}
 	if c == nil || c.proc != proc {
 		c = &dshConv{a: a, id: req.SessionID, placeholder: c.placeholderOrNew()}
 		meta := map[string]any{"sessionId": req.SessionID, "systemPrompt": req.SystemPrompt, "model": a.modelMeta(c, req.Model, req.Metadata)}
+		if custom := dshCustomTools(req.Tools); len(custom) > 0 {
+			meta["customTools"] = custom
+		}
 		var res acpSessionResponse
 		if req.Ref != "" {
 			err = proc.call(ctx, "session/load", map[string]any{"sessionId": req.Ref, "cwd": req.Cwd, "mcpServers": []any{}, "_meta": map[string]any{acpMetaKey: meta}}, &res)
@@ -205,7 +209,7 @@ func (a *dshAdapter) Open(ctx context.Context, req BrainOpen) (BrainSession, err
 		if err != nil {
 			return nil, acpOpenError(proc, "agent session", err)
 		}
-		if violation := acpToolsViolation(slices.Sorted(maps.Keys(a.env.AllowedTools())), res.Meta.Bma.ToolCatalog); violation != "" {
+		if violation := acpToolsViolation(slices.Sorted(maps.Keys(brainToolNames(dshCustomTools(req.Tools)))), res.Meta.Bma.ToolCatalog); violation != "" {
 			return nil, &AgentError{Code: AgentErrorCodeAgentProtocolError, Message: violation}
 		}
 		c.proc, c.mode = proc, "default"
@@ -213,6 +217,7 @@ func (a *dshAdapter) Open(ctx context.Context, req BrainOpen) (BrainSession, err
 		a.convs[req.SessionID] = c
 		a.mu.Unlock()
 	}
+	c.tools = req.Tools
 	if c.mode != req.Mode {
 		if err := proc.call(ctx, "session/set_mode", map[string]any{"sessionId": req.SessionID, "modeId": req.Mode}, nil); err != nil {
 			return nil, acpOpenError(proc, "agent set_mode", err)
@@ -252,7 +257,7 @@ func (c *dshConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) err
 	}
 	a := c.a
 	a.mu.Lock()
-	c.prompt = &dshPrompt{ctx: ctx, sink: sink, route: *in.Model}
+	c.prompt = &dshPrompt{ctx: ctx, sink: sink, route: *in.Model, tools: brainToolNames(c.tools)}
 	a.mu.Unlock()
 	defer func() {
 		a.mu.Lock()
@@ -265,6 +270,12 @@ func (c *dshConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) err
 	}
 	if in.Effort != "" {
 		meta["reasoningEffort"] = in.Effort
+	}
+	if host := dshHostTools(c.tools); len(host) > 0 {
+		meta["hostTools"] = host
+	}
+	if len(in.Skills) > 0 {
+		meta["inputSkills"] = in.Skills
 	}
 	params := map[string]any{"sessionId": c.id, "prompt": acpPromptBlocks(in), "_meta": map[string]any{acpMetaKey: meta}}
 	return promptACP(ctx, c.proc, params, a.env.CancelGrace, a.env.KillGrace)
@@ -311,20 +322,17 @@ func (a *dshAdapter) running(proc *acpProcess, wire string) (*dshConv, *dshPromp
 	return c, c.prompt
 }
 
-// routeFor is the model route of the running prompt of the conversation
-// holding placeholder (agent_acp_proxy.go).
-func (a *dshAdapter) routeFor(placeholder string) (BrainModelRoute, string, bool) {
+// routeFor is the running prompt of the conversation holding placeholder
+// (agent_acp_proxy.go), with its session id; nil when none runs.
+func (a *dshAdapter) routeFor(placeholder string) (*dshPrompt, string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, c := range a.convs {
 		if c.placeholder == placeholder {
-			if c.prompt == nil {
-				return BrainModelRoute{}, c.id, false
-			}
-			return c.prompt.route, c.id, true
+			return c.prompt, c.id
 		}
 	}
-	return BrainModelRoute{}, "", false
+	return nil, ""
 }
 
 // --- agent -> executor ---

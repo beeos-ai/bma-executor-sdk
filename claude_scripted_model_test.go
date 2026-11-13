@@ -31,6 +31,7 @@ type scriptedModel struct {
 }
 
 type modelRequest struct {
+	Model  string
 	Tools  []string
 	APIKey string
 	// Texts are the text blocks of the request's user messages.
@@ -58,7 +59,7 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 		Messages []json.RawMessage
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	req := modelRequest{APIKey: r.Header.Get("X-Api-Key")}
+	req := modelRequest{Model: body.Model, APIKey: r.Header.Get("X-Api-Key")}
 	for _, tool := range body.Tools {
 		req.Tools = append(req.Tools, tool.Name)
 	}

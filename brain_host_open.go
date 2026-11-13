@@ -38,6 +38,10 @@ type acpOpenPlan struct {
 	mode      string
 	system    string
 	hands     *EnvironmentInfo
+	// tools are the turn's tools besides the six (turnTools).
+	tools []BrainTool
+	// skills are the checked input_skills of the opening input.
+	skills []InputSkillDocument
 }
 
 // acpOpening is an open of a session in flight.
@@ -62,7 +66,7 @@ func (a *BrainHost) openSession(ctx context.Context, s *acpSession) error {
 			brain, err := a.adapter.Open(openCtx, BrainOpen{
 				SessionID: plan.params.SessionID, Ref: plan.params.ExecutorSessionRef, Current: current,
 				Cwd: plan.cwd, SystemPrompt: a.systemPrompt(plan.promptCwd, plan.system, plan.hands),
-				Mode: plan.mode, Model: plan.model, Effort: plan.effort, Metadata: plan.params.Metadata,
+				Mode: plan.mode, Model: plan.model, Effort: plan.effort, Metadata: plan.params.Metadata, Tools: plan.tools,
 			})
 			a.mu.Lock()
 			if err == nil {

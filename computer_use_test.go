@@ -161,7 +161,7 @@ func TestLooksLikeBundleID(t *testing.T) {
 // TestComputerToolSchemas: both tools ask for a description of the step, and
 // computer_action offers open_app with app.
 func TestComputerToolSchemas(t *testing.T) {
-	for _, tool := range []acpHostTool{acpComputerObserve, acpComputerAction} {
+	for _, tool := range []BrainTool{acpComputerObserve, acpComputerAction} {
 		required, _ := tool.Parameters["required"].([]string)
 		props, _ := tool.Parameters["properties"].(map[string]any)
 		if !slices.Contains(required, "description") || props["description"] == nil {

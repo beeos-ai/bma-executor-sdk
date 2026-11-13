@@ -154,6 +154,21 @@
             "context_only"
           ],
           "description": "tokens: the agent reports token usage. context_only: it reports context window occupancy only; usage is metered by the model proxy."
+        },
+        "model_credentials": {
+          "type": "string",
+          "enum": [
+            "platform",
+            "owner"
+          ],
+          "description": "Whose model access the agent uses. platform (or absent): the platform's model endpoint and per-turn credentials (platform_credentials harness_model), models from the platform catalog. owner: only the machine owner's own credentials configured on the machine; the platform never hands this harness harness_model credentials, never routes it through its model proxy and does not bill its model usage; the session's model must be one of this harness's models."
+        },
+        "models": {
+          "type": "array",
+          "description": "The models this agent offers when model_credentials is owner (for example the Claude Code model IDs), each with its thinking levels. The platform accepts AgentTurnConfig.model and thinking_level for a session on this harness only from this list and passes them unchanged. Ignored for model_credentials platform.",
+          "items": {
+            "$ref": "agent.json#/$defs/AgentModel"
+          }
         }
       },
       "required": [
@@ -866,7 +881,7 @@
     },
     "InteractionScope": {
       "type": "string",
-      "description": "How long a permission grant lasts on the executor: this tool use only, or the rest of the session.",
+      "description": "How long a permission grant lasts: this tool use only, or the rest of the session. A session grant is recorded by the platform (the single source): later permission requests of the same session for the same tool name are answered allow by the platform without asking (responder platform), whichever executor or brain asks, until the grant is revoked; the executor may also apply it locally.",
       "enum": [
         "once",
         "session"
