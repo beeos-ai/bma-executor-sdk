@@ -167,7 +167,7 @@ func TestPrewarmCanBeDisabledAndDSHHasNone(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	f := startACPFixture(t, ctx, ACPAgentOptions{})
-	if f.agent.warm != nil || f.agent.WaitPrewarm(ctx) != nil {
+	if _, ok := f.agent.adapter.(interface{ WaitPrewarm(context.Context) error }); ok || f.agent.WaitPrewarm(ctx) != nil {
 		t.Fatal("the DSH profile has a prewarm")
 	}
 	exe, err := os.Executable()
@@ -179,7 +179,7 @@ func TestPrewarmCanBeDisabledAndDSHHasNone(t *testing.T) {
 		Env: []string{"BMA_ACP_FAKE_CLAUDE=ok"}, StateDir: t.TempDir(), Core: core})
 	noErr(t, err)
 	t.Cleanup(func() { _ = agent.Close() })
-	if agent.warm != nil {
+	if agent.adapter.(*claudeACPAdapter).warm != nil {
 		t.Fatal("DisablePrewarm did not disable it")
 	}
 }

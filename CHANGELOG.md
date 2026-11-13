@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.6.4
+
+- **Go: `BrainHost` + `BrainAdapter`.** `ACPAgent` was the platform semantics
+  of a local brain and the driver of two brains at once, with the Claude Code
+  profile as branches through it. The platform semantics are now `BrainHost`
+  (`ACPAgent` is the same type, `NewACPAgent` unchanged), and each brain is a
+  `BrainAdapter` (bma-dsh-acp; claude-agent-acp) whose differences are stated
+  by `BrainCapabilities`; `NewBrainHost` hosts any adapter. The host's source
+  names no brain (a test enforces it). Behavior of both profiles is the same,
+  with three corrections: a tool the turn's policy or `ToolPolicy` denies is
+  refused without asking the platform for either brain (DSH asked and then
+  refused at the gate); a remote tool call of the DSH brain carries its
+  `agent.tool_use` id, as Claude Code's did; claude-agent-acp's idle
+  auto-compaction is put off past any session's life, so the agent never
+  starts a turn of its own.
+
 ## 1.6.3
 
 - **Go: the host may decide which computer use calls need approval

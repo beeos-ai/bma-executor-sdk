@@ -23,7 +23,7 @@ func handsAreRemote(metadata map[string]string) bool {
 // remoteToolRoute is the platform route of a turn with tools_mcp_*, or nil
 // for a turn whose tools run here. One of url and token without the other is
 // an error: the turn must not fall back to this machine.
-func (a *ACPAgent) remoteToolRoute(turn *AgentTurn) (func(*acpLedger) ToolRoute, error) {
+func (a *BrainHost) remoteToolRoute(turn *AgentTurn) (func(*acpLedger) ToolRoute, error) {
 	md := turn.Params().Metadata
 	if !handsAreRemote(md) {
 		return nil, nil
