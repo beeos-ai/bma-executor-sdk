@@ -436,6 +436,20 @@ type cliPrompt struct {
 	message string            // id of the current message
 	failure atomic.Pointer[AgentError]
 	errText string // the assistant's error type, if any
+	// reported are the calls whose result the tool server reported: what
+	// the tool returned, not the CLI's rendering of it for the model.
+	reported map[string]bool
+}
+
+// result reports a call's result once.
+func (p *cliPrompt) result(callID string, content []ContentBlock, isError bool) {
+	p.mu.Lock()
+	done := p.reported[callID]
+	p.reported[callID] = true
+	p.mu.Unlock()
+	if !done {
+		p.sink.ToolResult(callID, content, isError)
+	}
 }
 
 type cliBlock struct {
@@ -452,7 +466,7 @@ func (c *cliConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) err
 	}
 	c.mu.Lock()
 	proc := c.proc
-	p := &cliPrompt{ctx: ctx, sink: sink, blocks: map[int]*cliBlock{}}
+	p := &cliPrompt{ctx: ctx, sink: sink, blocks: map[int]*cliBlock{}, reported: map[string]bool{}}
 	c.prompt = p
 	c.mu.Unlock()
 	defer func() {
@@ -973,7 +987,9 @@ func (p *cliProc) onUser(prompt *cliPrompt, raw json.RawMessage) {
 		if b.Type != "tool_result" {
 			continue
 		}
-		prompt.sink.ToolResult(b.ToolUseID, claudeResultText(b.Content), b.IsError)
+		// A call the tool server ran is reported already; this is the
+		// result of one that did not reach it (refused, failed in the CLI).
+		prompt.result(b.ToolUseID, claudeResultText(b.Content), b.IsError)
 	}
 }
 
@@ -1199,6 +1215,7 @@ func (s *cliToolServer) call(ctx context.Context, c *cliConv, callID, name strin
 		defer cancel()
 		defer context.AfterFunc(prompt.ctx, cancel)()
 		result = prompt.sink.Call(ctx, BrainCall{ID: callID, Name: name, Input: input})
+		prompt.result(callID, []ContentBlock{{Type: ContentBlockTypeText, Text: result.Text}}, result.IsError)
 	}
 	content := []any{map[string]any{"type": "text", "text": result.Text}}
 	for _, img := range result.Images {

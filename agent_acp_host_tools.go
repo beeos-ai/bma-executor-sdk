@@ -137,7 +137,13 @@ func (a *BrainHost) turnTools(config AgentTurnConfig, remote bool) ([]BrainTool,
 		tools = append(tools, acpAskUserQuestion)
 	}
 	if a.caps.HostTools {
+		seen := map[string]bool{}
 		for _, h := range config.HostTools {
+			if (h.Name != ToolNameComputerObserve && h.Name != ToolNameComputerAction) || seen[h.Name] || strings.TrimSpace(h.Description) == "" ||
+				h.InputSchema["type"] != "object" || (h.Permission != "" && h.Permission != "allow" && h.Permission != "ask") {
+				return nil, &RPCError{Code: CodeInvalidParams, Message: "invalid params: host_tools entry " + h.Name + " is not a computer use tool with a description, an object input_schema and permission allow or ask, once"}
+			}
+			seen[h.Name] = true
 			kind := "other"
 			if h.ReadOnly {
 				kind = "read"
