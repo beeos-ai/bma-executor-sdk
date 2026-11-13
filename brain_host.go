@@ -1172,7 +1172,11 @@ func (t *acpTurn) Permission(ctx context.Context, call BrainCall) BrainDecision 
 	a.interaction(ACPInteractionEvent{Phase: "requested", SessionID: sessionID, InteractionID: interactionID, ToolName: call.Name, ToolInput: call.Input})
 	answer, err := t.turn.RequestInteraction(ctx, InteractionRequestParams{
 		Kind: InteractionKindPermission, InteractionID: interactionID,
-		ToolUseID: toolUseID, ToolName: call.Name, ToolInput: call.Input, Scopes: []string{InteractionScopeOnce},
+		// The user may allow the tool for the rest of the session: the
+		// platform records that grant and answers the session's later
+		// requests for the tool itself (contract 1.10.0, ADR-0068), so every
+		// call is still asked here and a revoked grant asks the user again.
+		ToolUseID: toolUseID, ToolName: call.Name, ToolInput: call.Input, Scopes: []string{InteractionScopeOnce, InteractionScopeSession},
 	})
 	outcome := string(answer.Outcome)
 	if err != nil {

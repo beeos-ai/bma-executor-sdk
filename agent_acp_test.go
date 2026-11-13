@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -275,7 +276,8 @@ func TestACPAgentToolPermissionAndExecution(t *testing.T) {
 	request := f.platform.interactions[0]
 	sum := sha256.Sum256([]byte("sesn_t\x00turn_1\x00call_1"))
 	if request.InteractionID != "appr_"+hex.EncodeToString(sum[:])[:24] || request.ToolName != "bash" ||
-		request.ToolInput["command"] != "echo hi > out.txt && cat out.txt" || !hasEvent(f.platform.snapshot(), request.ToolUseID) {
+		request.ToolInput["command"] != "echo hi > out.txt && cat out.txt" || !hasEvent(f.platform.snapshot(), request.ToolUseID) ||
+		!slices.Equal(request.Scopes, []string{InteractionScopeOnce, InteractionScopeSession}) {
 		t.Fatalf("interaction.request = %+v", request)
 	}
 	if _, err := f.executor.RespondInteraction(ctx, InteractionResponseParams{SessionID: "sesn_t", InteractionID: request.InteractionID, Outcome: InteractionOutcomeAllow}); err != nil {

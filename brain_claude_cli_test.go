@@ -74,10 +74,12 @@ func TestClaudeCLIRunsAnApprovedPlatformTool(t *testing.T) {
 	}
 	f.platform.waitFor(t, "permission", func() bool { return len(f.platform.interactions) == 1 })
 	request := f.platform.interactions[0]
-	if request.InteractionID != ApprovalID("sesn_c", "turn_1", "toolu_01") || request.ToolName != "bash" || request.ToolInput["command"] == nil {
+	if request.InteractionID != ApprovalID("sesn_c", "turn_1", "toolu_01") || request.ToolName != "bash" || request.ToolInput["command"] == nil ||
+		!slices.Equal(request.Scopes, []string{InteractionScopeOnce, InteractionScopeSession}) {
 		t.Fatalf("interaction.request = %+v", request)
 	}
-	if _, err := f.executor.RespondInteraction(ctx, InteractionResponseParams{SessionID: "sesn_c", InteractionID: request.InteractionID, Outcome: InteractionOutcomeAllow}); err != nil {
+	// "Always allow": the platform records the grant; the CLI gets no rule of its own.
+	if _, err := f.executor.RespondInteraction(ctx, InteractionResponseParams{SessionID: "sesn_c", InteractionID: request.InteractionID, Outcome: InteractionOutcomeAllow, Scope: InteractionScopeSession}); err != nil {
 		t.Fatal(err)
 	}
 	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)

@@ -1166,12 +1166,10 @@ func (p *cliProc) onControl(id string, raw json.RawMessage) {
 	d := prompt.sink.Permission(ctx, BrainCall{ID: r.ToolUseID, Name: name, Input: r.Input})
 	switch d.Outcome {
 	case BrainAllow:
-		result := map[string]any{"behavior": "allow", "updatedInput": r.Input, "toolUseID": r.ToolUseID}
-		if d.Session {
-			result["updatedPermissions"] = []any{map[string]any{"type": "addRules", "rules": []any{map[string]any{"toolName": r.ToolName}},
-				"behavior": "allow", "destination": "session"}}
-		}
-		answer(result)
+		// Never a CLI permission rule: a session grant ("always allow") is
+		// the platform's record, which answers every later request of the
+		// tool (and can be revoked), so the CLI asks each time.
+		answer(map[string]any{"behavior": "allow", "updatedInput": r.Input, "toolUseID": r.ToolUseID})
 	case BrainDeny:
 		message := d.Message
 		if message == "" {

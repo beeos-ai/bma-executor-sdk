@@ -107,9 +107,6 @@ type BrainDecision struct {
 	Outcome string
 	// Message is the refusal the model reads (deny only).
 	Message string
-	// Session is set when the user allowed the tool for the rest of the
-	// session (BrainCapabilities.SessionAllow).
-	Session bool
 }
 
 // BrainDecision outcomes.
@@ -207,9 +204,6 @@ type BrainCapabilities struct {
 	CustomTools bool
 	// InputSkills: the brain takes the selected skills of an input (BrainInput.Skills).
 	InputSkills bool
-	// SessionAllow: the brain keeps a permission the user granted for the
-	// rest of the session.
-	SessionAllow bool
 }
 
 // BrainOpen is what a turn asks the conversation to be.
