@@ -96,6 +96,51 @@ type ComputerUseBackend interface {
 	Action(ctx context.Context, req ComputerActionRequest) ([]ContentBlock, error)
 }
 
+// ComputerUseApprover is optionally implemented by a ComputerUseBackend whose
+// host decides which computer use calls the user must approve, for example
+// only actions that may send, submit, pay or delete. Without it every call is
+// asked (the tools' declared default). The platform's turn tool_policy and
+// ACPAgentOptions.ToolPolicy still win: a call is let through without asking
+// only while the ask comes from that default, never when either names the tool.
+type ComputerUseApprover interface {
+	// NeedsObserveApproval and NeedsActionApproval report whether the user
+	// must approve the call. A host that cannot tell should say true.
+	NeedsObserveApproval(ctx context.Context, req ComputerObserveRequest) bool
+	NeedsActionApproval(ctx context.Context, req ComputerActionRequest) bool
+}
+
+// computerNeedsApproval asks the backend's ComputerUseApprover about one
+// computer use call. No approver, or an input the tool would refuse, is asked.
+func (c *Core) computerNeedsApproval(ctx context.Context, sessionID, tool string, raw map[string]any) bool {
+	approver, ok := c.opts.ComputerUse.(ComputerUseApprover)
+	if !ok {
+		return true
+	}
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		return true
+	}
+	var input computerInput
+	if json.Unmarshal(payload, &input) != nil || (input.PID == 0) != (input.WindowID == 0) || (input.Display != "" && input.Display != "primary") {
+		return true
+	}
+	switch tool {
+	case ToolNameComputerObserve:
+		if validateObserveFormat(input.ImageFormat) != nil {
+			return true
+		}
+		return approver.NeedsObserveApproval(ctx, ComputerObserveRequest{SessionID: sessionID, PID: input.PID, WindowID: input.WindowID, ImageFormat: input.ImageFormat})
+	case ToolNameComputerAction:
+		request, err := input.actionRequest()
+		if err != nil {
+			return true
+		}
+		request.SessionID = sessionID
+		return approver.NeedsActionApproval(ctx, request)
+	}
+	return true
+}
+
 // computerInput is the superset input of computer_observe and computer_action
 // (contract: additionalProperties true).
 type computerInput struct {
