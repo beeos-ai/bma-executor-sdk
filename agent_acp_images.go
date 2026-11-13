@@ -3,7 +3,6 @@ package bmaexecutor
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -23,8 +22,7 @@ import (
 // never travel on the control channel). The executor downloads it, checks it
 // the way the Anthropic API does and hands it to the agent as an ACP image
 // content block (ACP prompt content: image, base64 data + mimeType), which
-// the agent may receive only when its initialize reply declares
-// promptCapabilities.image. An image that cannot be handed over ends the turn
+// the brain receives only when it takes images (BrainCapabilities.ImageInputs). An image that cannot be handed over ends the turn
 // with a session.error; it is never dropped silently.
 const (
 	// acpMaxImageBytes is the Anthropic API limit of one image (5 MB), which
@@ -55,22 +53,16 @@ type ACPInputFiles func(ctx context.Context, file ACPInputFile) (io.ReadCloser, 
 // acpImageTypes are the image types of the Anthropic API.
 var acpImageTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true}
 
-// canTakeImages reports whether the agent declared image prompts. The Claude
-// Code profile is left out: its image path is not exercised against the
-// pinned release yet, so it is not declared and refuses an image visibly.
-func (p *acpProcess) canTakeImages() bool {
-	return p.init.AgentCapabilities.PromptCapabilities.Image && !p.agent.claude()
-}
-
 // fileInputs is the agent capability's file_inputs: the executor can fetch
 // the files of file blocks (a host InputFiles, or the tools endpoint the
 // platform hands a turn when PlatformTools is on) and the agent takes images.
-func (a *ACPAgent) fileInputs(imageAgent bool) bool {
+func (a *BrainHost) fileInputs(imageAgent bool) bool {
 	return imageAgent && (a.opts.InputFiles != nil || a.opts.PlatformTools)
 }
 
-// promptContent is the ACP prompt of one input: its text, then its images.
-func (a *ACPAgent) promptContent(ctx context.Context, proc *acpProcess, turn *AgentTurn, input []AgentInputBlock) ([]any, error) {
+// brainInput is one input for the brain: its text, then its images,
+// downloaded and checked.
+func (a *BrainHost) brainInput(ctx context.Context, turn *AgentTurn, input []AgentInputBlock) (BrainInput, error) {
 	var texts []string
 	var files []AgentInputBlock
 	for _, b := range input {
@@ -81,29 +73,26 @@ func (a *ACPAgent) promptContent(ctx context.Context, proc *acpProcess, turn *Ag
 			files = append(files, b)
 		}
 	}
+	in := BrainInput{Text: strings.Join(texts, "\n")}
 	if len(files) == 0 {
-		return []any{map[string]any{"type": "text", "text": strings.Join(texts, "\n")}}, nil
+		return in, nil
 	}
-	if !proc.canTakeImages() {
-		return nil, &AgentError{Code: AgentErrorCodeAgentProtocolError,
-			Message: "the input has an image but this agent does not take image input (its initialize reply has promptCapabilities.image false)"}
+	if !a.caps.ImageInputs {
+		return BrainInput{}, &AgentError{Code: AgentErrorCodeAgentProtocolError,
+			Message: "the input has an image but this agent does not take image input"}
 	}
 	if len(files) > acpMaxPromptImages {
-		return nil, &AgentError{Code: AgentErrorCodeAgentError,
+		return BrainInput{}, &AgentError{Code: AgentErrorCodeAgentError,
 			Message: fmt.Sprintf("the input has %d images; at most %d are accepted", len(files), acpMaxPromptImages)}
-	}
-	var content []any
-	if text := strings.Join(texts, "\n"); text != "" {
-		content = append(content, map[string]any{"type": "text", "text": text})
 	}
 	for _, f := range files {
 		data, err := a.fetchImage(ctx, turn, f)
 		if err != nil {
-			return nil, &AgentError{Code: AgentErrorCodeAgentError, Message: "image " + imageLabel(f) + ": " + err.Error()}
+			return BrainInput{}, &AgentError{Code: AgentErrorCodeAgentError, Message: "image " + imageLabel(f) + ": " + err.Error()}
 		}
-		content = append(content, map[string]any{"type": "image", "data": base64.StdEncoding.EncodeToString(data), "mimeType": f.MimeType})
+		in.Images = append(in.Images, BrainImage{MimeType: f.MimeType, Data: data})
 	}
-	return content, nil
+	return in, nil
 }
 
 func imageLabel(b AgentInputBlock) string {
@@ -114,7 +103,7 @@ func imageLabel(b AgentInputBlock) string {
 }
 
 // fetchImage downloads and checks one image.
-func (a *ACPAgent) fetchImage(ctx context.Context, turn *AgentTurn, b AgentInputBlock) ([]byte, error) {
+func (a *BrainHost) fetchImage(ctx context.Context, turn *AgentTurn, b AgentInputBlock) ([]byte, error) {
 	if !acpImageTypes[b.MimeType] {
 		return nil, fmt.Errorf("the type %s is not supported (png, jpeg, gif and webp are)", b.MimeType)
 	}

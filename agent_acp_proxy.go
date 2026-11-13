@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// acpModelProxy is the machine-local model endpoint of an ACPAgent. The
+// acpModelProxy is the machine-local model endpoint of the DSH adapter. The
 // agent only knows http://127.0.0.1:<port>/v1 and a per-session placeholder
 // key; the proxy forwards POST /v1/chat/completions while that session has a
 // running turn, after checking that the request offers only the six platform
@@ -19,7 +19,7 @@ import (
 // of the agent's headers only Accept is kept, so the agent cannot set
 // Upstream.SessionHeader itself. Bodies and credentials are never logged.
 type acpModelProxy struct {
-	agent  *ACPAgent
+	agent  *dshAdapter
 	url    string
 	server *http.Server
 	client *http.Client
@@ -27,7 +27,7 @@ type acpModelProxy struct {
 
 const acpMaxModelRequestBytes = 32 << 20
 
-func startACPModelProxy(a *ACPAgent) (*acpModelProxy, error) {
+func startACPModelProxy(a *dshAdapter) (*acpModelProxy, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -39,21 +39,6 @@ func startACPModelProxy(a *ACPAgent) (*acpModelProxy, error) {
 }
 
 func (p *acpModelProxy) close() { _ = p.server.Close() }
-
-// routeFor is the route of the running turn of the session holding placeholder.
-func (a *ACPAgent) routeFor(placeholder string) (acpRoute, string, bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for _, s := range a.sessions {
-		if s.placeholder == placeholder {
-			if s.turn == nil {
-				return acpRoute{}, s.id, false
-			}
-			return s.turn.route, s.id, true
-		}
-	}
-	return acpRoute{}, "", false
-}
 
 func (p *acpModelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
@@ -81,7 +66,7 @@ func (p *acpModelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if names := acpExtraTools(request["tools"], p.agent.toolNames()); len(names) > 0 {
+	if names := acpExtraTools(request["tools"], p.agent.env.AllowedTools()); len(names) > 0 {
 		p.agent.log(LogWarn, fmt.Sprintf("acp model proxy refused tools %v in session %s", names, sessionID), nil)
 		http.Error(w, "forbidden: tool catalog not allowed: "+strings.Join(names, ","), http.StatusForbidden)
 		return

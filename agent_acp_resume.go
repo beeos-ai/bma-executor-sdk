@@ -85,7 +85,7 @@ func ledgerPath(stateDir, sessionID string) string {
 
 // ledger returns the session's ledger, read from disk the first time. There
 // is one in-memory copy per file in a Core, however many routes use it.
-func (a *ACPAgent) ledger(sessionID string) (*acpLedger, error) {
+func (a *BrainHost) ledger(sessionID string) (*acpLedger, error) {
 	return a.opts.Core.local.ledger(ledgerPath(a.opts.StateDir, sessionID), sessionID)
 }
 
