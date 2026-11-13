@@ -3,6 +3,6 @@
   "private": true,
   "description": "The bma-dsh-acp release the DSH profile of ACPAgent is tested with against the real agent (agent_acp_images_test.go). npm ci installs exactly the locked, integrity-checked tree.",
   "dependencies": {
-    "@beeos-ai/bma-dsh-acp": "0.2.2"
+    "@beeos-ai/bma-dsh-acp": "0.3.0"
   }
 }
