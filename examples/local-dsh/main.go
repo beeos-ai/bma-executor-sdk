@@ -11,7 +11,8 @@
 // platform's per-turn model endpoint when turn.start carries one.
 //
 // Claude Code instead of DSH: -profile claude-code with -agent set to the
-// pinned official claude-agent-acp (node dist/index.js, see -node). It uses
+// pinned official claude binary (or your launcher of it, with
+// -claude-executable naming the binary it runs). It uses
 // only your own Claude credentials, which are never sent to BMA: your Claude
 // Code login (HOME), or ANTHROPIC_* / CLAUDE_CODE_* / AWS_* / GOOGLE_*
 // variables of this process, which are handed to the agent as they are.
@@ -87,6 +88,7 @@ func main() {
 	workRoot := flag.String("work-root", filepath.Join(os.TempDir(), "bma-local-dsh"), "session workspaces and allowed cwd root")
 	state := flag.String("state", "", "agent state directory (default <work-root>/.state)")
 	profile := flag.String("profile", bmaexecutor.ACPProfileDSH, "agent profile: dsh or claude-code")
+	claudeExecutable := flag.String("claude-executable", "", "with -profile claude-code: the pinned claude binary -agent runs (default -agent itself)")
 	labels := flag.String("labels", "", "comma separated executor labels (a-z 0-9 . _ -)")
 	remoteBrain := flag.Bool("remote-brain", false, "allow a brain on another machine to use this machine as its hands")
 	platformTools := flag.Bool("platform-tools", false, "may be the brain of a session whose hands are on another machine")
@@ -110,7 +112,7 @@ func main() {
 	token, key := os.Getenv("BMA_MACHINE_TOKEN"), os.Getenv("BMA_LOCAL_MODEL_KEY")
 	claude := *profile == bmaexecutor.ACPProfileClaudeCode
 	if *baseURL == "" || *agent == "" || (*modelBase == "" && !claude) || token == "" {
-		log.Fatal("-base-url, -agent, -model-base-url (not with -profile claude-code) and BMA_MACHINE_TOKEN are required")
+		log.Fatal("-base-url, -agent, -model-base-url (not with a claude profile) and BMA_MACHINE_TOKEN are required")
 	}
 	if *state == "" {
 		*state = filepath.Join(*workRoot, ".state")
@@ -214,7 +216,12 @@ func main() {
 		agentOptions.Upstream = bmaexecutor.ACPModelUpstream{BaseURL: *modelBase, Model: *model,
 			Header: func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+key) }}
 	}
-	brain, err := bmaexecutor.NewACPAgent(ctx, agentOptions)
+	var brain *bmaexecutor.BrainHost
+	if claude {
+		brain, err = bmaexecutor.NewBrainHost(ctx, bmaexecutor.NewClaudeCLIAdapter(bmaexecutor.ClaudeCLIOptions{Executable: *claudeExecutable}), agentOptions)
+	} else {
+		brain, err = bmaexecutor.NewACPAgent(ctx, agentOptions)
+	}
 	check(err)
 	defer brain.Close()
 

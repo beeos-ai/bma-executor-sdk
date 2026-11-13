@@ -141,12 +141,8 @@ type BrainEnv struct {
 	CancelGrace  time.Duration
 	KillGrace    time.Duration
 	// HarnessID is the declared harness id ("" for the adapter's own).
-	HarnessID      string
-	DisablePrewarm bool
-	Log            func(LogLevel, string, error)
-	// SystemPrompt is the host's base system prompt for a working directory
-	// (for a conversation the adapter opens on its own, such as a prewarm).
-	SystemPrompt func(cwd string) string
+	HarnessID string
+	Log       func(LogLevel, string, error)
 }
 
 // BrainHostTool is a host tool the host offers: name, model-facing
@@ -202,6 +198,8 @@ type BrainOpen struct {
 	Mode string
 	// Model is the turn's model ("" when the brain picks its own).
 	Model string
+	// Effort is the turn's thinking level ("" for none).
+	Effort string
 	// Metadata is the turn.start metadata (model limits).
 	Metadata map[string]string
 }

@@ -1,6 +1,6 @@
 package bmaexecutor
 
-// NewACPAgent: a BrainHost with the adapter of an ACP profile. This is the
+// NewACPAgent: a BrainHost with the adapter of a profile. This is the
 // one place that maps a brain's name to its adapter; the host never names one.
 
 import (
@@ -12,9 +12,11 @@ import (
 const (
 	// ACPProfileDSH is bma-dsh-acp (ADR-0027), the default.
 	ACPProfileDSH = "dsh"
-	// ACPProfileClaudeCode is the official claude-agent-acp, unmodified (see
-	// agent_acp_claude.go). It uses only the node owner's own Claude
-	// credentials and never the platform's model endpoint.
+	// ACPProfileClaudeCode is the official claude CLI, unmodified, driven
+	// directly (brain_claude_cli.go); Command[0] is the pinned binary. It uses
+	// only the node owner's own Claude credentials and never the platform's
+	// model endpoint. A host whose Command is the owner's launcher of that
+	// binary uses NewBrainHost with NewClaudeCLIAdapter(ClaudeCLIOptions{Executable}).
 	ACPProfileClaudeCode = "claude-code"
 )
 
@@ -26,7 +28,7 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 	case "", ACPProfileDSH:
 		adapter = newDSHAdapter()
 	case ACPProfileClaudeCode:
-		adapter = newClaudeACPAdapter()
+		adapter = NewClaudeCLIAdapter(ClaudeCLIOptions{})
 	default:
 		return nil, fmt.Errorf("bmaexecutor: unknown ACPAgentOptions.Profile %q", opts.Profile)
 	}
