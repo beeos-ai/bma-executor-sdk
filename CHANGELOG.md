@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.6.6
+
+- **Go: Claude Code reports a tool call when the CLI asks to run it.** The
+  adapter reported every `tool_use` block as soon as the model's message
+  streamed it; with several calls in one message the later ones' `agent.tool_use`
+  (evaluated `ask`) showed before their approval was requested, so a client
+  could answer a confirmation the platform did not have open yet. Each call is
+  now reported at its permission request, one at a time as the CLI runs them,
+  as the DSH adapter does.
+- **Go: the Claude Code `bash` tool takes the platform's inputs only.** Its
+  schema offered a `description` input that the platform's tools endpoint does
+  not accept, so a call that set it came back without an outcome
+  (`bad_gateway_reply`) when the hands were on another machine.
+
 ## 1.6.5
 
 - **Go: Claude Code is the official `claude` CLI, driven directly.** The
