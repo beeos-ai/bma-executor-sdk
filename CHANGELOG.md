@@ -13,6 +13,10 @@
   schema offered a `description` input that the platform's tools endpoint does
   not accept, so a call that set it came back without an outcome
   (`bad_gateway_reply`) when the hands were on another machine.
+- **Go: a tool result of a canceled DSH turn follows its cancel.** When
+  `turn.cancel` ended a custom tool call (or another call) of a DSH turn, the
+  result could reach bma-dsh-acp before `session/cancel` and the agent asked
+  the model once more; the answer now goes out after the cancel.
 
 ## 1.6.5
 
