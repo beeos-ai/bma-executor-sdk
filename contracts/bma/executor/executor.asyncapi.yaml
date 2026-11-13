@@ -2,7 +2,7 @@ asyncapi: 3.0.0
 id: https://contracts.bma.beeos.ai/executor.asyncapi
 info:
   title: BMA Executor Protocol channels
-  version: 1.5.0
+  version: 1.9.0
   description: "WebSocket channels for bma.executor.v1 and bma.executor.v1.1. The control channel carries JSON-RPC 2.0 requests, notifications, and responses. The mcp channel carries raw MCP JSON-RPC with no BMA wrapper. PTY bytes travel on per-attach outbound host sockets (subprotocol bma.terminal.v1), not on these channels. Contract 1.4.0 adds the platform tools endpoint (x-bma-platform-tools): the HTTP MCP endpoint a brain on one machine calls to run its tools on the session's hands machine."
   license:
     name: Apache-2.0
@@ -766,7 +766,7 @@ components:
       name: session.event
       title: session.event
       summary: Emit a durable session event.
-      description: Executor to harness request for durable session events. A tool executor's event is idempotent by its JSON-RPC id. An agent executor (capability agent) also sends turn_id, event_id and sequence; the harness deduplicates by (session_id, event_id), accepts a sequence at or below acked_sequence as a duplicate, and rejects a gap with -32013 conflict (data.expected_sequence). An agent event matches schemas/agent.json AgentEvent. The JSON-RPC response is the ACK; the executor keeps every unacked event and resends them in sequence order after reconnect, before any new event.
+      description: Executor to harness request for durable session events. A tool executor's event is idempotent by its JSON-RPC id. An agent executor (capability agent) also sends turn_id, event_id and sequence; the harness deduplicates by (session_id, event_id), accepts a sequence at or below acked_sequence as a duplicate, and rejects a gap with -32013 conflict (data.expected_sequence). An agent event matches schemas/agent.json AgentEvent. The JSON-RPC response is the ACK; the executor keeps every unacked event and resends them in sequence order after reconnect, before any new event. Contract 1.7.0 clarifies two rules that keep a session from stalling. A failure on the harness side that resending can fix (storage conflict or outage) is answered with data.retryable true and the executor resends the same event; only a rejection of the event itself (invalid params) is permanent, and it ends the turn; the executor sends session.error (bma_error_code event_rejected) and session.status_idle for the turn in place of the rejected event, renumbers from data.expected_sequence only so that this session.error is accepted, and never continues the turn.
       contentType: application/json
       payload:
         type: object
@@ -1841,7 +1841,7 @@ components:
       name: turn.start
       title: turn.start
       summary: Start an agent turn.
-      description: Harness to executor request (capability agent). Opens the agent session on first use (no session.assign) or continues it; executor_session_ref from an earlier TurnStartResult lets the executor resume its local conversation after a restart. The executor answers as soon as the turn is accepted and reports progress with session.event. Idempotent by turn_id. A session with a running turn answers -32013 conflict (use turn.input); a turn.start while max_sessions turns are running answers -32009 (an idle session holds no slot).
+      description: Harness to executor request (capability agent). Opens the agent session on first use (no session.assign) or continues it; executor_session_ref from an earlier TurnStartResult lets the executor resume its local conversation after a restart. The executor answers as soon as the turn is accepted and reports progress with session.event. Idempotent by turn_id. A session with a running turn answers -32013 conflict (use turn.input); a turn.start while max_sessions turns are running answers -32009 (an idle session holds no slot). A request that would serialize to more than 48 KiB carries a single input_ref block as its input (contract 1.7.0, only to an executor that declared agent.input_by_reference).
       contentType: application/json
       payload:
         type: object
@@ -1900,7 +1900,7 @@ components:
       name: turn.input
       title: turn.input
       summary: Add user input to the running turn.
-      description: Harness to executor request (capability agent). The local agent consumes the input at its next step. Idempotent by input_id. When turn_id is not the running turn the executor answers -32013 conflict and the harness starts a new turn instead.
+      description: Harness to executor request (capability agent). The local agent consumes the input at its next step. Idempotent by input_id. When turn_id is not the running turn the executor answers -32013 conflict and the harness starts a new turn instead. A request that would serialize to more than 48 KiB carries a single input_ref block as its input (contract 1.7.0, only to an executor that declared agent.input_by_reference).
       contentType: application/json
       payload:
         type: object

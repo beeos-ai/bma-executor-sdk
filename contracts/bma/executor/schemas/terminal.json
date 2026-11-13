@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.bma.beeos.ai/schemas/terminal.json",
   "title": "BMA executor terminal types",
-  "description": "v1.1 terminal.* control methods (machine-scoped executors). PTY bytes never cross the control channel: each terminal.attach makes the executor dial one outbound host WebSocket (subprotocol bma.terminal.v1) that carries exactly one attachment.",
+  "description": "v1.1 terminal.* control methods (machine-scoped executors). PTY bytes never cross the control channel: each terminal.attach makes the executor dial one outbound host WebSocket (subprotocol bma.terminal.v1) that carries exactly one attachment. Frames on that socket (and on the browser relay socket, which carries the same frames plus attach) are the TerminalFrame* types below: UTF-8 JSON text messages, one frame per message, discriminated by type (contract 1.6.0, additive).",
   "$defs": {
     "TerminalHost": {
       "type": "object",
@@ -113,6 +113,415 @@
       },
       "required": [],
       "additionalProperties": true
+    },
+    "TerminalFrameAttach": {
+      "type": "object",
+      "description": "First and only first frame a client sends on the relay socket (any other first frame is answered with error terminal_internal_error). Not sent on the host socket: terminal.attach carries the same fields as params. from_seq is the first output byte the client still needs and ack_seq the last byte it has consumed; from_seq above latest_seq is answered with error terminal_invalid_frame. Exactly one attachment per terminal at a time: while one is attached, another attach (can_write false included) is answered with error terminal_writer_busy and the socket is closed. Direction: client to platform.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "attach"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Terminal session id (tsn_...). The platform fills it toward clients; an executor may omit it on the host socket."
+        },
+        "rows": {
+          "type": "integer",
+          "x-go-type": "uint16"
+        },
+        "cols": {
+          "type": "integer",
+          "x-go-type": "uint16"
+        },
+        "from_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Resume point (byte offset)."
+        },
+        "ack_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Last consumed byte offset."
+        },
+        "can_write": {
+          "type": "boolean",
+          "description": "Request the writer lease; omitted means true."
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalFrameAttached": {
+      "type": "object",
+      "description": "Answer to an attach; on the host socket the executor writes it first, before answering terminal.attach. writer_epoch increases on every attach of the terminal (attempts that fail may consume a value too) and fences input. earliest_seq is omitted when 0. Output from from_seq follows (preceded by gap when from_seq < earliest_seq). Direction: executor to platform to client.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "attached"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Terminal session id (tsn_...). The platform fills it toward clients; an executor may omit it on the host socket."
+        },
+        "rows": {
+          "type": "integer",
+          "x-go-type": "uint16"
+        },
+        "cols": {
+          "type": "integer",
+          "x-go-type": "uint16"
+        },
+        "pid": {
+          "type": "integer",
+          "x-go-type": "int"
+        },
+        "writer_epoch": {
+          "type": "integer",
+          "x-go-type": "uint64"
+        },
+        "can_write": {
+          "type": "boolean"
+        },
+        "earliest_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Oldest byte offset still buffered."
+        },
+        "latest_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Byte offset after the last output byte."
+        }
+      },
+      "required": [
+        "type",
+        "rows",
+        "cols",
+        "pid",
+        "writer_epoch",
+        "can_write",
+        "latest_seq"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalFrameOutput": {
+      "type": "object",
+      "description": "PTY output bytes [from_seq, end_seq), base64 (standard, padded) in data. Sequence numbers are byte offsets of the PTY output since the PTY was created; chunks are contiguous and at most 32768 bytes. from_seq is omitted when 0. The producer stops sending after a window of unacknowledged bytes until the consumer acks, so consumers ack every end_seq they processed. Direction: executor to platform to client.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "output"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Terminal session id (tsn_...). The platform fills it toward clients; an executor may omit it on the host socket."
+        },
+        "from_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Offset of the first byte in data; omitted when 0."
+        },
+        "end_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Offset after the last byte in data."
+        },
+        "data": {
+          "type": "string",
+          "contentEncoding": "base64"
+        }
+      },
+      "required": [
+        "type",
+        "end_seq",
+        "data"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalFrameGap": {
+      "type": "object",
+      "description": "Sent before output when the requested from_seq fell out of the ring buffer (the reference executor keeps 1 MiB): output resumes at earliest_seq. Direction: executor to platform to client.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "gap"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Terminal session id (tsn_...). The platform fills it toward clients; an executor may omit it on the host socket."
+        },
+        "earliest_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Where output resumes."
+        },
+        "latest_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Offset after the last output byte."
+        },
+        "truncated": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "type",
+        "earliest_seq",
+        "latest_seq",
+        "truncated"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalFrameAck": {
+      "type": "object",
+      "description": "Consumer acknowledgement: every byte before ack_seq was processed. Direction: client to platform to executor.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "ack"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Terminal session id (tsn_...). The platform fills it toward clients; an executor may omit it on the host socket."
+        },
+        "ack_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Offset after the last consumed byte."
+        }
+      },
+      "required": [
+        "type",
+        "ack_seq"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalFrameInput": {
+      "type": "object",
+      "description": "Bytes for the PTY, base64 in data. Accepted only from the attachment holding the writer lease; writer_epoch, when present, must equal the lease's epoch (attached.writer_epoch) or the frame is dropped with error terminal_stale_writer. Clients send the epoch of their attached frame. Direction: client to platform to executor.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "input"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Terminal session id (tsn_...). The platform fills it toward clients; an executor may omit it on the host socket."
+        },
+        "data": {
+          "type": "string",
+          "contentEncoding": "base64"
+        },
+        "writer_epoch": {
+          "type": "integer",
+          "x-go-type": "uint64"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalFrameResize": {
+      "type": "object",
+      "description": "Resize the PTY; answered with resized. Direction: client to platform to executor.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "resize"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Terminal session id (tsn_...). The platform fills it toward clients; an executor may omit it on the host socket."
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 1,
+          "x-go-type": "uint16"
+        },
+        "cols": {
+          "type": "integer",
+          "minimum": 1,
+          "x-go-type": "uint16"
+        }
+      },
+      "required": [
+        "type",
+        "rows",
+        "cols"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalFrameResized": {
+      "type": "object",
+      "description": "The PTY size after a resize. Direction: executor to platform to client.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "resized"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Terminal session id (tsn_...). The platform fills it toward clients; an executor may omit it on the host socket."
+        },
+        "rows": {
+          "type": "integer",
+          "x-go-type": "uint16"
+        },
+        "cols": {
+          "type": "integer",
+          "x-go-type": "uint16"
+        }
+      },
+      "required": [
+        "type",
+        "rows",
+        "cols"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalFrameClose": {
+      "type": "object",
+      "description": "Close the terminal (the PTY ends, not only this attachment); answered with closed. Closing the socket instead only detaches. Direction: client to platform to executor.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "close"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Terminal session id (tsn_...). The platform fills it toward clients; an executor may omit it on the host socket."
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalFrameExit": {
+      "type": "object",
+      "description": "The PTY process exited; end_seq is the offset after its last output byte. The socket closes after it. Direction: executor to platform to client.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "exit"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Terminal session id (tsn_...). The platform fills it toward clients; an executor may omit it on the host socket."
+        },
+        "end_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Offset after the last output byte."
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-go-type": "int"
+        },
+        "exit_reason": {
+          "type": "string",
+          "description": "exited (normal exit) or signaled; open set."
+        },
+        "exited": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "type",
+        "end_seq",
+        "exited"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalFrameClosed": {
+      "type": "object",
+      "description": "The terminal was closed (close frame or terminal.close); the socket closes after it. Direction: executor or platform to client.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "closed"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Terminal session id (tsn_...). The platform fills it toward clients; an executor may omit it on the host socket."
+        },
+        "reason": {
+          "type": "string",
+          "description": "closed, or the terminal.close reason; open set."
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalFrameError": {
+      "type": "object",
+      "description": "A refused frame or attach. After terminal_writer_busy, terminal_invalid_frame on attach, or terminal_internal_error the socket is closed; other errors leave the attachment open. Peers must also tolerate a socket that ends without a close frame. Direction: executor or platform to client.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "error"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Terminal session id (tsn_...). The platform fills it toward clients; an executor may omit it on the host socket."
+        },
+        "code": {
+          "$ref": "#/$defs/TerminalErrorCode"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "code",
+        "message"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalErrorCode": {
+      "type": "string",
+      "description": "bma.terminal.v1 error codes (open set; unknown codes are errors too). terminal_writer_busy: another attachment holds the terminal. terminal_invalid_frame: unsupported type or invalid field (for example from_seq beyond latest_seq). terminal_internal_error: protocol state error (for example a first frame other than attach) or an executor fault. terminal_stale_writer: input from an attachment that does not hold the current writer lease. terminal_read_only: input on an attachment opened with can_write false.",
+      "examples": [
+        "terminal_writer_busy",
+        "terminal_invalid_frame",
+        "terminal_internal_error",
+        "terminal_stale_writer",
+        "terminal_read_only"
+      ]
+    },
+    "TerminalFrameType": {
+      "type": "string",
+      "enum": [
+        "attach",
+        "attached",
+        "output",
+        "gap",
+        "ack",
+        "input",
+        "resize",
+        "resized",
+        "close",
+        "exit",
+        "closed",
+        "error"
+      ],
+      "description": "Frame discriminator. Receivers ignore frames of unknown type except as noted (the reference relay answers an unknown type with error terminal_invalid_frame)."
     }
   }
 }
