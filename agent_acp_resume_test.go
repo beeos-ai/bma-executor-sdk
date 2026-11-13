@@ -128,8 +128,10 @@ func countType(events []AgentEventRecord, eventType string) int {
 
 // Killing the executor process (and so its agent) at a moment of a turn and
 // starting it again: the platform starts the same turn (same turn_id and
-// input, executor_session_ref, then the epoch's sequence from 1). The turn
-// completes, the tool ran once, and nothing is reported twice.
+// input, executor_session_ref, then the epoch's sequence from 1). The host
+// settles the interrupted call under its own event and approval id and hands
+// the brain a recovery note: the turn completes, the tool ran once, and
+// nothing is reported twice.
 func TestACPAgentTurnResumeAfterExecutorRestart(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the scripted bash command is POSIX shell")

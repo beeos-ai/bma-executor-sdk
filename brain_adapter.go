@@ -207,9 +207,6 @@ type BrainCapabilities struct {
 	CustomTools bool
 	// InputSkills: the brain takes the selected skills of an input (BrainInput.Skills).
 	InputSkills bool
-	// InputIdempotent: the same input id handed again does not become a
-	// second user message (with the host's ledger, turn_resume).
-	InputIdempotent bool
 	// SessionAllow: the brain keeps a permission the user granted for the
 	// rest of the session.
 	SessionAllow bool

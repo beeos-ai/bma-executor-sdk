@@ -554,7 +554,12 @@ type acpError struct {
 	Data    json.RawMessage
 }
 
-func (e *acpError) Error() string { return fmt.Sprintf("acp error %d: %s", e.Code, e.Message) }
+func (e *acpError) Error() string {
+	if len(e.Data) > 0 && string(e.Data) != "null" {
+		return fmt.Sprintf("acp error %d: %s: %.500s", e.Code, e.Message, e.Data)
+	}
+	return fmt.Sprintf("acp error %d: %s", e.Code, e.Message)
+}
 
 // tailBuffer keeps the last max bytes written (the agent's stderr, for errors and logs).
 type tailBuffer struct {

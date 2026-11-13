@@ -761,6 +761,11 @@ func fakeHandle(c *fakeConn, method string, raw json.RawMessage) (any, map[strin
 			tr.Inputs = append(tr.Inputs, block.Text)
 			tr.save(p.SessionID)
 		}
+		if strings.HasPrefix(block.Text, recoveryNote) {
+			// The host settled the interrupted calls; the brain finishes the task.
+			c.message(p.SessionID, "m-final", "message", "done")
+			return map[string]any{"stopReason": "end_turn"}, nil
+		}
 		if strings.HasPrefix(block.Text, "resume") {
 			inputID, _ := p.Meta.Bma["inputId"].(string)
 			policy, _ := p.Meta.Bma["toolPolicy"].(map[string]any)

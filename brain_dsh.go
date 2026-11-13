@@ -125,7 +125,6 @@ func (a *dshAdapter) Start(ctx context.Context, env BrainEnv) (BrainCapabilities
 		HostTools:        true,
 		CustomTools:      true,
 		InputSkills:      true,
-		InputIdempotent:  true,
 	}, nil
 }
 

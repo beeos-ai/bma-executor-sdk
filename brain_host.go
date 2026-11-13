@@ -21,8 +21,11 @@ package bmaexecutor
 // in-flight turn again and the host continues it from the brain's durable
 // conversation and its own ledger of tool calls, approvals and acknowledged
 // events (agent_acp_resume.go); nothing that already happened is repeated.
-// It is declared when the brain takes an input id again without repeating it
-// (BrainCapabilities.InputIdempotent).
+// An input the brain had begun is not handed again: the host settles its
+// tool calls the platform has no result of (under their own agent.tool_use
+// events and approval ids: an answered approval is not asked again, a call
+// that ran is not run again) and hands the brain a recovery note instead,
+// the same for every brain.
 //
 // Tools run in the executor's Core, in the turn's working directory, so the
 // hands of a local brain are the same as for a platform brain; or on the
@@ -391,6 +394,8 @@ type acpTurn struct {
 	hostAllowed map[string]bool
 	// effort is the turn's thinking level ("" for none).
 	effort string
+	// input is the input the brain is working on.
+	input string
 
 	mu       sync.Mutex
 	messages map[string]string // kind + messageId -> event id
@@ -508,9 +513,8 @@ func (a *BrainHost) Capability() AgentCapability {
 		// Host tools come with tools_mcp_* (the hands are elsewhere).
 		HostTools:   a.caps.HostTools && a.opts.PlatformTools,
 		InputSkills: a.caps.InputSkills,
-		// A brain that repeats a re-sent input as a new user message cannot
-		// continue a turn an executor restart interrupted (ADR-0013: failed).
-		TurnResume:  a.caps.InputIdempotent,
+		// The host continues a turn an executor restart interrupted (recover).
+		TurnResume:  true,
 		FileInputs:  a.fileInputs(h.ImageInputs),
 		MaxSessions: a.opts.MaxSessions, Harness: &h, Harnesses: []AgentHarnessCapability{a.harness},
 		Models: a.models,
@@ -798,11 +802,24 @@ func (a *BrainHost) runInput(ctx context.Context, brain BrainSession, t *acpTurn
 	if t.ledger.inputDone(inputID) {
 		return nil
 	}
-	in, err := a.brainInput(ctx, t.turn, input)
-	if err != nil {
-		return err
+	t.mu.Lock()
+	t.input = inputID
+	t.mu.Unlock()
+	var in BrainInput
+	if t.ledger.inputBegun(inputID) {
+		note, err := t.recover(ctx)
+		if err != nil {
+			return err
+		}
+		in = BrainInput{InputID: inputID + ":recovered", Text: note}
+	} else {
+		var err error
+		if in, err = a.brainInput(ctx, t.turn, input); err != nil {
+			return err
+		}
+		in.InputID, in.Skills = inputID, skills
 	}
-	in.InputID, in.ToolPolicy, in.Effort, in.Skills = inputID, policy, t.effort, skills
+	in.ToolPolicy, in.Effort = policy, t.effort
 	if a.caps.ModelCredentials == BrainModelPlatform {
 		route := t.route
 		in.Model = &route
@@ -994,7 +1011,18 @@ func (t *acpTurn) eventID(key string) string {
 	return id
 }
 
+// begin records that the brain started working on the current input.
+func (t *acpTurn) begin() {
+	t.mu.Lock()
+	input := t.input
+	t.mu.Unlock()
+	if err := t.ledger.markInputBegun(input); err != nil {
+		t.agent.log(LogWarn, "turn state: input "+input+" begun but not recorded", err)
+	}
+}
+
 func (t *acpTurn) Delta(kind, messageID, text string) {
+	t.begin()
 	eventType := EventDeltaTypeAgentMessage
 	if kind == BrainKindThinking {
 		eventType = EventDeltaTypeAgentThinking
@@ -1008,6 +1036,7 @@ func (t *acpTurn) Delta(kind, messageID, text string) {
 }
 
 func (t *acpTurn) Message(kind, messageID, text string) {
+	t.begin()
 	key := kind + "\x00" + messageID
 	id := t.eventID(key)
 	t.mu.Lock()
@@ -1082,8 +1111,21 @@ func (t *acpTurn) toolUse(callID, name string, input map[string]any, permission 
 	if input == nil {
 		input = map[string]any{}
 	}
-	_, _ = t.turn.EmitWithID(id, AgentToolUseEvent{Type: AgentEventTypeAgentToolUse, Name: name, Input: input, EvaluatedPermission: &EvaluatedPermission{Type: permission}})
+	t.begin()
+	if err := t.ledger.update(callID, func(c *acpCallState) { c.ToolUseID, c.ToolName, c.Input, c.Permission = id, name, input, permission }); err != nil {
+		t.agent.log(LogWarn, "turn state: tool call "+callID+" not recorded", err)
+	}
+	t.emitToolUse(callID, id, name, input, permission)
 	return id
+}
+
+// emitToolUse emits a call's agent.tool_use and records its acknowledgement.
+func (t *acpTurn) emitToolUse(callID, id, name string, input map[string]any, permission string) {
+	_ = t.turn.emitAckedWithID(id, AgentToolUseEvent{Type: AgentEventTypeAgentToolUse, Name: name, Input: input, EvaluatedPermission: &EvaluatedPermission{Type: permission}}, func() {
+		if err := t.ledger.update(callID, func(c *acpCallState) { c.UseReported = true }); err != nil {
+			t.agent.log(LogWarn, "turn state: tool use of "+callID+" acknowledged but not recorded", err)
+		}
+	})
 }
 
 // Permission decides a call: the turn's policy, the host's approver, a
@@ -1181,3 +1223,50 @@ func (t *acpTurn) Call(ctx context.Context, call BrainCall) *RouteResult {
 	t.mu.Unlock()
 	return t.toolRoute.Call(ctx, RouteCall{ID: call.ID, ToolUseID: toolUseID, Name: call.Name, Input: call.Input})
 }
+
+// recover settles the tool calls of an interrupted input that have no
+// acknowledged result, under their own agent.tool_use events and approval
+// ids (an answered approval is not asked again, a pending one is asked again;
+// the route replays a call that ran and does not run again one whose outcome
+// is unknown), and returns the note that tells the brain how they ended.
+func (t *acpTurn) recover(ctx context.Context) (string, error) {
+	lines := []string{}
+	for _, c := range t.ledger.unreported() {
+		if !c.UseReported {
+			// The platform never got its agent.tool_use: emitted again (event
+			// ids are this process's).
+			c.ToolUseID = t.turn.NewEventID()
+			if err := t.ledger.update(c.ID, func(s *acpCallState) { s.ToolUseID = c.ToolUseID }); err != nil {
+				return "", err
+			}
+			t.emitToolUse(c.ID, c.ToolUseID, c.ToolName, c.Input, c.Permission)
+		}
+		t.mu.Lock()
+		t.tools[c.ID] = c.ToolUseID
+		t.mu.Unlock()
+		call := BrainCall{ID: c.ID, Name: c.ToolName, Input: c.Input}
+		raw, _ := json.Marshal(c.Input)
+		label := c.ToolName + " " + string(raw)
+		var text string
+		var isError bool
+		switch d := t.Permission(ctx, call); d.Outcome {
+		case BrainAllow:
+			r := t.Call(ctx, call)
+			text, isError = r.Text, r.IsError
+			lines = append(lines, fmt.Sprintf("- %s: settled after the restart. Result%s:\n%s", label, map[bool]string{true: " (error)"}[isError], text))
+		case BrainDeny:
+			text, isError = d.Message, true
+			lines = append(lines, fmt.Sprintf("- %s: not approved: %s", label, text))
+		default:
+			return "", cmp.Or(ctx.Err(), errors.New("the approval of "+c.ID+" was withdrawn"))
+		}
+		t.ToolResult(c.ID, []ContentBlock{{Type: ContentBlockTypeText, Text: text}}, isError)
+	}
+	if len(lines) == 0 {
+		lines = append(lines, "- none")
+	}
+	return strings.Join(append(append([]string{recoveryNote}, lines...), "Continue the original task from here."), "\n"), nil
+}
+
+// recoveryNote opens the input that continues a turn after an executor restart.
+const recoveryNote = "[platform] The executor restarted while this turn was running. The interrupted tool calls were settled as follows:"

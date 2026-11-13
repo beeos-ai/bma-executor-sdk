@@ -64,8 +64,8 @@ func TestClaudeCLIRunsAnApprovedPlatformTool(t *testing.T) {
 		!capability.Harnesses[0].ImageInputs || !slices.ContainsFunc(claudeCLIPins, func(p claudeCLIPin) bool { return p.Version == capability.Harnesses[0].Version }) {
 		t.Fatalf("capability = %+v, %v", capability, err)
 	}
-	if len(capability.PlatformCredentials) != 0 || capability.TurnResume {
-		t.Fatalf("capability: no platform credentials, no turn_resume: %+v", capability)
+	if len(capability.PlatformCredentials) != 0 || !capability.TurnResume {
+		t.Fatalf("capability: no platform credentials, turn_resume: %+v", capability)
 	}
 
 	result := f.start(t, ctx, "sesn_c", "turn_1", "run it")
