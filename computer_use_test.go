@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -108,10 +109,68 @@ func TestComputerUseRejectsBadInput(t *testing.T) {
 		"bad scroll direction":     {"action": "scroll", "coordinate": []int{1, 1}, "scroll_direction": "sideways"},
 		"pid without window":       {"action": "click", "coordinate": []int{1, 1}, "pid": 5},
 		"second display":           {"action": "type", "text": "x", "display": "HDMI-2"},
+		"open_app without app":     {"action": "open_app", "app": "  "},
+		"open_app with a window":   {"action": "open_app", "app": "TextEdit", "pid": 5, "window_id": 6},
 	} {
 		if result := callComputer(t, session, ToolNameComputerAction, input); !result.IsError || result.Outcome != ToolOutcomeFailed {
 			t.Errorf("%s = %+v", name, result)
 		}
+	}
+}
+
+// TestComputerOpenApp: open_app launches by bundle id or name, brings the app
+// to the front and returns its pid and windows; description is accepted and
+// not needed.
+func TestComputerOpenApp(t *testing.T) {
+	driver, logPath, err := fakeCua(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _ := computerSession(t, CoreOptions{ComputerUse: driver})
+	result := callComputer(t, session, ToolNameComputerAction, map[string]any{"action": "open_app", "app": "com.apple.TextEdit", "description": "打开文本编辑"})
+	if result.IsError || !strings.Contains(textOf(result), "pid=4242, brought to the front") ||
+		!strings.Contains(textOf(result), "window pid=4242 window_id=77 app=TextEdit") {
+		t.Fatalf("open_app = %+v", result)
+	}
+	if result := callComputer(t, session, ToolNameComputerAction, map[string]any{"action": "open_app", "app": "Text Edit"}); result.IsError {
+		t.Fatalf("open_app by name = %+v", result)
+	}
+	raw, _ := os.ReadFile(logPath)
+	for _, want := range []string{
+		`launch_app {"bundle_id":"com.apple.TextEdit"}`,
+		`bring_to_front {"pid":4242}`,
+		`launch_app {"name":"Text Edit"}`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("driver log lacks %q:\n%s", want, raw)
+		}
+	}
+}
+
+func TestLooksLikeBundleID(t *testing.T) {
+	for app, want := range map[string]bool{
+		"com.apple.TextEdit": true, "com.larksuite.larkApp": true,
+		"TextEdit": false, "Lark.app": false, "/Applications/Lark.app": false, "Visual Studio Code": false, "飞书": false,
+	} {
+		if got := looksLikeBundleID(app); got != want {
+			t.Errorf("looksLikeBundleID(%q) = %v", app, got)
+		}
+	}
+}
+
+// TestComputerToolSchemas: both tools ask for a description of the step, and
+// computer_action offers open_app with app.
+func TestComputerToolSchemas(t *testing.T) {
+	for _, tool := range []acpHostTool{acpComputerObserve, acpComputerAction} {
+		required, _ := tool.Parameters["required"].([]string)
+		props, _ := tool.Parameters["properties"].(map[string]any)
+		if !slices.Contains(required, "description") || props["description"] == nil {
+			t.Errorf("%s: description is not a required property: %v", tool.Name, tool.Parameters)
+		}
+	}
+	props := acpComputerAction.Parameters["properties"].(map[string]any)
+	if enum := props["action"].(map[string]any)["enum"].([]string); !slices.Contains(enum, ComputerActionOpenApp) || props["app"] == nil {
+		t.Errorf("computer_action lacks open_app / app: %v", props)
 	}
 }
 

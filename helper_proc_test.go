@@ -82,6 +82,10 @@ func runFakeCua() {
 		os.Exit(64)
 	}
 	tool, payload := args[1], args[2]
+	if tool == "click" && os.Getenv("BMA_TEST_CUA_ACTION_STDOUT") != "" {
+		fmt.Fprintln(os.Stdout, os.Getenv("BMA_TEST_CUA_ACTION_STDOUT"))
+		os.Exit(1)
+	}
 	screenshot := ""
 	for i, arg := range args {
 		if arg == "--screenshot-out-file" && i+1 < len(args) {
@@ -125,6 +129,11 @@ func runFakeCua() {
 			map[string]any{"app_name": "notepad.exe", "pid": 1208, "window_id": 983170, "title": "Untitled - Notepad",
 				"is_on_screen": true, "bounds": map[string]any{"x": 111, "y": 104, "width": 754, "height": 512}},
 			map[string]any{"app_name": "hidden.exe", "pid": 1, "window_id": 2, "title": "gone", "is_on_screen": false},
+		}}
+	case "launch_app":
+		result = map[string]any{"pid": 4242, "bundle_id": "com.apple.TextEdit", "name": "TextEdit", "windows": []any{
+			map[string]any{"app_name": "TextEdit", "pid": 4242, "window_id": 77, "title": "Untitled",
+				"is_on_screen": true, "bounds": map[string]any{"x": 10, "y": 20, "width": 600, "height": 400}},
 		}}
 	default:
 		result = map[string]any{"summary": "did " + tool + " " + strings.TrimSpace(payload)}
