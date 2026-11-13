@@ -8,15 +8,19 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
-// claudeCLIBinary is the pinned official claude binary: the one the Agent SDK
-// platform package of testdata/claude-agent-acp installs (npm ci).
+// claudeCLIBinary is the pinned official claude binary: BMA_CLAUDE_CLI, or the
+// one the Agent SDK platform package of testdata/claude-agent-acp installs (npm ci).
 func claudeCLIBinary(t *testing.T) string {
 	t.Helper()
+	if bin := os.Getenv("BMA_CLAUDE_CLI"); bin != "" {
+		return bin
+	}
 	dir := os.Getenv("BMA_CLAUDE_AGENT_ACP_DIR")
 	if dir == "" {
 		dir = "testdata/claude-agent-acp"
@@ -57,7 +61,7 @@ func TestClaudeCLIRunsAnApprovedPlatformTool(t *testing.T) {
 
 	capability, err := f.executor.AgentCapability()
 	if err != nil || len(capability.Harnesses) != 1 || capability.Harnesses[0].ID != "claude-code" || capability.Harnesses[0].Protocol != "claude-cli/stream-json" ||
-		!capability.Harnesses[0].ImageInputs || capability.Harnesses[0].Version != "2.1.318" {
+		!capability.Harnesses[0].ImageInputs || !slices.ContainsFunc(claudeCLIPins, func(p claudeCLIPin) bool { return p.Version == capability.Harnesses[0].Version }) {
 		t.Fatalf("capability = %+v, %v", capability, err)
 	}
 	if len(capability.PlatformCredentials) != 0 || capability.TurnResume || len(capability.Models) == 0 {

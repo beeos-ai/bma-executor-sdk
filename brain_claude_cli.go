@@ -64,12 +64,22 @@ type claudeCLIPin struct {
 	SHA256  map[string]string
 }
 
-// claudeCLIPins: 2.1.318 is the binary of the Agent SDK 0.3.318 platform
-// packages (npm @anthropic-ai/claude-agent-sdk-<platform>@0.3.318).
+// claudeCLIPins: the digests are the checksums of Anthropic's release
+// manifest (https://downloads.claude.ai/claude-code-releases/<version>/manifest.json,
+// the one the official installer verifies). 2.1.318 is also the binary of the
+// Agent SDK 0.3.318 platform packages the tests install.
 var claudeCLIPins = []claudeCLIPin{
 	{Version: "2.1.318", SHA256: map[string]string{
 		"darwin/arm64": "677a2ea7bf576cedd20e191d973914ed8a41796f53a63b1923381ddc4d5b5e7d",
+		"darwin/amd64": "ee9c8577a528aa8efa478bf552b17efa40bb58aa4981d2913c13d383a4d409a4",
+		"linux/arm64":  "53a0d7e219d7b0804ecba5dbc002745e89f786cc946d2de85a6470d5b2d1fb06",
 		"linux/amd64":  "708c77b204db30086ff6f1ed34577bda03e1be74ced80557cbf7b54249ebf0bd",
+	}},
+	{Version: "2.1.322", SHA256: map[string]string{
+		"darwin/arm64": "a9d237949db816a0b7afd88a9a8e1df36b3a597a30f5a41d1c0539eb180a3450",
+		"darwin/amd64": "b513d15117cbf1bb05095dab41963fd394ff40de1fa99dcc6d7d1033bf292e9b",
+		"linux/arm64":  "f220ca50ea4f3222043ff83cc224a1262e0196e9897acc0871efa94235b0c1fd",
+		"linux/amd64":  "bfb3703ad5380242328459bc62ada4bde8ae7ba57c6e1eeadb9c00e08874c478",
 	}},
 }
 
