@@ -36,6 +36,31 @@ import (
 // then.
 var ErrComputerUseUnavailable = errors.New("bmaexecutor: computer use backend is unavailable")
 
+// ErrComputerActionRejected means the driver explicitly refused the action
+// before input. Transport errors and incomplete/undecodable results never use
+// this classification, even if their text mentions a known rejection.
+var ErrComputerActionRejected = errors.New("computer_action_rejected")
+
+func cuaRejection(tool string, stdout []byte, runErr error) error {
+	var exit *exec.ExitError
+	if !errors.As(runErr, &exit) || exit.ExitCode() != 1 {
+		return nil
+	}
+	// Only structured pre-dispatch refusals verified in the driver contract.
+	// Do not classify arbitrary stderr, partial-action failures, or unknown codes.
+	var result struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(stdout, &result) != nil {
+		return nil
+	}
+	switch result.Code {
+	case "invalid_arguments", "desktop_scope_disabled", "stale_element_token", "screenshot_context_missing", "zoom_context_missing":
+		return fmt.Errorf("%w: cua-driver %s: %s", ErrComputerActionRejected, tool, result.Code)
+	}
+	return nil
+}
+
 // ComputerObserveRequest is a computer_observe call.
 type ComputerObserveRequest struct {
 	// SessionID is assigned by Core, not taken from model tool arguments.
@@ -306,6 +331,9 @@ func (d *CuaDriver) call(ctx context.Context, tool string, args map[string]any, 
 		return nil, fmt.Errorf("cua-driver %s: %w", tool, ctx.Err())
 	}
 	if runErr != nil {
+		if rejected := cuaRejection(tool, stdout.buf.Bytes(), runErr); rejected != nil {
+			return nil, rejected
+		}
 		message := strings.TrimSpace(stderr.String())
 		if message == "" {
 			message = strings.TrimSpace(stdout.String())
