@@ -404,6 +404,15 @@ func (a *dshAdapter) onRequest(ctx context.Context, proc *acpProcess, method str
 		ctx, cancel = context.WithCancel(ctx)
 		defer cancel()
 		defer context.AfterFunc(p.ctx, cancel)()
+		// An answer to a canceled prompt goes out after its session/cancel,
+		// so the agent does not take it as the result of a running turn.
+		defer func() {
+			if p.ctx.Err() != nil {
+				if err := proc.notify("session/cancel", map[string]any{"sessionId": base.SessionID}); err != nil {
+					a.log(LogDebug, "acp session/cancel", err)
+				}
+			}
+		}()
 	}
 	switch method {
 	case "session/request_permission":

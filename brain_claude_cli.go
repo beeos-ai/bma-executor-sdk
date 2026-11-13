@@ -467,11 +467,8 @@ func (p *cliPrompt) result(callID string, content []ContentBlock, isError bool) 
 }
 
 type cliBlock struct {
-	kind  string // text, thinking, tool_use
-	id    string // tool_use id
-	name  string
-	text  strings.Builder
-	input strings.Builder
+	kind string // text, thinking, tool_use
+	text strings.Builder
 }
 
 func (c *cliConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) error {
@@ -946,15 +943,12 @@ func (p *cliProc) onStream(prompt *cliPrompt, raw json.RawMessage, abandoned boo
 		} `json:"message"`
 		ContentBlock struct {
 			Type string `json:"type"`
-			ID   string `json:"id"`
-			Name string `json:"name"`
 		} `json:"content_block"`
 		Delta struct {
-			Type        string `json:"type"`
-			Text        string `json:"text"`
-			Thinking    string `json:"thinking"`
-			PartialJSON string `json:"partial_json"`
-			StopReason  string `json:"stop_reason"`
+			Type       string `json:"type"`
+			Text       string `json:"text"`
+			Thinking   string `json:"thinking"`
+			StopReason string `json:"stop_reason"`
 		} `json:"delta"`
 	}
 	if json.Unmarshal(raw, &e) != nil {
@@ -986,7 +980,7 @@ func (p *cliProc) onStream(prompt *cliPrompt, raw json.RawMessage, abandoned boo
 		}
 		return
 	case "content_block_start":
-		prompt.blocks[e.Index] = &cliBlock{kind: e.ContentBlock.Type, id: e.ContentBlock.ID, name: e.ContentBlock.Name}
+		prompt.blocks[e.Index] = &cliBlock{kind: e.ContentBlock.Type}
 		prompt.mu.Unlock()
 		return
 	}
@@ -1008,8 +1002,6 @@ func (p *cliProc) onStream(prompt *cliPrompt, raw json.RawMessage, abandoned boo
 		case "thinking_delta":
 			b.text.WriteString(e.Delta.Thinking)
 			prompt.sink.Delta(BrainKindThinking, key, e.Delta.Thinking)
-		case "input_json_delta":
-			b.input.WriteString(e.Delta.PartialJSON)
 		}
 	case "content_block_stop":
 		switch b.kind {
@@ -1019,17 +1011,11 @@ func (p *cliProc) onStream(prompt *cliPrompt, raw json.RawMessage, abandoned boo
 			}
 		case "thinking":
 			prompt.sink.Message(BrainKindThinking, key, b.text.String())
-		case "tool_use":
-			input := map[string]any{}
-			if s := b.input.String(); s != "" {
-				_ = json.Unmarshal([]byte(s), &input)
-			}
-			name, ok := claudeHostTool(b.name, p.tools)
-			if !ok {
-				name = b.name
-			}
-			prompt.sink.ToolUse(BrainCall{ID: b.id, Name: name, Input: input}, "")
 		}
+		// A tool_use block is reported when the CLI asks to run it
+		// (can_use_tool → Permission), one call at a time as the CLI runs
+		// them: an agent.tool_use that waits for approval is then always
+		// one whose interaction is open.
 	}
 }
 
@@ -1039,12 +1025,9 @@ func (p *cliProc) onUnstreamed(prompt *cliPrompt, raw json.RawMessage) {
 	var m struct {
 		ID      string `json:"id"`
 		Content []struct {
-			Type     string         `json:"type"`
-			Text     string         `json:"text"`
-			Thinking string         `json:"thinking"`
-			ID       string         `json:"id"`
-			Name     string         `json:"name"`
-			Input    map[string]any `json:"input"`
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Thinking string `json:"thinking"`
 		} `json:"content"`
 	}
 	if json.Unmarshal(raw, &m) != nil {
@@ -1059,12 +1042,6 @@ func (p *cliProc) onUnstreamed(prompt *cliPrompt, raw json.RawMessage) {
 			}
 		case "thinking":
 			prompt.sink.Message(BrainKindThinking, key, b.Thinking)
-		case "tool_use":
-			name, ok := claudeHostTool(b.Name, p.tools)
-			if !ok {
-				name = b.Name
-			}
-			prompt.sink.ToolUse(BrainCall{ID: b.ID, Name: name, Input: b.Input}, "")
 		}
 	}
 }
@@ -1368,10 +1345,9 @@ func claudeToolList() []any {
 	return []any{
 		tool(ToolNameBash, "Run a shell command in the working directory. A command that runs longer than the wait is left running; the call then returns its pid and the file its output goes to.",
 			[]string{"command"}, map[string]any{
-				"command":     str("The command to run."),
-				"timeout":     integer("How long to wait for the command, in milliseconds (default 120000, at most 600000)."),
-				"on_timeout":  map[string]any{"type": "string", "enum": []string{"background", "kill"}, "description": "At the end of the wait: leave the command running (default) or stop it."},
-				"description": str("What the command does."),
+				"command":    str("The command to run."),
+				"timeout":    integer("How long to wait for the command, in milliseconds (default 120000, at most 600000)."),
+				"on_timeout": map[string]any{"type": "string", "enum": []string{"background", "kill"}, "description": "At the end of the wait: leave the command running (default) or stop it."},
 			}),
 		tool(ToolNameRead, "Read a file.", []string{"file_path"}, map[string]any{
 			"file_path": str("Path of the file."), "offset": integer("First line to read."), "limit": integer("Number of lines to read."),
