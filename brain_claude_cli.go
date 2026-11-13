@@ -409,7 +409,7 @@ type cliPrompt struct {
 	mu      sync.Mutex
 	blocks  map[int]*cliBlock // stream content blocks by index, of the current message
 	message string            // id of the current message
-	failure atomic.Pointer[string]
+	failure atomic.Pointer[AgentError]
 	errText string // the assistant's error type, if any
 }
 
@@ -479,14 +479,14 @@ type cliResult struct {
 // end maps the end of a prompt to its result (contract stop codes).
 func (p *cliPrompt) end(r cliResult) error {
 	if f := p.failure.Load(); f != nil {
-		return errors.New(*f)
+		return f
 	}
 	p.mu.Lock()
 	errText := p.errText
 	p.mu.Unlock()
 	switch {
 	case errText == "max_output_tokens" || r.StopReason == "max_tokens":
-		return fmt.Errorf("%s: %s", AgentErrorCodeOutputLimitReached, "the model reply was cut at its output limit")
+		return &AgentError{Code: AgentErrorCodeOutputLimitReached, Message: AgentErrorCodeOutputLimitReached + ": the model reply was cut at its output limit"}
 	case slices.Contains([]string{"authentication_failed", "oauth_org_not_allowed", "billing_error", "cloud_credential_error", "account_on_hold", "verification_required"}, errText):
 		return &AgentError{Code: AgentErrorCodeAgentAuthRequired, Message: "claude: " + errText + ": " + r.Result}
 	case errText != "":
@@ -498,8 +498,7 @@ func (p *cliPrompt) end(r cliResult) error {
 }
 
 func (p *cliPrompt) fail(code, detail string) {
-	message := code + ": " + detail
-	p.failure.CompareAndSwap(nil, &message)
+	p.failure.CompareAndSwap(nil, &AgentError{Code: code, Message: code + ": " + detail})
 }
 
 // --- the CLI process ---

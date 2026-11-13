@@ -446,7 +446,7 @@ func acpStop(ctx context.Context, res acpPromptResponse, err error) error {
 			} `json:"bma"`
 		}
 		if len(rpc.Data) > 0 && json.Unmarshal(rpc.Data, &data) == nil && data.Bma != nil && data.Bma.StopCode != "" {
-			return fmt.Errorf("%s: %s", data.Bma.StopCode, data.Bma.Detail)
+			return &AgentError{Code: data.Bma.StopCode, Message: data.Bma.StopCode + ": " + data.Bma.Detail}
 		}
 		return errors.New(rpc.Message)
 	case err != nil:
@@ -465,7 +465,7 @@ func acpStop(ctx context.Context, res acpPromptResponse, err error) error {
 		if res.Meta.Bma.Detail != "" {
 			detail = res.Meta.Bma.Detail
 		}
-		return fmt.Errorf("output_limit_reached: %s", detail)
+		return &AgentError{Code: AgentErrorCodeOutputLimitReached, Message: AgentErrorCodeOutputLimitReached + ": " + detail}
 	default:
 		return fmt.Errorf("agent stopped: %s", res.StopReason)
 	}

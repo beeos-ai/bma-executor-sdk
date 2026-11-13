@@ -14,6 +14,11 @@
   configured model (declares no `models`). `ClaudeCLIOptions.Executable`
   names the official binary when `Command` is the owner's launcher of it
   (`examples/local-dsh -claude-executable`).
+- **Go: brain parity with the platform brains** (brain conformance gate):
+  a typed stop (`output_limit_reached`, `context_too_large`,
+  `model_stream_idle`) is the `session.error` type, not only its message
+  prefix; `agent.tool_result` always carries `is_error`; `platform_credentials`
+  lists `brain_tools` first.
 - **Removed:** the claude-agent-acp adapter of the `claude-code` profile, its
   pins and `testdata/claude-agent-acp`, and the prewarm that only it had
   (`ACPAgentOptions.DisablePrewarm`, `ACPAgent.WaitPrewarm`).
