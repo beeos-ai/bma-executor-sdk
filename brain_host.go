@@ -1076,6 +1076,11 @@ func (t *acpTurn) Permission(ctx context.Context, call BrainCall) BrainDecision 
 	sessionID := t.turn.SessionID()
 	interactionID := ApprovalID(sessionID, t.turnID, call.ID)
 	permission := t.policyOf(call.Name)
+	if call.Name == ToolNameAskUserQuestion {
+		// Asking is not an operation: its custom tool call is the event, and
+		// Call refuses it when the turn's policy denies it.
+		return BrainDecision{Outcome: BrainAllow}
+	}
 	decide := func(decision string) error {
 		return t.ledger.decide(call.ID, decision, interactionID, call.Name, call.Input)
 	}

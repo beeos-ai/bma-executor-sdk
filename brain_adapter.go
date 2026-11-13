@@ -202,6 +202,8 @@ type BrainOpen struct {
 	Mode string
 	// Model is the turn's model ("" when the brain picks its own).
 	Model string
+	// Effort is the turn's thinking level ("" for none).
+	Effort string
 	// Metadata is the turn.start metadata (model limits).
 	Metadata map[string]string
 }

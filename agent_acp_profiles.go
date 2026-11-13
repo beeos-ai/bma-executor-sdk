@@ -16,6 +16,11 @@ const (
 	// agent_acp_claude.go). It uses only the node owner's own Claude
 	// credentials and never the platform's model endpoint.
 	ACPProfileClaudeCode = "claude-code"
+	// ACPProfileClaudeCodeCLI is the official claude CLI driven directly
+	// (brain_claude_cli.go), harness id claude-code; Command[0] is the pinned
+	// binary. A host whose Command is the owner's launcher of that binary uses
+	// NewBrainHost with NewClaudeCLIAdapter(ClaudeCLIOptions{Executable}).
+	ACPProfileClaudeCodeCLI = "claude-code-cli"
 )
 
 // NewACPAgent starts the brain of opts.Profile, checks it and returns its
@@ -27,6 +32,8 @@ func NewACPAgent(ctx context.Context, opts ACPAgentOptions) (*ACPAgent, error) {
 		adapter = newDSHAdapter()
 	case ACPProfileClaudeCode:
 		adapter = newClaudeACPAdapter()
+	case ACPProfileClaudeCodeCLI:
+		adapter = NewClaudeCLIAdapter(ClaudeCLIOptions{})
 	default:
 		return nil, fmt.Errorf("bmaexecutor: unknown ACPAgentOptions.Profile %q", opts.Profile)
 	}

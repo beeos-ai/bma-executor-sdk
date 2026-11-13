@@ -72,6 +72,10 @@ type scriptedModel struct {
 type modelRequest struct {
 	Tools  []string
 	APIKey string
+	// Texts are the text blocks of the request's user messages.
+	Texts []string
+	// Images counts the image blocks of its user messages.
+	Images int
 }
 
 func newScriptedModel(t *testing.T, tool string, input map[string]any) *scriptedModel {
@@ -99,6 +103,23 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if os.Getenv("BMA_DEBUG_MODEL") != "" && len(body.Messages) > 0 {
 		fmt.Fprintf(os.Stderr, "MODEL n=%d last=%.300s\n", len(body.Messages), body.Messages[len(body.Messages)-1])
+	}
+	for _, raw := range body.Messages {
+		var msg struct {
+			Role    string
+			Content json.RawMessage
+		}
+		var blocks []struct{ Type, Text string }
+		if json.Unmarshal(raw, &msg) == nil && msg.Role == "user" && json.Unmarshal(msg.Content, &blocks) == nil {
+			for _, b := range blocks {
+				switch b.Type {
+				case "text":
+					req.Texts = append(req.Texts, b.Text)
+				case "image":
+					req.Images++
+				}
+			}
+		}
 	}
 	m.mu.Lock()
 	m.requests = append(m.requests, req)
@@ -444,4 +465,18 @@ func TestClaudePlatformToolNames(t *testing.T) {
 			t.Errorf("%q accepted as %q", in, got)
 		}
 	}
+}
+
+// sawPromptAfter reports whether a request after the first `after` ones carried a user text starting with prefix.
+func (m *scriptedModel) sawPromptAfter(after int, prefix string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, r := range m.requests[min(after, len(m.requests)):] {
+		for _, text := range r.Texts {
+			if strings.HasPrefix(text, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }

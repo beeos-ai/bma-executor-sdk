@@ -71,8 +71,9 @@ jobs:
           uv run -p ${{ matrix.python }} pytest -q
           uv run -p ${{ matrix.python }} pyright
 
-  # The Claude Code profile of ACPAgent against the real, pinned
-  # claude-agent-acp (npm ci installs the locked, integrity-checked tree). The
+  # The Claude Code brain against the real, pinned claude-agent-acp and the
+  # claude CLI of its Agent SDK platform package (npm ci installs the locked,
+  # integrity-checked tree; the CLI is also checked against its sha256 pin). The
   # model endpoint is scripted and the API key made up: no credential is used.
   claude-code:
     name: ACPAgent with the pinned claude-agent-acp
@@ -96,10 +97,12 @@ jobs:
         working-directory: testdata/claude-agent-acp
         run: npm ci
 
-      - name: Claude Code profile tests (they fail, not skip, when the agent is missing)
+      - name: Claude Code tests, claude-agent-acp and the pinned claude CLI (they fail, not skip, when missing)
+        env:
+          BMA_REQUIRE_CLAUDE_CLI: "1"
         run: |
           test -f testdata/claude-agent-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js
-          go test -race -count=1 -v -run 'ClaudeCode' ./... | tee /tmp/claude.log
+          go test -race -count=1 -v -run 'ClaudeCode|ClaudeCLI' ./... | tee /tmp/claude.log
           ! grep -q -- '--- SKIP' /tmp/claude.log
 
   # The DSH profile of ACPAgent against the real, pinned bma-dsh-acp (npm ci
