@@ -316,10 +316,13 @@ func TestClaudeCLIArguments(t *testing.T) {
 	joined := strings.Join(args, " ")
 	for _, want := range []string{"-p", "--input-format stream-json", "--output-format stream-json", "--include-partial-messages",
 		"--permission-prompt-tool stdio", "--permission-mode default", "--tools  --mcp-config", "--strict-mcp-config",
-		"--setting-sources  ", "--session-id u", "--append-system-prompt S", "--model sonnet", "--effort low"} {
+		"--setting-sources  ", "--session-id u", "--system-prompt S", "--model sonnet"} {
 		if !strings.Contains(joined+" ", want) {
 			t.Errorf("arguments %q lack %q", joined, want)
 		}
+	}
+	if strings.Contains(joined, "--effort") || strings.Contains(joined, "--append-system-prompt") {
+		t.Errorf("the effort is CLAUDE_CODE_EFFORT_LEVEL and the system prompt replaces the CLI's: %q", joined)
 	}
 	if args := strings.Join(a.args(cliLaunch{placeholder: "ph", uuid: "u", resume: true}), " "); !strings.Contains(args, "--resume u") || strings.Contains(args, "--session-id") {
 		t.Errorf("resume arguments = %q", args)
