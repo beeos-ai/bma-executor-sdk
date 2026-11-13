@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- **Go: `computer_action` can open an app, and both computer use tools ask
+  the model what the step does.** A local brain had no way to start an app:
+  `open` from bash fails in the sandbox, so the model clicked through Finder
+  or searched with bash. `computer_action` now takes `action: "open_app"`
+  with `app` (a name such as `TextEdit` or a bundle id such as
+  `com.apple.TextEdit`; no `pid`/`window_id`), passed to the backend as
+  `ComputerActionRequest.App` (`ComputerActionOpenApp`). `CuaDriver` runs
+  `launch_app`, then `bring_to_front`, and returns the pid and the app's
+  windows. `open_app` is an action of the host tool only, not of the
+  contract's `ComputerAction` enum. Both tools also declare a required
+  `description` string (one sentence in the user's language, with the app and
+  the object, at most 40 characters, no coordinates) that a client can show as
+  the step's title; the tools do not read it and a call without it still
+  runs. The tool descriptions tell the model to use these tools rather than
+  bash for desktop apps (`open_app`, then observe the window) and to check the
+  recipient before sending.
+
 ## 1.6.4
 
 - **Go: `BrainHost` + `BrainAdapter`.** `ACPAgent` was the platform semantics

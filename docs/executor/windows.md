@@ -42,6 +42,10 @@ daemon. Telemetry is off (`CUA_TELEMETRY=0`). The executor runs
   `coordinate`). Without `pid`/`window_id` coordinates are screen pixels of the
   last full observation and input goes to the focused app; with them input is
   delivered to that window in the background and coordinates are window-local.
+  A local brain's `computer_action` also has `open_app` (`app`: name or
+  bundle id), which runs the driver's `launch_app` (macOS drivers only) and
+  `bring_to_front`. Both tools take a `description` of the step for clients
+  to show; a call without it still runs.
 - Degradation: no driver or daemon at start leaves `computer_use` off.
 
 ## Install

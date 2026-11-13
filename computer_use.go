@@ -26,7 +26,8 @@ import (
 //
 // The tool inputs follow Anthropic's computer-use tool (coordinate,
 // start_coordinate, text, scroll_direction, scroll_amount) over the contract's
-// action enum (click, type, key, scroll, drag); coordinates are pixels of the
+// action enum (click, type, key, scroll, drag), plus open_app for a local
+// brain's host tool; coordinates are pixels of the
 // screenshot computer_observe returned. pid and window_id (additive, from
 // computer_observe's window list) target one window: input is then delivered to
 // it in the background and coordinates are window-local.
@@ -35,6 +36,14 @@ import (
 // interactive-session daemon cannot be used; leave CoreOptions.ComputerUse nil
 // then.
 var ErrComputerUseUnavailable = errors.New("bmaexecutor: computer use backend is unavailable")
+
+// ComputerActionOpenApp opens an app (ComputerActionRequest.App: a name or a
+// bundle id) and brings it to the front. It is an action of the host tool
+// computer_action of a local brain, not of the contract's ComputerAction enum.
+const ComputerActionOpenApp = "open_app"
+
+// maxAppName bounds ComputerActionRequest.App.
+const maxAppName = 256
 
 // ErrComputerActionRejected means the driver explicitly refused the action
 // before input. Transport errors and incomplete/undecodable results never use
@@ -86,6 +95,9 @@ type ComputerActionRequest struct {
 	ClickCount    int
 	ScrollDir     string
 	ScrollAmount  int
+	// App is the app open_app opens: a name such as "TextEdit" or a bundle
+	// id such as "com.apple.TextEdit".
+	App string
 }
 
 // ComputerUseBackend performs computer use on the machine's interactive
@@ -156,6 +168,7 @@ type computerInput struct {
 	ScrollAmount    int       `json:"scroll_amount"`
 	PID             int       `json:"pid"`
 	WindowID        int       `json:"window_id"`
+	App             string    `json:"app"`
 }
 
 func (c *Core) computerTool(ctx context.Context, params ToolCallParams) (ToolResultParams, error) {
@@ -243,8 +256,16 @@ func (in computerInput) actionRequest() (ComputerActionRequest, error) {
 		if request.Coordinate, err = point("coordinate", in.Coordinate); err != nil {
 			return request, err
 		}
+	case ComputerActionOpenApp:
+		request.App = strings.TrimSpace(in.App)
+		if request.App == "" || len(request.App) > maxAppName {
+			return request, errors.New(`app is required: an app name such as "TextEdit" or a bundle id such as "com.apple.TextEdit"`)
+		}
+		if in.PID != 0 || in.WindowID != 0 {
+			return request, errors.New("open_app takes no pid or window_id")
+		}
 	default:
-		return request, fmt.Errorf("action %q is not click, type, key, scroll or drag", in.Action)
+		return request, fmt.Errorf("action %q is not click, type, key, scroll, drag or open_app", in.Action)
 	}
 	return request, nil
 }
@@ -427,6 +448,9 @@ func (d *CuaDriver) windowSession(sessionID string) string {
 
 // Action performs one computer_action and returns the driver's summary.
 func (d *CuaDriver) Action(ctx context.Context, req ComputerActionRequest) ([]ContentBlock, error) {
+	if req.Action == ComputerActionOpenApp {
+		return d.openApp(ctx, req.App)
+	}
 	tool, args := cuaAction(req)
 	if req.WindowID != 0 {
 		args["session"] = d.windowSession(req.SessionID)
@@ -444,6 +468,34 @@ func (d *CuaDriver) Action(ctx context.Context, req ComputerActionRequest) ([]Co
 		summary += "\n" + hint
 	}
 	return []ContentBlock{{Type: ContentBlockTypeText, Text: summary}}, nil
+}
+
+// openApp launches the app (launch_app starts it in the background), brings
+// it to the front and returns its pid and windows for computer_observe.
+func (d *CuaDriver) openApp(ctx context.Context, app string) ([]ContentBlock, error) {
+	args := map[string]any{"name": app}
+	if looksLikeBundleID(app) {
+		args = map[string]any{"bundle_id": app}
+	}
+	result, err := d.call(ctx, "launch_app", args, "")
+	if err != nil {
+		return nil, err
+	}
+	pid, _ := result["pid"].(float64)
+	if pid <= 0 {
+		return nil, fmt.Errorf("cua-driver launch_app: no pid for %q", app)
+	}
+	front := "brought to the front"
+	if _, err := d.call(ctx, "bring_to_front", map[string]any{"pid": int(pid)}, ""); err != nil {
+		front = "not brought to the front: " + truncate(err.Error(), 200)
+	}
+	text := fmt.Sprintf("opened %v (%v) pid=%d, %s\n", result["name"], result["bundle_id"], int(pid), front)
+	return []ContentBlock{{Type: ContentBlockTypeText, Text: text + windowList(result)}}, nil
+}
+
+// looksLikeBundleID tells a bundle id ("com.apple.TextEdit") from an app name.
+func looksLikeBundleID(app string) bool {
+	return strings.Contains(app, ".") && !strings.ContainsAny(app, " /") && !strings.HasSuffix(strings.ToLower(app), ".app")
 }
 
 // cuaAction maps a computer_action to the driver tool and arguments. Without a

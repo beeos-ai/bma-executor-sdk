@@ -86,23 +86,36 @@ var acpAskUserQuestion = acpHostTool{
 	Kind: "other", Permission: "allow",
 }
 
+// computerStepDescription is the description input of both computer use
+// tools: what a client shows as the step's title. The tools do not read it,
+// and a call without it still runs.
+var computerStepDescription = map[string]any{"type": "string", "description": "What this step does, in one sentence in the user's language, " +
+	`naming the app and the object, for example "在飞书里搜索联系人 Q". At most 40 characters; no coordinates.`}
+
 var acpComputerObserve = acpHostTool{
 	Name: ToolNameComputerObserve,
 	Description: "Take a screenshot of this computer's screen with the list of its windows (pid, window_id, app, title), " +
-		"or of one window (pid and window_id) with its accessibility tree. Coordinates for computer_action are pixels of the screenshot.",
-	Parameters: acpObject(nil, map[string]any{
-		"pid":       map[string]any{"type": "integer", "description": "Process id of the window to observe (with window_id)."},
-		"window_id": map[string]any{"type": "integer", "description": "Window id from the window list (with pid)."},
+		"or of one window (pid and window_id) with its accessibility tree. Coordinates for computer_action are pixels of the screenshot. " +
+		"For a desktop app, use these tools rather than bash: open it with computer_action open_app, then observe its window by pid and window_id. " +
+		"Do not look for apps or read environment variables with bash.",
+	Parameters: acpObject([]string{"description"}, map[string]any{
+		"description": computerStepDescription,
+		"pid":         map[string]any{"type": "integer", "description": "Process id of the window to observe (with window_id)."},
+		"window_id":   map[string]any{"type": "integer", "description": "Window id from the window list (with pid)."},
 	}),
 	ReadOnly: true, Kind: "read", Permission: "ask",
 }
 
 var acpComputerAction = acpHostTool{
 	Name: ToolNameComputerAction,
-	Description: "Use this computer's mouse and keyboard: click, type, key, scroll or drag. Coordinates are pixels of the last computer_observe " +
-		"screenshot (window-local with pid and window_id). Observe before acting and again afterwards to check the result.",
-	Parameters: acpObject([]string{"action"}, map[string]any{
-		"action":           map[string]any{"type": "string", "enum": []string{ComputerActionClick, ComputerActionType, ComputerActionKey, ComputerActionScroll, ComputerActionDrag}},
+	Description: "Use this computer's mouse and keyboard: click, type, key, scroll or drag; open_app opens an app by name or bundle id, " +
+		"brings it to the front and returns its pid and windows. Coordinates are pixels of the last computer_observe " +
+		"screenshot (window-local with pid and window_id). Observe before acting and again afterwards to check the result. " +
+		"Before sending a message, check on screen that the recipient is right.",
+	Parameters: acpObject([]string{"action", "description"}, map[string]any{
+		"description":      computerStepDescription,
+		"action":           map[string]any{"type": "string", "enum": []string{ComputerActionClick, ComputerActionType, ComputerActionKey, ComputerActionScroll, ComputerActionDrag, ComputerActionOpenApp}},
+		"app":              map[string]any{"type": "string", "description": `App to open with open_app: its name such as "TextEdit", or its bundle id such as "com.apple.TextEdit".`},
 		"coordinate":       map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[x, y] for click, scroll and the end of drag."},
 		"start_coordinate": map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[x, y] where drag starts."},
 		"text":             map[string]any{"type": "string", "description": `Text to type, or a key or chord such as "Return" or "ctrl+s".`},
