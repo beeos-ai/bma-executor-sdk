@@ -75,6 +75,9 @@ import (
 )
 
 func main() {
+	if bmaexecutor.RunNativeDesktopInputWorker() {
+		return
+	}
 	baseURL := flag.String("base-url", "", "BMA executor base URL")
 	machineID := flag.String("machine-id", "", "BYO machine id (mch_...); empty uses the legacy token path")
 	agent := flag.String("agent", "", "absolute path of the bma-dsh-acp executable, or of its .mjs bundle (with -node)")
@@ -100,6 +103,8 @@ func main() {
 		allowedRoots = append(allowedRoots, v)
 		return nil
 	})
+	screenLive := flag.Bool("screen-live-parent", false, "hosted screen publication over private stdin/stdout; platform commands only")
+	screenControl := flag.Bool("screen-control-parent", false, "enable platform-authorized native input through the private screen host")
 	lifeline := flag.Bool("stdin-lifeline", false, "exit when stdin closes (a supervising app passes a pipe, so its exit or crash stops this executor)")
 	flag.Parse()
 	token, key := os.Getenv("BMA_MACHINE_TOKEN"), os.Getenv("BMA_LOCAL_MODEL_KEY")
@@ -116,7 +121,12 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if *lifeline {
+	var screenPipe *bmaexecutor.ScreenLivePipe
+	if *screenLive {
+		screenPipe = bmaexecutor.NewScreenLivePipe(os.Stdin, os.Stdout)
+		go func() { <-screenPipe.ParentDone(); stop() }()
+	}
+	if *lifeline && !*screenLive {
 		go func() {
 			_, _ = io.Copy(io.Discard, os.Stdin)
 			emit(map[string]any{"level": "info", "msg": "stdin closed; stopping"})
@@ -135,6 +145,7 @@ func main() {
 			"session_id": e.SessionID, "tool_name": e.ToolName, "tool_input": e.ToolInput, "outcome": e.Outcome})
 	}
 
+	var controlGate *bmaexecutor.DesktopControlGate
 	coreOptions := bmaexecutor.CoreOptions{WorkRoot: *workRoot, OnLog: logf}
 	if *cuaDriver != "" {
 		if !filepath.IsAbs(*cuaDriver) {
@@ -151,6 +162,28 @@ func main() {
 			emit(map[string]any{"level": "warn", "msg": "computer use unavailable", "error": err.Error()})
 		} else {
 			coreOptions.ComputerUse = driver
+			if *screenControl {
+				if screenPipe == nil {
+					log.Fatal("screen control requires screen-live-parent")
+				}
+				native, err := bmaexecutor.NewNativeDesktopInput()
+				if err != nil {
+					emit(map[string]any{"level": "warn", "msg": "remote control unavailable", "error": err.Error()})
+				} else {
+					controlGate = bmaexecutor.NewDesktopControlGate(driver, native)
+					defer controlGate.Close()
+					coreOptions.ComputerUse = controlGate
+					screenPipe.SetInputHandler(func(ctx context.Context, m bmaexecutor.DesktopInputMessage) error {
+						if len(m.Packet) > 0 {
+							return controlGate.SignedInput(ctx, m.Identity, m.Packet, m.Width, m.Height)
+						}
+						if m.Event.Type != "heartbeat" {
+							return bmaexecutor.ErrDesktopControl
+						}
+						return controlGate.Heartbeat(m.Epoch, m.LeaseID, m.Identity)
+					})
+				}
+			}
 			emit(map[string]any{"level": "info", "msg": "computer use available"})
 		}
 	}
@@ -192,6 +225,19 @@ func main() {
 		Labels: splitLabels(*labels),
 	})
 	check(err)
+	if screenPipe != nil {
+		check(client.ServeScreenLive(func(ctx context.Context, c bmaexecutor.ScreenLiveCommand) (bmaexecutor.ScreenLiveResult, error) {
+			if controlGate != nil && c.Type == "screen_live_stop" {
+				if err := controlGate.StopMedia(ctx, c.SessionID); err != nil {
+					return bmaexecutor.ScreenLiveResult{}, err
+				}
+			}
+			return screenPipe.Call(ctx, c)
+		}))
+	}
+	if controlGate != nil {
+		check(client.ServeDesktopControl(controlGate))
+	}
 	capability := brain.Capability()
 	client.ServeAgent(brain, capability)
 	check(core.Attach("cloud", client))
