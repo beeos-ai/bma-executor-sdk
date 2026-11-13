@@ -424,6 +424,12 @@ type acpTurn struct {
 	// policy is the effective permission of each tool (see acpEffectivePolicy);
 	// the executor enforces it, whatever the agent does.
 	policy map[string]string
+	// hostAsk are the host tools whose ask is only their declared default:
+	// neither the turn's tool_policy nor the host's ceiling names them.
+	hostAsk map[string]bool
+	// hostAllowed is the ComputerUseApprover's answer per toolCallId, asked
+	// once so the tool_use event and the permission request agree.
+	hostAllowed map[string]bool
 	// effort is the turn's thinking level, sent with each prompt as
 	// _meta.bma.reasoningEffort ("" for none).
 	effort string
@@ -764,9 +770,16 @@ func (a *ACPAgent) RunTurn(ctx context.Context, turn *AgentTurn) error {
 	a.mu.Lock()
 	mode := s.mode
 	a.mu.Unlock()
-	policy := acpCapPolicy(a.withHostTools(acpEffectivePolicy(mode, overrides)), a.opts.ToolPolicy)
+	effective := acpEffectivePolicy(mode, overrides)
+	hostAsk := map[string]bool{}
+	for _, tool := range a.hostTools() {
+		_, named := effective[tool.Name]
+		_, capped := a.opts.ToolPolicy[tool.Name]
+		hostAsk[tool.Name] = tool.Permission == "ask" && !named && !capped
+	}
+	policy := acpCapPolicy(a.withHostTools(effective), a.opts.ToolPolicy)
 	a.mu.Lock()
-	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: policy, effort: plan.effort,
+	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: policy, hostAsk: hostAsk, hostAllowed: map[string]bool{}, effort: plan.effort,
 		messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}, questions: map[string]string{}}
 	if remoteRoute != nil {
 		t.toolRoute = remoteRoute(ledger)
@@ -1297,6 +1310,17 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 				return choose("reject_once"), nil
 			}
 		}
+		interactionID := ApprovalID(sessionID, t.turn.Params().TurnID, p.ToolCall.ToolCallID)
+		if t.ledger.call(p.ToolCall.ToolCallID).Decision == "" && t.hostAllows(ctx, sessionID, p.ToolCall.ToolCallID, toolName, p.ToolCall.RawInput) {
+			// The host's ComputerUseApprover lets this call through: it is
+			// recorded as allowed for the gate, and reported as allow, so no
+			// client is asked.
+			t.toolUse(p.ToolCall.ToolCallID, toolName, p.ToolCall.RawInput, "allow")
+			if err := t.ledger.decide(p.ToolCall.ToolCallID, acpDecisionAllow, interactionID, toolName, p.ToolCall.RawInput); err != nil {
+				return nil, &RPCError{Code: CodeInternalError, Message: "turn state: " + err.Error()}
+			}
+			return choose("allow_once"), nil
+		}
 		toolUseID := t.toolUse(p.ToolCall.ToolCallID, toolName, p.ToolCall.RawInput, "ask")
 		// An approval the platform already answered (before a restart) is not asked again.
 		switch t.ledger.call(p.ToolCall.ToolCallID).Decision {
@@ -1305,7 +1329,6 @@ func (a *ACPAgent) onRequest(ctx context.Context, proc *acpProcess, method strin
 		case acpDecisionDeny:
 			return choose("reject_once"), nil
 		}
-		interactionID := ApprovalID(sessionID, t.turn.Params().TurnID, p.ToolCall.ToolCallID)
 		a.interaction(ACPInteractionEvent{Phase: "requested", SessionID: sessionID, InteractionID: interactionID, ToolName: toolName, ToolInput: p.ToolCall.RawInput})
 		answer, err := t.turn.RequestInteraction(ctx, InteractionRequestParams{
 			Kind: InteractionKindPermission, InteractionID: interactionID,
@@ -1432,6 +1455,9 @@ func (t *acpTurn) update(u acpUpdate) {
 		permission := u.Meta.Bma.Permission
 		if permission == "" {
 			permission = "ask"
+		}
+		if permission == "ask" && t.ledger.call(u.ToolCallID).Decision == "" && t.hostAllows(t.ctx, t.turn.SessionID(), u.ToolCallID, name, u.RawInput) {
+			permission = "allow"
 		}
 		t.toolUse(u.ToolCallID, name, u.RawInput, permission)
 	case "tool_call_update":

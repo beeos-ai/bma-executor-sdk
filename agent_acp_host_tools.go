@@ -10,7 +10,10 @@ package bmaexecutor
 //	                                   Default ask: a screenshot leaves the machine for the model and
 //	                                   an action drives the real desktop, so each call is approved on
 //	                                   the platform (any client of the session) unless the turn's
-//	                                   tool_policy says otherwise.
+//	                                   tool_policy says otherwise. A backend that implements
+//	                                   ComputerUseApprover may let the calls it judges safe run
+//	                                   without asking, but only while neither the turn's tool_policy
+//	                                   nor ACPAgentOptions.ToolPolicy names the tool.
 //	ask_user_question                  with ACPAgentOptions.AskUserQuestion: asks the user and waits. It is a custom tool call of the
 //	                                   session (agent.custom_tool_use): the platform pauses the session
 //	                                   with requires_action, any client answers with
@@ -166,6 +169,31 @@ func (a *ACPAgent) withHostTools(policy map[string]string) map[string]string {
 		}
 	}
 	return policy
+}
+
+// hostAllows reports whether a computer use call may run without asking: its
+// ask is only the declared default (hostAsk) and the backend's
+// ComputerUseApprover says the user need not approve it. The answer for a
+// call is kept: the tool_use event and the permission request use the same.
+func (t *acpTurn) hostAllows(ctx context.Context, sessionID, callID, tool string, input map[string]any) bool {
+	if !t.hostAsk[tool] || t.policyOf(tool) != "ask" || (tool != ToolNameComputerObserve && tool != ToolNameComputerAction) {
+		return false
+	}
+	core := t.agent.opts.Core
+	if core == nil || core.opts.ComputerUse == nil {
+		return false
+	}
+	t.mu.Lock()
+	allowed, ok := t.hostAllowed[callID]
+	t.mu.Unlock()
+	if ok {
+		return allowed
+	}
+	allowed = !core.computerNeedsApproval(ctx, sessionID, tool, input)
+	t.mu.Lock()
+	t.hostAllowed[callID] = allowed
+	t.mu.Unlock()
+	return allowed
 }
 
 // askUserID is the event id of the agent.custom_tool_use of one

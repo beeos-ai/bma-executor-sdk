@@ -69,6 +69,10 @@
 
 `ACPAgentOptions.ToolPolicy map[string]string`（工具名 → `allow`、`ask`、`deny`）是宿主对 `ACPAgent` 工具（六个工具和宿主工具）的权限上限。一个回合里某工具的权限，取这个值与权限模式、平台 `turn.start` 的 `metadata.tool_policy` 三者中较严的（`deny` > `ask` > `allow`），所以后两者只能更严、不能放松；没列出的工具不设上限。宿主还没接好某工具的检查时，先把它设为 `deny`（fail closed）。无论脑怎么做，都由执行端的 gate 强制（`permission_denied`；`ask` 没有用户批准时为 `approval_required`）。`NewACPAgent` 对其他取值和空工具名报错。
 
+### 宿主决定电脑操作要不要审批：`ComputerUseApprover`
+
+`computer_observe` 和 `computer_action` 默认是 `ask`：每次调用都在平台上审批。`CoreOptions.ComputerUse` 的后端如果同时实现 `ComputerUseApprover`（`NeedsObserveApproval`、`NeedsActionApproval`），就逐次由它决定：答 `false` 的调用上报为 `allow`（`agent.tool_use` 的 `evaluated_permission`），在账本里记为已允许，不发 `interaction.request` 直接执行；答 `true` 照旧询问。只有当 `ask` 来自工具的默认值时才问它：平台的 `metadata.tool_policy` 或 `ACPAgentOptions.ToolPolicy` 写了这个工具，就按写的值办，不再问它。每次调用只问一次。判断不了的调用（比如不知道点击会点到什么）应答 `true`。只有 Go 有，和电脑操作本身一样。
+
 TypeScript / Python 没有 process 运行时，因此不提供 Launch 钩子：执行端自己的 `process.start` handler 就是等价物（读上下文、校验、再 spawn），其 params 里能看到 `package_install`，所以包安装与命令有同样的决策点。见 [`typescript/examples/session-context`](../../typescript/examples/session-context/main.mjs) 与 [`python/examples/session_context.py`](../../python/examples/session_context.py)：缺 `agent_session_id`（承载的 `initiator: "platform"` 除外）与 `package_install` 在读取会话上下文之前就被拒绝。
 
 ## 会话文件根

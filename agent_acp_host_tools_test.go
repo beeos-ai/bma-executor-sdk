@@ -218,6 +218,85 @@ func TestACPAgentAskUserQuestionCanceledWithTheTurn(t *testing.T) {
 	}
 }
 
+// approvingComputer is a fakeComputer whose host decides what needs approval.
+type approvingComputer struct {
+	fakeComputer
+	needs    bool
+	sessions []string
+}
+
+func (c *approvingComputer) NeedsObserveApproval(_ context.Context, req ComputerObserveRequest) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sessions = append(c.sessions, req.SessionID)
+	return c.needs
+}
+
+func (c *approvingComputer) NeedsActionApproval(context.Context, ComputerActionRequest) bool {
+	return c.needs
+}
+
+// A ComputerUseApprover decides only while the ask is the tools' declared
+// default: the platform's tool_policy or the host's ceiling naming the tool
+// brings the approval back.
+func TestACPAgentComputerUseApprover(t *testing.T) {
+	command := bmaDshAcpCommand(t)
+	for name, c := range map[string]struct {
+		needs    bool
+		policy   string
+		ceiling  map[string]string
+		wantAsks bool
+	}{
+		"host lets it run":      {},
+		"host asks":             {needs: true, wantAsks: true},
+		"platform names it":     {policy: `{"computer_observe":"ask"}`, wantAsks: true},
+		"host ceiling names it": {ceiling: map[string]string{ToolNameComputerObserve: "ask"}, wantAsks: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newScriptedToolModel(t)
+			model.name, model.args = ToolNameComputerObserve, `{}`
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			computer := &approvingComputer{needs: c.needs}
+			core, err := NewCore(CoreOptions{WorkRoot: filepath.Join(t.TempDir(), "work"), ComputerUse: computer})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(core.Close)
+			f := startACPFixture(t, ctx, ACPAgentOptions{Command: command, Core: core, ToolPolicy: c.ceiling, Upstream: ACPModelUpstream{BaseURL: model.server.URL + "/v1", Model: "scripted"}})
+			f.start(t, ctx, "sesn_ca", "turn_1", "look at the screen", func(p *TurnStartParams) {
+				if c.policy != "" {
+					p.Metadata = map[string]string{"tool_policy": c.policy}
+				}
+			})
+			if c.wantAsks {
+				f.platform.waitFor(t, "permission", func() bool { return len(f.platform.interactions) == 1 })
+				if _, err := f.executor.RespondInteraction(ctx, InteractionResponseParams{SessionID: "sesn_ca", InteractionID: f.platform.interactions[0].InteractionID, Outcome: InteractionOutcomeAllow}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
+			if !c.wantAsks && len(f.platform.interactions) != 0 {
+				t.Fatalf("asked %d times, want none", len(f.platform.interactions))
+			}
+			events := eventsOf(f.platform.snapshot(), "turn_1")
+			if got := strings.Join(eventTypes(events), ","); got != "session.status_running,agent.tool_use,agent.tool_result,agent.message,session.status_idle" {
+				t.Fatalf("events = %s", got)
+			}
+			want := "allow"
+			if c.wantAsks {
+				want = "ask"
+			}
+			if got := fmt.Sprint(eventJSON(t, events[1])["evaluated_permission"]); got != "map[type:"+want+"]" {
+				t.Fatalf("evaluated_permission = %s, want %s", got, want)
+			}
+			if !c.wantAsks && (len(computer.sessions) != 1 || computer.sessions[0] != "sesn_ca") {
+				t.Fatalf("approver saw sessions %v", computer.sessions)
+			}
+		})
+	}
+}
+
 func TestACPAgentComputerUseIsAHostToolApprovedOnThePlatform(t *testing.T) {
 	command := bmaDshAcpCommand(t)
 	model := newScriptedToolModel(t)
