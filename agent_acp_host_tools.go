@@ -228,7 +228,7 @@ func (t *acpTurn) askUser(ctx context.Context, callID string, input map[string]a
 	t.agent.interaction(ACPInteractionEvent{Phase: "ended", Kind: InteractionKindQuestion, SessionID: sessionID, InteractionID: id, ToolName: ToolNameAskUserQuestion, Outcome: outcome})
 	if err != nil {
 		// The turn ended (cancel, deadline) before an answer: the call is given up (contract).
-		_, _ = t.turn.Emit(AgentToolResultEvent{Type: AgentEventTypeAgentToolResult, ToolUseID: id, IsError: true,
+		_, _ = t.turn.Emit(toolResultEvent{Type: AgentEventTypeAgentToolResult, ToolUseID: id, IsError: true,
 			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "The question was withdrawn before the user answered."}}})
 		return &RouteResult{Outcome: RouteOutcomeNotForwarded, Code: "canceled", Text: "canceled: The question was withdrawn before the user answered.", IsError: true}
 	}

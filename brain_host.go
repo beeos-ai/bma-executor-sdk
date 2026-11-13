@@ -505,11 +505,11 @@ func (a *BrainHost) Capability() AgentCapability {
 		MaxSessions: a.opts.MaxSessions, Harness: &h, Harnesses: []AgentHarnessCapability{a.harness},
 		Models: a.models,
 	}
-	if a.opts.PlatformModel {
-		c.PlatformCredentials = append(c.PlatformCredentials, PlatformCredentialHarnessModel)
-	}
 	if a.opts.PlatformTools {
 		c.PlatformCredentials = append(c.PlatformCredentials, PlatformCredentialBrainTools)
+	}
+	if a.opts.PlatformModel {
+		c.PlatformCredentials = append(c.PlatformCredentials, PlatformCredentialHarnessModel)
 	}
 	return c
 }
@@ -1021,7 +1021,7 @@ func (t *acpTurn) ToolResult(callID string, content []ContentBlock, isError bool
 	if toolUseID == "" {
 		return
 	}
-	_ = t.turn.emitAcked(AgentToolResultEvent{Type: AgentEventTypeAgentToolResult, ToolUseID: toolUseID, Content: content, IsError: isError}, func() {
+	_ = t.turn.emitAcked(toolResultEvent{Type: AgentEventTypeAgentToolResult, ToolUseID: toolUseID, Content: content, IsError: isError}, func() {
 		if err := t.ledger.update(callID, func(c *acpCallState) { c.Reported = true }); err != nil {
 			t.agent.log(LogWarn, "turn state: tool result of "+callID+" acknowledged but not recorded", err)
 		}
@@ -1029,6 +1029,15 @@ func (t *acpTurn) ToolResult(callID string, content []ContentBlock, isError bool
 			t.agent.hook(t.ctx, "reported")
 		}
 	})
+}
+
+// toolResultEvent is agent.tool_result with is_error always present, as the
+// platform brains write it (CMA: a boolean of every tool result).
+type toolResultEvent struct {
+	Type      string         `json:"type"`
+	ToolUseID string         `json:"tool_use_id"`
+	Content   []ContentBlock `json:"content,omitempty"`
+	IsError   bool           `json:"is_error"`
 }
 
 // toolUse emits agent.tool_use once per tool call and returns its event id.
