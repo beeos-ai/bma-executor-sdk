@@ -1,9 +1,10 @@
 package bmaexecutor
 
-// Host tools of the DSH profile: tools this machine adds to the six platform
-// tools of a local brain. bma-dsh-acp registers what initialize declares
-// (_meta.bma.hostTools) and calls them like the six (_bma/tools/call), so
-// they run here, under the same policy, approval and turn rules.
+// Host tools: tools this machine adds to the six platform tools of a local
+// brain. The host offers them to the brain (BrainEnv.HostTools); the brain
+// takes those it can (BrainCapabilities.HostTools) and calls them like the six
+// (BrainSink.Call), so they run here, under the same policy, approval and turn
+// rules.
 //
 //	computer_observe, computer_action  only with CoreOptions.ComputerUse (Core advertises computer_use then):
 //	                                   the machine's own desktop, the contract's computer use tools.
@@ -25,8 +26,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"fmt"
 	"slices"
 	"strings"
 )
@@ -117,12 +116,8 @@ var acpComputerAction = acpHostTool{
 	Kind: "other", Permission: "ask",
 }
 
-// declaredHostTools are the tools this agent offers bma-dsh-acp beyond the
-// six (DSH profile only).
-func (a *ACPAgent) declaredHostTools() []acpHostTool {
-	if a.claude() {
-		return nil
-	}
+// offeredHostTools are the host tools this host offers the brain beyond the six.
+func (a *BrainHost) offeredHostTools() []acpHostTool {
 	var tools []acpHostTool
 	if a.opts.AskUserQuestion {
 		tools = append(tools, acpAskUserQuestion)
@@ -133,16 +128,12 @@ func (a *ACPAgent) declaredHostTools() []acpHostTool {
 	return tools
 }
 
-// hostTools are the declared host tools the running agent took (initialize
-// _meta.bma.hostTools of its answer). An agent from before host tools
-// reports none and keeps exactly the six.
-func (a *ACPAgent) hostTools() []acpHostTool {
-	a.mu.Lock()
-	accepted := a.accepted
-	a.mu.Unlock()
+// hostTools are the offered host tools the brain took
+// (BrainCapabilities.HostTools). A brain that takes none keeps exactly the six.
+func (a *BrainHost) hostTools() []acpHostTool {
 	var out []acpHostTool
-	for _, t := range a.declaredHostTools() {
-		if slices.Contains(accepted, t.Name) {
+	for _, t := range a.offeredHostTools() {
+		if slices.Contains(a.caps.HostTools, t.Name) {
 			out = append(out, t)
 		}
 	}
@@ -150,7 +141,7 @@ func (a *ACPAgent) hostTools() []acpHostTool {
 }
 
 // toolNames are the platform tools and the host tools: exactly what the agent may offer the model.
-func (a *ACPAgent) toolNames() map[string]bool {
+func (a *BrainHost) toolNames() map[string]bool {
 	names := map[string]bool{}
 	for name := range coreTools {
 		names[name] = true
@@ -162,7 +153,7 @@ func (a *ACPAgent) toolNames() map[string]bool {
 }
 
 // withHostTools adds each host tool's default permission to a policy that does not name it.
-func (a *ACPAgent) withHostTools(policy map[string]string) map[string]string {
+func (a *BrainHost) withHostTools(policy map[string]string) map[string]string {
 	for _, t := range a.hostTools() {
 		if _, ok := policy[t.Name]; !ok {
 			policy[t.Name] = t.Permission
@@ -242,28 +233,4 @@ func (t *acpTurn) askUser(ctx context.Context, callID string, input map[string]a
 		text = "The user answered: " + text
 	}
 	return &RouteResult{Outcome: RouteOutcomeExecuted, Text: text, IsError: answer.IsError}
-}
-
-// hostToolsMeta is initialize's _meta for bma-dsh-acp.
-func (a *ACPAgent) initializeMeta() map[string]any {
-	tools := a.declaredHostTools()
-	if len(tools) == 0 {
-		return nil
-	}
-	return map[string]any{acpMetaKey: map[string]any{"hostTools": tools}}
-}
-
-// hostToolsViolation checks the agent took only declared host tools.
-func (a *ACPAgent) hostToolsViolation(got []string) string {
-	var want []string
-	for _, t := range a.declaredHostTools() {
-		want = append(want, t.Name)
-	}
-	for _, name := range got {
-		if !slices.Contains(want, name) {
-			raw, _ := json.Marshal(got)
-			return fmt.Sprintf("agent took host tools %s, not among the declared [%s]: refused (fail-closed)", raw, strings.Join(want, ","))
-		}
-	}
-	return ""
 }

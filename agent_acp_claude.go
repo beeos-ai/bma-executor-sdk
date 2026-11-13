@@ -1,6 +1,7 @@
 package bmaexecutor
 
-// The Claude Code profile of ACPAgent (ADR-0029 S3, ADR-0027 decision 8).
+// The claude-agent-acp adapter (ADR-0029 S3, ADR-0027 decision 10): the
+// ACPProfileClaudeCode profile of NewACPAgent.
 //
 // The brain is the official claude-agent-acp
 // (https://github.com/agentclientprotocol/claude-agent-acp, npm
@@ -11,17 +12,15 @@ package bmaexecutor
 //
 // Credentials. Claude Code runs with the credentials of the node's owner
 // (its login under HOME, or ANTHROPIC_API_KEY or a third-party provider's
-// variables in ACPAgentOptions.Env). They never pass through BMA: the profile
-// starts no model proxy, declares no harness_model, ignores the platform's
-// model endpoint, and the SDK never reads or logs the owner's credentials.
+// variables in ACPAgentOptions.Env). They never pass through BMA: the adapter
+// starts no model proxy, refuses harness_model, and the SDK never reads or
+// logs the owner's credentials.
 //
 // Tools. The agent is started with `tools: []` (no built-in tool) and one
-// injected MCP server named "bma", served on loopback by the ACPAgent itself
+// injected MCP server named "bma", served on loopback by the adapter itself
 // (acpToolServer): the six platform tools, mcp__bma__{bash,read,write,edit,
-// glob,grep}. Every call of that server goes through the turn's toolRoute, so
-// it is checked and run exactly as bma-dsh-acp's calls are: on this machine,
-// or on the platform's gateway when the turn carries tools_mcp_* (a remote
-// hands machine).
+// glob,grep}. Every call of that server goes to the host (BrainSink.Call), so
+// it is checked and run exactly as bma-dsh-acp's calls are.
 //
 // Gates, all fail closed:
 //   - session/new is followed by session/set_mode default and the mode is
@@ -33,20 +32,28 @@ package bmaexecutor
 //     list only the six platform tools plus the placeholder tools the pinned
 //     version is known to add (claudeAgentACPPins); anything else fails the turn;
 //   - a permission request for any tool that is not a platform tool is rejected;
-//     for a platform tool the platform's policy decides (allow, deny, or ask the
-//     platform's user through an interaction), not Claude Code's own mode.
+//     for a platform tool the host decides (BrainSink.Permission), not Claude
+//     Code's own mode.
+//   - its idle auto-compaction (a /compact turn of its own shortly before the
+//     prompt cache of an idle session expires, spending the owner's credit)
+//     is put off past any session's life: claudeIdleCompactionOff.
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -65,6 +72,13 @@ var claudeAgentACPPins = map[string][]string{
 	// request; also allowed in the init message in case a release reports it).
 	"0.101.0": {"DeferredToolPlaceholder"},
 }
+
+// claudeIdleCompactionOff sets claude-agent-acp's idle compaction delay to the
+// longest timer Node takes (about 24.8 days; idle-compaction.ts reads
+// CLAUDE_AGENT_ACP_IDLE_COMPACT_DELAY_MS from the agent's environment), so the
+// agent never starts a turn the platform did not ask for. Claude Code's own
+// compaction of a running turn is unchanged.
+const claudeIdleCompactionOff = "CLAUDE_AGENT_ACP_IDLE_COMPACT_DELAY_MS=2147483647"
 
 const (
 	claudeMCPServerName = "bma"
@@ -96,20 +110,174 @@ func claudePlatformTool(claudeName string) (string, bool) {
 // acpPlatformTools are the six platform tools (CMA agent_toolset names).
 var acpPlatformTools = []string{ToolNameBash, ToolNameEdit, ToolNameGlob, ToolNameGrep, ToolNameRead, ToolNameWrite}
 
-// policyOf is the turn's permission for a tool (an unlisted tool asks).
-func (t *acpTurn) policyOf(name string) string {
-	if p := t.policy[name]; p != "" {
-		return p
-	}
-	return "ask"
+func newClaudeACPAdapter() *claudeACPAdapter {
+	return &claudeACPAdapter{convs: map[string]*claudeACPConv{}}
 }
 
-// --- session ---
+type claudeACPAdapter struct {
+	env  BrainEnv
+	mcp  *acpToolServer
+	warm *acpPrewarm
 
-func (a *ACPAgent) openClaudeSession(ctx context.Context, proc *acpProcess, s *acpSession, params TurnStartParams, cwd, systemPrompt string) error {
+	mu     sync.Mutex
+	proc   *acpProcess
+	convs  map[string]*claudeACPConv // by the agent's session id
+	closed bool
+}
+
+type claudeACPConv struct {
+	a           *claudeACPAdapter
+	placeholder string
+	proc        *acpProcess
+	// agentID is the agent's own session id, agentMode the permission mode it reported last.
+	agentID   string
+	agentMode string
+	prompt    *claudeACPPrompt
+}
+
+// claudeACPPrompt is the input a conversation is running.
+type claudeACPPrompt struct {
+	ctx       context.Context
+	sink      BrainSink
+	violation atomic.Pointer[string]
+	mu        sync.Mutex
+	chunks    []*claudeChunk // message text not yet committed, in order
+}
+
+type claudeChunk struct {
+	kind, messageID string
+	text            strings.Builder
+}
+
+func (a *claudeACPAdapter) log(level LogLevel, message string, err error) {
+	if a.env.Log != nil {
+		a.env.Log(level, message, err)
+	}
+}
+
+func (a *claudeACPAdapter) Start(ctx context.Context, env BrainEnv) (BrainCapabilities, error) {
+	if env.PlatformModel {
+		return BrainCapabilities{}, errors.New("bmaexecutor: the Claude Code profile uses the node owner's own credentials; PlatformModel (harness_model) is not allowed")
+	}
+	if len(env.Models) > 0 {
+		return BrainCapabilities{}, errors.New("bmaexecutor: ACPAgentOptions.Models is for the DSH profile; Claude Code uses the model its owner configured")
+	}
+	a.env = env
+	server, err := startACPToolServer(a)
+	if err != nil {
+		return BrainCapabilities{}, err
+	}
+	a.mcp = server
+	proc, err := a.ensureProcess(ctx)
+	if err != nil {
+		server.close()
+		return BrainCapabilities{}, err
+	}
+	id := env.HarnessID
+	if id == "" {
+		id = "claude-code"
+	}
+	init := proc.init
+	a.startPrewarm()
+	return BrainCapabilities{
+		Harness: AgentHarnessCapability{
+			ID: id, Version: init.AgentInfo.Version, Protocol: "acp/1",
+			AgentName: init.AgentInfo.Name, AgentVersion: init.AgentInfo.Version,
+			Streaming: "token", PermissionRelay: "full", SessionLoad: init.AgentCapabilities.LoadSession,
+		},
+		ModelCredentials: BrainModelOwner,
+	}, nil
+}
+
+// Ref: the agent names a new conversation itself.
+func (a *claudeACPAdapter) Ref(string) string { return "" }
+
+func (a *claudeACPAdapter) Close() error {
+	a.mu.Lock()
+	a.closed = true
+	proc := a.proc
+	a.mu.Unlock()
+	if proc != nil {
+		proc.kill(a.env.KillGrace)
+	}
+	if a.mcp != nil {
+		a.mcp.close()
+	}
+	return nil
+}
+
+func (a *claudeACPAdapter) ensureProcess(ctx context.Context) (*acpProcess, error) {
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return nil, errors.New("agent is closed")
+	}
+	if a.proc != nil && a.proc.alive() {
+		proc := a.proc
+		a.mu.Unlock()
+		return proc, nil
+	}
+	a.mu.Unlock()
+	proc, err := startACPProcess(ctx, acpLaunch{env: a.env, extraEnv: []string{claudeIdleCompactionOff}}, a)
+	if err != nil {
+		return nil, err
+	}
+	if err := claudeCheckPin(proc.init.AgentInfo.Name, proc.init.AgentInfo.Version); err != nil {
+		proc.kill(a.env.KillGrace)
+		return nil, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.proc != nil && a.proc.alive() {
+		go proc.kill(a.env.KillGrace)
+		return a.proc, nil
+	}
+	a.proc = proc
+	return proc, nil
+}
+
+func (a *claudeACPAdapter) Open(ctx context.Context, req BrainOpen) (BrainSession, error) {
+	proc, err := a.ensureProcess(ctx)
+	if err != nil {
+		return nil, &AgentError{Code: AgentErrorCodeAgentUnavailable, Message: "agent unavailable: " + err.Error()}
+	}
+	c, _ := req.Current.(*claudeACPConv)
+	if c == nil || c.proc != proc {
+		placeholder := ""
+		if c != nil {
+			placeholder = c.placeholder
+		}
+		if c, err = a.openSession(ctx, proc, placeholder, req.Ref, req.Cwd, req.SystemPrompt); err != nil {
+			return nil, err
+		}
+	}
+	if err := a.defaultMode(ctx, c); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func newPlaceholder() string {
+	key := make([]byte, 16)
+	_, _ = rand.Read(key)
+	return "bma-local-" + hex.EncodeToString(key)
+}
+
+// openSession opens (session/new) or loads (session/load ref) a conversation.
+func (a *claudeACPAdapter) openSession(ctx context.Context, proc *acpProcess, placeholder, ref, cwd, systemPrompt string) (*claudeACPConv, error) {
+	return a.openConv(ctx, proc, placeholder, ref, cwd, systemPrompt, true)
+}
+
+// openConv opens a conversation; register makes the adapter route the
+// agent's notifications to it (not for the prewarm's throwaway one).
+func (a *claudeACPAdapter) openConv(ctx context.Context, proc *acpProcess, placeholder, ref, cwd, systemPrompt string, register bool) (*claudeACPConv, error) {
+	if placeholder == "" {
+		placeholder = newPlaceholder()
+	}
+	c := &claudeACPConv{a: a, placeholder: placeholder}
 	mcpServers := []any{map[string]any{
 		"type": "http", "name": claudeMCPServerName, "url": a.mcp.url + "/mcp",
-		"headers": []any{map[string]any{"name": "Authorization", "value": "Bearer " + s.placeholder}},
+		"headers": []any{map[string]any{"name": "Authorization", "value": "Bearer " + placeholder}},
 	}}
 	meta := map[string]any{
 		"systemPrompt": map[string]any{"append": systemPrompt},
@@ -123,61 +291,73 @@ func (a *ACPAgent) openClaudeSession(ctx context.Context, proc *acpProcess, s *a
 	}
 	var res acpSessionResponse
 	var err error
-	if ref := params.ExecutorSessionRef; ref != "" {
-		a.mu.Lock()
-		s.proc, s.agentID, s.agentMode = proc, ref, ""
-		a.mu.Unlock()
+	if ref != "" {
+		a.register(c, proc, ref)
 		err = proc.call(ctx, "session/load", map[string]any{"sessionId": ref, "cwd": cwd, "mcpServers": mcpServers, "_meta": meta}, &res)
 		if err != nil {
-			a.mu.Lock()
-			s.proc, s.agentID = nil, ""
-			a.mu.Unlock()
+			a.forget(c)
 		}
 		var acpErr *acpError
 		if errors.As(err, &acpErr) && acpErr.Code == CodeNotFound {
-			return &AgentError{Code: AgentErrorCodeAgentError, Message: "the local conversation " + ref + " was not found; it is not recreated"}
+			return nil, &AgentError{Code: AgentErrorCodeAgentError, Message: "the local conversation " + ref + " was not found; it is not recreated"}
 		}
 	} else {
 		err = proc.call(ctx, "session/new", map[string]any{"cwd": cwd, "mcpServers": mcpServers, "_meta": meta}, &res)
 		if err == nil {
 			if res.SessionID == "" {
-				return &AgentError{Code: AgentErrorCodeAgentProtocolError, Message: "agent session: session/new answered without a sessionId"}
+				return nil, &AgentError{Code: AgentErrorCodeAgentProtocolError, Message: "agent session: session/new answered without a sessionId"}
 			}
-			a.mu.Lock()
-			s.proc, s.agentID, s.agentMode = proc, res.SessionID, ""
-			a.mu.Unlock()
+			if register {
+				a.register(c, proc, res.SessionID)
+			} else {
+				c.proc, c.agentID = proc, res.SessionID
+			}
 		}
 	}
 	if err != nil {
-		return acpOpenError(proc, "agent session", err)
+		return nil, acpOpenError(proc, "agent session", err)
 	}
-	return nil
+	return c, nil
 }
 
-// claudeDefaultMode makes sure the agent's session mode is "default" and
-// asserts it. The mode a session starts in is the agent's (auto, or what the
-// owner's settings say), so session/set_mode default follows every
-// session/new and session/load; a mode that is not default afterwards
-// refuses the turn.
-func (a *ACPAgent) claudeDefaultMode(ctx context.Context, proc *acpProcess, s *acpSession) error {
+func (a *claudeACPAdapter) register(c *claudeACPConv, proc *acpProcess, agentID string) {
 	a.mu.Lock()
-	mode := s.agentMode
+	c.proc, c.agentID, c.agentMode = proc, agentID, ""
+	a.convs[agentID] = c
+	a.mu.Unlock()
+}
+
+func (a *claudeACPAdapter) forget(c *claudeACPConv) {
+	a.mu.Lock()
+	if a.convs[c.agentID] == c {
+		delete(a.convs, c.agentID)
+	}
+	a.mu.Unlock()
+}
+
+// defaultMode makes sure the agent's session mode is "default" and asserts
+// it. The mode a session starts in is the agent's (auto, or what the owner's
+// settings say), so session/set_mode default follows every session/new and
+// session/load; a mode that is not default afterwards refuses the turn.
+func (a *claudeACPAdapter) defaultMode(ctx context.Context, c *claudeACPConv) error {
+	a.mu.Lock()
+	mode := c.agentMode
 	a.mu.Unlock()
 	if mode != "default" {
 		// A successful set_mode means default unless the agent says otherwise
 		// first (it reports a clamped mode with current_mode_update, before the answer).
 		a.mu.Lock()
-		s.agentMode = "default"
+		c.agentMode = "default"
 		a.mu.Unlock()
-		if err := proc.call(ctx, "session/set_mode", map[string]any{"sessionId": s.wire(), "modeId": "default"}, nil); err != nil {
+		if err := c.proc.call(ctx, "session/set_mode", map[string]any{"sessionId": c.agentID, "modeId": "default"}, nil); err != nil {
 			a.mu.Lock()
-			s.agentMode = ""
+			c.agentMode = ""
 			a.mu.Unlock()
-			return acpOpenError(proc, "agent set_mode", err)
+			return acpOpenError(c.proc, "agent set_mode", err)
 		}
 	}
 	a.mu.Lock()
-	mode = s.agentMode
+	mode = c.agentMode
 	a.mu.Unlock()
 	if mode != "default" {
 		return &AgentError{Code: AgentErrorCodeAgentError, Message: fmt.Sprintf("mode_not_default: the agent's permission mode is %q, not default; the turn is refused", mode)}
@@ -185,8 +365,155 @@ func (a *ACPAgent) claudeDefaultMode(ctx context.Context, proc *acpProcess, s *a
 	return nil
 }
 
-// trackClaudeMode follows the agent's reports of its permission mode.
-func (a *ACPAgent) trackClaudeMode(proc *acpProcess, wire string, u acpUpdate) {
+func (c *claudeACPConv) Ref() string { return c.agentID }
+
+func (c *claudeACPConv) Ready() bool { return c.proc != nil && c.proc.alive() }
+
+func (c *claudeACPConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) error {
+	a := c.a
+	p := &claudeACPPrompt{ctx: ctx, sink: sink}
+	a.mu.Lock()
+	c.prompt = p
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		c.prompt = nil
+		a.mu.Unlock()
+	}()
+	err := promptACP(ctx, c.proc, map[string]any{"sessionId": c.agentID, "prompt": acpPromptBlocks(in)}, a.env.CancelGrace, a.env.KillGrace)
+	p.flush()
+	if v := p.violation.Load(); v != nil {
+		return errors.New(*v)
+	}
+	return err
+}
+
+func (c *claudeACPConv) Suspend(ctx context.Context) error {
+	if c.proc != nil && c.proc.alive() {
+		err := c.proc.call(ctx, "session/close", map[string]any{"sessionId": c.agentID}, nil)
+		var acpErr *acpError
+		if err != nil && !(errors.As(err, &acpErr) && acpErr.Code == CodeNotFound) && c.proc.alive() {
+			return fmt.Errorf("agent session/close: %w", err)
+		}
+	}
+	c.a.forget(c)
+	return nil
+}
+
+func (c *claudeACPConv) Close(ctx context.Context) error {
+	c.a.forget(c)
+	if c.proc != nil && c.proc.alive() {
+		return c.proc.call(ctx, "session/close", map[string]any{"sessionId": c.agentID}, nil)
+	}
+	return nil
+}
+
+func (a *claudeACPAdapter) conv(proc *acpProcess, wire string) *claudeACPConv {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if c := a.convs[wire]; c != nil && c.proc == proc {
+		return c
+	}
+	return nil
+}
+
+func (a *claudeACPAdapter) running(proc *acpProcess, wire string) (*claudeACPConv, *claudeACPPrompt) {
+	c := a.conv(proc, wire)
+	if c == nil {
+		return nil, nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return c, c.prompt
+}
+
+// fail ends the prompt with an error (the first one wins) and asks the agent to stop.
+func (p *claudeACPPrompt) fail(a *claudeACPAdapter, proc *acpProcess, wire, code, detail string) {
+	message := code + ": " + detail
+	if !p.violation.CompareAndSwap(nil, &message) {
+		return
+	}
+	a.log(LogError, "claude code turn refused: "+message, nil)
+	if err := proc.notify("session/cancel", map[string]any{"sessionId": wire}); err != nil {
+		a.log(LogDebug, "acp session/cancel", err)
+	}
+}
+
+// add appends to the message text.
+func (p *claudeACPPrompt) add(kind, messageID, text string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, c := range p.chunks {
+		if c.kind == kind && c.messageID == messageID {
+			c.text.WriteString(text)
+			return
+		}
+	}
+	c := &claudeChunk{kind: kind, messageID: messageID}
+	c.text.WriteString(text)
+	p.chunks = append(p.chunks, c)
+}
+
+// flush commits the streamed message text as durable messages (Claude Code
+// has no separate "this message is complete" notification; a message is
+// complete when something else follows it, or the prompt ends).
+func (p *claudeACPPrompt) flush() {
+	p.mu.Lock()
+	chunks := p.chunks
+	p.chunks = nil
+	p.mu.Unlock()
+	for _, c := range chunks {
+		p.sink.Message(c.kind, c.messageID, c.text.String())
+	}
+}
+
+// --- agent -> executor ---
+
+func (a *claudeACPAdapter) onNotification(proc *acpProcess, method string, raw json.RawMessage) {
+	switch method {
+	case "session/update":
+		var n struct {
+			SessionID string    `json:"sessionId"`
+			Update    acpUpdate `json:"update"`
+		}
+		if json.Unmarshal(raw, &n) != nil {
+			return
+		}
+		a.trackMode(proc, n.SessionID, n.Update)
+		_, p := a.running(proc, n.SessionID)
+		if p == nil {
+			return
+		}
+		u := n.Update
+		switch u.Kind {
+		case "agent_message_chunk", "agent_thought_chunk":
+			if text, ok := u.chunkText(); ok {
+				kind := acpChunkKind(u.Kind)
+				p.add(kind, u.MessageID, text)
+				p.sink.Delta(kind, u.MessageID, text)
+			}
+		case "tool_call", "tool_call_update":
+			p.flush()
+			// The input arrives with the first update that has it (the tool_call
+			// itself carries none).
+			if len(u.RawInput) > 0 {
+				name, ok := claudePlatformTool(u.Meta.ClaudeCode.ToolName)
+				if !ok {
+					name = u.Meta.ClaudeCode.ToolName
+				}
+				p.sink.ToolUse(BrainCall{ID: u.ToolCallID, Name: name, Input: u.RawInput}, "")
+			}
+			if content, isError, done := u.toolResult(); u.Kind == "tool_call_update" && done {
+				p.sink.ToolResult(u.ToolCallID, content, isError)
+			}
+		}
+	case "_claude/sdkMessage":
+		a.onSDKMessage(proc, raw)
+	}
+}
+
+// trackMode follows the agent's reports of its permission mode.
+func (a *claudeACPAdapter) trackMode(proc *acpProcess, wire string, u acpUpdate) {
 	mode := ""
 	switch u.Kind {
 	case "current_mode_update":
@@ -208,22 +535,22 @@ func (a *ACPAgent) trackClaudeMode(proc *acpProcess, wire string, u acpUpdate) {
 	if mode == "" {
 		return
 	}
-	s := a.sessionOf(proc, wire)
-	if s == nil {
+	c := a.conv(proc, wire)
+	if c == nil {
 		return
 	}
 	a.mu.Lock()
-	s.agentMode = mode
-	t := s.turn
+	c.agentMode = mode
+	p := c.prompt
 	a.mu.Unlock()
-	if mode != "default" && t != nil {
-		t.failClaude(proc, wire, "mode_not_default", fmt.Sprintf("the agent's permission mode became %q during the turn", mode))
+	if mode != "default" && p != nil {
+		p.fail(a, proc, wire, "mode_not_default", fmt.Sprintf("the agent's permission mode became %q during the turn", mode))
 	}
 }
 
-// onClaudeSDKMessage checks Claude Code's system init message: its tool list
-// and its permission mode.
-func (a *ACPAgent) onClaudeSDKMessage(proc *acpProcess, raw json.RawMessage) {
+// onSDKMessage checks Claude Code's system init message: its tool list and
+// its permission mode.
+func (a *claudeACPAdapter) onSDKMessage(proc *acpProcess, raw json.RawMessage) {
 	var n struct {
 		SessionID string `json:"sessionId"`
 		Message   struct {
@@ -236,122 +563,118 @@ func (a *ACPAgent) onClaudeSDKMessage(proc *acpProcess, raw json.RawMessage) {
 	if json.Unmarshal(raw, &n) != nil || n.Message.Type != "system" || n.Message.Subtype != "init" {
 		return
 	}
-	t := a.turnFor(proc, n.SessionID)
-	if t == nil {
+	_, p := a.running(proc, n.SessionID)
+	if p == nil {
 		return
 	}
 	allowed := claudeAgentACPPins[proc.init.AgentInfo.Version]
 	for _, tool := range n.Message.Tools {
 		if _, ok := claudePlatformTool(tool); !ok && !slices.Contains(allowed, tool) {
-			t.failClaude(proc, n.SessionID, "tool_catalog_violation",
+			p.fail(a, proc, n.SessionID, "tool_catalog_violation",
 				fmt.Sprintf("claude code offers the tool %q, which is neither a platform tool nor a known placeholder of claude-agent-acp %s", tool, proc.init.AgentInfo.Version))
 			return
 		}
 	}
 	if n.Message.PermissionMode != "" && n.Message.PermissionMode != "default" {
-		t.failClaude(proc, n.SessionID, "mode_not_default", fmt.Sprintf("claude code started the turn in the permission mode %q", n.Message.PermissionMode))
+		p.fail(a, proc, n.SessionID, "mode_not_default", fmt.Sprintf("claude code started the turn in the permission mode %q", n.Message.PermissionMode))
 	}
 }
 
-// --- turn ---
-
-// acpClaudeTurn is the Claude Code profile's state of a turn.
-type acpClaudeTurn struct {
-	violation atomic.Pointer[string]
-	chunks    []*claudeChunk // message text not yet committed, in order
+func (a *claudeACPAdapter) onRequest(ctx context.Context, proc *acpProcess, method string, raw json.RawMessage) (any, *RPCError) {
+	if method != "session/request_permission" {
+		return nil, &RPCError{Code: CodeMethodNotFound, Message: "method not found: " + method}
+	}
+	var r acpPermissionRequest
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil, &RPCError{Code: CodeInvalidParams, Message: err.Error()}
+	}
+	_, p := a.running(proc, r.SessionID)
+	if p == nil {
+		return acpPermissionOutcome(nil, BrainDecision{Outcome: BrainCanceled}), nil
+	}
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(p.ctx, cancel)()
+	// Only the platform tools (the injected MCP server) may be used at all.
+	name, ok := claudePlatformTool(r.ToolCall.Meta.ClaudeCode.ToolName)
+	if !ok {
+		a.log(LogWarn, fmt.Sprintf("claude code asked to use %q, which is not a platform tool: refused", r.ToolCall.Meta.ClaudeCode.ToolName), nil)
+		return acpPermissionOutcome(r.Options, BrainDecision{Outcome: BrainDeny}), nil
+	}
+	return acpPermissionOutcome(r.Options, p.sink.Permission(ctx, BrainCall{ID: r.ToolCall.ToolCallID, Name: name, Input: r.ToolCall.RawInput})), nil
 }
 
-type claudeChunk struct {
-	kind, messageID string
-	text            strings.Builder
+// --- prewarm ---
+
+// Starting Claude Code for the first time in a process costs most of a
+// second more than later sessions (measured: the first session/new of a
+// claude-agent-acp process ~1.1 s, the next ones ~0.2 s), and without it the
+// first turn after registration pays that. Start opens one throwaway session
+// in the background, in a scratch directory under StateDir with the same
+// options a real session gets, and closes it without ever prompting it (a
+// prompt would spend the owner's model credit). A failure is logged at
+// LogWarn ("agent prewarm failed") and returned by WaitPrewarm.
+
+type acpPrewarm struct {
+	done chan struct{}
+	err  error
 }
 
-// failClaude ends the turn with an error (the first one wins) and asks the
-// agent to stop.
-func (t *acpTurn) failClaude(proc *acpProcess, wire, code, detail string) {
-	message := code + ": " + detail
-	if !t.claude.violation.CompareAndSwap(nil, &message) {
+func (a *claudeACPAdapter) startPrewarm() {
+	if a.env.DisablePrewarm {
 		return
 	}
-	t.agent.log(LogError, "claude code turn "+t.turnID+" refused: "+message, nil)
-	if err := proc.notify("session/cancel", map[string]any{"sessionId": wire}); err != nil {
-		t.agent.log(LogDebug, "acp session/cancel", err)
+	a.warm = &acpPrewarm{done: make(chan struct{})}
+	go func() {
+		defer close(a.warm.done)
+		ctx, cancel := context.WithTimeout(context.Background(), acpOpenTimeout)
+		defer cancel()
+		began := time.Now()
+		if a.warm.err = a.prewarmSession(ctx); a.warm.err != nil {
+			a.log(LogWarn, "agent prewarm failed; the first turn opens its session itself", a.warm.err)
+			return
+		}
+		a.log(LogInfo, fmt.Sprintf("agent prewarmed in %s", time.Since(began).Round(time.Millisecond)), nil)
+	}()
+}
+
+// WaitPrewarm waits for the background prewarm and returns its error (nil at
+// once with DisablePrewarm).
+func (a *claudeACPAdapter) WaitPrewarm(ctx context.Context) error {
+	if a.warm == nil {
+		return nil
+	}
+	select {
+	case <-a.warm.done:
+		return a.warm.err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
-func (t *acpTurn) violationError() error {
-	if v := t.claude.violation.Load(); v != nil {
-		return errors.New(*v)
+func (a *claudeACPAdapter) prewarmSession(ctx context.Context) error {
+	proc, err := a.ensureProcess(ctx)
+	if err != nil {
+		return err
+	}
+	cwd := filepath.Join(a.env.StateDir, "prewarm")
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		return err
+	}
+	if runAs := a.env.RunAs; runAs != nil {
+		if err := os.Chown(cwd, int(runAs.UID), int(runAs.GID)); err != nil {
+			return err
+		}
+	}
+	c, err := a.openConv(ctx, proc, "bma-prewarm-"+fmt.Sprint(time.Now().UnixNano()), "", cwd, a.env.SystemPrompt(cwd), false)
+	if err != nil {
+		return err
+	}
+	if err := proc.call(ctx, "session/close", map[string]any{"sessionId": c.agentID}, nil); err != nil {
+		a.log(LogDebug, "acp session/close of the prewarm session", err)
 	}
 	return nil
-}
-
-func (t *acpTurn) updateClaude(u acpUpdate) {
-	switch u.Kind {
-	case "agent_message_chunk", "agent_thought_chunk":
-		var c struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if json.Unmarshal(u.Content, &c) != nil || c.Type != "text" {
-			return
-		}
-		eventType := EventDeltaTypeAgentMessage
-		if u.Kind == "agent_thought_chunk" {
-			eventType = EventDeltaTypeAgentThinking
-		}
-		id := t.eventID(u.Kind + "\x00" + u.MessageID)
-		t.mu.Lock()
-		index := t.index[id]
-		t.index[id]++
-		t.addChunk(u.Kind, u.MessageID, c.Text)
-		t.mu.Unlock()
-		t.turn.Delta(id, eventType, index, c.Text)
-	case "tool_call", "tool_call_update":
-		t.flushMessages()
-		// The input arrives with the first update that has it (the tool_call
-		// itself carries none).
-		if len(u.RawInput) > 0 {
-			name, ok := claudePlatformTool(u.Meta.ClaudeCode.ToolName)
-			if !ok {
-				name = u.Meta.ClaudeCode.ToolName
-			}
-			t.toolUse(u.ToolCallID, name, u.RawInput, t.policyOf(name))
-		}
-		if u.Kind == "tool_call_update" {
-			t.toolResult(u)
-		}
-	}
-}
-
-// addChunk appends to the message text; t.mu is held.
-func (t *acpTurn) addChunk(kind, messageID, text string) {
-	for _, c := range t.claude.chunks {
-		if c.kind == kind && c.messageID == messageID {
-			c.text.WriteString(text)
-			return
-		}
-	}
-	c := &claudeChunk{kind: kind, messageID: messageID}
-	c.text.WriteString(text)
-	t.claude.chunks = append(t.claude.chunks, c)
-}
-
-// flushMessages commits the streamed message text as durable events (Claude
-// Code has no separate "this message is complete" notification; a message is
-// complete when something else follows it, or the prompt ends).
-func (t *acpTurn) flushMessages() {
-	t.mu.Lock()
-	chunks := t.claude.chunks
-	t.claude.chunks = nil
-	t.mu.Unlock()
-	for _, c := range chunks {
-		kind := "message"
-		if c.kind == "agent_thought_chunk" {
-			kind = "thinking"
-		}
-		t.commit(c.messageID, kind, c.text.String())
-	}
 }
 
 // --- the platform tools as an MCP server on loopback ---
@@ -360,13 +683,13 @@ func (t *acpTurn) flushMessages() {
 // Streamable HTTP (JSON replies; tools/call as an SSE stream). A request carries the session's
 // placeholder as its bearer token, so a session can only reach its own turn.
 type acpToolServer struct {
-	agent  *ACPAgent
+	agent  *claudeACPAdapter
 	url    string
 	server *http.Server
 	anon   atomic.Int64
 }
 
-func startACPToolServer(a *ACPAgent) (*acpToolServer, error) {
+func startACPToolServer(a *claudeACPAdapter) (*acpToolServer, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -383,13 +706,13 @@ func (s *acpToolServer) close() { _ = s.server.Close() }
 
 const acpMaxToolRequestBytes = 32 << 20
 
-// sessionFor is the session whose placeholder is token.
-func (a *ACPAgent) sessionFor(token string) *acpSession {
+// convFor is the conversation whose placeholder is token.
+func (a *claudeACPAdapter) convFor(token string) *claudeACPConv {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for _, s := range a.sessions {
-		if subtle.ConstantTimeCompare([]byte(s.placeholder), []byte(token)) == 1 {
-			return s
+	for _, c := range a.convs {
+		if subtle.ConstantTimeCompare([]byte(c.placeholder), []byte(token)) == 1 {
+			return c
 		}
 	}
 	return nil
@@ -397,8 +720,8 @@ func (a *ACPAgent) sessionFor(token string) *acpSession {
 
 func (s *acpToolServer) serve(w http.ResponseWriter, r *http.Request) {
 	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	session := s.agent.sessionFor(token)
-	if token == "" || session == nil {
+	conv := s.agent.convFor(token)
+	if token == "" || conv == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -473,22 +796,22 @@ func (s *acpToolServer) serve(w http.ResponseWriter, r *http.Request) {
 			f.Flush()
 		}
 		data, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID,
-			"result": s.call(r.Context(), session, callID, p.Name, p.Arguments)})
+			"result": s.call(r.Context(), conv, callID, p.Name, p.Arguments)})
 		_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", data)
 	default:
 		reply(nil, map[string]any{"code": -32601, "message": "method not found: " + req.Method})
 	}
 }
 
-// call runs one tool call of Claude Code through the turn's route.
-func (s *acpToolServer) call(ctx context.Context, session *acpSession, callID, name string, input map[string]any) map[string]any {
+// call runs one tool call of Claude Code through the host.
+func (s *acpToolServer) call(ctx context.Context, c *claudeACPConv, callID, name string, input map[string]any) map[string]any {
 	a := s.agent
 	a.mu.Lock()
-	t, mode := session.turn, session.agentMode
+	p, mode := c.prompt, c.agentMode
 	a.mu.Unlock()
 	var result *RouteResult
 	switch {
-	case t == nil:
+	case p == nil:
 		result = refused("stale_turn", "no turn of this session is running")
 	case mode != "default":
 		result = refused("mode_not_default", fmt.Sprintf("the agent's permission mode is %q, not default", mode))
@@ -500,11 +823,8 @@ func (s *acpToolServer) call(ctx context.Context, session *acpSession, callID, n
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithCancel(ctx)
 		defer cancel()
-		defer context.AfterFunc(t.ctx, cancel)()
-		t.mu.Lock()
-		toolUseID := t.tools[callID]
-		t.mu.Unlock()
-		result = t.toolRoute.Call(ctx, RouteCall{ID: callID, ToolUseID: toolUseID, Name: name, Input: input})
+		defer context.AfterFunc(p.ctx, cancel)()
+		result = p.sink.Call(ctx, BrainCall{ID: callID, Name: name, Input: input})
 	}
 	// No structuredContent: Claude Code would show the model that instead of
 	// the text. The outcome is in the text ("<code>: ..." for a refused or
