@@ -976,9 +976,9 @@ func fakePrompt(c *fakeConn, sid, text string) (any, map[string]any) {
 func (a *ACPAgent) proxyStatusForTest(t *testing.T, sessionID string) int {
 	t.Helper()
 	a.mu.Lock()
-	key := a.sessions[sessionID].placeholder
+	key := a.sessions[sessionID].brain.(*dshConv).placeholder
 	a.mu.Unlock()
-	req, _ := http.NewRequest("POST", a.proxy.url+"/v1/chat/completions", strings.NewReader(`{"model":"m"}`))
+	req, _ := http.NewRequest("POST", a.adapter.(*dshAdapter).proxy.url+"/v1/chat/completions", strings.NewReader(`{"model":"m"}`))
 	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

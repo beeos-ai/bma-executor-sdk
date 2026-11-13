@@ -82,6 +82,10 @@ func runFakeCua() {
 		os.Exit(64)
 	}
 	tool, payload := args[1], args[2]
+	if tool == "click" && os.Getenv("BMA_TEST_CUA_ACTION_STDOUT") != "" {
+		fmt.Fprintln(os.Stdout, os.Getenv("BMA_TEST_CUA_ACTION_STDOUT"))
+		os.Exit(1)
+	}
 	screenshot := ""
 	for i, arg := range args {
 		if arg == "--screenshot-out-file" && i+1 < len(args) {

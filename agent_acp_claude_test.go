@@ -408,8 +408,8 @@ func TestClaudeCodeProfileRefusesATurnWhoseModeIsNotDefault(t *testing.T) {
 	if err := agent2.openSession(ctx, agent2.session("sesn_f")); err != nil {
 		t.Fatalf("openSession: %v", err)
 	}
-	if s := agent2.sessions["sesn_f"]; s.agentID != "claude-session-1" || s.agentMode != "default" {
-		t.Fatalf("session = %+v", s)
+	if c := agent2.sessions["sesn_f"].brain.(*claudeACPConv); c.agentID != "claude-session-1" || c.agentMode != "default" {
+		t.Fatalf("conversation = %+v", c)
 	}
 }
 

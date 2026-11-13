@@ -280,7 +280,7 @@ func TestACPAgentNoTurnOfThatProcessIsStale(t *testing.T) {
 	// A call that comes from a process that is not the session's (an earlier
 	// brain process): the turn is not found.
 	raw, _ := json.Marshal(map[string]any{"sessionId": "sesn_old", "toolCallId": "c", "name": "bash", "input": map[string]any{"command": "true"}})
-	got, rpcErr := f.agent.onRequest(ctx, &acpProcess{}, "_bma/tools/call", raw)
+	got, rpcErr := f.agent.adapter.(*dshAdapter).onRequest(ctx, &acpProcess{}, "_bma/tools/call", raw)
 	if rpcErr != nil {
 		t.Fatal(rpcErr)
 	}

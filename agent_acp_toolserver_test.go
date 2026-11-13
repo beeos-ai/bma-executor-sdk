@@ -27,7 +27,7 @@ func (b blockingRoute) Call(ctx context.Context, _ RouteCall) *RouteResult {
 // server sends the response headers at once and the result as the one event
 // of an SSE stream (MCP Streamable HTTP).
 func TestACPToolServerStreamsALongToolCall(t *testing.T) {
-	a := &ACPAgent{sessions: map[string]*acpSession{}}
+	a := newClaudeACPAdapter()
 	srv, err := startACPToolServer(a)
 	if err != nil {
 		t.Fatal(err)
@@ -36,8 +36,9 @@ func TestACPToolServerStreamsALongToolCall(t *testing.T) {
 	route := blockingRoute{release: make(chan struct{})}
 	turnCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	a.sessions["ses"] = &acpSession{id: "ses", placeholder: "ph-1", agentMode: "default",
-		turn: &acpTurn{ctx: turnCtx, toolRoute: route, tools: map[string]string{}}}
+	sink := &acpTurn{agent: &BrainHost{}, ctx: turnCtx, toolRoute: route, tools: map[string]string{}}
+	a.convs["ses"] = &claudeACPConv{a: a, agentID: "ses", placeholder: "ph-1", agentMode: "default",
+		prompt: &claudeACPPrompt{ctx: turnCtx, sink: sink}}
 
 	body := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"bash","arguments":{"command":"true"},"_meta":{"claudecode/toolUseId":"toolu_1"}}}`
 	req, _ := http.NewRequest(http.MethodPost, srv.url+"/mcp", strings.NewReader(body))

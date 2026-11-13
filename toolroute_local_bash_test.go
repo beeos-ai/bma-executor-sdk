@@ -33,6 +33,14 @@ func newBashRigWith(t *testing.T, opts CoreOptions) *bashRig {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	noErr(t, err)
 	opts.WorkRoot = root
+	if opts.Launch == nil {
+		// These tests measure command timeout and lifetime, not the developer's
+		// login profile. A slow bash profile can consume the entire 300ms wait
+		// before the command has even written its PID or first output.
+		opts.Launch = func(_ context.Context, req LaunchRequest) (LaunchSpec, error) {
+			return LaunchSpec{Argv: []string{"/bin/sh", "-c", req.Argv[len(req.Argv)-1]}}, nil
+		}
+	}
 	core, err := NewCore(opts)
 	if err != nil {
 		t.Fatal(err)
