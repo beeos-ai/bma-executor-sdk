@@ -465,10 +465,10 @@ func TestTypeRoute(t *testing.T) {
 		"web field, ASCII": {env: []string{web}, req: ComputerActionRequest{Action: "type", Text: "rain", PID: 1, WindowID: 2},
 			want: []string{`type_text {"pid":1`}, without: []string{"clipboard", "delivery_mode"}, reads: 1},
 		"rich clipboard": {env: []string{web, `BMA_TEST_CUA_CLIPBOARD_TYPES=["public.html","public.utf8-plain-text"]`}, req: req,
-			want: []string{`clipboard_read`, `type_text {"delivery_mode":"foreground"`}, without: []string{"clipboard_write", "hotkey"}, reads: 2},
+			want: []string{`clipboard_read`, `bring_to_front {"pid":38989`, `type_text {"pid":38989`}, without: []string{"clipboard_write", "hotkey", "delivery_mode"}, reads: 2},
 		"unreadable window": {req: req, want: paste, without: []string{"type_text"}, reads: 2},
 		"no clipboard": {noClipboard: true, env: []string{web}, req: req,
-			want: []string{`type_text {"delivery_mode":"foreground"`}, without: []string{"clipboard"}, reads: 2},
+			want: []string{`bring_to_front {"pid":38989`, `type_text {"pid":38989`}, without: []string{"clipboard", "delivery_mode"}, reads: 2},
 		"no window": {req: ComputerActionRequest{Action: "type", Text: text}, want: []string{`type_text {"scope":"desktop"`},
 			without: []string{"clipboard", "delivery_mode"}},
 	} {
@@ -592,21 +592,26 @@ func TestForegroundOnRefusal(t *testing.T) {
 			blocks, err := driver.Action(context.Background(), c.req)
 			raw, _ := os.ReadFile(logPath)
 			calls := strings.Count(string(raw), c.tool+" ")
-			foreground := strings.Count(string(raw), `"delivery_mode":"foreground"`)
+			fronts := strings.Count(string(raw), "bring_to_front ")
 			if c.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 					t.Fatalf("err = %v, want %q", err, c.wantErr)
 				}
-				if want := map[bool]int{true: 2, false: 1}[c.fgRefuse]; calls != want {
-					t.Fatalf("%s called %d times, want %d:\n%s", c.tool, calls, want, raw)
+				if want := map[bool]int{true: 2, false: 1}[c.fgRefuse]; calls != want || fronts != want-1 {
+					t.Fatalf("%s called %d times, bring_to_front %d, want %d:\n%s", c.tool, calls, fronts, want, raw)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if calls != 2 || foreground != 1 || !strings.Contains(blocks[0].Text, foregroundNote) {
-				t.Fatalf("calls %d, foreground %d, text %q:\n%s", calls, foreground, blocks[0].Text, raw)
+			// bring_to_front, then the same input again, never delivered in
+			// the foreground (which gives the front back).
+			log := string(raw)
+			first, front, second := strings.Index(log, c.tool+" "), strings.Index(log, "bring_to_front "), strings.LastIndex(log, c.tool+" ")
+			if calls != 2 || fronts != 1 || !(first < front && front < second) || strings.Contains(log, `"delivery_mode":"foreground"`) ||
+				!strings.Contains(blocks[0].Text, "brought window 142026 (pid 501) to the front, where it stays") {
+				t.Fatalf("calls %d, bring_to_front %d, text %q:\n%s", calls, fronts, blocks[0].Text, raw)
 			}
 		})
 	}
