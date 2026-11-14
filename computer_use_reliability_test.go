@@ -193,16 +193,27 @@ func TestComputerMenuAction(t *testing.T) {
 		t.Fatalf("driver log:\n%s", raw)
 	}
 	for name, input := range map[string]map[string]any{
-		"no window":   {"action": "menu", "menu_path": []string{"File"}},
-		"no path":     {"action": "menu", "pid": 1, "window_id": 2},
-		"blank label": {"action": "menu", "menu_path": []string{"File", "  "}, "pid": 1, "window_id": 2},
-		"long label":  {"action": "menu", "menu_path": []string{strings.Repeat("x", 201)}, "pid": 1, "window_id": 2},
-		"too deep":    {"action": "menu", "menu_path": strings.Split(strings.Repeat("a,", 16)+"a", ","), "pid": 1, "window_id": 2},
-		"coordinate":  {"action": "menu", "menu_path": []string{"File"}, "pid": 1, "window_id": 2, "coordinate": []int{1, 1}},
+		"no window":      {"action": "menu", "menu_path": []string{"File", "New Folder"}},
+		"no path":        {"action": "menu", "pid": 1, "window_id": 2},
+		"top level only": {"action": "menu", "menu_path": []string{"File"}, "pid": 1, "window_id": 2},
+		"blank label":    {"action": "menu", "menu_path": []string{"File", "  "}, "pid": 1, "window_id": 2},
+		"long label":     {"action": "menu", "menu_path": []string{"File", strings.Repeat("x", 201)}, "pid": 1, "window_id": 2},
+		"too deep":       {"action": "menu", "menu_path": strings.Split(strings.Repeat("a,", 16)+"a", ","), "pid": 1, "window_id": 2},
+		"coordinate":     {"action": "menu", "menu_path": []string{"File", "New Folder"}, "pid": 1, "window_id": 2, "coordinate": []int{1, 1}},
 	} {
 		if r := callComputer(t, session, ToolNameComputerAction, input); !r.IsError {
 			t.Errorf("%s = %+v", name, r)
 		}
+	}
+	// A top-level label alone opens its menu and leaves it open: refused before
+	// the driver, with what to send instead.
+	raw, _ = os.ReadFile(logPath)
+	if strings.Count(string(raw), "invoke_menu") != 1 {
+		t.Fatalf("a refused menu reached the driver:\n%s", raw)
+	}
+	r := callComputer(t, session, ToolNameComputerAction, map[string]any{"action": "menu", "menu_path": []string{"File"}, "pid": 1, "window_id": 2})
+	if !strings.Contains(textOf(r), `menu_path needs the full path, the menu item last, for example ["File", "New Folder"]`) || !strings.Contains(textOf(r), "computer_observe") {
+		t.Fatalf("top-level menu = %+v", r)
 	}
 }
 

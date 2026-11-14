@@ -217,7 +217,7 @@ type ComputerActionRequest struct {
 	// id such as "com.apple.TextEdit".
 	App string
 	// MenuPath are the menu labels of a menu action, from the menu bar to
-	// the item (1-16 labels, each 1-200 characters, trimmed).
+	// the item (2-16 labels, each 1-200 characters, trimmed).
 	MenuPath []string
 	// Duration is how long hold_key holds its keys (contract 1.14.0).
 	Duration time.Duration
@@ -819,9 +819,16 @@ func (in computerInput) actionRequest() (ComputerActionRequest, error) {
 		if in.PID == 0 || in.WindowID == 0 {
 			return request, errors.New("menu needs the pid and window_id of a window of the app whose menu it runs")
 		}
-		if len(in.MenuPath) == 0 || len(in.MenuPath) > maxMenuItems {
-			return request, fmt.Errorf(`menu_path must be 1-%d menu labels from the menu bar to the item, for example ["Window", "Weixin"]`, maxMenuItems)
+		if len(in.MenuPath) == 1 {
+			// A top-level label alone opens that menu and leaves it open
+			// (2026-11-15: ["File"], then File > New Folder ran 5 times and
+			// made nothing).
+			return request, errors.New(`menu_path needs the full path, the menu item last, for example ["File", "New Folder"]; to see which items there are, use computer_observe (the window's tree has the menu bar)`)
 		}
+		if len(in.MenuPath) == 0 || len(in.MenuPath) > maxMenuItems {
+			return request, fmt.Errorf(`menu_path must be 2-%d menu labels from the menu bar to the item, for example ["Window", "Weixin"]`, maxMenuItems)
+		}
+
 		for _, label := range in.MenuPath {
 			label = strings.TrimSpace(label)
 			if label == "" || utf8.RuneCountInString(label) > maxMenuLabel {

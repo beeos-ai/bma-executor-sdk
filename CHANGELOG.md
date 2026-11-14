@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.31
+
+- **Go: `menu` needs the full path.** A `menu_path` of one top-level label
+  (`["File"]`) made the driver open that menu and leave it open; the next five
+  File > New Folder calls each reported success and made no folder
+  (2026-11-15, beework-local 0.1.13). A one-label path is now refused before
+  the driver: "menu_path needs the full path, the menu item last, for
+  example ["File", "New Folder"]; to see which items there are, use
+  computer_observe (the window's tree has the menu bar)". The tool schema
+  asks for 2-16 labels. The driver's `invoke_menu` result says nothing about
+  a menu left open, so nothing is closed afterwards.
+
 ## 1.6.30
 
 - **Go: `menu` runs with the window's app in front.** The menu bar belongs
