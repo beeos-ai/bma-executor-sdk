@@ -1115,6 +1115,8 @@ func TestACPAgentOnInteractionReportsTheSameApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
+	// The "ended" report follows the interaction's close, not the turn's idle.
+	f.platform.waitFor(t, "ended report", func() bool { return len(got()) >= 2 })
 	if e := got(); len(e) != 2 || e[1].Phase != "ended" || e[1].InteractionID != id || e[1].Outcome != InteractionOutcomeAllow {
 		t.Fatalf("ended = %+v", e)
 	}
@@ -1126,6 +1128,7 @@ func TestACPAgentOnInteractionReportsTheSameApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertIdle(t, f.platform.waitIdle(t, "turn_2"), TurnOutcomeCanceled)
+	f.platform.waitFor(t, "withdrawn report", func() bool { return len(got()) >= 4 })
 	if e := got(); len(e) != 4 || e[3].Phase != "ended" || e[3].Outcome != "withdrawn" || e[3].InteractionID != f.platform.interactions[1].InteractionID {
 		t.Fatalf("withdrawn = %+v", e)
 	}
