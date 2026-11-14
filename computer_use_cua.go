@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -234,7 +235,10 @@ var cuaInputTools = map[string]bool{"click": true, "type_text": true, "press_key
 func (d *CuaDriver) callFronting(ctx context.Context, tool string, args map[string]any, req ComputerActionRequest) (result map[string]any, fronted bool, err error) {
 	result, err = d.callAction(ctx, tool, args, req)
 	var refusal *CuaDriverError
-	if err == nil || !asCuaDriverError(err, &refusal) || !refusal.foreground || req.WindowID == 0 || !cuaInputTools[tool] {
+	if err == nil || !asCuaDriverError(err, &refusal) || req.WindowID == 0 || !cuaInputTools[tool] {
+		return result, false, err
+	}
+	if !refusal.foreground && !(cuaKeyboardTools[tool] && refusal.Code == "no_focused_text_input" && d.inBackground(ctx, req.PID)) {
 		return result, false, err
 	}
 	if !d.bringToFront(ctx, req) {
@@ -242,6 +246,45 @@ func (d *CuaDriver) callFronting(ctx context.Context, tool string, args map[stri
 	}
 	result, err = d.callAction(ctx, tool, args, req)
 	return result, true, err
+}
+
+// cuaKeyboardTools are the input tools that send keys.
+var cuaKeyboardTools = map[string]bool{"type_text": true, "press_key": true, "hotkey": true}
+
+// inBackground reports that pid is known not to be the front app. macOS
+// sends keyboard input only to the key window of the front app, so keys for
+// an app in the background have nowhere to go: the driver answers
+// no_focused_text_input (its advice is a click to focus, which does not help
+// then). With the app in front the same answer means no field has the focus,
+// and the model should click it. Unknown (no front app query) is false.
+func (d *CuaDriver) inBackground(ctx context.Context, pid int) bool {
+	if d.frontPID == nil {
+		return false
+	}
+	front, err := d.frontPID(ctx)
+	return err == nil && front > 0 && front != pid
+}
+
+// frontAppPID asks LaunchServices for the front app's pid
+// (/usr/bin/lsappinfo, about 15 ms; NSWorkspace in a process without a
+// running AppKit loop keeps reporting the first app it saw). macOS only.
+func frontAppPID(ctx context.Context) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	asn, err := exec.CommandContext(ctx, "/usr/bin/lsappinfo", "front").Output()
+	if err != nil {
+		return 0, err
+	}
+	out, err := exec.CommandContext(ctx, "/usr/bin/lsappinfo", "info", "-only", "pid", strings.TrimSpace(string(asn))).Output()
+	if err != nil {
+		return 0, err
+	}
+	_, value, ok := strings.Cut(strings.TrimSpace(string(out)), "=")
+	pid, err := strconv.Atoi(strings.TrimSpace(value))
+	if !ok || err != nil {
+		return 0, fmt.Errorf("lsappinfo: no front pid in %q", out)
+	}
+	return pid, nil
 }
 
 // bringToFront makes the window's app the front app and leaves it there.
