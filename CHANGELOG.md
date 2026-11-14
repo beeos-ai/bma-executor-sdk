@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.25
+
+- **Go: a viewer's observation is not scaled.** An observation that names
+  `image_format` (the platform's desktop snapshot) keeps the screen's pixels
+  and size again; only model observations are scaled to the image limits
+  (1.6.24).
+
 ## 1.6.24
 
 - **Go: computer use batches, zoom, hover, key hold and wait; screenshots fit
