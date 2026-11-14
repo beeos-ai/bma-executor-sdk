@@ -392,8 +392,13 @@ type acpTurn struct {
 	// hostAllowed is the ComputerUseApprover's answer per call id, asked
 	// once so the tool_use event and the permission request agree.
 	hostAllowed map[string]bool
+	// computerChecks is the outcome of each computer use call's checks and
+	// preflight, run before its approval and handed to its execution.
+	computerChecks map[string]computerChecks
 	// effort is the turn's thinking level ("" for none).
 	effort string
+	// model is the turn's model (CoreOptions.ComputerVision is asked about it).
+	model string
 	// input is the input the brain is working on.
 	input string
 
@@ -699,7 +704,7 @@ func (a *BrainHost) RunTurn(ctx context.Context, turn *AgentTurn) error {
 	}
 	policy := acpCapPolicy(withTurnTools(effective, plan.tools), a.opts.ToolPolicy)
 	a.mu.Lock()
-	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: policy, hostAsk: hostAsk, custom: custom, hostAllowed: map[string]bool{}, effort: plan.effort,
+	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: policy, hostAsk: hostAsk, custom: custom, hostAllowed: map[string]bool{}, computerChecks: map[string]computerChecks{}, effort: plan.effort, model: plan.model,
 		messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}, questions: map[string]string{}}
 	if remoteRoute != nil {
 		t.toolRoute = remoteRoute(ledger)
@@ -1062,7 +1067,11 @@ func (t *acpTurn) ToolUse(call BrainCall, permission string) {
 	if permission == "" {
 		permission = t.policyOf(call.Name)
 	}
-	if permission == "ask" && t.ledger.call(call.ID).Decision == "" && t.hostAllows(t.ctx, t.turn.SessionID(), call.ID, call.Name, call.Input) {
+	undecided := t.ledger.call(call.ID).Decision == ""
+	switch {
+	case permission != "deny" && undecided && t.checkComputer(t.ctx, call) != nil:
+		permission = "allow" // refused before its approval (Permission)
+	case permission == "ask" && undecided && t.hostAllows(t.ctx, t.turn.SessionID(), call.ID, call.Name, call.Input):
 		permission = "allow"
 	}
 	t.toolUse(call.ID, call.Name, call.Input, permission)
@@ -1144,6 +1153,14 @@ func (t *acpTurn) Permission(ctx context.Context, call BrainCall) BrainDecision 
 	decide := func(decision string) error {
 		return t.ledger.decide(call.ID, decision, interactionID, call.Name, call.Input)
 	}
+	if permission != "deny" && t.ledger.call(call.ID).Decision == "" && t.checkComputer(ctx, call) != nil {
+		// Its checks or the host's preflighter refused this computer use
+		// call: nobody is asked, and Call answers the refusal without running
+		// it (the route records it as the call's result). No decision is
+		// recorded: the call was neither approved nor denied.
+		t.toolUse(call.ID, call.Name, call.Input, "allow")
+		return BrainDecision{Outcome: BrainAllow}
+	}
 	if permission == "ask" && t.ledger.call(call.ID).Decision == "" && t.hostAllows(ctx, sessionID, call.ID, call.Name, call.Input) {
 		// The host's ComputerUseApprover lets this call through: it is
 		// recorded as allowed for the gate, and reported as allow, so no
@@ -1224,7 +1241,12 @@ func (t *acpTurn) Call(ctx context.Context, call BrainCall) *RouteResult {
 	}
 	t.mu.Lock()
 	toolUseID := t.tools[call.ID]
+	checks, checked := t.computerChecks[call.ID]
 	t.mu.Unlock()
+	if checked {
+		ctx = withComputerChecks(ctx, checks.Refusal)
+	}
+	ctx = context.WithValue(ctx, computerModelKey{}, t.model)
 	return t.toolRoute.Call(ctx, RouteCall{ID: call.ID, ToolUseID: toolUseID, Name: call.Name, Input: call.Input})
 }
 

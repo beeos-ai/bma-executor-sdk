@@ -295,6 +295,8 @@ func TestDriverRejectionDoesNotPoisonControlAndUnknownNeedsDriverProof(t *testin
 	}{
 		{"structured refusal", `{"code":"invalid_arguments"}`, true},
 		{"partial input", `{"code":"type_text_incomplete"}`, false},
+		{"refused before input", `{"code":"off_space_or_ax_unresolved","effect":"refused"}`, true},
+		{"unknown code refused before input", `{"code":"future_refusal","effect":"refused"}`, true},
 		{"plain text", `invalid_arguments`, false},
 		{"undecodable", `{`, false},
 		{"unknown", `{"code":"future_error"}`, false},

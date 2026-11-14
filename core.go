@@ -97,6 +97,13 @@ type CoreOptions struct {
 	// capabilities.computer_use (for example NewCuaDriver). Nil leaves
 	// computer use off: the harness then sends no computer_* tool.
 	ComputerUse ComputerUseBackend
+	// ComputerVision tells whether the model that reads a session's
+	// computer use results takes images. When it answers
+	// ComputerVisionTextOnly, an observation's screenshot is still taken
+	// (actions use its pixels) but not sent: the result carries its text and
+	// a note that the model cannot read images. Nil, or
+	// ComputerVisionUnknown, sends the screenshot.
+	ComputerVision func(ctx context.Context, q ComputerVisionQuery) ComputerVisionAnswer
 	// UploadArtifacts advertises the artifacts capability and offloads large
 	// bash results with Client.UploadArtifact. Only environment-scoped
 	// executors have an artifact store.
@@ -230,6 +237,8 @@ type Core struct {
 
 	// local is the state of the local tool routes (toolroute_local.go).
 	local localState
+	// frames are the sessions' last computer use observations (computer_use.go).
+	frames computerFrames
 }
 
 type registeredMethod struct {
@@ -742,6 +751,7 @@ func (c *Core) stop(key coreKey) bool {
 	if session == nil {
 		return false
 	}
+	c.frames.forget(key)
 	session.mu.Lock()
 	session.stopped = true
 	session.mu.Unlock()
@@ -833,7 +843,7 @@ func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams
 			err = fmt.Errorf("capability_unavailable: tool %q is not supported", params.Tool)
 			break
 		}
-		result, err = c.computerTool(ctx, params)
+		result, err = c.computerTool(ctx, coreKey{brain, params.SessionID}, params)
 	default:
 		err = fmt.Errorf("capability_unavailable: tool %q is not supported", params.Tool)
 	}

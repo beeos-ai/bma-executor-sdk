@@ -1,5 +1,70 @@
 # Changelog
 
+## 1.6.9
+
+- **Go: computer use is checked before anyone approves it
+  (`ComputerUsePreflighter`).** A click on another app or a key for a window
+  on another Space was approved by the user and then refused by the driver.
+  A backend that implements `PreflightObserve` / `PreflightAction` now
+  refuses such a call first: for a local brain the order is input checks,
+  preflight, approval (`ComputerUseApprover` or the platform's policy),
+  execution, and a refused call asks nobody and runs nothing (reported
+  `allow`, its result the refusal). A platform brain's `tool.call` was
+  approved on the platform before it arrived; there the order is input
+  checks, preflight, execution. An input the tool refuses is no longer asked
+  either. The refusal text is `<reason>: <message>` (`NewReasonError`) or
+  the error's own `<code>: ...` text.
+- **Go: an action's coordinates must belong to the last screenshot.** Core
+  keeps each session's last observation (screen or window, and its pixel
+  size from the image) and passes it as `ComputerActionRequest.Frame`. A
+  click, scroll or drag without `pid`/`window_id` while the last observation
+  was a window is refused (`window_frame_required`) instead of being read as
+  screen pixels (2026-11-14: window pixels (500,300) clicked the browser
+  behind). It is refused rather than converted: a converted screen point can
+  land on a window in front of this one.
+- **Go: `computer_action` runs menu items (`menu`).** `action: "menu"` with
+  `menu_path` (1-16 labels, for example `["Window", "Weixin"]`) and the
+  window's `pid` and `window_id` (`ComputerActionMenu`,
+  `ComputerActionRequest.MenuPath`); `CuaDriver` runs `invoke_menu`.
+- **Go: `open_app` recovers an app without a usable window.** When
+  `bring_to_front` fails or the app has no window on the current desktop,
+  `CuaDriver` opens it again, brings it to the front and then brings its
+  largest hidden window forward; it lists only windows on the current desktop
+  and counts the others as not usable. `(*CuaDriver).OpenApp` returns the
+  same as `OpenAppResult`. Observations also leave out windows on another
+  Space.
+- **Go: typing says whether the text landed, and non-ASCII text is pasted.**
+  `type` ends with `typed: verified` (the driver confirmed it, or a native
+  field of the window shows it), `typed: mismatch — ...` (no field shows it;
+  with the closest field's text) or `typed: unverified — ...` (web content,
+  or nothing to read), from one accessibility read without a screenshot
+  (`CuaDriverOptions.SkipTypeReadback` leaves it out). A driver's
+  `type_text_incomplete` whose text the field shows is a success. Text with
+  non-ASCII characters for a window is pasted by default
+  (`CuaDriverOptions.NonASCIIText`: `paste`, `foreground`, `background`):
+  synthesized key events in the background garbled it in Electron fields
+  (2026-11-14, Lark: 13 incomplete deliveries, characters out of order). The
+  clipboard is used only when it holds plain text alone, which is put back
+  right after; other content is never replaced, and the text is then typed
+  with the window briefly in front. The typed text is not logged or repeated
+  in the result.
+- **Go: driver advice names only what the model can call.** Driver hints,
+  next calls and escalations naming `run_steps`, `delivery_mode`,
+  `get_browser_state`, `set_value` and other tools the model does not have
+  are dropped; `invoke_menu`, `get_window_state`, `launch_app` and the like
+  are rewritten into `computer_*` actions (`cuaToolActions`, one row per
+  action). Known refusals (`background_unavailable`,
+  `off_space_or_ax_unresolved`, ...) read as what to do next. A structured
+  failure is a `*CuaDriverError` (`Tool`, `Code`); one with effect `refused`
+  is `ErrComputerActionRejected`.
+- **Go: text-only models get no screenshot (`CoreOptions.ComputerVision`).**
+  The host answers per session and model (`ComputerVisionQuery`); for
+  `ComputerVisionTextOnly` the screenshot is taken but not sent, with a note,
+  and unknown sends it.
+- **Go: the `computer_action` description carries the rules** for frames,
+  hidden windows, checking typed text before Return, the recipient before
+  sending, and stopping after repeated failures.
+
 ## 1.6.8
 
 - **Go: an executor reconnects as soon as its host resumes from a suspend.**

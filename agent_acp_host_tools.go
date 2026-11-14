@@ -103,13 +103,28 @@ var acpComputerObserve = BrainTool{
 var acpComputerAction = BrainTool{
 	Name: ToolNameComputerAction,
 	Description: "Use this computer's mouse and keyboard: click, type, key, scroll or drag; open_app opens an app by name or bundle id, " +
-		"brings it to the front and returns its pid and windows. Coordinates are pixels of the last computer_observe " +
-		"screenshot (window-local with pid and window_id). Observe before acting and again afterwards to check the result. " +
-		"Before sending a message, check on screen that the recipient is right.",
+		"brings it to the front and returns its pid and the windows you can use; menu runs an item of an app's menu bar by its labels " +
+		`(menu_path, for example ["Window", "Weixin"] to show a window) with the pid and window_id of one of its windows. ` +
+		"Observe before acting and again afterwards to check the result.\n" +
+		"Rules:\n" +
+		"- A coordinate belongs to the screenshot it was read from. After observing a window, act on it with the same pid and window_id; " +
+		"use screen coordinates only after a whole-screen observation, without pid and window_id.\n" +
+		"- Only act on windows the window list shows; windows that are minimized, hidden or on another Space cannot be used: " +
+		"bring them back with open_app or the app's Window menu.\n" +
+		"- type ends with a line \"typed: verified\", \"typed: mismatch\" or \"typed: unverified\". Unless it is verified, observe the field " +
+		"and compare its text with what you meant before any Return or send. If only part landed, type just the missing rest; if it is " +
+		"wrong otherwise, select all, delete and type it once more; if it is still wrong, stop and report.\n" +
+		"- Never press Return in a message box until you have just read the box and its text is exactly the message.\n" +
+		"- Before sending, submitting or paying, read the recipient or target on screen and check it is the one the user asked for.\n" +
+		"- If the same approach fails twice, try a different one; after three different approaches fail, stop and ask the user. " +
+		"Do not experiment with the tool itself.\n" +
+		"- Open apps with open_app; do not use bash, osascript or open to find, start or control apps.",
 	Parameters: acpObject([]string{"action", "description"}, map[string]any{
-		"description":      computerStepDescription,
-		"action":           map[string]any{"type": "string", "enum": []string{ComputerActionClick, ComputerActionType, ComputerActionKey, ComputerActionScroll, ComputerActionDrag, ComputerActionOpenApp}},
-		"app":              map[string]any{"type": "string", "description": `App to open with open_app: its name such as "TextEdit", or its bundle id such as "com.apple.TextEdit".`},
+		"description": computerStepDescription,
+		"action":      map[string]any{"type": "string", "enum": []string{ComputerActionClick, ComputerActionType, ComputerActionKey, ComputerActionScroll, ComputerActionDrag, ComputerActionOpenApp, ComputerActionMenu}},
+		"app":         map[string]any{"type": "string", "description": `App to open with open_app: its name such as "TextEdit", or its bundle id such as "com.apple.TextEdit".`},
+		"menu_path": map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1, "maxLength": maxMenuLabel},
+			"minItems": 1, "maxItems": maxMenuItems, "description": `Menu labels from the menu bar to the item for menu, exactly as shown, for example ["File", "Save As..."].`},
 		"coordinate":       map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[x, y] for click, scroll and the end of drag."},
 		"start_coordinate": map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[x, y] where drag starts."},
 		"text":             map[string]any{"type": "string", "description": `Text to type, or a key or chord such as "Return" or "ctrl+s".`},
@@ -202,6 +217,31 @@ func (t *acpTurn) hostAllows(ctx context.Context, sessionID, callID, tool string
 	t.hostAllowed[callID] = allowed
 	t.mu.Unlock()
 	return allowed
+}
+
+// checkComputer runs the checks and the host's ComputerUsePreflighter of a
+// computer use call this machine serves, once per call and before its
+// approval, and returns its refusal (nil: go on). Calls of other tools, and
+// computer use on the hands of another machine, are not checked here.
+func (t *acpTurn) checkComputer(ctx context.Context, call BrainCall) *RouteResult {
+	if t.local == nil || (call.Name != ToolNameComputerObserve && call.Name != ToolNameComputerAction) {
+		return nil
+	}
+	core := t.agent.opts.Core
+	if core == nil || !core.hasComputerTool(call.Name) {
+		return nil
+	}
+	t.mu.Lock()
+	checks, ok := t.computerChecks[call.ID]
+	t.mu.Unlock()
+	if ok {
+		return checks.Refusal
+	}
+	checks.Refusal = core.computerCheck(ctx, coreKey{acpBrain, t.turn.SessionID()}, call.Name, call.Input)
+	t.mu.Lock()
+	t.computerChecks[call.ID] = checks
+	t.mu.Unlock()
+	return checks.Refusal
 }
 
 // customToolUseID is the event id of the agent.custom_tool_use of one call

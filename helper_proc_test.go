@@ -86,6 +86,57 @@ func runFakeCua() {
 		fmt.Fprintln(os.Stdout, os.Getenv("BMA_TEST_CUA_ACTION_STDOUT"))
 		os.Exit(1)
 	}
+	var input map[string]any
+	_ = json.Unmarshal([]byte(payload), &input)
+	// BMA_TEST_CUA_FAIL_TOOL / BMA_TEST_CUA_FAIL_STDOUT: that tool exits 1
+	// with that structured result; BMA_TEST_CUA_RESULT_TOOL /
+	// BMA_TEST_CUA_RESULT: that tool answers that result.
+	logCall := func() {
+		if logPath := os.Getenv("BMA_TEST_CUA_LOG"); logPath != "" {
+			file, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+			if err == nil {
+				fmt.Fprintf(file, "%s %s telemetry=%s\n", tool, payload, os.Getenv("CUA_TELEMETRY"))
+				_ = file.Close()
+			}
+		}
+	}
+	if tool == os.Getenv("BMA_TEST_CUA_FAIL_TOOL") {
+		logCall()
+		fmt.Fprintln(os.Stdout, os.Getenv("BMA_TEST_CUA_FAIL_STDOUT"))
+		os.Exit(1)
+	}
+	if tool == os.Getenv("BMA_TEST_CUA_RESULT_TOOL") {
+		logCall()
+		fmt.Fprintln(os.Stdout, os.Getenv("BMA_TEST_CUA_RESULT"))
+		return
+	}
+	// BMA_TEST_CUA_HIDDEN=1: TextEdit runs with its only window off the
+	// current desktop: bring_to_front of the app fails, of the window brings
+	// it back (a marker file next to the log remembers it).
+	if os.Getenv("BMA_TEST_CUA_HIDDEN") == "1" {
+		marker := os.Getenv("BMA_TEST_CUA_LOG") + ".front"
+		_, shown := os.Stat(marker)
+		window := map[string]any{"app_name": "TextEdit", "pid": 4242, "window_id": 78, "title": "Untitled", "layer": 0,
+			"is_on_screen": shown == nil, "on_current_space": shown == nil, "bounds": map[string]any{"x": 10, "y": 20, "width": 600, "height": 400}}
+		panel := map[string]any{"app_name": "TextEdit", "pid": 4242, "window_id": 79, "title": "", "layer": 0,
+			"is_on_screen": false, "bounds": map[string]any{"x": 0, "y": 0, "width": 10, "height": 10}}
+		switch tool {
+		case "launch_app", "list_windows":
+			logCall()
+			_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"pid": 4242, "bundle_id": "com.apple.TextEdit", "name": "TextEdit",
+				"windows": []any{window, panel}})
+			return
+		case "bring_to_front":
+			logCall()
+			if input["window_id"] == nil {
+				fmt.Fprintln(os.Stdout, `{"code":"bring_to_front_window_not_found","candidates":[{"window_id":78,"is_on_screen":false}],"hint":"call get_window_state or run_steps"}`)
+				os.Exit(1)
+			}
+			_ = os.WriteFile(marker, nil, 0o600)
+			_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"summary": "activated"})
+			return
+		}
+	}
 	screenshot := ""
 	for i, arg := range args {
 		if arg == "--screenshot-out-file" && i+1 < len(args) {
@@ -113,8 +164,12 @@ func runFakeCua() {
 	case "get_window_state":
 		// The bundled macOS 0.34.0 driver returns tree_markdown by default,
 		// but rejects the newer tree_format input field.
-		var input map[string]any
-		_ = json.Unmarshal([]byte(payload), &input)
+		if input["tree_format"] == "elements" && os.Getenv("BMA_TEST_CUA_ELEMENTS") != "" {
+			var elements any
+			_ = json.Unmarshal([]byte(os.Getenv("BMA_TEST_CUA_ELEMENTS")), &elements)
+			result = map[string]any{"elements": elements}
+			break
+		}
 		if os.Getenv("BMA_TEST_CUA_STRICT_WINDOW") == "1" {
 			if _, present := input["tree_format"]; present {
 				fmt.Fprintln(os.Stderr, "get_window_state: unknown argument tree_format")
@@ -130,6 +185,12 @@ func runFakeCua() {
 				"is_on_screen": true, "bounds": map[string]any{"x": 111, "y": 104, "width": 754, "height": 512}},
 			map[string]any{"app_name": "hidden.exe", "pid": 1, "window_id": 2, "title": "gone", "is_on_screen": false},
 		}}
+	case "clipboard_read":
+		var types any = []any{"public.utf8-plain-text"}
+		if raw := os.Getenv("BMA_TEST_CUA_CLIPBOARD_TYPES"); raw != "" {
+			_ = json.Unmarshal([]byte(raw), &types)
+		}
+		result = map[string]any{"types": types, "text": "CLIPBOARD-PREV"}
 	case "launch_app":
 		result = map[string]any{"pid": 4242, "bundle_id": "com.apple.TextEdit", "name": "TextEdit", "windows": []any{
 			map[string]any{"app_name": "TextEdit", "pid": 4242, "window_id": 77, "title": "Untitled",

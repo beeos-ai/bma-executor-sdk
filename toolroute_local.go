@@ -373,6 +373,18 @@ func (r *LocalToolRoute) runOnce(ctx context.Context, c RouteCall) *RouteResult 
 		}
 		return &RouteResult{Outcome: RouteOutcomeUnknown, Code: "outcome_unknown", Text: text, IsError: true}
 	}
+	// A computer use call the turn refused before its approval (its checks
+	// or the host's preflighter) has no decision for the gate: its refusal
+	// is the answer, and nothing runs.
+	if checks, ok := ctx.Value(computerChecks{}).(computerChecks); ok && checks.Refusal != nil && r.core.hasComputerTool(c.Name) {
+		r.logf(LogWarn, fmt.Sprintf("tool call %s (%s) of session %s refused before its approval: %s", c.ID, c.Name, r.sessionID, checks.Refusal.Code))
+		if err := ledger.update(c.ID, func(s *acpCallState) {
+			s.Phase, s.Text, s.IsError, s.Outcome, s.Code = acpPhaseDone, checks.Refusal.Text, true, checks.Refusal.Outcome, checks.Refusal.Code
+		}); err != nil {
+			return stateError(err)
+		}
+		return checks.Refusal
+	}
 	if denied := r.gate(c); denied != nil {
 		r.logf(LogWarn, fmt.Sprintf("tool call %s (%s) of session %s refused: %s", c.ID, c.Name, r.sessionID, denied.Text))
 		return denied
@@ -409,6 +421,21 @@ func (r *LocalToolRoute) runOnce(ctx context.Context, c RouteCall) *RouteResult 
 			return stateError(err)
 		}
 		return refusal
+	}
+	// A computer use call passes its checks and the host's preflighter
+	// before it is marked started (the turn already asked them before the
+	// approval; a call recovered after a restart is asked here).
+	if r.core.hasComputerTool(c.Name) {
+		var refusal *RouteResult
+		if ctx, refusal = r.checkComputer(ctx, c); refusal != nil {
+			r.logf(LogWarn, fmt.Sprintf("tool call %s (%s) of session %s refused before it ran: %s", c.ID, c.Name, r.sessionID, refusal.Code))
+			if err := ledger.update(c.ID, func(s *acpCallState) {
+				s.Phase, s.Text, s.IsError, s.Outcome, s.Code = acpPhaseDone, refusal.Text, true, refusal.Outcome, refusal.Code
+			}); err != nil {
+				return stateError(err)
+			}
+			return refusal
+		}
 	}
 	if err := ledger.update(c.ID, func(s *acpCallState) { s.Phase = acpPhaseStarted }); err != nil {
 		return stateError(err)
@@ -452,6 +479,28 @@ func (r *LocalToolRoute) checkFileAccess(ctx context.Context, c RouteCall) *Rout
 		return refused(code, detail)
 	}
 	return nil
+}
+
+// computerChecks carries the outcome of a computer use call's checks from the
+// turn's permission step to the route: Refusal nil means it passed.
+type computerChecks struct{ Refusal *RouteResult }
+
+// withComputerChecks marks ctx with a call's check outcome.
+func withComputerChecks(ctx context.Context, refusal *RouteResult) context.Context {
+	return context.WithValue(ctx, computerChecks{}, computerChecks{refusal})
+}
+
+// checkComputer returns a computer use call's refusal, or the ctx the call
+// runs with (marked checked, so Core does not ask the preflighter again).
+func (r *LocalToolRoute) checkComputer(ctx context.Context, c RouteCall) (context.Context, *RouteResult) {
+	checks, ok := ctx.Value(computerChecks{}).(computerChecks)
+	if !ok {
+		checks.Refusal = r.core.computerCheck(ctx, coreKey{acpBrain, r.sessionID}, c.Name, c.Input)
+	}
+	if checks.Refusal != nil {
+		return ctx, checks.Refusal
+	}
+	return context.WithValue(ctx, computerCheckedKey{}, true), nil
 }
 
 // runComputer runs computer_observe / computer_action in Core (its

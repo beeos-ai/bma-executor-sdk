@@ -73,6 +73,14 @@
 
 `computer_observe` 和 `computer_action` 默认是 `ask`：每次调用都在平台上审批。`CoreOptions.ComputerUse` 的后端如果同时实现 `ComputerUseApprover`（`NeedsObserveApproval`、`NeedsActionApproval`），就逐次由它决定：答 `false` 的调用上报为 `allow`（`agent.tool_use` 的 `evaluated_permission`），在账本里记为已允许，不发 `interaction.request` 直接执行；答 `true` 照旧询问。只有当 `ask` 来自工具的默认值时才问它：平台的 `metadata.tool_policy` 或 `ACPAgentOptions.ToolPolicy` 写了这个工具，就按写的值办，不再问它。每次调用只问一次。判断不了的调用（比如不知道点击会点到什么）应答 `true`。只有 Go 有，和电脑操作本身一样。
 
+### 审批前先拒绝：`ComputerUsePreflighter`
+
+后端如果同时实现 `ComputerUsePreflighter`（`PreflightObserve`、`PreflightAction`），可以在问人之前拒绝一次调用，比如点到别的应用、窗口在别的桌面空间。本机脑的调用顺序是：输入校验（含 `window_frame_required`）→ 预检 → 审批（`ComputerUseApprover` 或平台策略）→ 执行；被拒的调用上报为 `allow`，结果是带错误码的工具错误，不问任何人。平台脑的 `tool.call` 在到达前已在平台上审批，所以那条路径是输入校验 → 预检 → 执行。拒绝文本：带 data reason 的 `*RPCError`（`NewReasonError`）为 `<reason>: <message>`；文本本身以 `<code>: ` 开头时原样；否则为 `computer_use_refused: <文本>`。请求带 `SessionID`，动作还带 `Frame`（坐标所属的、这个会话最近一次观察）。
+
+### 只能读文字的模型：`CoreOptions.ComputerVision`
+
+`ComputerVision(ctx, ComputerVisionQuery{SessionID, Model})` 回答这个会话的模型能不能看图（本机脑回合里 `Model` 是这一轮的模型，`tool.call` 为空）。答 `ComputerVisionTextOnly` 时照常截图（动作按它的像素），但不发给模型，结果里写明原因；`ComputerVisionUnknown` 或没有回调时照常发图。
+
 TypeScript / Python 没有 process 运行时，因此不提供 Launch 钩子：执行端自己的 `process.start` handler 就是等价物（读上下文、校验、再 spawn），其 params 里能看到 `package_install`，所以包安装与命令有同样的决策点。见 [`typescript/examples/session-context`](../../typescript/examples/session-context/main.mjs) 与 [`python/examples/session_context.py`](../../python/examples/session_context.py)：缺 `agent_session_id`（承载的 `initiator: "platform"` 除外）与 `package_install` 在读取会话上下文之前就被拒绝。
 
 ## 会话文件根
