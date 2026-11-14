@@ -3,6 +3,7 @@ package bmaexecutor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -419,5 +420,76 @@ func TestACPAgentComputerUsePreflightBeforeApproval(t *testing.T) {
 				t.Fatalf("vision queries = %q, want the turn's model", models)
 			}
 		})
+	}
+}
+
+// platformAskUserQuestion is the agent's own ask_user_question, as the
+// beework backend defines it for every employee (2026-11-14).
+var platformAskUserQuestion = CustomToolDefinition{Name: ToolNameAskUserQuestion, Description: "Ask the user (platform definition).",
+	InputSchema: map[string]any{"type": "object", "properties": map[string]any{"questions": map[string]any{"type": "array"}}}}
+
+// An agent's custom ask_user_question is the same ability as the built-in
+// one: with ACPAgentOptions.AskUserQuestion the turn is accepted (1.6.9-1.6.11
+// refused it as a name of the executor's tools), the tool is offered once,
+// with the platform's definition, and a call is the session's custom tool
+// call. Another custom tool with an executor tool's name is still refused.
+func TestTurnToolsPlatformAskUserQuestionWins(t *testing.T) {
+	a := &BrainHost{opts: ACPAgentOptions{AskUserQuestion: true, Core: &Core{}}, caps: BrainCapabilities{HostTools: true, CustomTools: true}}
+	tools, err := a.turnTools(AgentTurnConfig{CustomTools: []CustomToolDefinition{platformAskUserQuestion}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 || tools[0].Name != ToolNameAskUserQuestion || !tools[0].Custom || tools[0].Description != platformAskUserQuestion.Description {
+		t.Fatalf("tools = %+v", tools)
+	}
+	// Without the platform's, the built-in one.
+	if tools, err := a.turnTools(AgentTurnConfig{}, false); err != nil || len(tools) != 1 || tools[0].Custom || tools[0].Description != acpAskUserQuestion.Description {
+		t.Fatalf("tools without a platform definition = %+v, %v", tools, err)
+	}
+	// A real clash is still refused.
+	core := &Core{opts: CoreOptions{ComputerUse: &fakeComputer{}}}
+	b := &BrainHost{opts: ACPAgentOptions{AskUserQuestion: true, Core: core}, caps: BrainCapabilities{HostTools: true, CustomTools: true}}
+	_, err = b.turnTools(AgentTurnConfig{CustomTools: []CustomToolDefinition{{Name: ToolNameComputerObserve, Description: "x", InputSchema: map[string]any{"type": "object"}}}}, false)
+	var rpcErr *RPCError
+	if !errors.As(err, &rpcErr) || rpcErr.Code != CodeInvalidParams {
+		t.Fatalf("custom computer_observe = %v", err)
+	}
+}
+
+func TestACPAgentPlatformAskUserQuestionIsTheCustomTool(t *testing.T) {
+	command := bmaDshAcpCommand(t)
+	model := newScriptedToolModel(t)
+	model.name, model.args = ToolNameAskUserQuestion, `{"questions":[{"question":"Which format?","options":[{"label":"Markdown"},{"label":"PDF"}]}]}`
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	f := startACPFixture(t, ctx, ACPAgentOptions{Command: command, AskUserQuestion: true, Upstream: ACPModelUpstream{BaseURL: model.server.URL + "/v1", Model: "scripted"}})
+	f.start(t, ctx, "sesn_pq", "turn_1", "make a report", func(p *TurnStartParams) {
+		p.Config.CustomTools = []CustomToolDefinition{platformAskUserQuestion}
+	})
+	var use AgentEventRecord
+	f.platform.waitFor(t, "agent.custom_tool_use", func() bool {
+		for _, e := range f.platform.events {
+			if eventJSON(t, e)["type"] == AgentEventTypeAgentCustomToolUse {
+				use = e
+				return true
+			}
+		}
+		return false
+	})
+	if body := eventJSON(t, use); body["name"] != ToolNameAskUserQuestion || !strings.Contains(fmt.Sprint(body["input"]), "Which format?") {
+		t.Fatalf("custom tool use = %v", body)
+	}
+	if result, err := f.executor.RespondCustomToolResult(ctx, AgentCustomToolResultParams{SessionID: "sesn_pq", ToolUseID: use.EventID,
+		Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "Markdown"}}}); err != nil || !result.Accepted {
+		t.Fatalf("custom tool result: %+v %v", result, err)
+	}
+	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
+	if got := strings.Join(eventTypes(eventsOf(f.platform.snapshot(), "turn_1")), ","); got != "session.status_running,agent.custom_tool_use,agent.message,session.status_idle" {
+		t.Fatalf("events = %s", got)
+	}
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	if tools := strings.Join(model.tools[0], ","); tools != "ask_user_question,bash,edit,glob,grep,read,write" {
+		t.Fatalf("model saw tools %s", tools)
 	}
 }

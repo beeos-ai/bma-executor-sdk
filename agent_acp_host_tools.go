@@ -19,7 +19,8 @@ package bmaexecutor
 //	                                   ComputerUseApprover may let the calls it judges safe run
 //	                                   without asking, but only while neither the turn's tool_policy
 //	                                   nor ACPAgentOptions.ToolPolicy names the tool.
-//	ask_user_question                  with ACPAgentOptions.AskUserQuestion: asks the user and waits. It is a custom tool call of the
+//	ask_user_question                  with ACPAgentOptions.AskUserQuestion, unless the agent defines its own (a custom tool
+//	                                   of the same name is the same ability and its definition wins): asks the user and waits. It is a custom tool call of the
 //	                                   session (agent.custom_tool_use): the platform pauses the session
 //	                                   with requires_action, any client answers with
 //	                                   user.custom_tool_result, and the same turn continues with the
@@ -148,7 +149,10 @@ func (a *BrainHost) turnTools(config AgentTurnConfig, remote bool) ([]BrainTool,
 	switch {
 	case len(config.HostTools) > 0 && (!remote || !a.caps.HostTools):
 		return nil, &RPCError{Code: CodeInvalidParams, Message: "invalid params: host_tools are only for an executor that declared agent.host_tools, with tools_mcp_*"}
-	case a.caps.HostTools && a.opts.AskUserQuestion:
+	case a.caps.HostTools && a.opts.AskUserQuestion && !hasCustomTool(config.CustomTools, ToolNameAskUserQuestion):
+		// The built-in ask_user_question is the fallback for a turn whose
+		// agent does not define it: an agent's custom ask_user_question is the
+		// same ability (a custom tool call of the session) and its definition wins.
 		tools = append(tools, acpAskUserQuestion)
 	}
 	if a.caps.HostTools {
@@ -242,6 +246,16 @@ func (t *acpTurn) checkComputer(ctx context.Context, call BrainCall) *RouteResul
 	t.computerChecks[call.ID] = checks
 	t.mu.Unlock()
 	return checks.Refusal
+}
+
+// hasCustomTool reports whether the turn's custom tools define name.
+func hasCustomTool(tools []CustomToolDefinition, name string) bool {
+	for _, t := range tools {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // customToolUseID is the event id of the agent.custom_tool_use of one call

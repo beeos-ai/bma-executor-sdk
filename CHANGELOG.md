@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.6.12
+
+- **Go: a turn whose agent defines `ask_user_question` runs again with
+  `ACPAgentOptions.AskUserQuestion`.** 1.6.9-1.6.11 refused every such
+  `turn.start` with `-32602 invalid params: custom tool ask_user_question has
+  the name of one of the executor's tools`: the built-in `ask_user_question`
+  was added first and the agent's custom tool of the same name (which the
+  beework backend gives every employee) clashed with it. Both are the same
+  ability, a custom tool call of the session, so the agent's definition now
+  wins: the built-in one is offered only when the agent has none, the tool
+  appears once, and a call is the session's custom tool call. Any other
+  custom tool with the name of one of the executor's tools is still refused.
+
 ## 1.6.11
 
 - **Go: `open_app` reopens a running app that shows no window (macOS).**
