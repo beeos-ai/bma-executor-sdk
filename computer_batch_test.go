@@ -272,3 +272,16 @@ func TestCuaDriverNewActions(t *testing.T) {
 		t.Fatalf("driver log:\n%s", raw)
 	}
 }
+
+// TestComputerViewerObservationKeepsItsSize: an observation that asks for an
+// image format is a viewer's (desktop snapshot): its pixels and size stay the
+// screen's, without the model's scaling note.
+func TestComputerViewerObservationKeepsItsSize(t *testing.T) {
+	backend := &screenBackend{w: 1920, h: 1080}
+	session, _ := computerSession(t, CoreOptions{ComputerUse: backend})
+	viewer := callComputer(t, session, ToolNameComputerObserve, map[string]any{"image_format": "png"})
+	images := resultImages(t, viewer)
+	if len(images) != 1 || images[0].Bounds().Dx() != 1920 || strings.Contains(textOf(viewer), "scaled") {
+		t.Fatalf("viewer observation = %d images, text %q", len(images), textOf(viewer))
+	}
+}

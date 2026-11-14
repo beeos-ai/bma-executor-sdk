@@ -537,9 +537,13 @@ func (c *Core) computerObserve(ctx context.Context, key coreKey, req ComputerObs
 	if err != nil {
 		return nil, err
 	}
-	blocks, scale, err := fitScreenshot(blocks)
-	if err != nil {
-		return nil, err
+	scale := 1.0
+	// An observation that names an image format is a viewer's (desktop
+	// snapshot): it keeps the screen's pixels and size.
+	if req.ImageFormat == "" {
+		if blocks, scale, err = fitScreenshot(blocks); err != nil {
+			return nil, err
+		}
 	}
 	c.frames.record(key, req, blocks, scale)
 	return c.withoutImages(ctx, key.session, blocks), nil
