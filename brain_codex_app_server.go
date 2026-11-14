@@ -405,9 +405,28 @@ func (a *codexAdapter) probe(ctx context.Context) ([]AgentModel, error) {
 	return models, nil
 }
 
-// Ref: the platform session id names the conversation; the adapter keeps
-// the codex thread of each (codexThreads).
-func (a *codexAdapter) Ref(sessionID string) string { return sessionID }
+// ownsRef reports whether ref is a handle of a conversation of sessionID:
+// "<session id>@<suffix>", or the session id itself (the handle of a
+// session's first conversation, before handles had a suffix).
+func ownsRef(sessionID, ref string) bool {
+	return ref == sessionID || strings.HasPrefix(ref, sessionID+"@")
+}
+
+// holdsThread reports whether codex has the conversation of thread: its
+// rollout file sessions/YYYY/MM/DD/rollout-<time>-<thread>.jsonl (or its
+// archived copy) in the BMA Codex home, which thread/resume loads. A new or
+// emptied Codex home, or another machine, has none.
+func (a *codexAdapter) holdsThread(thread string) bool {
+	for _, pattern := range []string{
+		filepath.Join(a.home, "sessions", "*", "*", "*", "rollout-*-"+thread+".jsonl"),
+		filepath.Join(a.home, "archived_sessions", "rollout-*-"+thread+".jsonl"),
+	} {
+		if found, _ := filepath.Glob(pattern); len(found) > 0 {
+			return true
+		}
+	}
+	return false
+}
 
 func (a *codexAdapter) Close() error {
 	a.mu.Lock()
@@ -468,6 +487,7 @@ func (a *codexAdapter) saveThread(sessionID string, t codexThread) error {
 type codexConv struct {
 	a         *codexAdapter
 	sessionID string
+	ref       string // the conversation's handle (executor_session_ref), the key of its thread record
 	cwd       string
 	system    string
 
@@ -488,8 +508,9 @@ func (a *codexAdapter) Open(ctx context.Context, req BrainOpen) (BrainSession, e
 	if closed {
 		return nil, &AgentError{Code: AgentErrorCodeAgentUnavailable, Message: "agent unavailable: the adapter is closed"}
 	}
-	if req.Ref != "" && req.Ref != req.SessionID {
-		return nil, &AgentError{Code: AgentErrorCodeAgentError, Message: "the local conversation " + req.Ref + " is not this session's (" + req.SessionID + ")"}
+	ref := cmp.Or(req.Ref, req.New)
+	if !ownsRef(req.SessionID, ref) {
+		return nil, &AgentError{Code: AgentErrorCodeAgentError, Message: "the local conversation " + ref + " is not this session's (" + req.SessionID + ")"}
 	}
 	if c, _ := req.Current.(*codexConv); c != nil && c.Ready() {
 		if err := c.offers(req.Tools); err != nil {
@@ -503,14 +524,14 @@ func (a *codexAdapter) Open(ctx context.Context, req BrainOpen) (BrainSession, e
 	if err := a.checkHome(); err != nil {
 		return nil, &AgentError{Code: AgentErrorCodeAgentUnavailable, Message: err.Error()}
 	}
-	known, err := a.loadThread(req.SessionID)
+	known, err := a.loadThread(ref)
 	if err != nil {
 		return nil, &AgentError{Code: AgentErrorCodeAgentError, Message: err.Error()}
 	}
-	if req.Ref != "" && known == nil {
-		return nil, &AgentError{Code: AgentErrorCodeAgentError, Message: "the local conversation " + req.Ref + " was not found; it is not recreated"}
+	if req.Ref != "" && (known == nil || !a.holdsThread(known.Thread)) {
+		return nil, fmt.Errorf("codex conversation %s: %w", req.Ref, ErrConversationLost)
 	}
-	c := &codexConv{a: a, sessionID: req.SessionID, cwd: req.Cwd, system: req.SystemPrompt, model: req.Model, tools: req.Tools}
+	c := &codexConv{a: a, sessionID: req.SessionID, ref: ref, cwd: req.Cwd, system: req.SystemPrompt, model: req.Model, tools: req.Tools}
 	p, err := a.spawn(ctx)
 	if err != nil {
 		return nil, err
@@ -563,7 +584,7 @@ func (c *codexConv) start(ctx context.Context) error {
 	slices.Sort(names)
 	c.thread = codexThread{Thread: r.Thread.ID, Tools: names}
 	c.proc.setThread(r.Thread.ID)
-	if err := c.a.saveThread(c.sessionID, c.thread); err != nil {
+	if err := c.a.saveThread(c.ref, c.thread); err != nil {
 		return &AgentError{Code: AgentErrorCodeAgentError, Message: "record the codex thread: " + err.Error()}
 	}
 	return nil
@@ -575,7 +596,7 @@ func (c *codexConv) resume(ctx context.Context) error {
 	if err := c.proc.call(ctx, "thread/resume", params, nil); err != nil {
 		var rpcErr *codexRPCError
 		if errors.As(err, &rpcErr) && strings.Contains(rpcErr.Message, "no rollout found") {
-			return &AgentError{Code: AgentErrorCodeAgentError, Message: "the local conversation of " + c.sessionID + " (codex thread " + c.thread.Thread + ") was not found; it is not recreated"}
+			return fmt.Errorf("codex thread %s of conversation %s: %w", c.thread.Thread, c.ref, ErrConversationLost)
 		}
 		return err
 	}
@@ -595,7 +616,7 @@ func (c *codexConv) offers(tools []BrainTool) error {
 	return nil
 }
 
-func (c *codexConv) Ref() string { return c.sessionID }
+func (c *codexConv) Ref() string { return c.ref }
 
 func (c *codexConv) Ready() bool {
 	c.mu.Lock()
@@ -630,7 +651,7 @@ func (c *codexConv) Suspend(context.Context) error {
 func (c *codexConv) Close(context.Context) error {
 	c.stopProcess()
 	c.forget()
-	_ = os.Remove(c.a.threadPath(c.sessionID))
+	_ = os.Remove(c.a.threadPath(c.ref))
 	return nil
 }
 

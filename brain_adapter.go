@@ -16,6 +16,7 @@ package bmaexecutor
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"slices"
 	"time"
@@ -30,17 +31,22 @@ type BrainAdapter interface {
 	// refused before anything starts.
 	Start(ctx context.Context, env BrainEnv) (BrainCapabilities, error)
 	// Open makes the brain's conversation of a platform session ready for a
-	// turn: a new conversation (req.Ref empty), the conversation req.Ref
-	// names, or req.Current when that is still ready. A conversation to resume
-	// that does not exist is an *AgentError (agent_error); it is never
-	// created anew.
+	// turn: a new conversation named req.New (req.Ref empty), the conversation
+	// req.Ref names, or req.Current when that is still ready. A conversation
+	// to resume that the brain no longer holds (its local state is gone) is
+	// ErrConversationLost, returned before anything of it is created: the
+	// brain holds it only when its own state for that handle exists, and the
+	// host then asks for a new one. The handle of a conversation is the
+	// executor_session_ref (BrainSession.Ref).
 	Open(ctx context.Context, req BrainOpen) (BrainSession, error)
-	// Ref is the executor_session_ref a conversation of sessionID has before
-	// it is opened ("" when the brain assigns it at Open).
-	Ref(sessionID string) string
 	// Close stops the brain and everything it started.
 	Close() error
 }
+
+// ErrConversationLost is what Open answers for a req.Ref whose local state
+// the brain does not have: the host opens a new conversation instead and
+// tells the platform (turn.start resumed false, another executor_session_ref).
+var ErrConversationLost = errors.New("the local conversation is gone")
 
 // BrainSession is one open conversation of the brain.
 type BrainSession interface {
@@ -212,6 +218,9 @@ type BrainOpen struct {
 	SessionID string
 	// Ref is the conversation to resume ("" for a new one).
 	Ref string
+	// New is the handle of the new conversation to create when Ref is empty:
+	// "<session id>@<random>", never one this session was answered before.
+	New string
 	// Current is the conversation the host holds from an earlier turn (nil
 	// when none); Open returns it when it is still ready.
 	Current BrainSession

@@ -38,6 +38,8 @@ package bmaexecutor
 import (
 	"cmp"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -603,11 +605,11 @@ func (a *BrainHost) OpenTurn(ctx context.Context, params TurnStartParams) (TurnS
 	if err != nil {
 		return TurnStartResult{}, err
 	}
-	// Opening the brain's conversation is not done here: turn.start is
-	// answered as soon as the turn is accepted (contract) and the open runs
-	// first thing in RunTurn, where a failure ends the turn with session.error
-	// and a cancel ends it canceled. Everything that can be refused cheaply and
-	// for certain is refused above.
+	// Opening a new conversation is not done here: turn.start is answered as
+	// soon as the turn is accepted (contract) and the open runs first thing in
+	// RunTurn, where a failure ends the turn with session.error and a cancel
+	// ends it canceled. Everything that can be refused cheaply and for certain
+	// is refused above. Resuming one is opened below, to know it still exists.
 	s := a.session(params.SessionID)
 	a.mu.Lock()
 	if ref, ok := a.suspended[params.SessionID]; ok {
@@ -618,17 +620,30 @@ func (a *BrainHost) OpenTurn(ctx context.Context, params TurnStartParams) (TurnS
 			params.ExecutorSessionRef = ref
 		}
 	}
-	resumed := params.ExecutorSessionRef != "" || (s.brain != nil && s.brain.Ready())
-	ref := cmp.Or(a.adapter.Ref(params.SessionID), params.ExecutorSessionRef)
-	if s.brain != nil {
+	// The conversation of the turn: the one the brain holds open, the one the
+	// platform names (resumed once the brain confirms it still has it, below),
+	// or a new one.
+	live := s.brain != nil && s.brain.Ready()
+	resumed, newRef := live || params.ExecutorSessionRef != "", ""
+	ref := params.ExecutorSessionRef
+	switch {
+	case live:
 		ref = s.brain.Ref()
+	case ref == "" && s.brain != nil:
+		ref = s.brain.Ref() // it died: resumed, not replaced
+	case ref == "":
+		newRef = newConversationRef(params.SessionID)
+		ref, resumed = newRef, false
 	}
 	system := config.System
 	mountNote := a.sessionFilesNote(params.SessionID, remote)
 	if mountNote != "" {
 		system = strings.TrimSpace(system + "\n\n" + mountNote)
 	}
-	s.plan = acpOpenPlan{params: params, cwd: cwd, promptCwd: promptCwd, model: model, effort: level, mode: mode, system: system, hands: config.EnvironmentInfo,
+	if ref != "" && newRef == "" {
+		params.ExecutorSessionRef = ref
+	}
+	s.plan = acpOpenPlan{newRef: newRef, params: params, cwd: cwd, promptCwd: promptCwd, model: model, effort: level, mode: mode, system: system, hands: config.EnvironmentInfo,
 		tools: tools, skills: config.InputSkills}
 	a.mu.Unlock()
 	if err := a.opts.Core.openLocal(acpBrain, params.SessionID, cwd); err != nil {
@@ -649,10 +664,38 @@ func (a *BrainHost) OpenTurn(ctx context.Context, params TurnStartParams) (TurnS
 	if err != nil {
 		return TurnStartResult{}, &RPCError{Code: CodeInternalError, Message: "turn state: " + err.Error()}
 	}
+	if resumed && !live {
+		// A conversation to resume is opened before turn.start is answered:
+		// resumed true only when the brain confirms its local state for that
+		// handle is there. Gone (state directory or volume lost, a machine
+		// without it), the session gets a new conversation and a handle the
+		// platform has not seen, which is how it tells the user the earlier
+		// context is lost (contract TurnStartResult.executor_session_ref). Any
+		// other failure of the open is the turn's, reported by RunTurn.
+		if err := a.openSession(ctx, s); errors.Is(err, ErrConversationLost) {
+			a.log(LogWarn, "local conversation "+ref+" of session "+params.SessionID+" is gone; starting a new one", nil)
+			a.mu.Lock()
+			newRef = newConversationRef(params.SessionID)
+			s.plan.params.ExecutorSessionRef, s.plan.newRef = "", newRef
+			a.mu.Unlock()
+			ref, resumed = newRef, false
+			_ = a.openSession(ctx, s)
+		}
+	}
 	return TurnStartResult{
 		Accepted: true, TurnID: params.TurnID, ExecutorSessionRef: ref, Resumed: resumed,
 		Effective: AgentTurnConfig{Model: model, ThinkingLevel: level, PermissionMode: mode, Cwd: promptCwd, Harness: a.harness.ID, InputSkillReceipt: receipt},
 	}, nil
+}
+
+// newConversationRef is the handle of a new conversation of a session: the
+// session id and a random suffix, so the platform sees another handle for
+// every conversation the session had (a conversation that is gone is not
+// continued under its old one).
+func newConversationRef(sessionID string) string {
+	raw := make([]byte, 8)
+	_, _ = rand.Read(raw)
+	return sessionID + "@" + hex.EncodeToString(raw)
 }
 
 func (a *BrainHost) RunTurn(ctx context.Context, turn *AgentTurn) error {
@@ -779,7 +822,7 @@ func (a *BrainHost) SuspendSession(ctx context.Context, sessionID string) error 
 	if a.opts.Core.local.background.hasLive(sessionID) {
 		return errors.New("the session has a command running in the background")
 	}
-	ref := a.adapter.Ref(sessionID)
+	ref := ""
 	if s != nil && s.brain != nil {
 		ref = s.brain.Ref()
 		if err := s.brain.Suspend(ctx); err != nil {
@@ -789,7 +832,9 @@ func (a *BrainHost) SuspendSession(ctx context.Context, sessionID string) error 
 	a.mu.Lock()
 	if a.sessions[sessionID] == s {
 		delete(a.sessions, sessionID)
-		a.suspended[sessionID] = ref
+		if ref != "" {
+			a.suspended[sessionID] = ref
+		}
 	}
 	a.mu.Unlock()
 	a.opts.Core.suspendLocalSession(sessionID)

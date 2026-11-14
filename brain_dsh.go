@@ -27,6 +27,7 @@ package bmaexecutor
 // turn's real credential.
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -36,6 +37,7 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -50,13 +52,15 @@ type dshAdapter struct {
 
 	mu     sync.Mutex
 	proc   *acpProcess
-	convs  map[string]*dshConv // by platform session id (the id the agent knows)
+	convs  map[string]*dshConv // by wire id (dshWireID of the handle: the id the agent knows)
 	closed bool
 }
 
 type dshConv struct {
 	a           *dshAdapter
-	id          string
+	id          string // the conversation's id on the wire: its handle (dshWireID)
+	ref         string // the conversation's handle (executor_session_ref)
+	sessionID   string // the platform session
 	placeholder string
 	proc        *acpProcess
 	mode        string
@@ -128,8 +132,6 @@ func (a *dshAdapter) Start(ctx context.Context, env BrainEnv) (BrainCapabilities
 	}, nil
 }
 
-func (a *dshAdapter) Ref(sessionID string) string { return sessionID }
-
 func (a *dshAdapter) Close() error {
 	a.mu.Lock()
 	a.closed = true
@@ -180,6 +182,10 @@ func (a *dshAdapter) Open(ctx context.Context, req BrainOpen) (BrainSession, err
 	if err != nil {
 		return nil, &AgentError{Code: AgentErrorCodeAgentUnavailable, Message: "agent unavailable: " + err.Error()}
 	}
+	ref := cmp.Or(req.Ref, req.New)
+	if !ownsRef(req.SessionID, ref) {
+		return nil, &AgentError{Code: AgentErrorCodeAgentError, Message: "the local conversation " + ref + " is not this session's (" + req.SessionID + ")"}
+	}
 	c, _ := req.Current.(*dshConv)
 	if c != nil && c.proc == proc && !sameBrainTools(dshCustomTools(c.tools), dshCustomTools(req.Tools)) {
 		// The agent binds its custom tools when the session opens: close it
@@ -187,21 +193,21 @@ func (a *dshAdapter) Open(ctx context.Context, req BrainOpen) (BrainSession, err
 		if err := c.Suspend(ctx); err != nil {
 			return nil, acpOpenError(proc, "agent session/close", err)
 		}
-		req.Ref = c.id
+		req.Ref, ref = c.ref, c.ref
 		c.proc = nil
 	}
 	if c == nil || c.proc != proc {
-		c = &dshConv{a: a, id: req.SessionID, placeholder: c.placeholderOrNew()}
-		meta := map[string]any{"sessionId": req.SessionID, "systemPrompt": req.SystemPrompt, "model": a.modelMeta(c, req.Model, req.Metadata)}
+		c = &dshConv{a: a, id: dshWireID(ref), ref: ref, sessionID: req.SessionID, placeholder: c.placeholderOrNew()}
+		meta := map[string]any{"sessionId": dshWireID(ref), "systemPrompt": req.SystemPrompt, "model": a.modelMeta(c, req.Model, req.Metadata)}
 		if custom := dshCustomTools(req.Tools); len(custom) > 0 {
 			meta["customTools"] = custom
 		}
 		var res acpSessionResponse
 		if req.Ref != "" {
-			err = proc.call(ctx, "session/load", map[string]any{"sessionId": req.Ref, "cwd": req.Cwd, "mcpServers": []any{}, "_meta": map[string]any{acpMetaKey: meta}}, &res)
+			err = proc.call(ctx, "session/load", map[string]any{"sessionId": dshWireID(req.Ref), "cwd": req.Cwd, "mcpServers": []any{}, "_meta": map[string]any{acpMetaKey: meta}}, &res)
 			var acpErr *acpError
 			if errors.As(err, &acpErr) && acpErr.Code == CodeNotFound {
-				return nil, &AgentError{Code: AgentErrorCodeAgentError, Message: "the local conversation " + req.Ref + " was not found; it is not recreated"}
+				return nil, fmt.Errorf("agent conversation %s: %w", req.Ref, ErrConversationLost)
 			}
 		} else {
 			err = proc.call(ctx, "session/new", map[string]any{"cwd": req.Cwd, "mcpServers": []any{}, "_meta": map[string]any{acpMetaKey: meta}}, &res)
@@ -214,18 +220,24 @@ func (a *dshAdapter) Open(ctx context.Context, req BrainOpen) (BrainSession, err
 		}
 		c.proc, c.mode = proc, "default"
 		a.mu.Lock()
-		a.convs[req.SessionID] = c
+		a.convs[c.id] = c
 		a.mu.Unlock()
 	}
 	c.tools = req.Tools
 	if c.mode != req.Mode {
-		if err := proc.call(ctx, "session/set_mode", map[string]any{"sessionId": req.SessionID, "modeId": req.Mode}, nil); err != nil {
+		if err := proc.call(ctx, "session/set_mode", map[string]any{"sessionId": c.id, "modeId": req.Mode}, nil); err != nil {
 			return nil, acpOpenError(proc, "agent set_mode", err)
 		}
 		c.mode = req.Mode
 	}
 	return c, nil
 }
+
+// dshWireID is the agent's session id of a conversation handle. The agent
+// takes [A-Za-z0-9_.:-] only: the handle's "@" is ":" there. The handle of a
+// session's first conversation, before handles had a suffix, is the session
+// id and is its own.
+func dshWireID(ref string) string { return strings.Replace(ref, "@", ":", 1) }
 
 // placeholderOrNew keeps a conversation's placeholder key across reopens.
 func (c *dshConv) placeholderOrNew() string {
@@ -247,7 +259,7 @@ func (a *dshAdapter) modelMeta(c *dshConv, model string, metadata map[string]str
 	return meta
 }
 
-func (c *dshConv) Ref() string { return c.id }
+func (c *dshConv) Ref() string { return c.ref }
 
 func (c *dshConv) Ready() bool { return c.proc != nil && c.proc.alive() }
 
@@ -329,7 +341,7 @@ func (a *dshAdapter) routeFor(placeholder string) (*dshPrompt, string) {
 	defer a.mu.Unlock()
 	for _, c := range a.convs {
 		if c.placeholder == placeholder {
-			return c.prompt, c.id
+			return c.prompt, c.sessionID
 		}
 	}
 	return nil, ""

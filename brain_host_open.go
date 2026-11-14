@@ -30,6 +30,9 @@ const acpOpenTimeout = 2 * time.Minute
 
 // acpOpenPlan is what a turn.start asked the brain conversation to be.
 type acpOpenPlan struct {
+	// newRef is the handle of the conversation to create when the plan
+	// resumes none (params.ExecutorSessionRef empty).
+	newRef    string
 	params    TurnStartParams
 	cwd       string
 	promptCwd string
@@ -64,7 +67,7 @@ func (a *BrainHost) openSession(ctx context.Context, s *acpSession) error {
 			openCtx, cancel := context.WithTimeout(context.Background(), acpOpenTimeout)
 			defer cancel()
 			brain, err := a.adapter.Open(openCtx, BrainOpen{
-				SessionID: plan.params.SessionID, Ref: plan.params.ExecutorSessionRef, Current: current,
+				SessionID: plan.params.SessionID, Ref: plan.params.ExecutorSessionRef, New: plan.newRef, Current: current,
 				Cwd: plan.cwd, SystemPrompt: a.systemPrompt(plan.promptCwd, plan.system, plan.hands),
 				Mode: plan.mode, Model: plan.model, Effort: plan.effort, Metadata: plan.params.Metadata, Tools: plan.tools,
 			})

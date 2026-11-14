@@ -57,15 +57,19 @@ func TestACPAgentManySessionsOneAfterAnother(t *testing.T) {
 	if got := f.agent.Capability().MaxSessions; got != 2 {
 		t.Fatalf("capability max_sessions = %d", got)
 	}
+	refs := map[string]string{} // the handle each session was answered
 	for i := 1; i <= 12; i++ {
 		turn := fmt.Sprintf("turn_%d", i)
-		f.start(t, ctx, fmt.Sprintf("sesn_%d", i), turn, "hello")
+		refs[fmt.Sprintf("sesn_%d", i)] = f.start(t, ctx, fmt.Sprintf("sesn_%d", i), turn, "hello").ExecutorSessionRef
 		assertIdle(t, f.platform.waitIdle(t, turn), TurnOutcomeCompleted)
 	}
 	closed := callsOf(t, f, "close")
 	want := []string{}
 	for i := 1; i <= 9; i++ { // 12 sessions, 3 resident
 		want = append(want, fmt.Sprintf("sesn_%d", i))
+	}
+	for i, id := range closed { // the wire id is the conversation's handle: the session id and a suffix (":" on the wire)
+		closed[i], _, _ = strings.Cut(id, ":")
 	}
 	if strings.Join(closed, ",") != strings.Join(want, ",") {
 		t.Fatalf("session/close calls = %v, want %v (least recently used first)", closed, want)
@@ -75,7 +79,7 @@ func TestACPAgentManySessionsOneAfterAnother(t *testing.T) {
 	}
 
 	// The oldest session comes back with its transcript: loaded, not created.
-	result := f.start(t, ctx, "sesn_1", "turn_back", "history", func(p *TurnStartParams) { p.ExecutorSessionRef = "sesn_1" })
+	result := f.start(t, ctx, "sesn_1", "turn_back", "history", func(p *TurnStartParams) { p.ExecutorSessionRef = refs["sesn_1"] })
 	if !result.Resumed {
 		t.Fatalf("turn.start of a suspended session: %+v, want resumed", result)
 	}
@@ -83,7 +87,7 @@ func TestACPAgentManySessionsOneAfterAnother(t *testing.T) {
 	if got := messageTexts(t, f.platform.snapshot(), "turn_back"); got != "hello" {
 		t.Fatalf("transcript after suspension = %q, want the earlier prompt", got)
 	}
-	if loads := callsOf(t, f, "load"); len(loads) != 1 || loads[0] != "sesn_1" {
+	if loads := callsOf(t, f, "load"); len(loads) != 1 || loads[0] != dshWireID(refs["sesn_1"]) {
 		t.Fatalf("session/load calls = %v, want only sesn_1", loads)
 	}
 	// And it works without the platform's ref: the agent remembers the id it suspended.
@@ -92,7 +96,7 @@ func TestACPAgentManySessionsOneAfterAnother(t *testing.T) {
 	if got := messageTexts(t, f.platform.snapshot(), "turn_back2"); got != "hello" {
 		t.Fatalf("transcript of sesn_2 = %q", got)
 	}
-	if loads := callsOf(t, f, "load"); strings.Join(loads, ",") != "sesn_1,sesn_2" {
+	if loads := callsOf(t, f, "load"); strings.Join(loads, ",") != dshWireID(refs["sesn_1"])+","+dshWireID(refs["sesn_2"]) {
 		t.Fatalf("session/load calls = %v, want sesn_1,sesn_2 (loaded, not created again)", loads)
 	}
 	// Archiving a suspended session still cleans up.
@@ -181,15 +185,19 @@ func TestACPAgentManySessionsWithBmaDshAcp(t *testing.T) {
 	defer cancel()
 	f := startACPFixture(t, ctx, ACPAgentOptions{Command: command, MaxSessions: 2, MaxResidentSessions: 3,
 		Upstream: ACPModelUpstream{BaseURL: model.URL + "/v1", Model: "scripted"}})
+	first := ""
 	for i := 1; i <= 12; i++ {
 		turn := fmt.Sprintf("turn_%d", i)
-		f.start(t, ctx, fmt.Sprintf("sesn_%d", i), turn, fmt.Sprintf("question %d", i))
+		ref := f.start(t, ctx, fmt.Sprintf("sesn_%d", i), turn, fmt.Sprintf("question %d", i)).ExecutorSessionRef
+		if i == 1 {
+			first = ref
+		}
 		assertIdle(t, f.platform.waitIdle(t, turn), TurnOutcomeCompleted)
 	}
 	if n := len(f.agent.opts.Core.sessions); n > 3 {
 		t.Fatalf("Core holds %d sessions, want at most 3", n)
 	}
-	result := f.start(t, ctx, "sesn_1", "turn_back", "and again", func(p *TurnStartParams) { p.ExecutorSessionRef = "sesn_1" })
+	result := f.start(t, ctx, "sesn_1", "turn_back", "and again", func(p *TurnStartParams) { p.ExecutorSessionRef = first })
 	if !result.Resumed {
 		t.Fatalf("turn.start of a suspended session: %+v", result)
 	}
