@@ -23,6 +23,7 @@ func useHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("BMA_HOME", dir)
+	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
 	return dir
 }
@@ -208,5 +209,50 @@ func TestDevNullIsNotInteractive(t *testing.T) {
 	defer func() { os.Stdin = old }()
 	if interactive() {
 		t.Fatal("/dev/null is not a terminal")
+	}
+}
+
+// disconnect removes the local token only when the platform removed the
+// machine (or no longer knows it); a gateway without the route is an error.
+func TestDisconnectNeedsThePlatformToRemoveTheMachine(t *testing.T) {
+	useHome(t)
+	var answer func(w http.ResponseWriter)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/v1/machines/mch_1" || r.Header.Get("Authorization") != "Bearer tok" {
+			w.WriteHeader(http.StatusTeapot)
+			return
+		}
+		answer(w)
+	}))
+	defer srv.Close()
+	stopService = func() error { return nil }
+	t.Cleanup(func() { stopService = removeService })
+	setup := func() {
+		c := defaultConfig()
+		c.MachineID, c.ExecutorURL = "mch_1", srv.URL
+		if err := c.save(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := saveToken("mch_1", "tok"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setup()
+	answer = func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"not_found_error","code":"route_not_found","message":"no route"}}`))
+	}
+	if err := cmdDisconnect(nil); err == nil {
+		t.Fatal("a missing route is not a removed machine")
+	}
+	if _, err := loadToken("mch_1"); err != nil {
+		t.Fatal("the token stays when the machine was not removed")
+	}
+	answer = func(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }
+	if err := cmdDisconnect(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadToken("mch_1"); err == nil {
+		t.Fatal("the token is gone")
 	}
 }

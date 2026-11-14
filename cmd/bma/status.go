@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"runtime"
@@ -115,6 +116,10 @@ func fileExists(p string) bool {
 	return err == nil
 }
 
+// stopService is removeService; tests replace it so they never touch this
+// computer's service manager.
+var stopService = removeService
+
 // cmdDisconnect stops the service and removes this computer from BMA with
 // its own machine token (a machine token can delete only its own machine),
 // then forgets the token. The harness releases stay for a later `bma up`.
@@ -130,7 +135,7 @@ func cmdDisconnect(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := removeService(); err != nil {
+	if err := stopService(); err != nil {
 		return err
 	}
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete,
@@ -143,9 +148,14 @@ func cmdDisconnect(args []string) error {
 	if err != nil {
 		return fmt.Errorf("removing %s from BMA: %w (the service is stopped; run `bma disconnect` again)", c.MachineID, err)
 	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	_ = resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK, http.StatusNoContent, http.StatusUnauthorized, http.StatusNotFound:
+	var e apiError
+	_ = json.Unmarshal(body, &e)
+	switch {
+	case resp.StatusCode == http.StatusOK, resp.StatusCode == http.StatusNoContent,
+		resp.StatusCode == http.StatusUnauthorized,
+		resp.StatusCode == http.StatusNotFound && e.Error.Code != "route_not_found":
 		// 401/404: the platform no longer knows this machine or its token.
 	default:
 		return fmt.Errorf("removing %s from BMA: %s (the service is stopped; delete it in the console)", c.MachineID,
