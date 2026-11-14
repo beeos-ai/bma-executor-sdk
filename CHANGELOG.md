@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.6.11
+
+- **Go: `open_app` reopens a running app that shows no window (macOS).**
+  On a real Mac (2026-11-14, Cua Driver 0.38.0) WeChat with its main window
+  closed (⌘W, the app still running) stayed without a window after
+  `launch_app` and `bring_to_front`, so the 1.6.9 recovery (launching it
+  again) did nothing; `open -b com.tencent.xinWeChat` and
+  `open -g -b com.tencent.xinWeChat` brought the main window back, and `-g`
+  left the front app alone. Opening a running app through LaunchServices
+  sends it the reopen event a click on its Dock icon sends; the driver's
+  background launch does not. `CuaDriver.OpenApp` now runs
+  `/usr/bin/open -g -b <bundle id>` (no shell, bundle ids only) when the app
+  is not brought to the front or has no window on the current desktop, then
+  brings it to the front and reads its windows again (up to five times,
+  400 ms apart, as the window comes a moment later), and only then brings
+  its largest hidden window forward. Other systems launch it again as
+  before. A result without a usable window now says how to get one
+  (`computer_action menu` with a hidden window's id, or observe the screen).
+- **Go: the `computer_action` description asks for `pid` and `window_id` on
+  every input** instead of describing screen coordinates without them.
+
 ## 1.6.10
 
 - The contract snapshot and the generated types (Go, TypeScript, Python) are

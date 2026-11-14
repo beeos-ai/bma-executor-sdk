@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 )
 
 // What the Cua Driver backend adds around single driver calls: the menu
@@ -276,14 +278,17 @@ type OpenAppResult struct {
 	// hidden or on another Space).
 	Windows []ComputerWindow
 	Hidden  int
+
+	hidden []ComputerWindow
 }
 
 // OpenApp launches the app (launch_app starts it in the background) and
 // brings it to the front. When that fails or the app has no window on the
-// current desktop it recovers, in order: it opens the app again (an app that
-// runs without a window shows its main window then) and brings it to the
-// front, then brings its largest hidden window forward. Only windows on the
-// current desktop are returned.
+// current desktop it recovers, in order: on macOS it reopens the app (as a
+// click on its Dock icon: an app that runs without a window shows its main
+// window then; launch_app of a running app does not), elsewhere it launches
+// it again; it brings the app to the front, and then brings its largest
+// hidden window forward. Only windows on the current desktop are returned.
 func (d *CuaDriver) OpenApp(ctx context.Context, req ComputerActionRequest) (OpenAppResult, error) {
 	args := map[string]any{"name": req.App}
 	if looksLikeBundleID(req.App) {
@@ -307,29 +312,74 @@ func (d *CuaDriver) OpenApp(ctx context.Context, req ComputerActionRequest) (Ope
 			out.Front, out.FrontError = true, ""
 		}
 	}
-	front(map[string]any{"pid": out.PID})
-	visible, hidden := splitWindows(launched, out.PID)
-	if !out.Front || len(visible) == 0 {
-		if _, err := d.callAction(ctx, "launch_app", args, req); err == nil {
-			out.Recovery = append(out.Recovery, "opened the app again")
-		}
-		front(map[string]any{"pid": out.PID})
+	list := func() {
 		if listed, err := d.call(ctx, "list_windows", map[string]any{"pid": out.PID}, ""); err == nil {
-			visible, hidden = splitWindows(listed, out.PID)
-		}
-		if len(visible) == 0 && len(hidden) > 0 {
-			sort.SliceStable(hidden, func(i, j int) bool { return hidden[i].Width*hidden[i].Height > hidden[j].Width*hidden[j].Height })
-			front(map[string]any{"pid": out.PID, "window_id": hidden[0].WindowID})
-			if out.Front {
-				out.Recovery = append(out.Recovery, fmt.Sprintf("brought window %d forward", hidden[0].WindowID))
-			}
-			if listed, err := d.call(ctx, "list_windows", map[string]any{"pid": out.PID}, ""); err == nil {
-				visible, hidden = splitWindows(listed, out.PID)
-			}
+			out.Windows, out.hidden = splitWindows(listed, out.PID)
 		}
 	}
-	out.Windows, out.Hidden = visible, len(hidden)
+	front(map[string]any{"pid": out.PID})
+	out.Windows, out.hidden = splitWindows(launched, out.PID)
+	if !out.Front || len(out.Windows) == 0 {
+		switch {
+		case d.reopen != nil && out.BundleID != "":
+			if err := d.reopen(ctx, out.BundleID); err != nil {
+				out.Recovery = append(out.Recovery, "reopening the app failed: "+truncate(err.Error(), 200))
+			} else {
+				out.Recovery = append(out.Recovery, "reopened the app")
+			}
+		case d.reopen == nil:
+			if _, err := d.callAction(ctx, "launch_app", args, req); err == nil {
+				out.Recovery = append(out.Recovery, "opened the app again")
+			}
+		}
+		front(map[string]any{"pid": out.PID})
+		// A reopened app shows its window a moment later.
+		for try := 0; try < 5; try++ {
+			if try > 0 {
+				select {
+				case <-ctx.Done():
+				case <-time.After(d.windowWait):
+				}
+			}
+			list()
+			if len(out.Windows) > 0 || ctx.Err() != nil {
+				break
+			}
+		}
+		if len(out.Windows) == 0 && len(out.hidden) > 0 {
+			largest := out.hidden[0]
+			for _, w := range out.hidden[1:] {
+				if w.Width*w.Height > largest.Width*largest.Height {
+					largest = w
+				}
+			}
+			front(map[string]any{"pid": out.PID, "window_id": largest.WindowID})
+			if out.Front {
+				out.Recovery = append(out.Recovery, fmt.Sprintf("brought window %d forward", largest.WindowID))
+			}
+			list()
+		}
+	}
+	out.Hidden = len(out.hidden)
 	return out, nil
+}
+
+// reopenApp sends a running app the reopen event LaunchServices sends when
+// it is opened again (a click on its Dock icon), without making it the front
+// app: /usr/bin/open -g -b <bundle id>, run without a shell. On 2026-11-14 a
+// WeChat whose main window was closed (the app still running) showed it again
+// after this, while launch_app and bring_to_front did not.
+func reopenApp(ctx context.Context, bundleID string) error {
+	if strings.HasPrefix(bundleID, "-") || !looksLikeBundleID(bundleID) {
+		return fmt.Errorf("%q is not a bundle id", bundleID)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "/usr/bin/open", "-g", "-b", bundleID).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("open -g -b %s: %v: %s", bundleID, err, truncate(strings.TrimSpace(string(output)), 200))
+	}
+	return nil
 }
 
 // splitWindows sorts a result's windows of pid into those on the current
@@ -380,6 +430,13 @@ func (r OpenAppResult) text() string {
 	}
 	if r.Hidden > 0 {
 		fmt.Fprintf(&out, "not usable (minimized, hidden or on another Space): %d window(s)\n", r.Hidden)
+	}
+	if len(r.Windows) == 0 {
+		if len(r.hidden) > 0 {
+			fmt.Fprintf(&out, "no usable window: open one from the app's Window menu with computer_action menu, pid=%d window_id=%d\n", r.PID, r.hidden[0].WindowID)
+		} else {
+			out.WriteString("no usable window yet: observe the screen; if none appears, open one from the app's menu with computer_action menu\n")
+		}
 	}
 	return out.String()
 }

@@ -1,6 +1,6 @@
 {
   "name": "@beeos-ai/bma-executor-sdk",
-  "version": "1.6.10",
+  "version": "1.6.11",
   "description": "BMA executor protocol (bma.executor.v1.1): executor, harness and agent ends with WebSocket, local socket and in-process transports.",
   "license": "Apache-2.0",
   "repository": {

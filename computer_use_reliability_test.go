@@ -3,12 +3,14 @@ package bmaexecutor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // recordingComputer is a ComputerUseBackend that is also a
@@ -260,45 +262,95 @@ func TestCuaDriverFailureAdvice(t *testing.T) {
 	}
 }
 
-// TestOpenAppRecovers: an app whose only window is off the current desktop
-// and that cannot be brought to the front is opened again, its window
-// brought forward, and only windows on the current desktop are listed.
+// TestOpenAppRecovers: an app that runs without a window on the current
+// desktop (WeChat after its main window was closed, 2026-11-14) is reopened,
+// not launched again, then brought to the front; its largest hidden window is
+// brought forward when that showed none. Only windows on the current desktop
+// are listed. Without reopen (not macOS) it is launched again as before.
 func TestOpenAppRecovers(t *testing.T) {
-	driver, logPath, err := fakeCua(t, "BMA_TEST_CUA_HIDDEN=1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	blocks, err := driver.Action(context.Background(), ComputerActionRequest{Action: "open_app", App: "TextEdit"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := blocks[0].Text
-	for _, want := range []string{
-		"opened TextEdit (com.apple.TextEdit) pid=4242, brought to the front\n",
-		"recovered: opened the app again, brought window 78 forward\n",
-		`window pid=4242 window_id=78 app=TextEdit title="Untitled" at (10,20) 600x400`,
-		"not usable (minimized, hidden or on another Space): 1 window(s)\n",
+	const (
+		launch   = `launch_app {"name":"TextEdit"}`
+		front    = `bring_to_front {"pid":4242}`
+		list     = `list_windows {"pid":4242}`
+		frontWin = `bring_to_front {"pid":4242,"window_id":78}`
+		reopen   = `reopen com.apple.TextEdit`
+	)
+	for name, c := range map[string]struct {
+		reopen   string // shows: the window comes back; nothing: it does not; fails; none: no reopen (not macOS)
+		env      []string
+		calls    []string
+		texts    []string
+		noWindow bool
+	}{
+		"reopen shows the window": {reopen: "shows", calls: []string{launch, front, reopen, front, list},
+			texts: []string{"pid=4242, brought to the front\n", "recovered: reopened the app\n", `window pid=4242 window_id=78 app=TextEdit title="Untitled"`}},
+		"reopen shows nothing": {reopen: "nothing", calls: []string{launch, front, reopen, front, list, list, list, list, list, frontWin, list},
+			texts: []string{"recovered: reopened the app, brought window 78 forward\n", "window pid=4242 window_id=78", "not usable (minimized, hidden or on another Space): 1 window(s)\n"}},
+		"reopen fails": {reopen: "fails", calls: []string{launch, front, reopen, front, list, list, list, list, list, frontWin, list},
+			texts: []string{"recovered: reopening the app failed: no reopen here, brought window 78 forward\n"}},
+		"stuck": {reopen: "nothing", env: []string{"BMA_TEST_CUA_STUCK=1"}, noWindow: true,
+			calls: []string{launch, front, reopen, front, list, list, list, list, list, frontWin, list},
+			texts: []string{"not brought to the front: ", "no usable window: open one from the app's Window menu with computer_action menu, pid=4242 window_id=78\n"}},
+		"not macOS": {reopen: "none", calls: []string{launch, front, launch, front, list, list, list, list, list, frontWin, list},
+			texts: []string{"recovered: opened the app again, brought window 78 forward\n"}},
 	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("open_app text lacks %q:\n%s", want, text)
-		}
-	}
-	raw, _ := os.ReadFile(logPath)
-	var tools []string
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		tools = append(tools, line[:strings.LastIndex(line, " telemetry=")])
-	}
-	want := `launch_app {"name":"TextEdit"},bring_to_front {"pid":4242},launch_app {"name":"TextEdit"},bring_to_front {"pid":4242},` +
-		`list_windows {"pid":4242},bring_to_front {"pid":4242,"window_id":78},list_windows {"pid":4242}`
-	if got := strings.Join(tools[1:], ","); got != want { // tools[0] is NewCuaDriver's get_screen_size
-		t.Fatalf("driver calls:\n%s\nwant\n%s", got, want)
+		t.Run(name, func(t *testing.T) {
+			driver, logPath, err := fakeCua(t, append([]string{"BMA_TEST_CUA_HIDDEN=1"}, c.env...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			driver.windowWait = time.Millisecond
+			logLine := func(line string) {
+				file, _ := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o600)
+				fmt.Fprintf(file, "%s telemetry=0\n", line)
+				_ = file.Close()
+			}
+			switch c.reopen {
+			case "none":
+				driver.reopen = nil
+			default:
+				driver.reopen = func(_ context.Context, bundleID string) error {
+					logLine("reopen " + bundleID)
+					switch c.reopen {
+					case "shows":
+						return os.WriteFile(logPath+".front", nil, 0o600)
+					case "fails":
+						return errors.New("no reopen here")
+					}
+					return nil
+				}
+			}
+			blocks, err := driver.Action(context.Background(), ComputerActionRequest{Action: "open_app", App: "TextEdit"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := blocks[0].Text
+			for _, want := range c.texts {
+				if !strings.Contains(text, want) {
+					t.Errorf("open_app text lacks %q:\n%s", want, text)
+				}
+			}
+			if c.noWindow == strings.Contains(text, "window pid=") {
+				t.Errorf("open_app text lists windows wrongly:\n%s", text)
+			}
+			raw, _ := os.ReadFile(logPath)
+			var calls []string
+			for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+				calls = append(calls, line[:strings.LastIndex(line, " telemetry=")])
+			}
+			if got, want := strings.Join(calls[1:], "\n"), strings.Join(c.calls, "\n"); got != want { // calls[0] is NewCuaDriver's get_screen_size
+				t.Fatalf("driver calls:\n%s\nwant\n%s", got, want)
+			}
+		})
 	}
 	// The structured result, for a host that checks what was opened.
-	driver2, _, err := fakeCua(t, "BMA_TEST_CUA_HIDDEN=1", "BMA_TEST_CUA_LOG="+filepath.Join(t.TempDir(), "other.log"))
+	driver, _, err := fakeCua(t, "BMA_TEST_CUA_HIDDEN=1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := driver2.OpenApp(context.Background(), ComputerActionRequest{App: "com.apple.TextEdit"})
+	driver.windowWait = time.Millisecond
+	driver.reopen = nil
+	result, err := driver.OpenApp(context.Background(), ComputerActionRequest{App: "com.apple.TextEdit"})
 	if err != nil || result.PID != 4242 || !result.Front || len(result.Windows) != 1 || result.Windows[0].WindowID != 78 || result.Hidden != 1 {
 		t.Fatalf("OpenApp = %+v, %v", result, err)
 	}
@@ -312,6 +364,16 @@ func TestOpenAppRecovers(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(logPlain); strings.Count(string(raw), "launch_app") != 1 || strings.Contains(string(raw), "list_windows") {
 		t.Fatalf("driver calls without recovery:\n%s", raw)
+	}
+}
+
+// TestReopenAppRefusesNonBundleIDs: reopen takes bundle ids only, so an
+// argument can never become an option of open.
+func TestReopenAppRefusesNonBundleIDs(t *testing.T) {
+	for _, id := range []string{"-a", "-n.foo", "TextEdit", "Text Edit.app", ""} {
+		if err := reopenApp(context.Background(), id); err == nil {
+			t.Errorf("reopenApp(%q) ran", id)
+		}
 	}
 }
 
