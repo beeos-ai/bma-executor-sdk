@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.14
+
+- **Go: a `turn.start` right after the previous turn's
+  `session.status_idle` starts the turn** instead of answering `-32013 a turn
+  is already running`: the idle event went out just before the session was
+  released, so a client that starts the next turn on that idle could lose the
+  race. A start that finds the previous turn already ended now waits for its
+  release. 1.6.13 was tagged but not published (its release checks met this
+  race); its `bma` command ships in this release.
+
 ## 1.6.13
 
 - **`bma`: connect this computer to BMA with one command.** `cmd/bma` is a
