@@ -118,6 +118,55 @@ func (c *Client) ServeAgent(handler AgentHandler, capability AgentCapability) {
 	c.onRequest(MethodSessionClose, decodeThen(runtime.sessionClose))
 	c.onRequest(MethodInteractionResponse, decodeThen(runtime.interactionResponse))
 	c.onRequest(MethodAgentCustomToolResult, decodeThen(runtime.customToolResult))
+	c.onSessionsLost(runtime.sessionsLost)
+}
+
+// sessionsLost ends, on this side, the sessions the client gave up after the
+// harness lease expired (v1.1 §3.9): the platform has already ended their
+// turns ("the agent executor restarted and lost the turn") and will answer
+// none of their approvals. Each is closed as session.close closes it (its
+// running turn canceled and awaited, then AgentHandler.CloseSession with
+// reason "lease_expired"), without a session.ended the platform no longer
+// expects. Without this a turn waiting for an answer ran forever and its
+// RunTurn never returned. It runs in the background: the client calls it
+// while it schedules its reconnect.
+func (r *agentRuntime) sessionsLost(ids []string) {
+	for _, id := range ids {
+		r.mu.Lock()
+		s := r.sessions[id]
+		r.mu.Unlock()
+		if s != nil {
+			go r.loseSession(s)
+		}
+	}
+}
+
+func (r *agentRuntime) loseSession(s *agentSession) {
+	s.mu.Lock()
+	turn, suspending := s.turn, s.suspending
+	s.mu.Unlock()
+	if suspending != nil {
+		<-suspending
+	}
+	if turn != nil {
+		turn.cancel()
+		<-turn.done
+	}
+	ctx, cancel := context.WithTimeout(r.client.rootCtx, agentCloseFlushWait)
+	defer cancel()
+	if err := r.handler.CloseSession(ctx, s.id, AgentSessionLostReason); err != nil {
+		r.client.log(LogWarn, "session "+s.id+" was not closed after the executor lease expired", err)
+	}
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	s.signal()
+	r.mu.Lock()
+	if r.sessions[s.id] == s {
+		delete(r.sessions, s.id)
+	}
+	r.mu.Unlock()
+	r.client.log(LogInfo, "session "+s.id+" stopped: executor lease expired", nil)
 }
 
 func decodeThen[P any, R any](handle func(context.Context, P) (R, error)) func(context.Context, json.RawMessage) (any, error) {
@@ -129,6 +178,11 @@ func decodeThen[P any, R any](handle func(context.Context, P) (R, error)) func(c
 		return handle(ctx, params)
 	}
 }
+
+// AgentSessionLostReason is the reason AgentHandler.CloseSession gets for a
+// session the executor gave up because the harness lease expired while it
+// was disconnected (a sleeping laptop, a long network outage).
+const AgentSessionLostReason = "lease_expired"
 
 type agentRuntime struct {
 	client     *Client

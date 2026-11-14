@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.6.15
+
+- **Go: an agent turn ends when the executor gives up its sessions after the
+  harness lease expired.** A Mac that slept for two hours (2026-11-14) came
+  back with a local turn waiting for an approval: the platform had meanwhile
+  failed the turn ("the agent executor restarted and lost the turn") and
+  canceled the approval, so the turn went on, asked again, and waited for an
+  answer that never came. RunTurn never returned and a host that counts its
+  running turns kept one forever. The client already dropped the sessions it
+  held past the lease and stopped Core's; now `ServeAgent` closes its agent
+  sessions there as `session.close` does: the running turn's ctx is
+  canceled and awaited, then `AgentHandler.CloseSession` gets
+  `AgentSessionLostReason` (`lease_expired`). No `session.ended` is sent: the
+  platform ended them already. The log line is "session <id> stopped:
+  executor lease expired", as for Core sessions.
+
 ## 1.6.14
 
 - **Go: a `turn.start` right after the previous turn's
