@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -167,6 +168,7 @@ type CuaDriverError struct {
 	// action in the foreground (escalation.recommended).
 	foreground bool
 	text       string
+	result     map[string]any
 }
 
 func (e *CuaDriverError) Error() string { return e.text }
@@ -206,7 +208,7 @@ func newCuaDriverError(tool string, stdout []byte, req ComputerActionRequest) (*
 		advice = "the driver refused the action"
 	}
 	return &CuaDriverError{Tool: tool, Code: code, rejected: cuaRejectedCodes[code] || effect == "refused",
-		foreground: refused && recommended == "foreground", text: code + ": " + advice}, true
+		foreground: refused && recommended == "foreground", text: code + ": " + advice, result: result}, true
 }
 
 // cuaRefusedBeforeInput are driver codes that refuse an action before any
@@ -214,35 +216,90 @@ func newCuaDriverError(tool string, stdout []byte, req ComputerActionRequest) (*
 // a retry cannot repeat input.
 var cuaRefusedBeforeInput = map[string]bool{"background_unavailable": true, "off_space_or_ax_unresolved": true, "window_not_key": true}
 
-// cuaForegroundTools are the driver tools that take delivery_mode.
-var cuaForegroundTools = map[string]bool{"click": true, "type_text": true, "press_key": true, "hotkey": true}
+// cuaInputTools are the input tools a front window may be needed for.
+var cuaInputTools = map[string]bool{"click": true, "type_text": true, "press_key": true, "hotkey": true}
 
-// callForeground runs an input tool of an action in the background (the
-// default: no focus change); when the driver refuses it before input and
-// recommends the foreground, it runs it once more with delivery_mode
-// "foreground" (the driver fronts the window, acts and gives the front back).
-// Sheets and panels that must be the key window (Finder's Go to Folder,
-// 2026-11-15: 11 refused types) take input only that way. A window that is
-// truly on another Space is the host's to refuse first (preflight); this
-// follows the driver's recommendation only. foreground reports the retry.
-func (d *CuaDriver) callForeground(ctx context.Context, tool string, args map[string]any, req ComputerActionRequest) (result map[string]any, foreground bool, err error) {
+// callFronting runs an input tool of an action in the background (the
+// default: no focus change). When the driver refuses it before input and
+// recommends the foreground, it brings the window to the front with
+// bring_to_front, which leaves it there, and runs the same input once more.
+// The driver's own foreground delivery (delivery_mode "foreground") is not
+// used: it gives the front back right after the input, and that hand-back
+// ended edits that live only while their app is in front (2026-11-15:
+// Finder's rename field kept 9 of 12 characters; with Finder in front, 3 of 3
+// renames were whole). Sheets and panels that must be the key window
+// (Finder's Go to Folder) take input this way too. A window that is truly on
+// another Space is the host's to refuse first (preflight); this follows the
+// driver's recommendation only. fronted reports that the window was brought
+// to the front.
+func (d *CuaDriver) callFronting(ctx context.Context, tool string, args map[string]any, req ComputerActionRequest) (result map[string]any, fronted bool, err error) {
 	result, err = d.callAction(ctx, tool, args, req)
 	var refusal *CuaDriverError
-	if err == nil || !asCuaDriverError(err, &refusal) || !refusal.foreground || req.WindowID == 0 ||
-		!cuaForegroundTools[tool] || args["delivery_mode"] == "foreground" {
+	if err == nil || !asCuaDriverError(err, &refusal) || req.WindowID == 0 || !cuaInputTools[tool] {
 		return result, false, err
 	}
-	retry := make(map[string]any, len(args)+1)
-	for k, v := range args {
-		retry[k] = v
+	if !refusal.foreground && !(cuaKeyboardTools[tool] && refusal.Code == "no_focused_text_input" && d.inBackground(ctx, req.PID)) {
+		return result, false, err
 	}
-	retry["delivery_mode"] = "foreground"
-	result, err = d.callAction(ctx, tool, retry, req)
-	return result, err == nil, err
+	if !d.bringToFront(ctx, req) {
+		return result, false, err
+	}
+	result, err = d.callAction(ctx, tool, args, req)
+	return result, true, err
 }
 
-// foregroundNote is the line a result gets when its input went in the foreground.
-const foregroundNote = "delivered in the foreground: the window did not take it in the background, so it was briefly brought to the front"
+// cuaKeyboardTools are the input tools that send keys.
+var cuaKeyboardTools = map[string]bool{"type_text": true, "press_key": true, "hotkey": true}
+
+// inBackground reports that pid is known not to be the front app. macOS
+// sends keyboard input only to the key window of the front app, so keys for
+// an app in the background have nowhere to go: the driver answers
+// no_focused_text_input (its advice is a click to focus, which does not help
+// then). With the app in front the same answer means no field has the focus,
+// and the model should click it. Unknown (no front app query) is false.
+func (d *CuaDriver) inBackground(ctx context.Context, pid int) bool {
+	if d.frontPID == nil {
+		return false
+	}
+	front, err := d.frontPID(ctx)
+	return err == nil && front > 0 && front != pid
+}
+
+// frontAppPID asks LaunchServices for the front app's pid
+// (/usr/bin/lsappinfo, about 15 ms; NSWorkspace in a process without a
+// running AppKit loop keeps reporting the first app it saw). macOS only.
+func frontAppPID(ctx context.Context) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	asn, err := exec.CommandContext(ctx, "/usr/bin/lsappinfo", "front").Output()
+	if err != nil {
+		return 0, err
+	}
+	out, err := exec.CommandContext(ctx, "/usr/bin/lsappinfo", "info", "-only", "pid", strings.TrimSpace(string(asn))).Output()
+	if err != nil {
+		return 0, err
+	}
+	_, value, ok := strings.Cut(strings.TrimSpace(string(out)), "=")
+	pid, err := strconv.Atoi(strings.TrimSpace(value))
+	if !ok || err != nil {
+		return 0, fmt.Errorf("lsappinfo: no front pid in %q", out)
+	}
+	return pid, nil
+}
+
+// bringToFront makes the window's app the front app and leaves it there.
+// A result the driver could not fully verify still counts when it says the
+// app was activated.
+func (d *CuaDriver) bringToFront(ctx context.Context, req ComputerActionRequest) bool {
+	_, err := d.callAction(ctx, "bring_to_front", map[string]any{"pid": req.PID, "window_id": req.WindowID, "session": d.windowSession(req.SessionID)}, req)
+	var failure *CuaDriverError
+	return err == nil || (asCuaDriverError(err, &failure) && failure.result["activated"] == true)
+}
+
+// frontedNote is the line a result gets when its window was brought to the front.
+func frontedNote(req ComputerActionRequest) string {
+	return fmt.Sprintf("brought window %d (pid %d) to the front, where it stays: the window did not take the input in the background", req.WindowID, req.PID)
+}
 
 // cuaResultText is a driver result for the model: its summary (or reason or
 // message) and hint as advice it can follow, and a next call it can make.
@@ -539,18 +596,21 @@ func (d *CuaDriver) typeText(ctx context.Context, req ComputerActionRequest) ([]
 	var result map[string]any
 	var err error
 	var note string
-	typed := false
+	typed, fronted := false, false
 	if req.WindowID != 0 && hasNonASCII(req.Text) && d.webContent(ctx, req) {
 		if !d.noClipboard {
 			result, note, typed, err = d.paste(ctx, req)
 		}
-		if !typed {
-			args["delivery_mode"] = "foreground"
+		if !typed && d.bringToFront(ctx, req) {
+			// Without the clipboard: type to the app in front, not with key
+			// events posted to an app in the background (they garble it).
+			fronted = true
 		}
 	}
-	foreground := false
 	if !typed {
-		result, foreground, err = d.callForeground(ctx, tool, args, req)
+		var retried bool
+		result, retried, err = d.callFronting(ctx, tool, args, req)
+		fronted = fronted || retried
 	}
 	var driverErr *CuaDriverError
 	incomplete := err != nil && asCuaDriverError(err, &driverErr) && driverErr.Code == "type_text_incomplete"
@@ -565,8 +625,8 @@ func (d *CuaDriver) typeText(ctx context.Context, req ComputerActionRequest) ([]
 	if incomplete {
 		text = "the driver reported an incomplete delivery, but the field shows the text"
 	}
-	if foreground {
-		text += "\n" + foregroundNote
+	if fronted {
+		text += "\n" + frontedNote(req)
 	}
 	if note != "" {
 		text += "\n" + note
@@ -634,11 +694,11 @@ func (d *CuaDriver) paste(ctx context.Context, req ComputerActionRequest) (resul
 	if runtime.GOOS != "darwin" {
 		modifier = "ctrl"
 	}
-	var foreground bool
-	result, foreground, err = d.callForeground(ctx, "hotkey", map[string]any{"keys": []string{modifier, "v"}, "pid": req.PID, "window_id": req.WindowID,
+	var fronted bool
+	result, fronted, err = d.callFronting(ctx, "hotkey", map[string]any{"keys": []string{modifier, "v"}, "pid": req.PID, "window_id": req.WindowID,
 		"session": d.windowSession(req.SessionID)}, req)
-	if foreground {
-		note = foregroundNote
+	if fronted {
+		note = frontedNote(req)
 	}
 	if _, restoreErr := d.call(ctx, "clipboard_write", map[string]any{"text": before}, ""); restoreErr != nil {
 		note = strings.TrimPrefix(note+"\nthe clipboard could not be put back: it holds the typed text", "\n")

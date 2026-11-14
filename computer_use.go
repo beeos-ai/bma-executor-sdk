@@ -627,7 +627,9 @@ type CuaDriver struct {
 	noClipboard      bool
 	// reopen reopens a running app by bundle id (macOS: reopenApp), nil
 	// elsewhere; windowWait is the pause between window list reads after it.
-	reopen     func(ctx context.Context, bundleID string) error
+	reopen func(ctx context.Context, bundleID string) error
+	// frontPID is the front app's pid (macOS: frontAppPID), nil elsewhere.
+	frontPID   func(ctx context.Context) (int, error)
 	windowWait time.Duration
 }
 
@@ -653,6 +655,7 @@ func NewCuaDriver(ctx context.Context, opts CuaDriverOptions) (*CuaDriver, error
 		noClipboard: opts.NoClipboard, windowWait: 400 * time.Millisecond}
 	if runtime.GOOS == "darwin" {
 		driver.reopen = reopenApp
+		driver.frontPID = frontAppPID
 	}
 	if _, err := driver.call(ctx, "get_screen_size", map[string]any{}, ""); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrComputerUseUnavailable, err)
@@ -810,7 +813,7 @@ func (d *CuaDriver) Action(ctx context.Context, req ComputerActionRequest) ([]Co
 	if req.WindowID != 0 {
 		args["session"] = d.windowSession(req.SessionID)
 	}
-	result, foreground, err := d.callForeground(ctx, tool, args, req)
+	result, fronted, err := d.callFronting(ctx, tool, args, req)
 	if err != nil {
 		return nil, err
 	}
@@ -824,8 +827,8 @@ func (d *CuaDriver) Action(ctx context.Context, req ComputerActionRequest) ([]Co
 	}
 	raw, _ := json.Marshal(fallback)
 	text := cuaResultText(result, string(raw))
-	if foreground {
-		text += "\n" + foregroundNote
+	if fronted {
+		text += "\n" + frontedNote(req)
 	}
 	return []ContentBlock{{Type: ContentBlockTypeText, Text: text}}, nil
 }

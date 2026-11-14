@@ -465,10 +465,10 @@ func TestTypeRoute(t *testing.T) {
 		"web field, ASCII": {env: []string{web}, req: ComputerActionRequest{Action: "type", Text: "rain", PID: 1, WindowID: 2},
 			want: []string{`type_text {"pid":1`}, without: []string{"clipboard", "delivery_mode"}, reads: 1},
 		"rich clipboard": {env: []string{web, `BMA_TEST_CUA_CLIPBOARD_TYPES=["public.html","public.utf8-plain-text"]`}, req: req,
-			want: []string{`clipboard_read`, `type_text {"delivery_mode":"foreground"`}, without: []string{"clipboard_write", "hotkey"}, reads: 2},
+			want: []string{`clipboard_read`, `bring_to_front {"pid":38989`, `type_text {"pid":38989`}, without: []string{"clipboard_write", "hotkey", "delivery_mode"}, reads: 2},
 		"unreadable window": {req: req, want: paste, without: []string{"type_text"}, reads: 2},
 		"no clipboard": {noClipboard: true, env: []string{web}, req: req,
-			want: []string{`type_text {"delivery_mode":"foreground"`}, without: []string{"clipboard"}, reads: 2},
+			want: []string{`bring_to_front {"pid":38989`, `type_text {"pid":38989`}, without: []string{"clipboard", "delivery_mode"}, reads: 2},
 		"no window": {req: ComputerActionRequest{Action: "type", Text: text}, want: []string{`type_text {"scope":"desktop"`},
 			without: []string{"clipboard", "delivery_mode"}},
 	} {
@@ -555,6 +555,7 @@ func TestForegroundOnRefusal(t *testing.T) {
 	notKey := `{"code":"window_not_key","escalation":{"recommended":"foreground"}}`
 	background := `{"code":"background_unavailable","escalation":{"recommended":"foreground","reason":"occluded"}}`
 	noAdvice := `{"code":"off_space_or_ax_unresolved","effect":"refused"}`
+	noField := `{"code":"no_focused_text_input","escalation":{"recommended":"px"}}`
 	partial := `{"code":"type_text_incomplete","effect":"partial","escalation":{"recommended":"foreground"}}`
 	window := ComputerActionRequest{PID: 501, WindowID: 142026}
 	with := func(r ComputerActionRequest, action, text string) ComputerActionRequest {
@@ -567,18 +568,24 @@ func TestForegroundOnRefusal(t *testing.T) {
 	for name, c := range map[string]struct {
 		tool, stdout string
 		fgRefuse     bool
+		front        int // the front app's pid; 0: unknown
 		req          ComputerActionRequest
 		retried      bool
 		wantErr      string
 	}{
-		"type into a sheet":       {tool: "type_text", stdout: offSpace, req: with(window, "type", "/Users"), retried: true},
-		"key into a sheet":        {tool: "press_key", stdout: notKey, req: with(window, "key", "Return"), retried: true},
-		"chord into a sheet":      {tool: "hotkey", stdout: notKey, req: with(window, "key", "cmd+a"), retried: true},
-		"click behind":            {tool: "click", stdout: background, req: with(window, "click", ""), retried: true},
-		"no recommendation":       {tool: "type_text", stdout: noAdvice, req: with(window, "type", "/Users"), wantErr: "off_space_or_ax_unresolved: window 142026 is not on the current desktop"},
-		"no window":               {tool: "press_key", stdout: notKey, req: with(ComputerActionRequest{}, "key", "Return"), wantErr: "window_not_key: "},
-		"partial delivery":        {tool: "type_text", stdout: partial, req: with(window, "type", "/Users"), wantErr: "type_text_incomplete: "},
-		"foreground refused, too": {tool: "press_key", stdout: notKey, fgRefuse: true, req: with(window, "key", "Return"), wantErr: "window_not_key: window 142026 is not the app's focused window"},
+		"type into a sheet":        {tool: "type_text", stdout: offSpace, req: with(window, "type", "/Users"), retried: true},
+		"key into a sheet":         {tool: "press_key", stdout: notKey, req: with(window, "key", "Return"), retried: true},
+		"chord into a sheet":       {tool: "hotkey", stdout: notKey, req: with(window, "key", "cmd+a"), retried: true},
+		"click behind":             {tool: "click", stdout: background, req: with(window, "click", ""), retried: true},
+		"type, app in background":  {tool: "type_text", stdout: noField, front: 999, req: with(window, "type", "/Users"), retried: true},
+		"key, app in background":   {tool: "press_key", stdout: noField, front: 999, req: with(window, "key", "Return"), retried: true},
+		"type, app in front":       {tool: "type_text", stdout: noField, front: 501, req: with(window, "type", "/Users"), wantErr: "no_focused_text_input: no text field has the focus"},
+		"type, front unknown":      {tool: "type_text", stdout: noField, req: with(window, "type", "/Users"), wantErr: "no_focused_text_input: "},
+		"click, app in background": {tool: "click", stdout: noField, front: 999, req: with(window, "click", ""), wantErr: "no_focused_text_input: "},
+		"no recommendation":        {tool: "type_text", stdout: noAdvice, req: with(window, "type", "/Users"), wantErr: "off_space_or_ax_unresolved: window 142026 is not on the current desktop"},
+		"no window":                {tool: "press_key", stdout: notKey, req: with(ComputerActionRequest{}, "key", "Return"), wantErr: "window_not_key: "},
+		"partial delivery":         {tool: "type_text", stdout: partial, req: with(window, "type", "/Users"), wantErr: "type_text_incomplete: "},
+		"foreground refused, too":  {tool: "press_key", stdout: notKey, fgRefuse: true, req: with(window, "key", "Return"), wantErr: "window_not_key: window 142026 is not the app's focused window"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			env := []string{"BMA_TEST_CUA_BG_REFUSE_TOOL=" + c.tool, "BMA_TEST_CUA_BG_REFUSE_STDOUT=" + c.stdout, `BMA_TEST_CUA_ELEMENTS=[{"role":"AXTextField","value":"/Us"}]`}
@@ -589,24 +596,33 @@ func TestForegroundOnRefusal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			driver.frontPID = nil
+			if c.front != 0 {
+				driver.frontPID = func(context.Context) (int, error) { return c.front, nil }
+			}
 			blocks, err := driver.Action(context.Background(), c.req)
 			raw, _ := os.ReadFile(logPath)
 			calls := strings.Count(string(raw), c.tool+" ")
-			foreground := strings.Count(string(raw), `"delivery_mode":"foreground"`)
+			fronts := strings.Count(string(raw), "bring_to_front ")
 			if c.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 					t.Fatalf("err = %v, want %q", err, c.wantErr)
 				}
-				if want := map[bool]int{true: 2, false: 1}[c.fgRefuse]; calls != want {
-					t.Fatalf("%s called %d times, want %d:\n%s", c.tool, calls, want, raw)
+				if want := map[bool]int{true: 2, false: 1}[c.fgRefuse]; calls != want || fronts != want-1 {
+					t.Fatalf("%s called %d times, bring_to_front %d, want %d:\n%s", c.tool, calls, fronts, want, raw)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if calls != 2 || foreground != 1 || !strings.Contains(blocks[0].Text, foregroundNote) {
-				t.Fatalf("calls %d, foreground %d, text %q:\n%s", calls, foreground, blocks[0].Text, raw)
+			// bring_to_front, then the same input again, never delivered in
+			// the foreground (which gives the front back).
+			log := string(raw)
+			first, front, second := strings.Index(log, c.tool+" "), strings.Index(log, "bring_to_front "), strings.LastIndex(log, c.tool+" ")
+			if calls != 2 || fronts != 1 || !(first < front && front < second) || strings.Contains(log, `"delivery_mode":"foreground"`) ||
+				!strings.Contains(blocks[0].Text, "brought window 142026 (pid 501) to the front, where it stays") {
+				t.Fatalf("calls %d, bring_to_front %d, text %q:\n%s", calls, fronts, blocks[0].Text, raw)
 			}
 		})
 	}
@@ -618,5 +634,22 @@ func TestForegroundOnRefusal(t *testing.T) {
 	_, err = driver.Action(context.Background(), ComputerActionRequest{Action: "menu", MenuPath: []string{"Go", "Go to Folder..."}, PID: 501, WindowID: 142000})
 	if err == nil || !strings.Contains(err.Error(), "window_not_key: window 142000 is not the app's focused window: a sheet or dialog") {
 		t.Fatalf("menu err = %v", err)
+	}
+}
+
+// TestFrontAppPID reads the front app's pid from LaunchServices (macOS).
+func TestFrontAppPID(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS only")
+	}
+	if _, err := os.Stat("/usr/bin/lsappinfo"); err != nil {
+		t.Skip("no lsappinfo")
+	}
+	pid, err := frontAppPID(context.Background())
+	if err != nil {
+		t.Skipf("no front app in this session: %v", err)
+	}
+	if pid <= 0 {
+		t.Fatalf("front pid = %d", pid)
 	}
 }

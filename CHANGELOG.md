@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.6.23
+
+- **Go: an input that needs its window in front brings it there and stays,
+  instead of borrowing the front.** 1.6.19 retried an input the driver
+  refused in the background with `delivery_mode: "foreground"`: the driver
+  brings the window to the front, types and gives the front back at once.
+  That hand-back ended edits that live only while their app is in front
+  (2026-11-15, Finder's rename field kept 9 of 12 characters). On a real
+  Mac, typing into the rename field with Finder in front landed 3 of 3
+  names whole, and a paste chord sent in the foreground did not reach the
+  field at all (it ran Finder's Edit > Paste). Now such an input brings the
+  window to the front with `bring_to_front`, which leaves it there, and runs
+  the same input again in the default way; the result says "brought window
+  W (pid P) to the front, where it stays". It happens when the driver
+  refuses the input before delivery and recommends the foreground, and, for
+  `type` and `key` only, when it answers `no_focused_text_input` while the
+  SDK finds (from LaunchServices, `lsappinfo`) that the target app is not the
+  front app: macOS sends keyboard input only to the key window of the front
+  app, so keys for an app in the background have nowhere to go. With the app
+  in front `no_focused_text_input` still goes to the model (no field has
+  the focus; click it first), and `click` is not retried for it. Non-ASCII
+  text into web content without the clipboard is typed to the app brought to
+  the front in the same way. The SDK no longer uses the driver's foreground
+  delivery.
+
 ## 1.6.22
 
 - **Go: the claude CLI's transcript is looked for in the CLI's own config
