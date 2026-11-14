@@ -66,7 +66,7 @@ function echoAgent(closed: string[]): AgentHandler {
     async runTurn(turn, signal) {
       const text = turn.params.input[0]?.text ?? ''
       if (text === 'block') {
-        await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }))
+        if (!signal.aborted) await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }))
         return
       }
       if (text === 'fail') throw new Error('model unavailable')
