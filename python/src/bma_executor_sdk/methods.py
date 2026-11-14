@@ -29,6 +29,10 @@ from .generated import (
     ProcessStatusParams,
     ProcessWriteParams,
     ProcessWriteResult,
+    ScreenStartParams,
+    ScreenStartResult,
+    ScreenStopParams,
+    ScreenStopResult,
     SessionEndedParams,
     SessionEventDeltaParams,
     SessionEventParams,
@@ -52,6 +56,8 @@ from .generated import (
 )
 
 __all__ = [
+    "SCREEN_START",
+    "SCREEN_STOP",
     "PROCESS_START",
     "PROCESS_READ",
     "PROCESS_WRITE",
@@ -82,6 +88,8 @@ __all__ = [
 ]
 
 # Harness-to-executor requests a client serves with on_request.
+SCREEN_START: Request[ScreenStartParams, ScreenStartResult] = Request("screen.start")
+SCREEN_STOP: Request[ScreenStopParams, ScreenStopResult] = Request("screen.stop")
 PROCESS_START: Request[ProcessStartParams, ProcessState] = Request("process.start")
 PROCESS_READ: Request[ProcessReadParams, ProcessReadResult] = Request("process.read")
 PROCESS_WRITE: Request[ProcessWriteParams, ProcessWriteResult] = Request("process.write")

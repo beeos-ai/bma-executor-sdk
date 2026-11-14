@@ -1650,6 +1650,50 @@
         },
         "resumed": false
       }
+    },
+    {
+      "name": "screen.start request",
+      "method": "screen.start",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_screen_start",
+        "method": "screen.start",
+        "params": {
+          "session_id": "dsn_phone",
+          "relay_url": "wss://relay.example.test/internal/realtime/desktop-relay",
+          "relay_ticket": "fixture-ticket"
+        }
+      }
+    },
+    {
+      "name": "screen.start result",
+      "method": "screen.start",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "screen.stop request",
+      "method": "screen.stop",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_screen_stop",
+        "method": "screen.stop",
+        "params": {
+          "session_id": "dsn_phone"
+        }
+      }
+    },
+    {
+      "name": "screen.stop result",
+      "method": "screen.stop",
+      "kind": "result",
+      "result": {
+        "stopped": true
+      }
     }
   ]
 }

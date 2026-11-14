@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 1.10.1
+  version: 1.12.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -64,6 +64,61 @@ servers:
         default: chrome
         description: MCP server key from the session assignment.
 methods:
+  - name: screen.start
+    summary: Start a native WebRTC screen producer.
+    description: >-
+      Starts a single native screen relay for this machine; no shell or virtual
+      desktop is created. The server-selected session is idempotent; another
+      active session is rejected. The relay ticket must never be logged. Human
+      input remains disabled until separately fenced and authorized.
+    tags:
+      - name: screen
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: display.native_webrtc
+    x-bma-idempotent-by: session_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: relay_url
+        required: true
+        schema:
+          type: string
+      - name: relay_ticket
+        required: true
+        schema:
+          type: string
+    result:
+      name: result
+      schema:
+        $ref: schemas/executor.json#/$defs/ScreenStartResult
+  - name: screen.stop
+    summary: Stop a native screen session.
+    description: >-
+      Fences human input and stops the named native screen producer, waiting
+      for cleanup before returning. Never resumes an agent. A repeated stop
+      is safe; it must not affect a replacement session.
+    tags:
+      - name: screen
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: display.native_webrtc
+    x-bma-idempotent-by: session_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+    result:
+      name: result
+      schema:
+        $ref: schemas/executor.json#/$defs/ScreenStopResult
   - name: executor.register
     summary: Register an executor connection.
     description: Executor to harness request, the first frame on the control channel. protocol MUST

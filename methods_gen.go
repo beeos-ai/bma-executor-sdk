@@ -5,6 +5,8 @@ package bmaexecutor
 // Requests are the harness-to-executor requests a client serves:
 // Requests.ProcessStart.Handle(client, fn).
 var Requests = struct {
+	ScreenStart           RequestMethod[ScreenStartParams, ScreenStartResult]
+	ScreenStop            RequestMethod[ScreenStopParams, ScreenStopResult]
 	ProcessStart          RequestMethod[ProcessStartParams, ProcessState]
 	ProcessRead           RequestMethod[ProcessReadParams, ProcessReadResult]
 	ProcessWrite          RequestMethod[ProcessWriteParams, ProcessWriteResult]
@@ -20,6 +22,8 @@ var Requests = struct {
 	FsUnmount             RequestMethod[FsUnmountParams, FsUnmountResult]
 	AgentCustomToolResult RequestMethod[AgentCustomToolResultParams, CustomToolResultResult]
 }{
+	ScreenStart:           RequestMethod[ScreenStartParams, ScreenStartResult]{Method: "screen.start"},
+	ScreenStop:            RequestMethod[ScreenStopParams, ScreenStopResult]{Method: "screen.stop"},
 	ProcessStart:          RequestMethod[ProcessStartParams, ProcessState]{Method: "process.start"},
 	ProcessRead:           RequestMethod[ProcessReadParams, ProcessReadResult]{Method: "process.read"},
 	ProcessWrite:          RequestMethod[ProcessWriteParams, ProcessWriteResult]{Method: "process.write"},

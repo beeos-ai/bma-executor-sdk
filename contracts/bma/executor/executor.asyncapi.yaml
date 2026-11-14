@@ -2,7 +2,7 @@ asyncapi: 3.0.0
 id: https://contracts.bma.beeos.ai/executor.asyncapi
 info:
   title: BMA Executor Protocol channels
-  version: 1.10.1
+  version: 1.12.0
   description: "WebSocket channels for bma.executor.v1 and bma.executor.v1.1. The control channel carries JSON-RPC 2.0 requests, notifications, and responses. The mcp channel carries raw MCP JSON-RPC with no BMA wrapper. PTY bytes travel on per-attach outbound host sockets (subprotocol bma.terminal.v1), not on these channels. Contract 1.4.0 adds the platform tools endpoint (x-bma-platform-tools): the HTTP MCP endpoint a brain on one machine calls to run its tools on the session's hands machine."
   license:
     name: Apache-2.0
@@ -73,6 +73,10 @@ channels:
       legacy: /v1/executors/channel?channel=control
     description: "Addresses: GET /v1/machines/{machine_id}/channel (machine-scoped) or GET /v1/environments/{environment_id}/channel (environment-scoped); address below is the deprecated legacy alias. Subprotocol bma.executor.v1.1 or bma.executor.v1; the server selects one and executor.register.protocol must equal it. Max outbound control frame: 64 KiB UTF-8. Close codes: 4001 token expired, 4003 unsupported protocol, 4004 replaced, 4005 drained."
     messages:
+      screenStart:
+        $ref: "#/components/messages/screenStart"
+      screenStop:
+        $ref: "#/components/messages/screenStop"
       executorRegister:
         $ref: "#/components/messages/executorRegister"
       executorHeartbeat:
@@ -186,6 +190,18 @@ channels:
       mcpErrorResponse:
         $ref: "#/components/messages/mcpErrorResponse"
 operations:
+  screenStartReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/screenStart"
+  screenStopReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/screenStop"
   executorRegisterSend:
     action: send
     channel:
@@ -434,6 +450,84 @@ operations:
       - $ref: "#/components/messages/toolsTokenRefresh"
 components:
   messages:
+    screenStart:
+      name: screen.start
+      title: screen.start
+      summary: Start a native WebRTC screen producer.
+      description: Starts a single native screen relay for this machine; no shell or virtual desktop is created. The server-selected session is idempotent; another active session is rejected. The relay ticket must never be logged. Human input remains disabled until separately fenced and authorized.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: screen.start
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              relay_url:
+                type: string
+              relay_ticket:
+                type: string
+            required:
+              - session_id
+              - relay_url
+              - relay_ticket
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: screen.start
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: session_id
+    screenStop:
+      name: screen.stop
+      title: screen.stop
+      summary: Stop a native screen session.
+      description: Fences human input and stops the named native screen producer, waiting for cleanup before returning. Never resumes an agent. A repeated stop is safe; it must not affect a replacement session.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: screen.stop
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+            required:
+              - session_id
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: screen.stop
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: session_id
     executorRegister:
       name: executor.register
       title: executor.register

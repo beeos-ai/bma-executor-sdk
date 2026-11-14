@@ -111,6 +111,10 @@
         "desktop": {
           "type": "boolean",
           "description": "The machine can host its own desktop for a desktop session (it carries bma-desktop-session, started through process.start). Absent means unknown (an executor that predates the field)."
+        },
+        "native_webrtc": {
+          "type": "boolean",
+          "description": "Native screen producer supports screen.start/stop and the bma desktop relay, without process execution. Does not grant input authority."
         }
       },
       "required": [],
@@ -549,6 +553,30 @@
         "channel_scope"
       ],
       "additionalProperties": true
+    },
+    "ScreenStartResult": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "accepted"
+      ],
+      "additionalProperties": false
+    },
+    "ScreenStopResult": {
+      "type": "object",
+      "properties": {
+        "stopped": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "stopped"
+      ],
+      "additionalProperties": false
     }
   }
 }
