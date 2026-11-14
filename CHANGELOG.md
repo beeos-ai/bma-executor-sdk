@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.18
+
+- **Go: a call whose ctx ends no longer drops the executor connection.**
+  The WebSocket library closes the whole connection when a write's ctx ends
+  during the write, even right after the frame went out; a canceled turn
+  could so take the channel down under the platform's next call (`executor
+  channel is not connected`). An ended ctx now fails only its own write, and
+  only the deadline bounds a write in progress.
+
 ## 1.6.17
 
 - **Go: Codex as a local brain (`ACPProfileCodex`, `NewCodexAppServerAdapter`).**

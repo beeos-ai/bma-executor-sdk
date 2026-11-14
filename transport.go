@@ -83,8 +83,21 @@ func (c wsConn) Read(ctx context.Context) ([]byte, error) {
 	return data, nil
 }
 
+// Write sends one frame. coder/websocket closes the whole connection when the
+// write's ctx ends during the write, even right after the frame went out, so
+// a canceled call would drop every other call on the connection: an ended ctx
+// fails only this write, and only its deadline bounds a write in progress.
 func (c wsConn) Write(ctx context.Context, frame []byte) error {
-	return c.ws.Write(ctx, websocket.MessageText, frame)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	writeCtx := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		writeCtx, cancel = context.WithDeadline(writeCtx, deadline)
+		defer cancel()
+	}
+	return c.ws.Write(writeCtx, websocket.MessageText, frame)
 }
 
 func (c wsConn) Close(code int, reason string) error {
