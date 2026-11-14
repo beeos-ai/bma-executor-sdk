@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.22
+
+- **Go: the claude CLI's transcript is looked for in the CLI's own config
+  dir.** 1.6.20 took the first `HOME` of the CLI's environment (the
+  process's) instead of the last (the host's `ACPAgentOptions.Env` overrides
+  it, as the CLI sees it), so a host that sets `HOME` or `CLAUDE_CONFIG_DIR`
+  for the CLI had every resumable `claude-code` conversation reported as
+  lost. The last `HOME` counts, and `CLAUDE_CONFIG_DIR` outranks it.
+
 ## 1.6.21
 
 - **`bma up` asks its questions only on a terminal.** A standard input that

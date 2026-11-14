@@ -333,13 +333,16 @@ func claudeConversationUUID(sessionID, ref string) (uuid string, ok bool) {
 // else HOME/.claude). A new HOME, a deleted config dir or another machine has
 // none: the conversation is lost.
 func (a *claudeCLIAdapter) holds(uuid string) bool {
-	dir := ""
+	var home, dir string // the CLI sees the last value of a variable
 	for _, kv := range a.processEnv() {
 		if v, ok := strings.CutPrefix(kv, "CLAUDE_CONFIG_DIR="); ok {
 			dir = v
-		} else if v, ok := strings.CutPrefix(kv, "HOME="); ok && dir == "" {
-			dir = filepath.Join(v, ".claude")
+		} else if v, ok := strings.CutPrefix(kv, "HOME="); ok {
+			home = v
 		}
+	}
+	if dir == "" {
+		dir = filepath.Join(home, ".claude")
 	}
 	found, _ := filepath.Glob(filepath.Join(dir, "projects", "*", uuid+".jsonl"))
 	return len(found) > 0
