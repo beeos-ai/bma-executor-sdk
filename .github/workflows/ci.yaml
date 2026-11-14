@@ -121,6 +121,38 @@ jobs:
           go test -race -count=1 -v -run 'ClaudeCLI' ./... | tee /tmp/claude.log
           ! grep -q -- '--- SKIP' /tmp/claude.log
 
+  # The Codex brain against each pinned codex CLI (OpenAI's GitHub release
+  # asset, checked against the digest GitHub publishes and the SDK's pins). The
+  # model provider is a scripted Responses endpoint and the API key made up: no
+  # credential is used.
+  codex:
+    name: Codex adapter with the pinned codex CLI ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        version: ["0.168.0", "0.169.0"]
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
+          cache-dependency-path: go.sum
+
+      - name: Fetch the pinned codex CLI
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: tools/fetch_codex_cli.sh ${{ matrix.version }} testdata/codex-cli/codex
+
+      - name: Codex adapter tests (they fail, not skip, when the CLI is missing)
+        env:
+          BMA_REQUIRE_CODEX_CLI: "1"
+        run: |
+          go test -race -count=1 -v -run 'Codex' ./... | tee /tmp/codex.log
+          ! grep -q -- '--- SKIP' /tmp/codex.log
+
   # The DSH profile of ACPAgent against the real, pinned bma-dsh-acp (npm ci
   # installs the locked tree): a user's image reaches a scripted model
   # endpoint. The model endpoint is scripted; no credential is used.

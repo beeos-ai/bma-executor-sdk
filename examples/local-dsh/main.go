@@ -18,6 +18,12 @@
 // variables of this process, which are handed to the agent as they are.
 // -model-base-url and BMA_LOCAL_MODEL_KEY are not used.
 //
+// Codex instead of DSH: -profile codex with -agent set to the pinned official
+// codex binary and CODEX_HOME set to the BMA Codex home you signed in to with
+// your own account (CODEX_HOME=<home> codex login); the home holds nothing but
+// that login. Your credentials stay in that home and are never sent to BMA.
+// -model-base-url and BMA_LOCAL_MODEL_KEY are not used.
+//
 // -labels (comma separated) and -remote-brain are this machine owner's local
 // choices: labels narrow where BMA may place sessions; -remote-brain lets a
 // brain on another machine use this one as its hands (off unless given).
@@ -87,7 +93,7 @@ func main() {
 	model := flag.String("model", "", "model id sent upstream")
 	workRoot := flag.String("work-root", filepath.Join(os.TempDir(), "bma-local-dsh"), "session workspaces and allowed cwd root")
 	state := flag.String("state", "", "agent state directory (default <work-root>/.state)")
-	profile := flag.String("profile", bmaexecutor.ACPProfileDSH, "agent profile: dsh or claude-code")
+	profile := flag.String("profile", bmaexecutor.ACPProfileDSH, "agent profile: dsh, claude-code or codex")
 	claudeExecutable := flag.String("claude-executable", "", "with -profile claude-code: the pinned claude binary -agent runs (default -agent itself)")
 	labels := flag.String("labels", "", "comma separated executor labels (a-z 0-9 . _ -)")
 	remoteBrain := flag.Bool("remote-brain", false, "allow a brain on another machine to use this machine as its hands")
@@ -111,8 +117,11 @@ func main() {
 	flag.Parse()
 	token, key := os.Getenv("BMA_MACHINE_TOKEN"), os.Getenv("BMA_LOCAL_MODEL_KEY")
 	claude := *profile == bmaexecutor.ACPProfileClaudeCode
-	if *baseURL == "" || *agent == "" || (*modelBase == "" && !claude) || token == "" {
-		log.Fatal("-base-url, -agent, -model-base-url (not with a claude profile) and BMA_MACHINE_TOKEN are required")
+	// The owner's own credentials of an owner-credential brain, handed to it as they are.
+	ownerEnv := map[string][]string{bmaexecutor.ACPProfileClaudeCode: {"ANTHROPIC_", "CLAUDE_CODE_", "AWS_", "GOOGLE_", "CLOUD_ML_"},
+		bmaexecutor.ACPProfileCodex: {"CODEX_HOME="}}[*profile]
+	if *baseURL == "" || *agent == "" || (*modelBase == "" && ownerEnv == nil) || token == "" {
+		log.Fatal("-base-url, -agent, -model-base-url (not with a claude-code or codex profile) and BMA_MACHINE_TOKEN are required")
 	}
 	if *state == "" {
 		*state = filepath.Join(*workRoot, ".state")
@@ -204,9 +213,9 @@ func main() {
 		dec.DisallowUnknownFields()
 		check(dec.Decode(&agentOptions.Models))
 	}
-	if claude {
-		for _, kv := range os.Environ() { // the owner's own credentials, for Claude Code only
-			for _, prefix := range []string{"ANTHROPIC_", "CLAUDE_CODE_", "AWS_", "GOOGLE_", "CLOUD_ML_"} {
+	if ownerEnv != nil {
+		for _, kv := range os.Environ() {
+			for _, prefix := range ownerEnv {
 				if strings.HasPrefix(kv, prefix) {
 					agentOptions.Env = append(agentOptions.Env, kv)
 				}

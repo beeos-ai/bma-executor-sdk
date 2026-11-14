@@ -3,3 +3,4 @@
 .build/
 testdata/bma-dsh-acp/node_modules/
 /testdata/claude-cli/
+/testdata/codex-cli/

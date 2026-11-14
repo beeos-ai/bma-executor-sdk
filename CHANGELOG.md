@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.6.17
+
+- **Go: Codex as a local brain (`ACPProfileCodex`, `NewCodexAppServerAdapter`).**
+  The adapter drives the official `codex` CLI, unmodified, through its app
+  server (JSON-RPC over stdio) with the owner's own credentials in a Codex home
+  of BMA's (`CODEX_HOME` in `ACPAgentOptions.Env`): the platform tools and the
+  turn's tools are dynamic tools the host approves and runs, every built-in
+  tool is off (command-line settings and a model catalog with each model's
+  tool mode and extra tools cleared), and a home with a configuration file is
+  refused. Pinned releases 0.168.0 and 0.169.0 (`codexPins`);
+  `tools/fetch_codex_cli.sh` fetches one. Models and reasoning efforts are
+  those codex reports (`model_credentials: owner`); cancel, resume across
+  executor restarts, images, host tools, custom tools, input skills and the
+  contract's stop codes as for every brain. `examples/local-dsh` takes
+  `-profile codex`.
+
 ## 1.6.16
 
 - **Go: a turn canceled while its `interaction.request` is still unanswered

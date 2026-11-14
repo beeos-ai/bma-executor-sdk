@@ -23,6 +23,10 @@ func TestMain(m *testing.M) {
 		fakeClaudeCLI(version)
 		return
 	}
+	if version := os.Getenv("BMA_FAKE_CODEX_CLI"); version != "" {
+		fakeCodexCLI(version)
+		return
+	}
 	if mode := os.Getenv("BMA_TEST_HELPER"); mode != "" {
 		runTestHelper(mode)
 		return

@@ -13,3 +13,12 @@ func fakeClaudeCLI(version string) {
 	}
 	os.Exit(2)
 }
+
+// fakeCodexCLI stands in for a codex binary that answers --version only.
+func fakeCodexCLI(version string) {
+	if len(os.Args) > 1 && os.Args[len(os.Args)-1] == "--version" {
+		fmt.Println("codex-cli " + version)
+		os.Exit(0)
+	}
+	os.Exit(2)
+}
