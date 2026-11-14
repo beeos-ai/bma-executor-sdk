@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.21
+
+- **`bma up` asks its questions only on a terminal.** A standard input that
+  is a character device but not a terminal (`bma up </dev/null`, a script, a
+  container exec) counted as interactive, so `bma up` printed the remote-brain
+  question and read an empty answer. It now checks for a terminal; elsewhere
+  the defaults apply (remote brain off, harnesses from `--harness`).
+
 ## 1.6.20
 
 - **Go: a local conversation that is gone is reported, not continued
