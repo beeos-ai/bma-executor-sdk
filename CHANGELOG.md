@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.29
+
+- **`bma disconnect` forgets the machine token only when BMA removed the
+  machine.** A 404 `route_not_found` (a deployment without the route) counted
+  as "already gone" and the local token was deleted while the machine stayed;
+  now only a removal (204), an unknown machine (404) or a rejected token (401)
+  does. The `cmd/bma` tests no longer reach this computer's service manager.
+
 ## 1.6.28
 
 - **Go: keys the window did not take in the background are sent in the
