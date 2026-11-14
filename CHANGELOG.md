@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.6.8
+
+- **Go: an executor reconnects as soon as its host resumes from a suspend.**
+  A host that was suspended (a paused sandbox resumed from its snapshot, a
+  Linux or macOS laptop waking from sleep) kept the connection it had before: nothing told
+  the client it was dead until the next heartbeat went unanswered, and a
+  reconnect backoff that was running still had its whole remainder to wait,
+  because neither clock moves while the host is suspended. The client now
+  compares the wall clock with the monotonic clock every 500ms; when wall time
+  passed that the monotonic clock did not see (2s or more), it drops the
+  registered connection and reconnects at once, or starts a pending reconnect
+  now. A registration in progress is left to finish.
+
 ## 1.6.7
 
 - **Go: nothing of a Claude Code turn follows its stop.** When a turn ended at

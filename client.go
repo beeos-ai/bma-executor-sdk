@@ -54,6 +54,13 @@ const (
 	// maxRefusedRegistrations is how many registrations in a row the
 	// platform may refuse before the client gives up (ErrRegistrationRefused).
 	maxRefusedRegistrations = 3
+	// suspendCheckInterval is how often the client compares the wall clock
+	// with the monotonic clock; a host suspended in between (a laptop's
+	// sleep, a paused sandbox) shows as wall time that passed while the
+	// monotonic clock stood still. minSuspend is the smallest such gap taken
+	// for a suspend, well above any clock adjustment.
+	suspendCheckInterval = 500 * time.Millisecond
+	minSuspend           = 2 * time.Second
 
 	// Artifact upload (v1.1 §6.5).
 	headerSessionID      = "X-BMA-Session-ID"
@@ -69,6 +76,8 @@ var (
 	// ErrReplaced is Err after the harness closed with 4004: a newer
 	// connection for this executor is authoritative and this one must stop.
 	ErrReplaced = errors.New("bmaexecutor: executor connection was replaced (4004)")
+	// errResumedFromSuspend ends a connection the host was suspended with.
+	errResumedFromSuspend = errors.New("bmaexecutor: host resumed from suspend")
 	// ErrReconnectExhausted is Err after a positive MaxReconnectAttempts
 	// failed; it wraps the last failure.
 	ErrReconnectExhausted = errors.New("bmaexecutor: executor reconnect attempts exhausted")
@@ -301,6 +310,10 @@ type Client struct {
 	sessions          map[string]struct{}
 	pending           map[string]chan rpcOutcome
 	reconnectAttempts int
+	// reconnectTimer is the pending reconnect; reconnectNow makes the next
+	// one start without a backoff (the host just resumed).
+	reconnectTimer *time.Timer
+	reconnectNow   bool
 	// refusedStreak counts registrations refused in a row; stableConn is the
 	// connection that stayed registered for one heartbeat interval, and
 	// stable is closed and replaced whenever a connection becomes stable.
@@ -325,6 +338,9 @@ type Client struct {
 	registered chan struct{}
 	// sessionContexts caches SessionContext reads.
 	sessionContexts sessionContextCache
+	// wallNow reads the wall clock without its monotonic reading; tests move
+	// it to simulate a suspend.
+	wallNow func() time.Time
 }
 
 // NewClient validates options and returns a disconnected client.
@@ -404,6 +420,7 @@ func NewClient(options Options) (*Client, error) {
 		registered:           make(chan struct{}),
 		stable:               make(chan struct{}),
 		toolHandlers:         make(map[string]toolHandler),
+		wallNow:              func() time.Time { return time.Now().Round(0) },
 	}
 	client.Tools = newTools(client)
 	return client, nil
@@ -434,6 +451,7 @@ func (c *Client) Start(ctx context.Context) (ExecutorRegisterResult, error) {
 		return ExecutorRegisterResult{}, err
 	}
 	go c.heartbeatLoop()
+	go c.suspendLoop()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.registerResult == nil {
@@ -1716,8 +1734,62 @@ func (c *Client) scheduleReconnect(cause error) {
 	}
 
 	delay := c.reconnectDelay(attempt)
+	c.mu.Lock()
+	if c.reconnectNow {
+		c.reconnectNow, delay = false, 0
+	}
+	c.reconnectTimer = time.AfterFunc(delay, func() { c.reconnect() })
+	c.mu.Unlock()
 	c.log(LogInfo, fmt.Sprintf("reconnecting executor channel in %s", delay), nil)
-	time.AfterFunc(delay, func() { c.reconnect() })
+}
+
+// suspendLoop notices that the host was suspended and resumed. Nothing else
+// tells the client: a connection that died while the host was suspended
+// looks open until a heartbeat times out, and a reconnect backoff (on the
+// monotonic clock, which stood still) still has its whole remainder to run.
+func (c *Client) suspendLoop() {
+	ticker := time.NewTicker(suspendCheckInterval)
+	defer ticker.Stop()
+	lastWall, lastMono := c.wallNow(), time.Now()
+	for {
+		select {
+		case <-c.rootCtx.Done():
+			return
+		case <-ticker.C:
+		}
+		wall, mono := c.wallNow(), time.Now()
+		if suspended := wall.Sub(lastWall) - mono.Sub(lastMono); suspended >= minSuspend {
+			c.resumed(suspended)
+		}
+		lastWall, lastMono = wall, mono
+	}
+}
+
+// resumed reconnects at once after a suspend: the registered connection is
+// dropped as dead (the platform has long since stopped hearing from it) and
+// the reconnect starts without a backoff. A registration in progress is left
+// to finish or fail on its own.
+func (c *Client) resumed(suspended time.Duration) {
+	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return
+	}
+	c.reconnectAttempts = 0
+	conn, state, timer := c.conn, c.state, c.reconnectTimer
+	registered := conn != nil && (state == ConnectionStateReady || state == ConnectionStateDraining)
+	c.reconnectNow = registered
+	c.mu.Unlock()
+	c.log(LogInfo, fmt.Sprintf("host resumed after about %s suspended; reconnecting now", suspended.Round(time.Second)), nil)
+	switch {
+	case registered:
+		// Close can wait seconds for the close handshake of a dead
+		// connection; the connection counts as lost right away.
+		go func() { _ = conn.conn.Close(1001, "host resumed from suspend") }()
+		c.disconnected(conn, errResumedFromSuspend)
+	case conn == nil && timer != nil && timer.Stop():
+		go c.reconnect()
+	}
 }
 
 // reconnectDelay is the exponential backoff for attempt, capped at
