@@ -18,7 +18,7 @@ var brainHostFiles = []string{
 }
 
 // brainNames match a brain's name in code.
-var brainNames = regexp.MustCompile(`(?i)claude|dsh`)
+var brainNames = regexp.MustCompile(`(?i)claude|dsh|codex`)
 
 // The host never asks which brain it hosts: no identifier or string naming a
 // brain, no profile, no assertion to an adapter's concrete type. Comments may

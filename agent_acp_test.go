@@ -138,9 +138,9 @@ func startACPFixtureAtCore(t *testing.T, ctx context.Context, opts ACPAgentOptio
 	}
 	agent.hook = hook
 	t.Cleanup(func() { _ = agent.Close() })
-	// session/new of Claude Code takes several seconds (it starts its CLI).
+	// Opening a Claude Code or Codex conversation takes seconds (it starts its CLI).
 	requestTimeout := 5 * time.Second
-	if opts.Profile == ACPProfileClaudeCode {
+	if opts.Profile == ACPProfileClaudeCode || opts.Profile == ACPProfileCodex {
 		requestTimeout = 60 * time.Second
 	}
 	harness := NewHarness(HarnessOptions{Agent: platform, RequestTimeout: requestTimeout})
