@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.26
+
+- **Go: `computer_action` gets `clipboard_read` and `clipboard_write`.** An
+  agent can now read the machine's clipboard text and put text on it (Cua
+  Driver `clipboard_read` / `clipboard_write`; Windows and macOS hands), the
+  shape of the vendors' clipboard tools (Cua Driver, Browserbase live view).
+  Like `open_app` and `menu` they are actions beyond the contract's
+  `ComputerAction` enum; they take no `coordinate`, `pid` or `window_id`
+  (`clipboard_write` needs `text`, at most 1 MiB; `clipboard_read` takes
+  none) and the result of a write never repeats the text. The local brain's
+  `computer_action` schema and description list them.
+
 ## 1.6.25
 
 - **Go: a viewer's observation is not scaled.** An observation that names

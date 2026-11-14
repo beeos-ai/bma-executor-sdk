@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // What the Cua Driver backend adds around single driver calls: the menu
@@ -632,6 +633,43 @@ func (d *CuaDriver) typeText(ctx context.Context, req ComputerActionRequest) ([]
 		text += "\n" + note
 	}
 	return []ContentBlock{{Type: ContentBlockTypeText, Text: text + "\ntyped: " + verdict}}, nil
+}
+
+// clipboardRead returns the clipboard's text (at most maxClipboardBytes). A
+// clipboard without text says so.
+func (d *CuaDriver) clipboardRead(ctx context.Context) ([]ContentBlock, error) {
+	result, err := d.call(ctx, "clipboard_read", map[string]any{"include_text": true}, "")
+	if err != nil {
+		return nil, err
+	}
+	text, _ := result["text"].(string)
+	if text == "" {
+		return []ContentBlock{{Type: ContentBlockTypeText, Text: "the clipboard holds no text"}}, nil
+	}
+	note := ""
+	if len(text) > maxClipboardBytes {
+		text, note = truncateUTF8(text, maxClipboardBytes), " (truncated)"
+	}
+	return []ContentBlock{{Type: ContentBlockTypeText, Text: fmt.Sprintf("clipboard text, %d character(s)%s:\n%s", len([]rune(text)), note, text)}}, nil
+}
+
+// clipboardWrite puts req.Text on the clipboard; the result does not repeat it.
+func (d *CuaDriver) clipboardWrite(ctx context.Context, req ComputerActionRequest) ([]ContentBlock, error) {
+	if _, err := d.call(ctx, "clipboard_write", map[string]any{"text": req.Text}, ""); err != nil {
+		return nil, err
+	}
+	return []ContentBlock{{Type: ContentBlockTypeText, Text: fmt.Sprintf("wrote %d character(s) to the clipboard", len([]rune(req.Text)))}}, nil
+}
+
+// truncateUTF8 cuts s to at most limit bytes on a rune boundary.
+func truncateUTF8(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	for limit > 0 && !utf8.RuneStart(s[limit]) {
+		limit--
+	}
+	return s[:limit]
 }
 
 // windowElements reads a window's accessibility elements without a

@@ -55,6 +55,22 @@ const ComputerActionOpenApp = "open_app"
 // only.
 const ComputerActionMenu = "menu"
 
+// ComputerActionClipboardRead returns the text on the machine's clipboard;
+// ComputerActionClipboardWrite (ComputerActionRequest.Text) puts text on it.
+// Like open_app and menu they are actions of the computer_action tool beyond
+// the contract's ComputerAction enum, and take no coordinate, pid or
+// window_id. Pasting the text where it is wanted is a key action (ctrl+v)
+// the model sends itself; typing non-ASCII text goes through the clipboard
+// on its own (type).
+const (
+	ComputerActionClipboardRead  = "clipboard_read"
+	ComputerActionClipboardWrite = "clipboard_write"
+)
+
+// maxClipboardBytes bounds the text of clipboard_write and what
+// clipboard_read returns.
+const maxClipboardBytes = 1 << 20
+
 // maxAppName bounds ComputerActionRequest.App; maxMenuItems and maxMenuLabel
 // bound ComputerActionRequest.MenuPath.
 const (
@@ -816,8 +832,20 @@ func (in computerInput) actionRequest() (ComputerActionRequest, error) {
 		if len(in.Coordinate) > 0 || in.Text != "" {
 			return request, errors.New("menu takes no coordinate or text")
 		}
+	case ComputerActionClipboardRead, ComputerActionClipboardWrite:
+		if in.PID != 0 || in.WindowID != 0 || len(in.Coordinate) > 0 {
+			return request, fmt.Errorf("%s takes no pid, window_id or coordinate", in.Action)
+		}
+		switch {
+		case in.Action == ComputerActionClipboardRead && in.Text != "":
+			return request, errors.New("clipboard_read takes no text")
+		case in.Action == ComputerActionClipboardWrite && in.Text == "":
+			return request, errors.New("text is required: the text to put on the clipboard")
+		case len(in.Text) > maxClipboardBytes:
+			return request, fmt.Errorf("text is longer than %d bytes", maxClipboardBytes)
+		}
 	default:
-		return request, fmt.Errorf("action %q is not click, type, key, scroll, drag, mouse_move, hold_key, wait, batch, open_app or menu", in.Action)
+		return request, fmt.Errorf("action %q is not click, type, key, scroll, drag, mouse_move, hold_key, wait, batch, open_app, menu, clipboard_read or clipboard_write", in.Action)
 	}
 	return request, nil
 }
@@ -1039,6 +1067,10 @@ func (d *CuaDriver) Action(ctx context.Context, req ComputerActionRequest) ([]Co
 		return d.menu(ctx, req)
 	case ComputerActionType:
 		return d.typeText(ctx, req)
+	case ComputerActionClipboardRead:
+		return d.clipboardRead(ctx)
+	case ComputerActionClipboardWrite:
+		return d.clipboardWrite(ctx, req)
 	case ComputerActionHoldKey:
 		return nil, errors.New("hold_key is not available on this desktop (Cua Driver has no key hold); use key instead")
 	}

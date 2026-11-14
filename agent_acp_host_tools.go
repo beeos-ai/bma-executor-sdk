@@ -90,7 +90,8 @@ var computerStepDescription = map[string]any{"type": "string", "description": "W
 
 // acpComputerActions are the actions of the local brain's computer_action.
 var acpComputerActions = []string{ComputerActionClick, ComputerActionType, ComputerActionKey, ComputerActionScroll, ComputerActionDrag,
-	ComputerActionMouseMove, ComputerActionHoldKey, ComputerActionWait, ComputerActionOpenApp, ComputerActionMenu}
+	ComputerActionMouseMove, ComputerActionHoldKey, ComputerActionWait, ComputerActionOpenApp, ComputerActionMenu,
+	ComputerActionClipboardRead, ComputerActionClipboardWrite}
 
 // computerRegion, computerDuration and computerSteps are the contract 1.14.0
 // inputs: the zoom region, the hold_key / wait seconds and a batch.
@@ -138,7 +139,8 @@ var acpComputerAction = BrainTool{
 	Description: "Use this computer's mouse and keyboard: click (button right for a context menu, click_count 2 or 3), type, key, scroll, drag, " +
 		"mouse_move (hover), hold_key or wait; batch with actions runs several steps in one call, in order, stops at the first failure and ends with a screenshot; open_app opens an app by name or bundle id, " +
 		"brings it to the front and returns its pid and the windows you can use; menu runs an item of an app's menu bar by its labels " +
-		`(menu_path, for example ["Window", "Weixin"] to show a window) with the pid and window_id of one of its windows. ` +
+		`(menu_path, for example ["Window", "Weixin"] to show a window) with the pid and window_id of one of its windows; ` +
+		"clipboard_read returns the clipboard's text and clipboard_write (text) replaces it (type already pastes non-ASCII text through the clipboard itself). " +
 		"Observe before acting and again afterwards to check the result.\n" +
 		"Rules:\n" +
 		"- Send input (click, type, key, scroll, drag) with the pid and window_id of the window it is for, " +
@@ -163,7 +165,7 @@ var acpComputerAction = BrainTool{
 			"minItems": 1, "maxItems": maxMenuItems, "description": `Menu labels from the menu bar to the item for menu, exactly as shown, for example ["File", "Save As..."].`},
 		"coordinate":       map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[x, y] for click, scroll and the end of drag."},
 		"start_coordinate": map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[x, y] where drag starts."},
-		"text":             map[string]any{"type": "string", "description": `Text to type, or a key or chord such as "Return" or "ctrl+s".`},
+		"text":             map[string]any{"type": "string", "description": `Text to type, or a key or chord such as "Return" or "ctrl+s"; for clipboard_write the text to put on the clipboard.`},
 		"button":           map[string]any{"type": "string", "enum": []string{"left", "right", "middle"}},
 		"click_count":      map[string]any{"type": "integer", "minimum": 1, "maximum": 3},
 		"scroll_direction": map[string]any{"type": "string", "enum": []string{"up", "down", "left", "right"}},

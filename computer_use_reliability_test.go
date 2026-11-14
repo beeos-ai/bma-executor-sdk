@@ -653,3 +653,36 @@ func TestFrontAppPID(t *testing.T) {
 		t.Fatalf("front pid = %d", pid)
 	}
 }
+
+// TestClipboardActions: clipboard_read and clipboard_write reach the driver's
+// clipboard tools, through Core's input checks, without a window or a frame.
+func TestClipboardActions(t *testing.T) {
+	driver, logPath, err := fakeCua(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _ := computerSession(t, CoreOptions{ComputerUse: driver})
+	text := "会议纪要 ✅ 日本語 😀"
+	write := callComputer(t, session, ToolNameComputerAction, map[string]any{"action": "clipboard_write", "text": text})
+	if write.IsError || strings.Contains(textOf(write), text) || !strings.Contains(textOf(write), "clipboard") {
+		t.Fatalf("write = %+v", write)
+	}
+	read := callComputer(t, session, ToolNameComputerAction, map[string]any{"action": "clipboard_read"})
+	if read.IsError || !strings.Contains(textOf(read), "CLIPBOARD-PREV") {
+		t.Fatalf("read = %+v", read)
+	}
+	raw, _ := os.ReadFile(logPath)
+	if log := string(raw); !strings.Contains(log, `clipboard_write {"text":"`+text+`"}`) || !strings.Contains(log, `clipboard_read {"include_text":true}`) {
+		t.Fatalf("driver log:\n%s", log)
+	}
+	for name, input := range map[string]map[string]any{
+		"write without text": {"action": "clipboard_write"},
+		"read with text":     {"action": "clipboard_read", "text": "x"},
+		"write with window":  {"action": "clipboard_write", "text": "x", "pid": 1, "window_id": 2},
+		"write too long":     {"action": "clipboard_write", "text": strings.Repeat("a", maxClipboardBytes+1)},
+	} {
+		if result, err := session.CallTool(testContext(t), ToolCallParams{Tool: ToolNameComputerAction, Input: mustJSON(t, input)}); err == nil && !result.IsError {
+			t.Fatalf("%s: accepted: %+v", name, result)
+		}
+	}
+}
