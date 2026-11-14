@@ -58,6 +58,10 @@ async function scenario(harness: Harness, start: () => Promise<TestExecutor>, mc
     assert.equal(canceled.outcome, 'canceled')
     assert.equal(canceled.content[0]?.text, 'canceled: test')
     assert.equal(await session.cancelTool('call_unknown', 'test'), false)
+    // A call canceled before its handler starts ends canceled too.
+    const early = session.callTool('bash', { command: 'block' }, { toolCallId: 'call_early' })
+    assert.equal(await session.cancelTool('call_early', 'test'), true)
+    assert.equal((await early).outcome, 'canceled')
 
     // A result for a call the harness never dispatched is not_found and not retried.
     await assert.rejects(

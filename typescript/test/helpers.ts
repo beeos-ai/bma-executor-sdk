@@ -48,7 +48,8 @@ export function testExecutor(options: Partial<ExecutorClientOptions> & Pick<Exec
   client.tools.bash.handle(async ({ command }, { progress, signal, toolCallId }) => {
     runs.push(toolCallId)
     if (command === 'block') {
-      await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }))
+      // tool.cancel may abort the call before its handler starts.
+      if (!signal.aborted) await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }))
       return []
     }
     progress('running')

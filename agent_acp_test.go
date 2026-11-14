@@ -380,6 +380,39 @@ func TestACPAgentCancelWithPendingPermission(t *testing.T) {
 	assertIdle(t, f.platform.waitIdle(t, "turn_2"), TurnOutcomeCompleted)
 }
 
+// heldInteractionPlatform records interaction.request but answers it only
+// once release is closed.
+type heldInteractionPlatform struct {
+	*recordingPlatform
+	release chan struct{}
+}
+
+func (p *heldInteractionPlatform) InteractionRequested(ctx context.Context, e *Executor, request InteractionRequestParams) (string, error) {
+	id, err := p.recordingPlatform.InteractionRequested(ctx, e, request)
+	<-p.release
+	return id, err
+}
+
+// A turn canceled while its interaction.request is still unanswered may
+// leave the interaction open on the platform: it is withdrawn too.
+func TestACPAgentCancelWithdrawsAnInteractionRequestInFlight(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	platform := &heldInteractionPlatform{recordingPlatform: newRecordingPlatform(), release: make(chan struct{})}
+	defer close(platform.release)
+	f := startACPFixtureOn(t, ctx, ACPAgentOptions{}, platform)
+	f.start(t, ctx, "sesn_c", "turn_1", "run")
+	platform.waitFor(t, "permission", func() bool { return len(platform.interactions) == 1 })
+	if r, err := f.executor.CancelTurn(ctx, TurnCancelParams{SessionID: "sesn_c", TurnID: "turn_1"}); err != nil || !r.Canceled {
+		t.Fatalf("turn.cancel = %+v %v", r, err)
+	}
+	assertIdle(t, platform.waitIdle(t, "turn_1"), TurnOutcomeCanceled)
+	platform.waitFor(t, "interaction withdrawn", func() bool { return len(platform.canceled) == 1 })
+	if got := platform.canceled[0]; got.InteractionID != platform.interactions[0].InteractionID || got.Reason != InteractionCancelReasonTurnCanceled {
+		t.Fatalf("interaction.cancel = %+v", got)
+	}
+}
+
 func TestACPAgentKillsAnAgentThatIgnoresCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

@@ -432,6 +432,10 @@ func (t *AgentTurn) RequestInteraction(ctx context.Context, params InteractionRe
 		_, err := Calls.InteractionRequest.Call(ctx, s.runtime.client, params)
 		return err
 	}); err != nil {
+		if ctx.Err() != nil {
+			// The platform may have opened the interaction before ctx ended.
+			s.withdraw(params.InteractionID, InteractionCancelReasonTurnCanceled)
+		}
 		return InteractionResponseParams{}, err
 	}
 	var expiry <-chan time.Time
