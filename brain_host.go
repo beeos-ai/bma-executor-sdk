@@ -1230,7 +1230,7 @@ func (t *acpTurn) Call(ctx context.Context, call BrainCall) *RouteResult {
 		if t.policyOf(call.Name) == "deny" {
 			return refused("permission_denied", "the "+call.Name+" tool is not allowed in this session")
 		}
-		if call.Name == ToolNameAskUserQuestion {
+		if call.Name == ToolNameAskUserQuestion && !t.custom[call.Name] {
 			return t.askUser(ctx, call.ID, call.Input)
 		}
 		text, isError, ok := t.customTool(ctx, call.ID, call.Name, call.Input)
