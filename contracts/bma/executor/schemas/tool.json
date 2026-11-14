@@ -21,13 +21,17 @@
     },
     "ComputerAction": {
       "type": "string",
-      "description": "Input actions accepted by the computer_action tool.",
+      "description": "Input actions accepted by the computer_action tool. mouse_move, hold_key, wait and batch are contract 1.14.0 (additive).",
       "enum": [
         "click",
         "type",
         "key",
         "scroll",
-        "drag"
+        "drag",
+        "mouse_move",
+        "hold_key",
+        "wait",
+        "batch"
       ]
     },
     "PermissionMode": {
@@ -252,7 +256,7 @@
     },
     "ComputerObserveInput": {
       "type": "object",
-      "description": "computer_observe input. The result is a screenshot (an image content block) with the list of the screen's windows as text. pid and window_id (both or neither, contract 1.8.0) observe one window of that list.",
+      "description": "computer_observe input. The result is a screenshot (an image content block) with the list of the screen's windows as text. pid and window_id (both or neither, contract 1.8.0) observe one window of that list. region (contract 1.14.0) zooms: the result is that part of the screenshot at full screen resolution.",
       "properties": {
         "display": {
           "type": "string",
@@ -265,6 +269,15 @@
         "window_id": {
           "type": "integer",
           "description": "Additive. Window id from the window list (with pid)."
+        },
+        "region": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "description": "Contract 1.14.0. [x0, y0, x1, y1]: the top-left and bottom-right corners, in pixels of the last screenshot of the same target, of the area to return at full resolution (zoom). Coordinates of later actions stay those of the full screenshot."
         }
       },
       "required": [],
@@ -272,7 +285,7 @@
     },
     "ComputerActionInput": {
       "type": "object",
-      "description": "computer_action input, after Anthropic's computer-use tool over the ComputerAction enum. Coordinates are pixels of the last computer_observe screenshot (window-local with pid and window_id). The members after display are contract 1.8.0 (additive).",
+      "description": "computer_action input, after Anthropic's computer-use tool over the ComputerAction enum. Coordinates are pixels of the last computer_observe screenshot (window-local with pid and window_id). The members after display are contract 1.8.0 (additive). duration and actions are contract 1.14.0: action batch with actions runs those steps in order, stops at the first failure and ends with a screenshot of the last step's target (the screen, or its window).",
       "properties": {
         "action": {
           "$ref": "tool.json#/$defs/ComputerAction"
@@ -337,6 +350,21 @@
         "window_id": {
           "type": "integer",
           "description": "Target window id (with pid); input then goes to that window in the background."
+        },
+        "duration": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 10,
+          "description": "Contract 1.14.0. Seconds to hold the keys (hold_key) or to wait (wait)."
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "tool.json#/$defs/ComputerActionInput"
+          },
+          "minItems": 1,
+          "maxItems": 20,
+          "description": "Contract 1.14.0. The steps of action batch (each a computer_action input other than batch), run in order; the first failure stops the batch and the rest are not executed. The result reports every step and ends with a screenshot of the last step's target."
         }
       },
       "required": [

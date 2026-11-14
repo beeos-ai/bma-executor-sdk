@@ -1,15 +1,15 @@
 {
   "source_repository": "beeos-ai/beeos-managed-agents",
-  "source_commit": "726d5a3c541550512deb2a39a3a4e0a73ee36030",
+  "source_commit": "3234d435fce6069f84a3abcc919fe63d377894e5",
   "protocols": [
     "bma.executor.v1",
     "bma.executor.v1.1"
   ],
-  "contract_version": "1.12.0",
+  "contract_version": "1.14.0",
   "contract": {
     "contracts/bma/executor/examples/conformance.json": "6756c86ace11578716fabb967073a1d8900c6374602d9c062567db75ab655503",
-    "contracts/bma/executor/executor.asyncapi.yaml": "16159b85d89f5ef2bd1199877ae996c63091313ee6040e031b080bd3cff4e495",
-    "contracts/bma/executor/executor.openrpc.yaml": "6b37d7037ba6808750da44da2a6ea5ba59e47040732a780b0abc096ff65df570",
+    "contracts/bma/executor/executor.asyncapi.yaml": "d6ebb61d876566c70a6d0a2fdc2f969757a698e3ac8188d307dde04ff53e2613",
+    "contracts/bma/executor/executor.openrpc.yaml": "772bf264b81df141dc28f31dcb6b55fc077c9846aa60515f555d63a4419cdec7",
     "contracts/bma/executor/schemas/agent.json": "16f5a6864e7ce4161af370e6ad54051d15b3dcf0173e8021e550506384f173bf",
     "contracts/bma/executor/schemas/common.json": "ad01c086fb4df2b5122753ab9557c1ab8d987723e56e24ab8419b859ee434df8",
     "contracts/bma/executor/schemas/executor.json": "755adffed9c1c61b0fafede60803d1cf838b9c639a79e159dad37e9c19567ab5",
@@ -19,12 +19,12 @@
     "contracts/bma/executor/schemas/session.json": "a4a2ce81841bb9bbf639b4c520dd9699364861b0ea5295f3aa0788120379a8fb",
     "contracts/bma/executor/schemas/skill.json": "76ee971d664319d7a9add3bb2c5a2846c22bfac870b2dd975badbee2b2ffcf73",
     "contracts/bma/executor/schemas/terminal.json": "9266028342f5d4725efbac813848e2b26406761f337a044a03c6e0a5512c4ab3",
-    "contracts/bma/executor/schemas/tool.json": "125f3ac1b1f1f90560cdb994509a3e7078a4d08517505748d45fc8d172d17a31",
+    "contracts/bma/executor/schemas/tool.json": "35cc82ccb8d127bc3c21a0d4f300fed9c008f7b0a65f29ac5b6d513dab5c2239",
     "contracts/bma/executor/schemas/workspace.json": "980435059173d01aa4287a8ec5d0ebb0b3424322e15cebf8cce70f74c21b8012"
   },
   "generated": {
-    "generated.go": "c234edc774c6fe3380b193889ae1b57bd5211078b8314070d6dfa14dcc3ec2f9",
-    "python/src/bma_executor_sdk/generated.py": "f4e99aa3365454d6a91559f88d64b13e3524f4f2d89e503d4fafb2cf12d415e0",
-    "typescript/src/generated/executor.ts": "607315a1b84d7b63c6df7082f06dff5eeb65a4f4e2a6d2fbdeb6676ed5c2fdc4"
+    "generated.go": "13575b428311bb88493917213f8f07e740fe629df74f5a8604c5320aacd4c672",
+    "python/src/bma_executor_sdk/generated.py": "6bdb9a06fec82ed94cd5849c83007e434183275364663a3e989a34602422daef",
+    "typescript/src/generated/executor.ts": "151dd5c4b7666e018c37505a6cc6de8b5756b1a5f2e3f491dc5d968434559aea"
   }
 }

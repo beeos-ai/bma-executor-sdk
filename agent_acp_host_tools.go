@@ -32,6 +32,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"slices"
 	"strings"
 )
 
@@ -87,14 +88,45 @@ var acpAskUserQuestion = BrainTool{
 var computerStepDescription = map[string]any{"type": "string", "description": "What this step does, in one sentence in the user's language, " +
 	`naming the app and the object, for example "在飞书里搜索联系人 Q". At most 40 characters; no coordinates.`}
 
+// acpComputerActions are the actions of the local brain's computer_action.
+var acpComputerActions = []string{ComputerActionClick, ComputerActionType, ComputerActionKey, ComputerActionScroll, ComputerActionDrag,
+	ComputerActionMouseMove, ComputerActionHoldKey, ComputerActionWait, ComputerActionOpenApp, ComputerActionMenu}
+
+// computerRegion, computerDuration and computerSteps are the contract 1.14.0
+// inputs: the zoom region, the hold_key / wait seconds and a batch.
+var (
+	computerRegion = map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "minItems": 4, "maxItems": 4,
+		"description": "[x0, y0, x1, y1] in pixels of the last screenshot: zoom on that area. Later coordinates stay those of the full screenshot."}
+	computerDuration = map[string]any{"type": "number", "exclusiveMinimum": 0, "maximum": maxComputerDuration,
+		"description": "Seconds to hold the keys (hold_key) or to wait (wait)."}
+	computerSteps = map[string]any{"type": "array", "minItems": 1, "maxItems": maxBatchSteps,
+		"description": "The steps of batch, each a computer_action input other than batch (no description), run in order; " +
+			"the first failure stops the batch. The result reports each step and ends with a screenshot, so do not observe after it.",
+		"items": map[string]any{"type": "object", "required": []string{"action"}, "properties": map[string]any{
+			"action":           map[string]any{"type": "string", "enum": acpComputerActions},
+			"coordinate":       map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "minItems": 2, "maxItems": 2},
+			"start_coordinate": map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "minItems": 2, "maxItems": 2},
+			"text":             map[string]any{"type": "string"},
+			"button":           map[string]any{"type": "string", "enum": []string{"left", "right", "middle"}},
+			"click_count":      map[string]any{"type": "integer", "minimum": 1, "maximum": 3},
+			"scroll_direction": map[string]any{"type": "string", "enum": []string{"up", "down", "left", "right"}},
+			"scroll_amount":    map[string]any{"type": "integer", "minimum": 1, "maximum": 50},
+			"duration":         map[string]any{"type": "number"},
+			"pid":              map[string]any{"type": "integer"},
+			"window_id":        map[string]any{"type": "integer"},
+		}}}
+)
+
 var acpComputerObserve = BrainTool{
 	Name: ToolNameComputerObserve,
 	Description: "Take a screenshot of this computer's screen with the list of its windows (pid, window_id, app, title), " +
 		"or of one window (pid and window_id) with its accessibility tree. Coordinates for computer_action are pixels of the screenshot. " +
 		"For a desktop app, use these tools rather than bash: open it with computer_action open_app, then observe its window by pid and window_id. " +
-		"Do not look for apps or read environment variables with bash.",
+		"Do not look for apps or read environment variables with bash. " +
+		"region zooms: it returns that part of the last screenshot at full resolution, to read small text or controls.",
 	Parameters: acpObject([]string{"description"}, map[string]any{
 		"description": computerStepDescription,
+		"region":      computerRegion,
 		"pid":         map[string]any{"type": "integer", "description": "Process id of the window to observe (with window_id)."},
 		"window_id":   map[string]any{"type": "integer", "description": "Window id from the window list (with pid)."},
 	}),
@@ -103,7 +135,8 @@ var acpComputerObserve = BrainTool{
 
 var acpComputerAction = BrainTool{
 	Name: ToolNameComputerAction,
-	Description: "Use this computer's mouse and keyboard: click, type, key, scroll or drag; open_app opens an app by name or bundle id, " +
+	Description: "Use this computer's mouse and keyboard: click (button right for a context menu, click_count 2 or 3), type, key, scroll, drag, " +
+		"mouse_move (hover), hold_key or wait; batch with actions runs several steps in one call, in order, stops at the first failure and ends with a screenshot; open_app opens an app by name or bundle id, " +
 		"brings it to the front and returns its pid and the windows you can use; menu runs an item of an app's menu bar by its labels " +
 		`(menu_path, for example ["Window", "Weixin"] to show a window) with the pid and window_id of one of its windows. ` +
 		"Observe before acting and again afterwards to check the result.\n" +
@@ -122,7 +155,9 @@ var acpComputerAction = BrainTool{
 		"- Open apps with open_app; do not use bash, osascript or open to find, start or control apps.",
 	Parameters: acpObject([]string{"action", "description"}, map[string]any{
 		"description": computerStepDescription,
-		"action":      map[string]any{"type": "string", "enum": []string{ComputerActionClick, ComputerActionType, ComputerActionKey, ComputerActionScroll, ComputerActionDrag, ComputerActionOpenApp, ComputerActionMenu}},
+		"action":      map[string]any{"type": "string", "enum": append(slices.Clone(acpComputerActions), ComputerActionBatch)},
+		"actions":     computerSteps,
+		"duration":    computerDuration,
 		"app":         map[string]any{"type": "string", "description": `App to open with open_app: its name such as "TextEdit", or its bundle id such as "com.apple.TextEdit".`},
 		"menu_path": map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1, "maxLength": maxMenuLabel},
 			"minItems": 1, "maxItems": maxMenuItems, "description": `Menu labels from the menu bar to the item for menu, exactly as shown, for example ["File", "Save As..."].`},
