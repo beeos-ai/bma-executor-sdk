@@ -50,7 +50,11 @@ func cmdRun(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	debug := os.Getenv("BMA_DEBUG") != ""
 	logf := func(e bmaexecutor.LogEvent) {
+		if e.Level == bmaexecutor.LogDebug && !debug {
+			return // protocol traces (a harness's raw output) only when asked for
+		}
 		if e.Err != nil {
 			log.Printf("%s %s: %v", e.Level, e.Message, e.Err)
 			return
