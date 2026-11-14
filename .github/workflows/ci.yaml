@@ -52,6 +52,16 @@ jobs:
       - name: Typed method tables are up to date
         run: python3 tools/gen_methods.py --check
 
+      # Every tracked Go file, tests included: gofmt lists the unformatted ones.
+      - name: Go files are gofmt-formatted
+        run: |
+          unformatted=$(git ls-files -z '*.go' | xargs -0 gofmt -l)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt -l lists files that are not formatted (run gofmt -w):"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Go
         run: |
           go vet ./...
