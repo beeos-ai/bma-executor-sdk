@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -586,4 +587,95 @@ func waitCustomToolUse(t *testing.T, platform *recordingPlatform) AgentEventReco
 		return false
 	})
 	return use
+}
+
+// waitingAgent runs a turn that waits for an answer that never comes (only
+// its ctx ends it) and records how sessions are closed.
+type waitingAgent struct {
+	mu       sync.Mutex
+	running  chan struct{}
+	returned chan error
+	closed   []string
+}
+
+func (a *waitingAgent) OpenTurn(_ context.Context, params TurnStartParams) (TurnStartResult, error) {
+	return TurnStartResult{Accepted: true, TurnID: params.TurnID, ExecutorSessionRef: "ref", Effective: AgentTurnConfig{}}, nil
+}
+
+func (a *waitingAgent) RunTurn(ctx context.Context, _ *AgentTurn) error {
+	close(a.running)
+	<-ctx.Done()
+	a.returned <- ctx.Err()
+	return ctx.Err()
+}
+
+func (a *waitingAgent) CloseSession(_ context.Context, sessionID, reason string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.closed = append(a.closed, sessionID+":"+reason)
+	return nil
+}
+
+// A client disconnected past the harness lease gives up its sessions; an
+// agent session's running turn ends with them (2026-11-14: a Mac asleep for
+// two hours came back with a turn waiting for an approval the platform had
+// canceled, and RunTurn never returned): its ctx is canceled, RunTurn
+// returns, the handler closes the session (AgentSessionLostReason), and the
+// session is not reported active again.
+func TestAgentSessionsLostEndTheirTurns(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	agent := &waitingAgent{running: make(chan struct{}), returned: make(chan error, 1)}
+	_, executor, client, _ := startAgentPair(t, ctx, agent)
+	if _, err := executor.StartTurn(ctx, TurnStartParams{
+		SessionID: "sesn_l", TurnID: "turn_l", InputID: "ain_l", Input: []AgentInputBlock{{Type: AgentInputBlockTypeText, Text: "wait"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	<-agent.running
+	if !contains(client.ActiveSessions(), "sesn_l") {
+		t.Fatalf("active = %v", client.ActiveSessions())
+	}
+	// The next disconnect counts as longer than the lease, whatever the
+	// clock's resolution (Windows: time.Since may still be 0).
+	client.mu.Lock()
+	client.leaseTTL = -time.Nanosecond
+	client.mu.Unlock()
+	executor.mu.Lock()
+	conn := executor.conn
+	executor.mu.Unlock()
+	_ = conn.ws.Close(int(websocket.StatusGoingAway), "host asleep")
+	select {
+	case err := <-agent.returned:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("RunTurn ctx ended with %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("RunTurn did not return after the lease expired")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		agent.mu.Lock()
+		closed := slices.Clone(agent.closed)
+		agent.mu.Unlock()
+		if len(closed) == 1 {
+			if closed[0] != "sesn_l:"+AgentSessionLostReason {
+				t.Fatalf("CloseSession calls = %v", closed)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("CloseSession calls = %v", closed)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if contains(client.ActiveSessions(), "sesn_l") {
+		t.Fatalf("a lost session is still active: %v", client.ActiveSessions())
+	}
+	client.agent.mu.Lock()
+	_, kept := client.agent.sessions["sesn_l"]
+	client.agent.mu.Unlock()
+	if kept {
+		t.Fatal("the runtime kept the lost session")
+	}
 }
