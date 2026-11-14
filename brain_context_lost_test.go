@@ -173,3 +173,30 @@ func TestDshContextLostWhenTheVolumeIsGone(t *testing.T) {
 		t.Fatal("the new conversation holds the earlier input")
 	}
 }
+
+// The CLI's transcript is looked for where the CLI itself looks: the last
+// HOME of its environment (the host's Env overrides the process's), and
+// CLAUDE_CONFIG_DIR over HOME.
+func TestClaudeCLIHoldsLooksInTheConfigDirOfTheCLIsEnvironment(t *testing.T) {
+	const uuid = "0a0a0a0a-0a0a-5a0a-8a0a-0a0a0a0a0a0a"
+	transcript := func(dir string) {
+		noErr(t, os.MkdirAll(filepath.Join(dir, "projects", "-work"), 0o755))
+		noErr(t, os.WriteFile(filepath.Join(dir, "projects", "-work", uuid+".jsonl"), nil, 0o600))
+	}
+	t.Setenv("HOME", t.TempDir()) // the process's own HOME has nothing
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home, config := t.TempDir(), t.TempDir()
+	transcript(filepath.Join(home, ".claude"))
+	a := &claudeCLIAdapter{env: BrainEnv{Env: []string{"HOME=" + home}}}
+	if !a.holds(uuid) {
+		t.Fatal("a transcript under the HOME of the host's Env is not found")
+	}
+	a = &claudeCLIAdapter{env: BrainEnv{Env: []string{"HOME=" + home, "CLAUDE_CONFIG_DIR=" + config}}}
+	if a.holds(uuid) {
+		t.Fatal("CLAUDE_CONFIG_DIR does not take over from HOME")
+	}
+	transcript(config)
+	if !a.holds(uuid) {
+		t.Fatal("a transcript under CLAUDE_CONFIG_DIR is not found")
+	}
+}
