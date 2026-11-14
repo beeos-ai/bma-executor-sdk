@@ -32,6 +32,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"slices"
 	"strings"
 )
 
@@ -99,7 +100,7 @@ var (
 	computerDuration = map[string]any{"type": "number", "exclusiveMinimum": 0, "maximum": maxComputerDuration,
 		"description": "Seconds to hold the keys (hold_key) or to wait (wait)."}
 	computerSteps = map[string]any{"type": "array", "minItems": 1, "maxItems": maxBatchSteps,
-		"description": "Several steps in one call, each a computer_action input without actions and description, run in order; " +
+		"description": "The steps of batch, each a computer_action input other than batch (no description), run in order; " +
 			"the first failure stops the batch. The result reports each step and ends with a screenshot, so do not observe after it.",
 		"items": map[string]any{"type": "object", "required": []string{"action"}, "properties": map[string]any{
 			"action":           map[string]any{"type": "string", "enum": acpComputerActions},
@@ -135,7 +136,7 @@ var acpComputerObserve = BrainTool{
 var acpComputerAction = BrainTool{
 	Name: ToolNameComputerAction,
 	Description: "Use this computer's mouse and keyboard: click (button right for a context menu, click_count 2 or 3), type, key, scroll, drag, " +
-		"mouse_move (hover), hold_key or wait; actions runs several steps in one call, in order, stops at the first failure and ends with a screenshot; open_app opens an app by name or bundle id, " +
+		"mouse_move (hover), hold_key or wait; batch with actions runs several steps in one call, in order, stops at the first failure and ends with a screenshot; open_app opens an app by name or bundle id, " +
 		"brings it to the front and returns its pid and the windows you can use; menu runs an item of an app's menu bar by its labels " +
 		`(menu_path, for example ["Window", "Weixin"] to show a window) with the pid and window_id of one of its windows. ` +
 		"Observe before acting and again afterwards to check the result.\n" +
@@ -152,9 +153,9 @@ var acpComputerAction = BrainTool{
 		"- If the same approach fails twice, try a different one; after three different approaches fail, stop and ask the user. " +
 		"Do not experiment with the tool itself.\n" +
 		"- Open apps with open_app; do not use bash, osascript or open to find, start or control apps.",
-	Parameters: acpObject([]string{"description"}, map[string]any{
+	Parameters: acpObject([]string{"action", "description"}, map[string]any{
 		"description": computerStepDescription,
-		"action":      map[string]any{"type": "string", "enum": acpComputerActions, "description": "The action; omit it when giving actions."},
+		"action":      map[string]any{"type": "string", "enum": append(slices.Clone(acpComputerActions), ComputerActionBatch)},
 		"actions":     computerSteps,
 		"duration":    computerDuration,
 		"app":         map[string]any{"type": "string", "description": `App to open with open_app: its name such as "TextEdit", or its bundle id such as "com.apple.TextEdit".`},

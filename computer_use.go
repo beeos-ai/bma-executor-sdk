@@ -368,7 +368,10 @@ func (c *Core) prepareComputer(key coreKey, tool string, raw []byte) (computerCa
 		}
 		return call, nil
 	}
-	if input.Actions == nil {
+	if input.Action != ComputerActionBatch {
+		if input.Actions != nil {
+			return computerCall{}, errors.New(`actions go with action "batch"`)
+		}
 		request, err := c.prepareAction(key, input)
 		if err != nil {
 			return computerCall{}, err
@@ -376,17 +379,14 @@ func (c *Core) prepareComputer(key coreKey, tool string, raw []byte) (computerCa
 		call.action = request
 		return call, nil
 	}
-	if input.Action != "" {
-		return computerCall{}, errors.New("give either action or actions, not both")
-	}
 	if len(input.Actions) == 0 || len(input.Actions) > maxBatchSteps {
 		return computerCall{}, fmt.Errorf("actions must hold 1-%d steps", maxBatchSteps)
 	}
 	var paused float64
 	call.steps = make([]ComputerActionRequest, 0, len(input.Actions))
 	for i, step := range input.Actions {
-		if step.Actions != nil {
-			return computerCall{}, fmt.Errorf("step %d: a step cannot hold actions", i+1)
+		if step.Actions != nil || step.Action == ComputerActionBatch {
+			return computerCall{}, fmt.Errorf("step %d: a step cannot be a batch", i+1)
 		}
 		if err := step.checkTarget(); err != nil {
 			return computerCall{}, fmt.Errorf("step %d: %w", i+1, err)
@@ -813,7 +813,7 @@ func (in computerInput) actionRequest() (ComputerActionRequest, error) {
 			return request, errors.New("menu takes no coordinate or text")
 		}
 	default:
-		return request, fmt.Errorf("action %q is not click, type, key, scroll, drag, mouse_move, hold_key, wait, open_app or menu", in.Action)
+		return request, fmt.Errorf("action %q is not click, type, key, scroll, drag, mouse_move, hold_key, wait, batch, open_app or menu", in.Action)
 	}
 	return request, nil
 }

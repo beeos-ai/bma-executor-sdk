@@ -308,9 +308,9 @@ export const ChannelScope = {
   Mcp: 'mcp',
 } as const
 
-/** Input actions accepted by the computer_action tool. mouse_move, hold_key and wait are contract 1.14.0 (additive). */
+/** Input actions accepted by the computer_action tool. mouse_move, hold_key, wait and batch are contract 1.14.0 (additive). */
 export type ComputerAction =
-  'click' | 'type' | 'key' | 'scroll' | 'drag' | 'mouse_move' | 'hold_key' | 'wait'
+  'click' | 'type' | 'key' | 'scroll' | 'drag' | 'mouse_move' | 'hold_key' | 'wait' | 'batch'
 export const ComputerAction = {
   Click: 'click',
   Type: 'type',
@@ -320,12 +320,12 @@ export const ComputerAction = {
   MouseMove: 'mouse_move',
   HoldKey: 'hold_key',
   Wait: 'wait',
+  Batch: 'batch',
 } as const
 
-/** computer_action input, after Anthropic's computer-use tool over the ComputerAction enum. Coordinates are pixels of the last computer_observe screenshot (window-local with pid and window_id). The members after display are contract 1.8.0 (additive). duration and actions are contract 1.14.0: one call with actions runs those steps in order, stops at the first failure and ends with a screenshot of the last step's target (the screen, or its window). */
+/** computer_action input, after Anthropic's computer-use tool over the ComputerAction enum. Coordinates are pixels of the last computer_observe screenshot (window-local with pid and window_id). The members after display are contract 1.8.0 (additive). duration and actions are contract 1.14.0: action batch with actions runs those steps in order, stops at the first failure and ends with a screenshot of the last step's target (the screen, or its window). */
 export interface ComputerActionInput {
-  /** The action; omitted when actions is given. */
-  action?: ComputerAction
+  action: ComputerAction
   /** Display to act on. */
   display?: string
   /** [x, y] for click, scroll and the end of drag. */
@@ -344,7 +344,7 @@ export interface ComputerActionInput {
   window_id?: number
   /** Contract 1.14.0. Seconds to hold the keys (hold_key) or to wait (wait). */
   duration?: number
-  /** Contract 1.14.0. A batch: steps (each a computer_action input without actions) run in order; the first failure stops the batch and the rest are not executed. The result reports every step and ends with a screenshot of the last step's target (the screen, or its window). */
+  /** Contract 1.14.0. The steps of action batch (each a computer_action input other than batch), run in order; the first failure stops the batch and the rest are not executed. The result reports every step and ends with a screenshot of the last step's target. */
   actions?: Array<ComputerActionInput>
 }
 

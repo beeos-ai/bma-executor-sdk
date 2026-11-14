@@ -89,7 +89,7 @@ func resultImages(t *testing.T, result ToolResultParams) []image.Image {
 func TestComputerBatch(t *testing.T) {
 	backend := &screenBackend{w: 800, h: 600}
 	session, _ := computerSession(t, CoreOptions{ComputerUse: backend})
-	result := callComputer(t, session, ToolNameComputerAction, map[string]any{"actions": []map[string]any{
+	result := callComputer(t, session, ToolNameComputerAction, map[string]any{"action": "batch", "actions": []map[string]any{
 		{"action": "click", "coordinate": []int{10, 20}},
 		{"action": "type", "text": "hello"},
 		{"action": "key", "text": "Return"},
@@ -110,7 +110,7 @@ func TestComputerBatch(t *testing.T) {
 	}
 
 	backend.actions = nil
-	result = callComputer(t, session, ToolNameComputerAction, map[string]any{"actions": []map[string]any{
+	result = callComputer(t, session, ToolNameComputerAction, map[string]any{"action": "batch", "actions": []map[string]any{
 		{"action": "click", "coordinate": []int{10, 20}},
 		{"action": "key", "text": "boom"},
 		{"action": "type", "text": "never"},
@@ -137,11 +137,11 @@ func TestComputerBatchRefusals(t *testing.T) {
 	backend := &screenBackend{w: 800, h: 600}
 	session, _ := computerSession(t, CoreOptions{ComputerUse: backend})
 	for name, input := range map[string]map[string]any{
-		"bad step":                      {"actions": []map[string]any{{"action": "type", "text": "x"}, {"action": "click"}}},
-		"nested batch":                  {"actions": []map[string]any{{"actions": []map[string]any{{"action": "wait", "duration": 1}}}}},
-		"action and batch":              {"action": "type", "text": "x", "actions": []map[string]any{{"action": "type", "text": "y"}}},
-		"empty batch":                   {"actions": []map[string]any{}},
-		"too long waits":                {"actions": []map[string]any{{"action": "wait", "duration": 6}, {"action": "wait", "duration": 6}}},
+		"bad step":                      {"action": "batch", "actions": []map[string]any{{"action": "type", "text": "x"}, {"action": "click"}}},
+		"nested batch":                  {"action": "batch", "actions": []map[string]any{{"action": "batch", "actions": []map[string]any{{"action": "wait", "duration": 1}}}}},
+		"actions without batch":         {"action": "type", "text": "x", "actions": []map[string]any{{"action": "type", "text": "y"}}},
+		"empty batch":                   {"action": "batch", "actions": []map[string]any{}},
+		"too long waits":                {"action": "batch", "actions": []map[string]any{{"action": "wait", "duration": 6}, {"action": "wait", "duration": 6}}},
 		"hold_key without duration":     {"action": "hold_key", "text": "shift"},
 		"wait too long":                 {"action": "wait", "duration": 11},
 		"mouse_move without coordinate": {"action": "mouse_move"},
@@ -231,8 +231,8 @@ func TestComputerScreenshotFitsImageLimitsAndMapsCoordinates(t *testing.T) {
 func TestComputerBatchApproval(t *testing.T) {
 	backend := &approvingBackend{screenBackend: screenBackend{w: 800, h: 600}}
 	_, core := computerSession(t, CoreOptions{ComputerUse: backend})
-	quiet := map[string]any{"actions": []any{map[string]any{"action": "click", "coordinate": []any{1.0, 2.0}}}}
-	asks := map[string]any{"actions": []any{map[string]any{"action": "click", "coordinate": []any{1.0, 2.0}},
+	quiet := map[string]any{"action": "batch", "actions": []any{map[string]any{"action": "click", "coordinate": []any{1.0, 2.0}}}}
+	asks := map[string]any{"action": "batch", "actions": []any{map[string]any{"action": "click", "coordinate": []any{1.0, 2.0}},
 		map[string]any{"action": "key", "text": "Return"}}}
 	if core.computerNeedsApproval(context.Background(), "sess_cu", ToolNameComputerAction, quiet) {
 		t.Error("a batch of safe steps asks")

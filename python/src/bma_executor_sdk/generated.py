@@ -210,7 +210,7 @@ class ChannelScope(str, Enum):
     Mcp = "mcp"
 
 class ComputerAction(str, Enum):
-    """Input actions accepted by the computer_action tool. mouse_move, hold_key and wait are contract 1.14.0 (additive)."""
+    """Input actions accepted by the computer_action tool. mouse_move, hold_key, wait and batch are contract 1.14.0 (additive)."""
     Click = "click"
     Type = "type"
     Key = "key"
@@ -219,10 +219,11 @@ class ComputerAction(str, Enum):
     MouseMove = "mouse_move"
     HoldKey = "hold_key"
     Wait = "wait"
+    Batch = "batch"
 
 class ComputerActionInput(TypedDict):
-    """computer_action input, after Anthropic's computer-use tool over the ComputerAction enum. Coordinates are pixels of the last computer_observe screenshot (window-local with pid and window_id). The members after display are contract 1.8.0 (additive). duration and actions are contract 1.14.0: one call with actions runs those steps in order, stops at the first failure and ends with a screenshot of the last step's target (the screen, or its window)."""
-    action: NotRequired[ComputerAction]
+    """computer_action input, after Anthropic's computer-use tool over the ComputerAction enum. Coordinates are pixels of the last computer_observe screenshot (window-local with pid and window_id). The members after display are contract 1.8.0 (additive). duration and actions are contract 1.14.0: action batch with actions runs those steps in order, stops at the first failure and ends with a screenshot of the last step's target (the screen, or its window)."""
+    action: ComputerAction
     display: NotRequired[str]
     coordinate: NotRequired[list[float]]
     start_coordinate: NotRequired[list[float]]

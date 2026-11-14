@@ -4,7 +4,7 @@
 
 - **Go: computer use batches, zoom, hover, key hold and wait; screenshots fit
   the model's image limits** (contract 1.14.0, additive). `computer_action`
-  takes `actions`: up to 20 steps run in order in one call, the first failure
+  action `batch` takes `actions`: up to 20 steps run in order in one call, the first failure
   stops the batch (later steps answer "Not executed: an earlier computer
   action in this batch failed."), every step is reported and the result ends
   with a screenshot of the last step's target, so a form costs one model
