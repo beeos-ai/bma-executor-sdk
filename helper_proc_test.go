@@ -100,6 +100,14 @@ func runFakeCua() {
 			}
 		}
 	}
+	// BMA_TEST_CUA_BG_REFUSE_TOOL / _STDOUT: that tool exits 1 with that
+	// result unless it is asked for delivery_mode "foreground"
+	// (BMA_TEST_CUA_FG_REFUSE=1 refuses that too).
+	if tool == os.Getenv("BMA_TEST_CUA_BG_REFUSE_TOOL") && (input["delivery_mode"] != "foreground" || os.Getenv("BMA_TEST_CUA_FG_REFUSE") == "1") {
+		logCall()
+		fmt.Fprintln(os.Stdout, os.Getenv("BMA_TEST_CUA_BG_REFUSE_STDOUT"))
+		os.Exit(1)
+	}
 	if tool == os.Getenv("BMA_TEST_CUA_FAIL_TOOL") {
 		logCall()
 		fmt.Fprintln(os.Stdout, os.Getenv("BMA_TEST_CUA_FAIL_STDOUT"))

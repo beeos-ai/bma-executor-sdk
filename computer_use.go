@@ -810,7 +810,7 @@ func (d *CuaDriver) Action(ctx context.Context, req ComputerActionRequest) ([]Co
 	if req.WindowID != 0 {
 		args["session"] = d.windowSession(req.SessionID)
 	}
-	result, err := d.callAction(ctx, tool, args, req)
+	result, foreground, err := d.callForeground(ctx, tool, args, req)
 	if err != nil {
 		return nil, err
 	}
@@ -823,7 +823,11 @@ func (d *CuaDriver) Action(ctx context.Context, req ComputerActionRequest) ([]Co
 		}
 	}
 	raw, _ := json.Marshal(fallback)
-	return []ContentBlock{{Type: ContentBlockTypeText, Text: cuaResultText(result, string(raw))}}, nil
+	text := cuaResultText(result, string(raw))
+	if foreground {
+		text += "\n" + foregroundNote
+	}
+	return []ContentBlock{{Type: ContentBlockTypeText, Text: text}}, nil
 }
 
 // looksLikeBundleID tells a bundle id ("com.apple.TextEdit") from an app name.

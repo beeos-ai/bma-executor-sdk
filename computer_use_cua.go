@@ -141,6 +141,8 @@ func cuaErrorAdvice(code string, result map[string]any, req ComputerActionReques
 		return fmt.Sprintf("window %d belongs to another process. Observe the screen and use the pid of its window line.", window)
 	case "no_focused_text_input":
 		return "no text field has the focus. Click the field first, then type."
+	case "window_not_key":
+		return fmt.Sprintf("window %d is not the app's focused window: a sheet or dialog of the app (for example Go to Folder) has the focus. Observe the screen, then act on that dialog with its own window_id, or close it first.", window)
 	case "type_text_incomplete":
 		return "the driver could not confirm that all of the text landed; part of it may have. Observe the field before typing again, and do not resend the whole text."
 	}
@@ -161,6 +163,9 @@ var cuaRejectedCodes = map[string]bool{
 type CuaDriverError struct {
 	Tool, Code string
 	rejected   bool
+	// foreground: the driver refused before input and recommends the same
+	// action in the foreground (escalation.recommended).
+	foreground bool
 	text       string
 }
 
@@ -188,6 +193,11 @@ func newCuaDriverError(tool string, stdout []byte, req ComputerActionRequest) (*
 		return nil, false
 	}
 	effect, _ := result["effect"].(string)
+	recommended := ""
+	if escalation, _ := result["escalation"].(map[string]any); escalation != nil {
+		recommended, _ = escalation["recommended"].(string)
+	}
+	refused := cuaRejectedCodes[code] || effect == "refused" || cuaRefusedBeforeInput[code]
 	advice := cuaErrorAdvice(code, result, req)
 	if advice == "" {
 		advice = cuaResultText(result, "")
@@ -195,8 +205,44 @@ func newCuaDriverError(tool string, stdout []byte, req ComputerActionRequest) (*
 	if advice == "" {
 		advice = "the driver refused the action"
 	}
-	return &CuaDriverError{Tool: tool, Code: code, rejected: cuaRejectedCodes[code] || effect == "refused", text: code + ": " + advice}, true
+	return &CuaDriverError{Tool: tool, Code: code, rejected: cuaRejectedCodes[code] || effect == "refused",
+		foreground: refused && recommended == "foreground", text: code + ": " + advice}, true
 }
+
+// cuaRefusedBeforeInput are driver codes that refuse an action before any
+// input reaches the app, also when the result does not say effect "refused":
+// a retry cannot repeat input.
+var cuaRefusedBeforeInput = map[string]bool{"background_unavailable": true, "off_space_or_ax_unresolved": true, "window_not_key": true}
+
+// cuaForegroundTools are the driver tools that take delivery_mode.
+var cuaForegroundTools = map[string]bool{"click": true, "type_text": true, "press_key": true, "hotkey": true}
+
+// callForeground runs an input tool of an action in the background (the
+// default: no focus change); when the driver refuses it before input and
+// recommends the foreground, it runs it once more with delivery_mode
+// "foreground" (the driver fronts the window, acts and gives the front back).
+// Sheets and panels that must be the key window (Finder's Go to Folder,
+// 2026-11-15: 11 refused types) take input only that way. A window that is
+// truly on another Space is the host's to refuse first (preflight); this
+// follows the driver's recommendation only. foreground reports the retry.
+func (d *CuaDriver) callForeground(ctx context.Context, tool string, args map[string]any, req ComputerActionRequest) (result map[string]any, foreground bool, err error) {
+	result, err = d.callAction(ctx, tool, args, req)
+	var refusal *CuaDriverError
+	if err == nil || !asCuaDriverError(err, &refusal) || !refusal.foreground || req.WindowID == 0 ||
+		!cuaForegroundTools[tool] || args["delivery_mode"] == "foreground" {
+		return result, false, err
+	}
+	retry := make(map[string]any, len(args)+1)
+	for k, v := range args {
+		retry[k] = v
+	}
+	retry["delivery_mode"] = "foreground"
+	result, err = d.callAction(ctx, tool, retry, req)
+	return result, err == nil, err
+}
+
+// foregroundNote is the line a result gets when its input went in the foreground.
+const foregroundNote = "delivered in the foreground: the window did not take it in the background, so it was briefly brought to the front"
 
 // cuaResultText is a driver result for the model: its summary (or reason or
 // message) and hint as advice it can follow, and a next call it can make.
@@ -502,8 +548,9 @@ func (d *CuaDriver) typeText(ctx context.Context, req ComputerActionRequest) ([]
 			args["delivery_mode"] = "foreground"
 		}
 	}
+	foreground := false
 	if !typed {
-		result, err = d.callAction(ctx, tool, args, req)
+		result, foreground, err = d.callForeground(ctx, tool, args, req)
 	}
 	var driverErr *CuaDriverError
 	incomplete := err != nil && asCuaDriverError(err, &driverErr) && driverErr.Code == "type_text_incomplete"
@@ -517,6 +564,9 @@ func (d *CuaDriver) typeText(ctx context.Context, req ComputerActionRequest) ([]
 	text := cuaResultText(result, fmt.Sprintf("typed %d character(s)", len([]rune(req.Text))))
 	if incomplete {
 		text = "the driver reported an incomplete delivery, but the field shows the text"
+	}
+	if foreground {
+		text += "\n" + foregroundNote
 	}
 	if note != "" {
 		text += "\n" + note
@@ -584,10 +634,14 @@ func (d *CuaDriver) paste(ctx context.Context, req ComputerActionRequest) (resul
 	if runtime.GOOS != "darwin" {
 		modifier = "ctrl"
 	}
-	result, err = d.callAction(ctx, "hotkey", map[string]any{"keys": []string{modifier, "v"}, "pid": req.PID, "window_id": req.WindowID,
+	var foreground bool
+	result, foreground, err = d.callForeground(ctx, "hotkey", map[string]any{"keys": []string{modifier, "v"}, "pid": req.PID, "window_id": req.WindowID,
 		"session": d.windowSession(req.SessionID)}, req)
+	if foreground {
+		note = foregroundNote
+	}
 	if _, restoreErr := d.call(ctx, "clipboard_write", map[string]any{"text": before}, ""); restoreErr != nil {
-		note = "the clipboard could not be put back: it holds the typed text"
+		note = strings.TrimPrefix(note+"\nthe clipboard could not be put back: it holds the typed text", "\n")
 	}
 	if err != nil {
 		return nil, note, true, err
