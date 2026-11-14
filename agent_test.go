@@ -636,9 +636,10 @@ func TestAgentSessionsLostEndTheirTurns(t *testing.T) {
 	if !contains(client.ActiveSessions(), "sesn_l") {
 		t.Fatalf("active = %v", client.ActiveSessions())
 	}
-	// The next disconnect counts as longer than the lease.
+	// The next disconnect counts as longer than the lease, whatever the
+	// clock's resolution (Windows: time.Since may still be 0).
 	client.mu.Lock()
-	client.leaseTTL = time.Nanosecond
+	client.leaseTTL = -time.Nanosecond
 	client.mu.Unlock()
 	executor.mu.Lock()
 	conn := executor.conn
