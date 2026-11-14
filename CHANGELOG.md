@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.27
+
+- **`bma`: quieter service log and the Mac's own name.** `bma run` leaves out
+  debug traces (a harness's raw protocol output) unless `BMA_DEBUG` is set,
+  and `bma up` suggests the macOS Computer Name (System Settings) as this
+  computer's name instead of a host name that can be a network address.
+
 ## 1.6.26
 
 - **Go: `computer_action` gets `clipboard_read` and `clipboard_write`.** An

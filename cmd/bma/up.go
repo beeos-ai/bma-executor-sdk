@@ -60,7 +60,7 @@ func cmdUp(args []string) error {
 	} else if interactive() && c.MachineID == "" {
 		c.RemoteBrain = ask("Let brains on your other machines use this computer as their hands (remote brain)?", false)
 	}
-	host, _ := os.Hostname()
+	host := computerName()
 	fmt.Printf("✓ This computer: %s/%s, %s\n", runtime.GOOS, runtime.GOARCH, host)
 
 	harnesses, err := enabled(c)
@@ -266,4 +266,19 @@ func openBrowser(url string) {
 		name = "open"
 	}
 	_ = exec.Command(name, url).Start()
+}
+
+// computerName is the name the owner knows this computer by: on macOS the
+// Computer Name of System Settings (os.Hostname there may be a network
+// address), elsewhere the host name.
+func computerName() string {
+	if runtime.GOOS == "darwin" {
+		if out, err := exec.Command("/usr/sbin/scutil", "--get", "ComputerName").Output(); err == nil {
+			if name := strings.TrimSpace(string(out)); name != "" {
+				return name
+			}
+		}
+	}
+	host, _ := os.Hostname()
+	return host
 }
