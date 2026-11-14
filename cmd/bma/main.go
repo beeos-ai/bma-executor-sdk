@@ -1,3 +1,5 @@
+//go:build darwin || linux
+
 // Command bma connects this computer to BMA: one command (`bma up`) signs
 // the computer in through the console (device authorization, no token is
 // copied), prepares the coding harnesses the owner enables (pinned releases,
