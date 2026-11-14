@@ -210,11 +210,11 @@ func TestComputerMenuAction(t *testing.T) {
 // cannot call is dropped; tools it can are rewritten to its actions.
 func TestCuaAdviceSanitized(t *testing.T) {
 	for in, want := range map[string]string{
-		"Three single actions in a row: send the next ones as one run_steps call.": "",
-		"Three single actions in a row: send the next ones as one run_steps call. It runs them in order, stops at the first failure and returns what changed.": "",
+		"Three single actions in a row: send the next ones as one run_steps call.":                                                                                                              "",
+		"Three single actions in a row: send the next ones as one run_steps call. It runs them in order, stops at the first failure and returns what changed.":                                  "",
 		`📨 Sent (unverified) 10 char(s) via CGEvent (30ms delay). — driver could not confirm the text landed; verify via screenshot, and re-call with delivery_mode:"foreground" if it didn't.`: "📨 Sent (unverified) 10 char(s) via CGEvent (30ms delay). driver could not confirm the text landed;",
-		"Run an item with invoke_menu path, or observe with `get_window_state`.":                 "Run an item with computer_action menu path, or observe with computer_observe with pid and window_id.",
-		"menus collapsed: run an item with invoke_menu path, or pass query to search menu items": "menus collapsed: run an item with computer_action menu path, or pass query to search menu items",
+		"Run an item with invoke_menu path, or observe with `get_window_state`.":                                                                                                                "Run an item with computer_action menu path, or observe with computer_observe with pid and window_id.",
+		"menus collapsed: run an item with invoke_menu path, or pass query to search menu items":                                                                                                "menus collapsed: run an item with computer_action menu path, or pass query to search menu items",
 	} {
 		if got := sanitizeCuaAdvice(in); got != want {
 			t.Errorf("sanitize(%q) = %q, want %q", in, got, want)
