@@ -544,3 +544,79 @@ func TestComputerVision(t *testing.T) {
 		t.Fatalf("frame = %+v", f)
 	}
 }
+
+// TestForegroundOnRefusal: an input the driver refuses before delivery and
+// recommends in the foreground (a sheet such as Finder's Go to Folder that
+// must be the key window) runs once more with delivery_mode "foreground",
+// and the result says so; without that recommendation, without a window, or
+// after a partial delivery it is not retried.
+func TestForegroundOnRefusal(t *testing.T) {
+	offSpace := `{"code":"off_space_or_ax_unresolved","effect":"refused","escalation":{"recommended":"foreground"},"window_id":142026}`
+	notKey := `{"code":"window_not_key","escalation":{"recommended":"foreground"}}`
+	background := `{"code":"background_unavailable","escalation":{"recommended":"foreground","reason":"occluded"}}`
+	noAdvice := `{"code":"off_space_or_ax_unresolved","effect":"refused"}`
+	partial := `{"code":"type_text_incomplete","effect":"partial","escalation":{"recommended":"foreground"}}`
+	window := ComputerActionRequest{PID: 501, WindowID: 142026}
+	with := func(r ComputerActionRequest, action, text string) ComputerActionRequest {
+		r.Action, r.Text = action, text
+		if action == "click" {
+			r.Coordinate = &[2]float64{10, 20}
+		}
+		return r
+	}
+	for name, c := range map[string]struct {
+		tool, stdout string
+		fgRefuse     bool
+		req          ComputerActionRequest
+		retried      bool
+		wantErr      string
+	}{
+		"type into a sheet":       {tool: "type_text", stdout: offSpace, req: with(window, "type", "/Users"), retried: true},
+		"key into a sheet":        {tool: "press_key", stdout: notKey, req: with(window, "key", "Return"), retried: true},
+		"chord into a sheet":      {tool: "hotkey", stdout: notKey, req: with(window, "key", "cmd+a"), retried: true},
+		"click behind":            {tool: "click", stdout: background, req: with(window, "click", ""), retried: true},
+		"no recommendation":       {tool: "type_text", stdout: noAdvice, req: with(window, "type", "/Users"), wantErr: "off_space_or_ax_unresolved: window 142026 is not on the current desktop"},
+		"no window":               {tool: "press_key", stdout: notKey, req: with(ComputerActionRequest{}, "key", "Return"), wantErr: "window_not_key: "},
+		"partial delivery":        {tool: "type_text", stdout: partial, req: with(window, "type", "/Users"), wantErr: "type_text_incomplete: "},
+		"foreground refused, too": {tool: "press_key", stdout: notKey, fgRefuse: true, req: with(window, "key", "Return"), wantErr: "window_not_key: window 142026 is not the app's focused window"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := []string{"BMA_TEST_CUA_BG_REFUSE_TOOL=" + c.tool, "BMA_TEST_CUA_BG_REFUSE_STDOUT=" + c.stdout, `BMA_TEST_CUA_ELEMENTS=[{"role":"AXTextField","value":"/Us"}]`}
+			if c.fgRefuse {
+				env = append(env, "BMA_TEST_CUA_FG_REFUSE=1")
+			}
+			driver, logPath, err := fakeCua(t, env...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			blocks, err := driver.Action(context.Background(), c.req)
+			raw, _ := os.ReadFile(logPath)
+			calls := strings.Count(string(raw), c.tool+" ")
+			foreground := strings.Count(string(raw), `"delivery_mode":"foreground"`)
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("err = %v, want %q", err, c.wantErr)
+				}
+				if want := map[bool]int{true: 2, false: 1}[c.fgRefuse]; calls != want {
+					t.Fatalf("%s called %d times, want %d:\n%s", c.tool, calls, want, raw)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if calls != 2 || foreground != 1 || !strings.Contains(blocks[0].Text, foregroundNote) {
+				t.Fatalf("calls %d, foreground %d, text %q:\n%s", calls, foreground, blocks[0].Text, raw)
+			}
+		})
+	}
+	// menu cannot be delivered in the foreground: window_not_key says what to do.
+	driver, _, err := fakeCua(t, "BMA_TEST_CUA_FAIL_TOOL=invoke_menu", "BMA_TEST_CUA_FAIL_STDOUT="+notKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = driver.Action(context.Background(), ComputerActionRequest{Action: "menu", MenuPath: []string{"Go", "Go to Folder..."}, PID: 501, WindowID: 142000})
+	if err == nil || !strings.Contains(err.Error(), "window_not_key: window 142000 is not the app's focused window: a sheet or dialog") {
+		t.Fatalf("menu err = %v", err)
+	}
+}

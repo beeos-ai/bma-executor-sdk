@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.6.19
+
+- **Go: an input refused in the background goes in the foreground when the
+  driver recommends it.** Sheets and panels that must be the app's key
+  window take no background input: on a real Mac (2026-11-15, Cua Driver
+  0.38.0) all 11 `type` calls into Finder's Go to Folder sheet came back
+  `off_space_or_ax_unresolved` with `escalation.recommended: "foreground"`,
+  and the model never got through. Now `click`, `type` and `key` (and the
+  paste of non-ASCII text) that the driver refuses before any input
+  (`effect: "refused"`, or `background_unavailable`,
+  `off_space_or_ax_unresolved`, `window_not_key`) with that recommendation
+  run once more with `delivery_mode: "foreground"` (the driver brings the
+  window to the front, acts and gives the front back); the result says
+  "delivered in the foreground". Only the driver's recommendation decides:
+  without it, without a window, or after a partial delivery nothing is
+  retried, and a window that is really on another Space is the host's to
+  refuse first. Input stays in the background by default. `menu` (no
+  foreground route) answers `window_not_key` with what to do: act on the
+  focused sheet or dialog by its own window id, or close it.
+
 ## 1.6.18
 
 - **Go: a call whose ctx ends no longer drops the executor connection.**
