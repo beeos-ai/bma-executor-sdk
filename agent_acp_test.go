@@ -238,7 +238,7 @@ func TestACPAgentStreamsAndCommitsMessages(t *testing.T) {
 	defer cancel()
 	f := startACPFixture(t, ctx, ACPAgentOptions{})
 	result := f.start(t, ctx, "sesn_a", "turn_1", "hello")
-	if result.ExecutorSessionRef != "sesn_a" || result.Resumed {
+	if !strings.HasPrefix(result.ExecutorSessionRef, "sesn_a@") || result.Resumed {
 		t.Fatalf("turn.start result = %+v", result)
 	}
 	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
@@ -435,18 +435,25 @@ func TestACPAgentKillsAnAgentThatIgnoresCancel(t *testing.T) {
 	assertIdle(t, f.platform.waitIdle(t, "turn_2"), TurnOutcomeCompleted)
 }
 
-func TestACPAgentProcessCrashFailsTheTurnAndUnknownSessionIsNotRecreated(t *testing.T) {
+func TestACPAgentProcessCrashFailsTheTurnAndLostConversationIsReplacedAndSaid(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	f := startACPFixture(t, ctx, ACPAgentOptions{})
 	f.start(t, ctx, "sesn_x", "turn_1", "crash")
 	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeFailed)
-	// The conversation to resume does not exist: turn.start is still accepted
-	// (the open runs after the answer); the turn then fails with session.error.
-	f.start(t, ctx, "sesn_missing", "turn_2", "hello", func(p *TurnStartParams) { p.ExecutorSessionRef = "sesn_missing" })
-	assertIdle(t, f.platform.waitIdle(t, "turn_2"), TurnOutcomeFailed)
-	if got := sessionErrors(f.platform, "turn_2"); len(got) != 1 || got[0].Type != AgentErrorCodeAgentError || !strings.Contains(got[0].Message, "not found") {
-		t.Fatalf("session.error of the lost conversation = %+v", got)
+	// The conversation to resume does not exist (its state is gone): the
+	// session gets a new conversation, and turn.start says so: resumed false
+	// and a handle the platform has not seen, never resumed true.
+	result := f.start(t, ctx, "sesn_missing", "turn_2", "hello", func(p *TurnStartParams) { p.ExecutorSessionRef = "sesn_missing@gone" })
+	if result.Resumed || !strings.HasPrefix(result.ExecutorSessionRef, "sesn_missing@") || result.ExecutorSessionRef == "sesn_missing@gone" {
+		t.Fatalf("turn.start of a lost conversation = %+v", result)
+	}
+	assertIdle(t, f.platform.waitIdle(t, "turn_2"), TurnOutcomeCompleted)
+	// A handle of another session is refused, not mistaken for lost.
+	f.start(t, ctx, "sesn_mine", "turn_3", "hello", func(p *TurnStartParams) { p.ExecutorSessionRef = "sesn_theirs@x" })
+	assertIdle(t, f.platform.waitIdle(t, "turn_3"), TurnOutcomeFailed)
+	if got := sessionErrors(f.platform, "turn_3"); len(got) != 1 || !strings.Contains(got[0].Message, "not this session's") {
+		t.Fatalf("session.error of a foreign handle = %+v", got)
 	}
 }
 
@@ -720,7 +727,7 @@ func fakeHandle(c *fakeConn, method string, raw json.RawMessage) (any, map[strin
 		sid, _ := p.Meta.Bma["sessionId"].(string)
 		if method == "session/load" {
 			sid = p.SessionID
-			if sid == "sesn_missing" {
+			if strings.HasPrefix(sid, "sesn_missing") {
 				return nil, map[string]any{"code": -32002, "message": "Resource not found", "data": map[string]any{"sessionId": sid}}
 			}
 		}

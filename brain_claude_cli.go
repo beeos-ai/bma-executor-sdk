@@ -49,6 +49,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -294,11 +295,11 @@ func (a *claudeCLIAdapter) probe(ctx context.Context) ([]AgentModel, error) {
 	return models, nil
 }
 
-func (a *claudeCLIAdapter) Ref(sessionID string) string { return claudeSessionUUID(sessionID) }
-
-// claudeSessionUUID is the conversation id of a platform session: a UUID
-// version 5 (RFC 9562) of the session id in a fixed namespace, so every
-// process on any restart names the same conversation.
+// claudeSessionUUID is the CLI's conversation id of a conversation handle: a
+// UUID version 5 (RFC 9562) of the handle in a fixed namespace, so every
+// process on any restart names the same conversation. (The handle of a
+// session's first conversation, before handles had a suffix, is the UUID of
+// the session id itself: claudeConversationUUID.)
 func claudeSessionUUID(sessionID string) string {
 	// Namespace: UUIDv5 of the URL "https://beeos.ai/bma/claude-session" in the RFC 9562 URL namespace.
 	ns := [16]byte{0x6b, 0xa7, 0xb8, 0x11, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8}
@@ -309,6 +310,39 @@ func claudeSessionUUID(sessionID string) string {
 	sum[6] = sum[6]&0x0f | 0x50
 	sum[8] = sum[8]&0x3f | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", sum[0:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
+}
+
+// claudeConversationUUID is the CLI's conversation id of the handle ref of a
+// session's conversation: ref is "<session id>@<suffix>" (hashed to the id),
+// or the id itself for the handle of a session's first conversation, which
+// was the UUID of the session id (claudeSessionUUID). Any other ref is not
+// this session's: ok is false.
+func claudeConversationUUID(sessionID, ref string) (uuid string, ok bool) {
+	switch {
+	case ref == claudeSessionUUID(sessionID):
+		return ref, true
+	case strings.HasPrefix(ref, sessionID+"@"):
+		return claudeSessionUUID(ref), true
+	}
+	return "", false
+}
+
+// holds reports whether the CLI has the conversation uuid: its transcript
+// <config dir>/projects/<project>/<uuid>.jsonl, where it keeps what --resume
+// loads, in the config dir of the CLI's own environment (CLAUDE_CONFIG_DIR,
+// else HOME/.claude). A new HOME, a deleted config dir or another machine has
+// none: the conversation is lost.
+func (a *claudeCLIAdapter) holds(uuid string) bool {
+	dir := ""
+	for _, kv := range a.processEnv() {
+		if v, ok := strings.CutPrefix(kv, "CLAUDE_CONFIG_DIR="); ok {
+			dir = v
+		} else if v, ok := strings.CutPrefix(kv, "HOME="); ok && dir == "" {
+			dir = filepath.Join(v, ".claude")
+		}
+	}
+	found, _ := filepath.Glob(filepath.Join(dir, "projects", "*", uuid+".jsonl"))
+	return len(found) > 0
 }
 
 func (a *claudeCLIAdapter) Close() error {
@@ -330,6 +364,7 @@ func (a *claudeCLIAdapter) Close() error {
 type cliConv struct {
 	a           *claudeCLIAdapter
 	sessionID   string
+	ref         string // the conversation's handle (executor_session_ref)
 	uuid        string
 	placeholder string
 	cwd         string
@@ -358,11 +393,16 @@ func (a *claudeCLIAdapter) Open(ctx context.Context, req BrainOpen) (BrainSessio
 		c.mu.Unlock()
 		return c, nil
 	}
-	c := &cliConv{a: a, sessionID: req.SessionID, uuid: claudeSessionUUID(req.SessionID), placeholder: newPlaceholder(),
-		cwd: req.Cwd, system: req.SystemPrompt, model: req.Model, tools: req.Tools}
-	if req.Ref != "" && req.Ref != c.uuid {
-		return nil, &AgentError{Code: AgentErrorCodeAgentError, Message: "the local conversation " + req.Ref + " is not this session's (" + c.uuid + ")"}
+	ref := cmp.Or(req.Ref, req.New)
+	uuid, ok := claudeConversationUUID(req.SessionID, ref)
+	if !ok {
+		return nil, &AgentError{Code: AgentErrorCodeAgentError, Message: "the local conversation " + ref + " is not this session's (" + req.SessionID + ")"}
 	}
+	if req.Ref != "" && !a.holds(uuid) {
+		return nil, fmt.Errorf("claude conversation %s: %w", uuid, ErrConversationLost)
+	}
+	c := &cliConv{a: a, sessionID: req.SessionID, ref: ref, uuid: uuid, placeholder: newPlaceholder(),
+		cwd: req.Cwd, system: req.SystemPrompt, model: req.Model, tools: req.Tools}
 	// Registered first: the CLI connects to the tool server while it starts.
 	a.mu.Lock()
 	a.convs[c.placeholder] = c
@@ -398,7 +438,7 @@ func (c *cliConv) ensure(ctx context.Context, resume bool, effort string) error 
 	return nil
 }
 
-func (c *cliConv) Ref() string { return c.uuid }
+func (c *cliConv) Ref() string { return c.ref }
 
 func (c *cliConv) Ready() bool {
 	c.mu.Lock()

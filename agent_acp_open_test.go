@@ -5,6 +5,7 @@ package bmaexecutor
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -27,7 +28,7 @@ func TestACPAgentAnswersTurnStartBeforeTheSessionIsOpen(t *testing.T) {
 	if took := time.Since(began); took > 700*time.Millisecond {
 		t.Fatalf("turn.start took %v while session/new takes 1.5 s", took)
 	}
-	if !result.Accepted || result.TurnID != "turn_1" || result.ExecutorSessionRef != "sesn_slow" || result.Effective.Harness != "dsh" {
+	if !result.Accepted || result.TurnID != "turn_1" || !strings.HasPrefix(result.ExecutorSessionRef, "sesn_slow@") || result.Effective.Harness != "dsh" {
 		t.Fatalf("result = %+v", result)
 	}
 	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)

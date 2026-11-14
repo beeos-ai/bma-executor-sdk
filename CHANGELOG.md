@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.6.20
+
+- **Go: a local conversation that is gone is reported, not continued
+  silently.** `BrainHost` answered `resumed: true` for every `turn.start`
+  that carried an `executor_session_ref`, before it had opened anything, so a
+  brain that had lost its local state (state directory or volume replaced, a
+  machine rebuilt, the brain's own store emptied) started a blank
+  conversation, or failed the turn, without the platform or the user knowing.
+  Now the host opens a conversation to resume before it answers `turn.start`
+  and answers `resumed: true` only when the brain confirms its state for that
+  handle exists. Otherwise it starts a new conversation and answers
+  `resumed: false` with a new `executor_session_ref`
+  (`<session id>@<random>`, never one the session had): the platform sees a
+  different handle without `resumed` and tells the user the earlier context
+  is lost (`harness_context_lost`; contract
+  `TurnStartResult.executor_session_ref`). A handle the executor keeps is a
+  continuation. What "the state exists" means, by brain:
+  - `claude-code` (claude CLI): the CLI's transcript
+    `<config dir>/projects/<project>/<conversation uuid>.jsonl`, with the
+    config dir of the CLI's own environment (`CLAUDE_CONFIG_DIR`, else
+    `HOME/.claude`). The conversation uuid is derived from the handle.
+  - `codex` (codex app-server): the adapter's thread record of the handle in
+    the state directory **and** codex's rollout file for that thread in the
+    BMA Codex home (`sessions/*/*/*/rollout-*-<thread>.jsonl`, or
+    `archived_sessions/`).
+  - `dsh` (ACP agent): the agent's `session/load` of the handle finds the
+    session (ACP resource-not-found otherwise).
+
+  `BrainAdapter.Open` answers `ErrConversationLost` for a conversation to
+  resume that the brain does not hold, before creating anything, and
+  `BrainOpen.New` carries the handle of a new conversation; `BrainAdapter.Ref`
+  is removed. Handles of earlier releases (the session id; for the claude
+  CLI the UUID of the session id) are still resumed when the state exists.
+  The model proxy's session header still carries the platform session id.
+
 ## 1.6.19
 
 - **Go: an input refused in the background goes in the foreground when the

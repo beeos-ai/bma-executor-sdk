@@ -71,7 +71,7 @@ func TestCodexRunsAnApprovedPlatformTool(t *testing.T) {
 	// entry would bring code mode and tools of codex's own.
 	catalogModel := capability.Harnesses[0].Models[0].ID
 	result := f.start(t, ctx, "sesn_x", "turn_1", "run it", func(p *TurnStartParams) { p.Config.Model = catalogModel })
-	if result.ExecutorSessionRef != "sesn_x" {
+	if !strings.HasPrefix(result.ExecutorSessionRef, "sesn_x@") || result.Resumed {
 		t.Fatalf("executor_session_ref = %q", result.ExecutorSessionRef)
 	}
 	f.platform.waitFor(t, "permission", func() bool { return len(f.platform.interactions) == 1 })
@@ -125,7 +125,7 @@ func TestCodexDenyRunsNothingPolicyAllowAsksNobodyAndResumes(t *testing.T) {
 	model := newScriptedResponses(t, "bash", map[string]any{"command": "touch ran.txt"})
 	root := t.TempDir()
 	f := startCodexFixture(t, ctx, model, ACPAgentOptions{}, root)
-	f.start(t, ctx, "sesn_x", "turn_1", "run it")
+	first := f.start(t, ctx, "sesn_x", "turn_1", "run it")
 	f.platform.waitFor(t, "permission", func() bool { return len(f.platform.interactions) == 1 })
 	if _, err := f.executor.RespondInteraction(ctx, InteractionResponseParams{SessionID: "sesn_x", InteractionID: f.platform.interactions[0].InteractionID, Outcome: InteractionOutcomeDeny}); err != nil {
 		t.Fatal(err)
@@ -152,14 +152,21 @@ func TestCodexDenyRunsNothingPolicyAllowAsksNobodyAndResumes(t *testing.T) {
 	_ = f.agent.Close()
 	before := model.count()
 	g := startCodexFixture(t, ctx, model, ACPAgentOptions{}, root)
-	g.start(t, ctx, "sesn_x", "turn_3", "say hello", func(p *TurnStartParams) { p.ExecutorSessionRef = "sesn_x" })
+	resumed := g.start(t, ctx, "sesn_x", "turn_3", "say hello", func(p *TurnStartParams) { p.ExecutorSessionRef = first.ExecutorSessionRef })
+	if !resumed.Resumed || resumed.ExecutorSessionRef != first.ExecutorSessionRef {
+		t.Fatalf("turn.start of the resumed conversation = %+v", resumed)
+	}
 	assertIdle(t, g.platform.waitIdle(t, "turn_3"), TurnOutcomeCompleted)
 	if !model.sawPromptAfter(before, "run it") {
 		t.Fatal("the resumed conversation lost its history")
 	}
-	// An unknown conversation is not created anew.
-	g.start(t, ctx, "sesn_other", "turn_1", "say hello", func(p *TurnStartParams) { p.ExecutorSessionRef = "sesn_other" })
-	assertIdle(t, g.platform.waitIdle(t, "turn_1"), TurnOutcomeFailed)
+	// A conversation codex has no thread of is not resumed: a new one, said
+	// so (resumed false, another handle), and the turn completes.
+	lost := g.start(t, ctx, "sesn_other", "turn_1", "say hello", func(p *TurnStartParams) { p.ExecutorSessionRef = "sesn_other@gone" })
+	if lost.Resumed || !strings.HasPrefix(lost.ExecutorSessionRef, "sesn_other@") || lost.ExecutorSessionRef == "sesn_other@gone" {
+		t.Fatalf("turn.start of a lost conversation = %+v", lost)
+	}
+	assertIdle(t, g.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
 }
 
 func TestCodexCancelEndsTheTurnAndKillsTheTool(t *testing.T) {

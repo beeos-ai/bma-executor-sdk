@@ -69,8 +69,8 @@ func TestClaudeCLIRunsAnApprovedPlatformTool(t *testing.T) {
 	}
 
 	result := f.start(t, ctx, "sesn_c", "turn_1", "run it")
-	if result.ExecutorSessionRef != claudeSessionUUID("sesn_c") {
-		t.Fatalf("executor_session_ref = %q, want the session's uuid %s", result.ExecutorSessionRef, claudeSessionUUID("sesn_c"))
+	if !strings.HasPrefix(result.ExecutorSessionRef, "sesn_c@") || result.Resumed {
+		t.Fatalf("executor_session_ref = %q resumed %v, want a new conversation of the session", result.ExecutorSessionRef, result.Resumed)
 	}
 	f.platform.waitFor(t, "permission", func() bool { return len(f.platform.interactions) == 1 })
 	request := f.platform.interactions[0]
@@ -119,7 +119,7 @@ func TestClaudeCLIDenyRunsNothingPolicyAllowAsksNobodyAndResumes(t *testing.T) {
 	model := newScriptedModel(t, "bash", map[string]any{"command": "touch ran.txt"})
 	root := t.TempDir()
 	f := startClaudeCLIFixture(t, ctx, model, ACPAgentOptions{}, root)
-	f.start(t, ctx, "sesn_c", "turn_1", "run it")
+	first := f.start(t, ctx, "sesn_c", "turn_1", "run it")
 	f.platform.waitFor(t, "permission", func() bool { return len(f.platform.interactions) == 1 })
 	if _, err := f.executor.RespondInteraction(ctx, InteractionResponseParams{SessionID: "sesn_c", InteractionID: f.platform.interactions[0].InteractionID, Outcome: InteractionOutcomeDeny}); err != nil {
 		t.Fatal(err)
@@ -144,15 +144,21 @@ func TestClaudeCLIDenyRunsNothingPolicyAllowAsksNobodyAndResumes(t *testing.T) {
 	_ = f.agent.Close()
 	before := len(model.requests)
 	g := startClaudeCLIFixture(t, ctx, model, ACPAgentOptions{}, root)
-	g.start(t, ctx, "sesn_c", "turn_3", "say hello", func(p *TurnStartParams) { p.ExecutorSessionRef = claudeSessionUUID("sesn_c") })
+	resumed := g.start(t, ctx, "sesn_c", "turn_3", "say hello", func(p *TurnStartParams) { p.ExecutorSessionRef = first.ExecutorSessionRef })
+	if !resumed.Resumed || resumed.ExecutorSessionRef != first.ExecutorSessionRef {
+		t.Fatalf("turn.start of the resumed conversation = %+v", resumed)
+	}
 	assertIdle(t, g.platform.waitIdle(t, "turn_3"), TurnOutcomeCompleted)
 	if !model.sawPromptAfter(before, "run it") {
 		t.Fatal("the resumed conversation lost its history")
 	}
-	// An unknown conversation is not created anew.
-	g.start(t, ctx, "sesn_other", "turn_1", "say hello", func(p *TurnStartParams) { p.ExecutorSessionRef = claudeSessionUUID("sesn_other") })
-	idle := g.platform.waitIdle(t, "turn_1")
-	assertIdle(t, idle, TurnOutcomeFailed)
+	// A conversation the CLI has no transcript of is not resumed: a new one,
+	// said so (resumed false, another handle), and the turn completes.
+	lost := g.start(t, ctx, "sesn_other", "turn_1", "say hello", func(p *TurnStartParams) { p.ExecutorSessionRef = "sesn_other@gone" })
+	if lost.Resumed || !strings.HasPrefix(lost.ExecutorSessionRef, "sesn_other@") || lost.ExecutorSessionRef == "sesn_other@gone" {
+		t.Fatalf("turn.start of a lost conversation = %+v", lost)
+	}
+	assertIdle(t, g.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
 }
 
 func TestClaudeCLICancelEndsTheTurnAndKillsTheTool(t *testing.T) {
