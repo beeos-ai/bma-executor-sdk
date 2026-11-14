@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	bmaexecutor "github.com/beeos-ai/bma-executor-sdk"
 )
 
@@ -232,9 +234,11 @@ func splitList(s string) []string {
 	return out
 }
 
+// interactive reports whether stdin is a terminal (a character device such
+// as /dev/null is not one).
 func interactive() bool {
-	fi, err := os.Stdin.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	_, err := unix.IoctlGetTermios(int(os.Stdin.Fd()), ioctlReadTermios)
+	return err == nil
 }
 
 var stdin = bufio.NewReader(os.Stdin)

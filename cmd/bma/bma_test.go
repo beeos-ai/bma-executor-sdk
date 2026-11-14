@@ -194,3 +194,19 @@ func TestHarnessChoiceUsesTheCatalog(t *testing.T) {
 		t.Fatalf("enabled %+v %v", got, err)
 	}
 }
+
+// A character device that is not a terminal (/dev/null, as for a service or
+// `bma up </dev/null`) is not interactive: no question is asked.
+func TestDevNullIsNotInteractive(t *testing.T) {
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	old := os.Stdin
+	os.Stdin = f
+	defer func() { os.Stdin = old }()
+	if interactive() {
+		t.Fatal("/dev/null is not a terminal")
+	}
+}
