@@ -107,8 +107,8 @@ var acpComputerAction = BrainTool{
 		`(menu_path, for example ["Window", "Weixin"] to show a window) with the pid and window_id of one of its windows. ` +
 		"Observe before acting and again afterwards to check the result.\n" +
 		"Rules:\n" +
-		"- A coordinate belongs to the screenshot it was read from. After observing a window, act on it with the same pid and window_id; " +
-		"use screen coordinates only after a whole-screen observation, without pid and window_id.\n" +
+		"- Send input (click, type, key, scroll, drag) with the pid and window_id of the window it is for, " +
+		"with coordinates from that window's screenshot: observe the window first.\n" +
 		"- Only act on windows the window list shows; windows that are minimized, hidden or on another Space cannot be used: " +
 		"bring them back with open_app or the app's Window menu.\n" +
 		"- type ends with a line \"typed: verified\", \"typed: mismatch\" or \"typed: unverified\". Unless it is verified, observe the field " +

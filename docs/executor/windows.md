@@ -46,7 +46,9 @@ daemon. Telemetry is off (`CUA_TELEMETRY=0`). The executor runs
   observation is refused (`window_frame_required`).
   A local brain's `computer_action` also has `open_app` (`app`: name or
   bundle id), which runs the driver's `launch_app` (macOS drivers only) and
-  `bring_to_front` and lists only windows on the current desktop, and `menu`
+  `bring_to_front` (on macOS a running app without a usable window is
+  reopened with `open -g -b <bundle id>`, as a Dock click) and lists only
+  windows on the current desktop, and `menu`
   (`menu_path` with `pid` and `window_id`: the driver's `invoke_menu`). Both
   tools take a `description` of the step for clients to show; a call without
   it still runs. `type` ends with `typed: verified`, `typed: mismatch` or

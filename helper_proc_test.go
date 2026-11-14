@@ -111,8 +111,9 @@ func runFakeCua() {
 		return
 	}
 	// BMA_TEST_CUA_HIDDEN=1: TextEdit runs with its only window off the
-	// current desktop: bring_to_front of the app fails, of the window brings
-	// it back (a marker file next to the log remembers it).
+	// current desktop: bring_to_front of the app fails while it is hidden,
+	// of the window brings it back (a marker file next to the log remembers
+	// it; a test's reopen may create it too); BMA_TEST_CUA_STUCK=1 fails both.
 	if os.Getenv("BMA_TEST_CUA_HIDDEN") == "1" {
 		marker := os.Getenv("BMA_TEST_CUA_LOG") + ".front"
 		_, shown := os.Stat(marker)
@@ -128,7 +129,7 @@ func runFakeCua() {
 			return
 		case "bring_to_front":
 			logCall()
-			if input["window_id"] == nil {
+			if (input["window_id"] == nil && shown != nil) || os.Getenv("BMA_TEST_CUA_STUCK") == "1" {
 				fmt.Fprintln(os.Stdout, `{"code":"bring_to_front_window_not_found","candidates":[{"window_id":78,"is_on_screen":false}],"hint":"call get_window_state or run_steps"}`)
 				os.Exit(1)
 			}

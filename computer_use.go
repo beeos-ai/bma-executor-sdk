@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -624,6 +625,10 @@ type CuaDriver struct {
 	env              []string
 	timeout          time.Duration
 	noClipboard      bool
+	// reopen reopens a running app by bundle id (macOS: reopenApp), nil
+	// elsewhere; windowWait is the pause between window list reads after it.
+	reopen     func(ctx context.Context, bundleID string) error
+	windowWait time.Duration
 }
 
 // NewCuaDriver checks that the driver and its daemon work (a screen-size call)
@@ -645,7 +650,10 @@ func NewCuaDriver(ctx context.Context, opts CuaDriverOptions) (*CuaDriver, error
 		return nil, fmt.Errorf("%w: %v", ErrComputerUseUnavailable, err)
 	}
 	driver := &CuaDriver{path: resolved, socket: opts.Socket, env: opts.Env, timeout: opts.Timeout, sessionNamespace: fmt.Sprintf("%x", nonce),
-		noClipboard: opts.NoClipboard}
+		noClipboard: opts.NoClipboard, windowWait: 400 * time.Millisecond}
+	if runtime.GOOS == "darwin" {
+		driver.reopen = reopenApp
+	}
 	if _, err := driver.call(ctx, "get_screen_size", map[string]any{}, ""); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrComputerUseUnavailable, err)
 	}
