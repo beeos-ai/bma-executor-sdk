@@ -11,8 +11,10 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/draw"
 	"image/jpeg"
 	"image/png"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -71,9 +73,13 @@ const ComputerErrorWindowFrameRequired = "window_frame_required"
 // the session's last successful observation of the screen (PID and WindowID
 // zero) or of one window. Width and Height are the pixels of the screenshot
 // the model was given (zero when the observation returned no readable image).
+// Scale is the screen pixels per screenshot pixel (1 when the screenshot was
+// not scaled down to fit the model's image limits); Core has already mapped
+// an action's coordinates to screen (or window) pixels with it.
 type ComputerFrame struct {
 	PID, WindowID int
 	Width, Height int
+	Scale         float64
 }
 
 // ComputerVision is whether a model takes images (CoreOptions.ComputerVision).
@@ -197,6 +203,8 @@ type ComputerActionRequest struct {
 	// MenuPath are the menu labels of a menu action, from the menu bar to
 	// the item (1-16 labels, each 1-200 characters, trimmed).
 	MenuPath []string
+	// Duration is how long hold_key holds its keys (contract 1.14.0).
+	Duration time.Duration
 	// Frame is the screenshot the coordinates refer to, filled by Core: for
 	// an action with PID/WindowID the session's last observation of that
 	// window, otherwise its last observation. Nil when there was none.
@@ -243,7 +251,21 @@ func (c *Core) computerNeedsApproval(ctx context.Context, sessionID, tool string
 	if call.tool == ToolNameComputerObserve {
 		return approver.NeedsObserveApproval(ctx, call.observe)
 	}
-	return approver.NeedsActionApproval(ctx, call.action)
+	for _, step := range call.actions() {
+		if step.Action != ComputerActionWait && approver.NeedsActionApproval(ctx, step) {
+			return true
+		}
+	}
+	return false
+}
+
+// actions are the action requests of a computer_action call: its batch
+// steps, or its one action.
+func (c computerCall) actions() []ComputerActionRequest {
+	if c.steps != nil {
+		return c.steps
+	}
+	return []ComputerActionRequest{c.action}
 }
 
 // computerInput is the superset input of computer_observe and computer_action
@@ -263,14 +285,22 @@ type computerInput struct {
 	WindowID        int       `json:"window_id"`
 	App             string    `json:"app"`
 	MenuPath        []string  `json:"menu_path"`
+	// Contract 1.14.0: hold_key / wait seconds, a batch, a zoom region.
+	Duration float64         `json:"duration"`
+	Actions  []computerInput `json:"actions"`
+	Region   []float64       `json:"region"`
 }
 
 // computerCall is one checked computer use call: its tool and the request the
 // preflighter, the approver and the backend see.
+// A batch (computer_action actions) has its steps instead of action; a zoom
+// (computer_observe region) has its region in screenshot pixels.
 type computerCall struct {
 	tool    string
 	observe ComputerObserveRequest
 	action  ComputerActionRequest
+	steps   []ComputerActionRequest
+	zoom    *[4]float64
 }
 
 // computerRefusal is a computer use call refused before it ran: by its
@@ -320,11 +350,8 @@ func (c *Core) prepareComputer(key coreKey, tool string, raw []byte) (computerCa
 			return computerCall{}, fmt.Errorf("invalid tool input: %w", err)
 		}
 	}
-	if input.Display != "" && input.Display != "primary" {
-		return computerCall{}, fmt.Errorf("display %q is not available: only the primary display is", input.Display)
-	}
-	if (input.PID == 0) != (input.WindowID == 0) {
-		return computerCall{}, errors.New("pid and window_id go together")
+	if err := input.checkTarget(); err != nil {
+		return computerCall{}, err
 	}
 	call := computerCall{tool: tool}
 	if tool == ToolNameComputerObserve {
@@ -332,19 +359,82 @@ func (c *Core) prepareComputer(key coreKey, tool string, raw []byte) (computerCa
 			return computerCall{}, err
 		}
 		call.observe = ComputerObserveRequest{SessionID: key.session, PID: input.PID, WindowID: input.WindowID, ImageFormat: input.ImageFormat}
+		if input.Region != nil {
+			r := input.Region
+			if len(r) != 4 || r[0] < 0 || r[1] < 0 || r[2] <= r[0] || r[3] <= r[1] {
+				return computerCall{}, errors.New("region must be [x0, y0, x1, y1] with x0 < x1 and y0 < y1, in pixels of the last screenshot")
+			}
+			call.zoom = &[4]float64{r[0], r[1], r[2], r[3]}
+		}
 		return call, nil
 	}
+	if input.Actions == nil {
+		request, err := c.prepareAction(key, input)
+		if err != nil {
+			return computerCall{}, err
+		}
+		call.action = request
+		return call, nil
+	}
+	if input.Action != "" {
+		return computerCall{}, errors.New("give either action or actions, not both")
+	}
+	if len(input.Actions) == 0 || len(input.Actions) > maxBatchSteps {
+		return computerCall{}, fmt.Errorf("actions must hold 1-%d steps", maxBatchSteps)
+	}
+	var paused float64
+	call.steps = make([]ComputerActionRequest, 0, len(input.Actions))
+	for i, step := range input.Actions {
+		if step.Actions != nil {
+			return computerCall{}, fmt.Errorf("step %d: a step cannot hold actions", i+1)
+		}
+		if err := step.checkTarget(); err != nil {
+			return computerCall{}, fmt.Errorf("step %d: %w", i+1, err)
+		}
+		request, err := c.prepareAction(key, step)
+		if err != nil {
+			return computerCall{}, fmt.Errorf("step %d: %w", i+1, err)
+		}
+		paused += step.Duration
+		call.steps = append(call.steps, request)
+	}
+	if paused > maxComputerDuration {
+		return computerCall{}, fmt.Errorf("the steps' durations add up to more than %g seconds", maxComputerDuration)
+	}
+	return call, nil
+}
+
+// prepareAction checks one action (or batch step) and maps its coordinates
+// from the screenshot the model saw to the screen (or window) pixels.
+func (c *Core) prepareAction(key coreKey, input computerInput) (ComputerActionRequest, error) {
 	request, err := input.actionRequest()
 	if err != nil {
-		return computerCall{}, err
+		return request, err
 	}
 	request.SessionID = key.session
 	request.Frame = c.frames.frameFor(key, request.PID, request.WindowID)
 	if err := checkActionFrame(c.frames.last(key), request); err != nil {
-		return computerCall{}, err
+		return request, err
 	}
-	call.action = request
-	return call, nil
+	if f := request.Frame; f != nil && f.Scale > 0 && f.Scale != 1 {
+		for _, p := range []*[2]float64{request.Coordinate, request.Start} {
+			if p != nil {
+				p[0], p[1] = p[0]*f.Scale, p[1]*f.Scale
+			}
+		}
+	}
+	return request, nil
+}
+
+// checkTarget checks the display and window an input names.
+func (in computerInput) checkTarget() error {
+	if in.Display != "" && in.Display != "primary" {
+		return fmt.Errorf("display %q is not available: only the primary display is", in.Display)
+	}
+	if (in.PID == 0) != (in.WindowID == 0) {
+		return errors.New("pid and window_id go together")
+	}
+	return nil
 }
 
 // checkActionFrame refuses a click, scroll or drag without a window while the
@@ -353,7 +443,7 @@ func (c *Core) prepareComputer(key coreKey, tool string, raw []byte) (computerCa
 // converted screen point can land on another window in front of this one.
 func checkActionFrame(last *ComputerFrame, req ComputerActionRequest) error {
 	switch req.Action {
-	case ComputerActionClick, ComputerActionScroll, ComputerActionDrag:
+	case ComputerActionClick, ComputerActionScroll, ComputerActionDrag, ComputerActionMouseMove:
 	default:
 		return nil
 	}
@@ -371,14 +461,19 @@ func (c *Core) preflightComputer(ctx context.Context, call computerCall) error {
 	if !ok {
 		return nil
 	}
-	var err error
 	if call.tool == ToolNameComputerObserve {
-		err = preflighter.PreflightObserve(ctx, call.observe)
-	} else {
-		err = preflighter.PreflightAction(ctx, call.action)
+		if err := preflighter.PreflightObserve(ctx, call.observe); err != nil {
+			return asComputerRefusal(err)
+		}
+		return nil
 	}
-	if err != nil {
-		return asComputerRefusal(err)
+	for _, step := range call.actions() {
+		if step.Action == ComputerActionWait {
+			continue
+		}
+		if err := preflighter.PreflightAction(ctx, step); err != nil {
+			return asComputerRefusal(err)
+		}
 	}
 	return nil
 }
@@ -419,18 +514,125 @@ func (c *Core) computerTool(ctx context.Context, key coreKey, params ToolCallPar
 		}
 	}
 	var blocks []ContentBlock
-	if call.tool == ToolNameComputerObserve {
-		if blocks, err = c.opts.ComputerUse.Observe(ctx, call.observe); err == nil {
-			c.frames.record(key, call.observe, blocks)
-			blocks = c.withoutImages(ctx, key.session, blocks)
-		}
-	} else {
-		blocks, err = c.opts.ComputerUse.Action(ctx, call.action)
+	switch {
+	case call.zoom != nil:
+		blocks, err = c.computerZoom(ctx, key, call.observe, *call.zoom)
+	case call.tool == ToolNameComputerObserve:
+		blocks, err = c.computerObserve(ctx, key, call.observe)
+	case call.steps != nil:
+		return c.computerBatch(ctx, key, call.steps), nil
+	default:
+		blocks, err = c.computerAction(ctx, call.action)
 	}
 	if err != nil {
 		return ToolResultParams{}, err
 	}
 	return ToolResultParams{Outcome: ToolOutcomeSucceeded, Content: blocks}, nil
+}
+
+// computerObserve takes a screenshot, scales it to fit the model's image
+// limits and records its frame.
+func (c *Core) computerObserve(ctx context.Context, key coreKey, req ComputerObserveRequest) ([]ContentBlock, error) {
+	blocks, err := c.opts.ComputerUse.Observe(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	blocks, scale, err := fitScreenshot(blocks)
+	if err != nil {
+		return nil, err
+	}
+	c.frames.record(key, req, blocks, scale)
+	return c.withoutImages(ctx, key.session, blocks), nil
+}
+
+// computerAction runs one action: wait pauses here, the backend runs the rest.
+func (c *Core) computerAction(ctx context.Context, req ComputerActionRequest) ([]ContentBlock, error) {
+	if req.Action != ComputerActionWait {
+		return c.opts.ComputerUse.Action(ctx, req)
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(req.Duration):
+	}
+	return []ContentBlock{{Type: ContentBlockTypeText, Text: fmt.Sprintf("waited %gs", req.Duration.Seconds())}}, nil
+}
+
+// batchHalt is the text of a batch step after a failed one (the Anthropic
+// computer use tool's halt text, "turn" read as "batch").
+const batchHalt = "Not executed: an earlier computer action in this batch failed."
+
+// computerBatch runs a batch's steps in order and stops at the first failure;
+// every step is reported, and a screenshot of the last step's target ends the
+// result so the model sees the outcome without another round trip.
+func (c *Core) computerBatch(ctx context.Context, key coreKey, steps []ComputerActionRequest) ToolResultParams {
+	var report strings.Builder
+	failed := false
+	for i, step := range steps {
+		if failed {
+			fmt.Fprintf(&report, "step %d %s: %s\n", i+1, step.Action, batchHalt)
+			continue
+		}
+		blocks, err := c.computerAction(ctx, step)
+		if err != nil {
+			failed = true
+			fmt.Fprintf(&report, "step %d %s failed: %v\n", i+1, step.Action, err)
+			continue
+		}
+		var texts []string
+		for _, block := range blocks {
+			if block.Type == ContentBlockTypeText {
+				texts = append(texts, block.Text)
+			}
+		}
+		fmt.Fprintf(&report, "step %d %s: %s\n", i+1, step.Action, strings.Join(texts, " "))
+	}
+	last := steps[len(steps)-1]
+	content := []ContentBlock{{Type: ContentBlockTypeText, Text: report.String()}}
+	shot, err := c.computerObserve(ctx, key, ComputerObserveRequest{SessionID: key.session, PID: last.PID, WindowID: last.WindowID})
+	if err != nil {
+		content = append(content, ContentBlock{Type: ContentBlockTypeText, Text: "screenshot after the batch failed: " + err.Error()})
+	} else {
+		content = append(content, shot...)
+	}
+	if failed {
+		return ToolResultParams{Outcome: ToolOutcomeFailed, IsError: true, Content: content}
+	}
+	return ToolResultParams{Outcome: ToolOutcomeSucceeded, Content: content}
+}
+
+// computerZoom returns a region of the target's screenshot at full screen
+// resolution, scaled only as far as the image limits need. The region is in
+// pixels of the target's last screenshot; the frame does not change, so later
+// coordinates stay those of the full screenshot.
+func (c *Core) computerZoom(ctx context.Context, key coreKey, req ComputerObserveRequest, region [4]float64) ([]ContentBlock, error) {
+	scale := 1.0
+	if f := c.frames.frameFor(key, req.PID, req.WindowID); f != nil && f.Scale > 0 {
+		scale = f.Scale
+	}
+	blocks, err := c.opts.ComputerUse.Observe(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	src, mime, err := firstImage(blocks)
+	if err != nil {
+		return nil, err
+	}
+	rect := image.Rect(int(region[0]*scale), int(region[1]*scale), int(math.Ceil(region[2]*scale)), int(math.Ceil(region[3]*scale))).
+		Intersect(src.Bounds())
+	if rect.Empty() {
+		return nil, fmt.Errorf("region %v lies outside the screenshot", region)
+	}
+	crop := image.NewRGBA(image.Rect(0, 0, rect.Dx(), rect.Dy()))
+	draw.Draw(crop, crop.Bounds(), src, rect.Min, draw.Src)
+	img, _ := fitImage(crop)
+	block, err := encodeImage(img, mime)
+	if err != nil {
+		return nil, err
+	}
+	return c.withoutImages(ctx, key.session, []ContentBlock{block, {Type: ContentBlockTypeText, Text: fmt.Sprintf(
+		"zoom of region [%g, %g, %g, %g] at %dx%d; coordinates of actions stay those of the full screenshot",
+		region[0], region[1], region[2], region[3], img.Bounds().Dx(), img.Bounds().Dy())}}), nil
 }
 
 // computerFrames are the sessions' last observations: the last one of each
@@ -443,8 +645,8 @@ type computerFrames struct {
 
 // record keeps a successful observation's frame; the screenshot size is read
 // from the image's header.
-func (f *computerFrames) record(key coreKey, req ComputerObserveRequest, blocks []ContentBlock) {
-	frame := ComputerFrame{PID: req.PID, WindowID: req.WindowID}
+func (f *computerFrames) record(key coreKey, req ComputerObserveRequest, blocks []ContentBlock, scale float64) {
+	frame := ComputerFrame{PID: req.PID, WindowID: req.WindowID, Scale: scale}
 	frame.Width, frame.Height = blocksImageSize(blocks)
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -512,6 +714,13 @@ func (in computerInput) actionRequest() (ComputerActionRequest, error) {
 	request := ComputerActionRequest{
 		Action: in.Action, PID: in.PID, WindowID: in.WindowID, Text: in.Text, Button: in.Button,
 		ClickCount: in.Count, ScrollDir: in.ScrollDirection, ScrollAmount: in.ScrollAmount,
+		Duration: time.Duration(in.Duration * float64(time.Second)),
+	}
+	duration := func() error {
+		if in.Duration <= 0 || in.Duration > maxComputerDuration {
+			return fmt.Errorf("duration must be more than 0 and at most %g seconds", maxComputerDuration)
+		}
+		return nil
 	}
 	point := func(name string, values []float64) (*[2]float64, error) {
 		if len(values) != 2 {
@@ -560,6 +769,24 @@ func (in computerInput) actionRequest() (ComputerActionRequest, error) {
 		if request.Coordinate, err = point("coordinate", in.Coordinate); err != nil {
 			return request, err
 		}
+	case ComputerActionMouseMove:
+		if request.Coordinate, err = point("coordinate", in.Coordinate); err != nil {
+			return request, err
+		}
+	case ComputerActionHoldKey:
+		if strings.TrimSpace(in.Text) == "" {
+			return request, errors.New(`text is required: a key or chord such as "shift" or "ctrl+alt"`)
+		}
+		if err := duration(); err != nil {
+			return request, err
+		}
+	case ComputerActionWait:
+		if err := duration(); err != nil {
+			return request, err
+		}
+		if in.PID != 0 || len(in.Coordinate) > 0 || in.Text != "" {
+			return request, errors.New("wait takes only duration")
+		}
 	case ComputerActionOpenApp:
 		request.App = strings.TrimSpace(in.App)
 		if request.App == "" || len(request.App) > maxAppName {
@@ -586,7 +813,7 @@ func (in computerInput) actionRequest() (ComputerActionRequest, error) {
 			return request, errors.New("menu takes no coordinate or text")
 		}
 	default:
-		return request, fmt.Errorf("action %q is not click, type, key, scroll, drag, open_app or menu", in.Action)
+		return request, fmt.Errorf("action %q is not click, type, key, scroll, drag, mouse_move, hold_key, wait, open_app or menu", in.Action)
 	}
 	return request, nil
 }
@@ -808,6 +1035,8 @@ func (d *CuaDriver) Action(ctx context.Context, req ComputerActionRequest) ([]Co
 		return d.menu(ctx, req)
 	case ComputerActionType:
 		return d.typeText(ctx, req)
+	case ComputerActionHoldKey:
+		return nil, errors.New("hold_key is not available on this desktop (Cua Driver has no key hold); use key instead")
 	}
 	tool, args := cuaAction(req)
 	if req.WindowID != 0 {
@@ -860,6 +1089,9 @@ func cuaAction(req ComputerActionRequest) (string, map[string]any) {
 	case ComputerActionType:
 		args["text"] = req.Text
 		return "type_text", args
+	case ComputerActionMouseMove:
+		args["x"], args["y"] = req.Coordinate[0], req.Coordinate[1]
+		return "move_cursor", args
 	case ComputerActionKey:
 		keys := strings.Split(strings.ToLower(strings.ReplaceAll(strings.TrimSpace(req.Text), " ", "")), "+")
 		if len(keys) == 1 {

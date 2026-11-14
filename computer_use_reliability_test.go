@@ -158,7 +158,7 @@ func TestComputerFrameCheck(t *testing.T) {
 		t.Fatalf("targeted click = %+v", r)
 	}
 	last := computer.actions[len(computer.actions)-1]
-	if last.Frame == nil || *last.Frame != (ComputerFrame{PID: 7, WindowID: 9, Width: 1, Height: 1}) {
+	if last.Frame == nil || *last.Frame != (ComputerFrame{PID: 7, WindowID: 9, Width: 1, Height: 1, Scale: 1}) {
 		t.Fatalf("frame = %+v", last.Frame)
 	}
 	// A window never observed has no frame; the screen again is the frame of

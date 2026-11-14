@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.6.24
+
+- **Go: computer use batches, zoom, hover, key hold and wait; screenshots fit
+  the model's image limits** (contract 1.14.0, additive). `computer_action`
+  takes `actions`: up to 20 steps run in order in one call, the first failure
+  stops the batch (later steps answer "Not executed: an earlier computer
+  action in this batch failed."), every step is reported and the result ends
+  with a screenshot of the last step's target, so a form costs one model
+  round trip instead of one per field (Anthropic computer use tool, batch
+  actions). New actions `mouse_move` (hover), `hold_key` and `wait`
+  (`duration` seconds, at most 10, also per batch). `computer_observe` takes
+  `region` `[x0, y0, x1, y1]`: that part of the last screenshot at full
+  screen resolution (zoom), cropped in Core for every backend; coordinates
+  stay those of the full screenshot. A screenshot over 1568 px on the long
+  edge or about 1.15 megapixels is scaled down in Core (box filter) and the
+  model's coordinates are mapped back with the same factor
+  (`ComputerFrame.Scale`; backends and preflighters receive screen or window
+  pixels as before). A batch asks for approval when any step does
+  (`ComputerUseApprover`). Backends implement `mouse_move` and `hold_key`
+  (`ComputerActionRequest.Duration`); `wait` runs in Core. `CuaDriver` maps
+  `mouse_move` to `move_cursor` and refuses `hold_key` (the driver has no
+  key hold).
 ## 1.6.23
 
 - **Go: an input that needs its window in front brings it there and stays,
