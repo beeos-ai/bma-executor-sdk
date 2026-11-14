@@ -162,7 +162,7 @@ var acpComputerAction = BrainTool{
 		"duration":    computerDuration,
 		"app":         map[string]any{"type": "string", "description": `App to open with open_app: its name such as "TextEdit", or its bundle id such as "com.apple.TextEdit".`},
 		"menu_path": map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1, "maxLength": maxMenuLabel},
-			"minItems": 1, "maxItems": maxMenuItems, "description": `Menu labels from the menu bar to the item for menu, exactly as shown, for example ["File", "Save As..."].`},
+			"minItems": 2, "maxItems": maxMenuItems, "description": `Menu labels from the menu bar to the item for menu, exactly as shown, the item last, for example ["File", "Save As..."]; a top-level label alone is refused.`},
 		"coordinate":       map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[x, y] for click, scroll and the end of drag."},
 		"start_coordinate": map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[x, y] where drag starts."},
 		"text":             map[string]any{"type": "string", "description": `Text to type, or a key or chord such as "Return" or "ctrl+s"; for clipboard_write the text to put on the clipboard.`},
