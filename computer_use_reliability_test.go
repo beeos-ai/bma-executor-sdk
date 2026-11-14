@@ -210,10 +210,11 @@ func TestComputerMenuAction(t *testing.T) {
 // cannot call is dropped; tools it can are rewritten to its actions.
 func TestCuaAdviceSanitized(t *testing.T) {
 	for in, want := range map[string]string{
-		"Three single actions in a row: send the next ones as one run_steps call.": "",
+		"Three single actions in a row: send the next ones as one run_steps call.":                                                                                                              "",
+		"Three single actions in a row: send the next ones as one run_steps call. It runs them in order, stops at the first failure and returns what changed.":                                  "",
 		`📨 Sent (unverified) 10 char(s) via CGEvent (30ms delay). — driver could not confirm the text landed; verify via screenshot, and re-call with delivery_mode:"foreground" if it didn't.`: "📨 Sent (unverified) 10 char(s) via CGEvent (30ms delay). driver could not confirm the text landed;",
-		"Run an item with invoke_menu path, or observe with `get_window_state`.":                 "Run an item with computer_action menu path, or observe with computer_observe with pid and window_id.",
-		"menus collapsed: run an item with invoke_menu path, or pass query to search menu items": "menus collapsed: run an item with computer_action menu path, or pass query to search menu items",
+		"Run an item with invoke_menu path, or observe with `get_window_state`.":                                                                                                                "Run an item with computer_action menu path, or observe with computer_observe with pid and window_id.",
+		"menus collapsed: run an item with invoke_menu path, or pass query to search menu items":                                                                                                "menus collapsed: run an item with computer_action menu path, or pass query to search menu items",
 	} {
 		if got := sanitizeCuaAdvice(in); got != want {
 			t.Errorf("sanitize(%q) = %q, want %q", in, got, want)
@@ -700,5 +701,49 @@ func TestClipboardActions(t *testing.T) {
 		if result, err := session.CallTool(testContext(t), ToolCallParams{Tool: ToolNameComputerAction, Input: mustJSON(t, input)}); err == nil && !result.IsError {
 			t.Fatalf("%s: accepted: %+v", name, result)
 		}
+	}
+}
+
+// TestMenuBringsTheAppToTheFront: menu runs with the window's app in front:
+// an app behind is brought to the front first (and stays), an app in front
+// is left alone, and without a front app query the menu runs as is.
+func TestMenuBringsTheAppToTheFront(t *testing.T) {
+	req := ComputerActionRequest{Action: "menu", MenuPath: []string{"File", "New Folder"}, PID: 501, WindowID: 142000}
+	for name, c := range map[string]struct {
+		front int // 0: unknown
+		calls string
+		note  bool
+	}{
+		"app behind":    {front: 999, calls: "bring_to_front,invoke_menu", note: true},
+		"app in front":  {front: 501, calls: "invoke_menu"},
+		"front unknown": {calls: "invoke_menu"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			driver, logPath, err := fakeCua(t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			driver.frontPID = nil
+			if c.front != 0 {
+				driver.frontPID = func(context.Context) (int, error) { return c.front, nil }
+			}
+			blocks, err := driver.Action(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := os.ReadFile(logPath)
+			var calls []string
+			for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+				if tool := strings.SplitN(line, " ", 2)[0]; tool == "bring_to_front" || tool == "invoke_menu" {
+					calls = append(calls, tool)
+				}
+			}
+			if got := strings.Join(calls, ","); got != c.calls {
+				t.Fatalf("calls = %s, want %s:\n%s", got, c.calls, raw)
+			}
+			if c.note != strings.Contains(blocks[0].Text, "brought window 142000 (pid 501) to the front, where it stays, before running the menu") {
+				t.Fatalf("text = %q", blocks[0].Text)
+			}
+		})
 	}
 }

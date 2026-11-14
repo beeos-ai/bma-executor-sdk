@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.6.30
+
+- **Go: `menu` runs with the window's app in front.** The menu bar belongs
+  to the front app, and a user switches to an app before using its menu.
+  Run in the background, Finder's File > New Folder made the folder without
+  leaving its name in edit, so the name typed next went nowhere (2026-11-15,
+  real Mac, TextEdit in front: 0 of 3). Now, when the app is not the front
+  app (LaunchServices), `menu` first brings the window to the front with
+  `bring_to_front`, which leaves it there; an app already in front is left
+  alone, and the result says when it was brought forward. The same flow
+  then renamed 3 of 3 folders (menu, type, Return; checked on disk) and no
+  key reached TextEdit. Without a front app query (not macOS) the menu runs
+  as before.
+- **Go: driver advice about batching steps is dropped whole** (the sentence
+  after a `run_steps` hint was left behind).
+
 ## 1.6.29
 
 - **`bma disconnect` forgets the machine token only when BMA removed the

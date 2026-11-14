@@ -48,7 +48,7 @@ var cuaHiddenTerms = []string{
 	"`page`", `"page"`, "page tool", "set_value", "verify_state", "clipboard_", "zoom", "start_session", "end_session",
 	"set_window_frame", "get_accessibility_tree", "snapshot", "since:", "tree_format", "max_elements", "include_screenshot",
 	"target {", "target:{", "kind:", "kind=", "escalat", "move_cursor", "get_guide", "list_apps", "kill_app", "x,y", "x, y",
-	"px action", "ax action", "next_call",
+	"px action", "ax action", "next_call", "runs them in order", "single actions in a row",
 }
 
 var cuaToolName = func() *regexp.Regexp {
@@ -364,14 +364,31 @@ func cuaResultText(result map[string]any, fallback string) string {
 
 // --- menu ---
 
+// menu runs a menu item with the window's app in front. The menu bar is the
+// front app's, as for a user who switches to the app before using its menu;
+// run in the background, Finder's File > New Folder made the folder without
+// leaving its name in edit (2026-11-15: 0 of 3 then typed). So when the app
+// is not the front app (LaunchServices), the window is brought to the front
+// first (bring_to_front, which leaves it there); an app already in front is
+// left alone. Without a front app query (not macOS) the menu runs as is.
 func (d *CuaDriver) menu(ctx context.Context, req ComputerActionRequest) ([]ContentBlock, error) {
+	fronted := false
+	if d.frontPID != nil {
+		if front, err := d.frontPID(ctx); err == nil && front > 0 && front != req.PID {
+			fronted = d.bringToFront(ctx, req)
+		}
+	}
 	result, err := d.callAction(ctx, "invoke_menu", map[string]any{
 		"pid": req.PID, "window_id": req.WindowID, "path": req.MenuPath, "session": d.windowSession(req.SessionID),
 	}, req)
 	if err != nil {
 		return nil, err
 	}
-	return []ContentBlock{{Type: ContentBlockTypeText, Text: cuaResultText(result, "ran menu item "+strings.Join(req.MenuPath, " > "))}}, nil
+	text := cuaResultText(result, "ran menu item "+strings.Join(req.MenuPath, " > "))
+	if fronted {
+		text += "\n" + fmt.Sprintf("brought window %d (pid %d) to the front, where it stays, before running the menu", req.WindowID, req.PID)
+	}
+	return []ContentBlock{{Type: ContentBlockTypeText, Text: text}}, nil
 }
 
 // --- open_app ---
