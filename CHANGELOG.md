@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.15
+
+- **Go: a turn canceled while its `interaction.request` is still unanswered
+  withdraws the interaction** (`interaction.cancel`, reason `turn_canceled`).
+  The platform may already have opened it, so the approval card no longer
+  stays open after the turn ended.
+
 ## 1.6.14
 
 - **Go: a `turn.start` right after the previous turn's
