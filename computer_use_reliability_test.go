@@ -373,33 +373,42 @@ func TestTypeReadBack(t *testing.T) {
 	}
 }
 
-// TestTypeNonASCII: non-ASCII text for a window is pasted by default when the
-// clipboard can be put back, typed in the foreground when it cannot, and
-// each route can be chosen.
-func TestTypeNonASCII(t *testing.T) {
+// TestTypeRoute: type picks its route by the field. A window without web
+// content and ASCII text go the driver's default way (accessibility
+// insertion); non-ASCII text into web content is pasted with the clipboard
+// put back, or typed in the foreground when the clipboard holds more than
+// plain text or the host keeps the clipboard out; an unreadable window counts
+// as web content.
+func TestTypeRoute(t *testing.T) {
 	text := "老婆仔，今天下雨☔️"
 	req := ComputerActionRequest{Action: "type", Text: text, PID: 38989, WindowID: 133461}
 	modifier := "cmd"
 	if runtime.GOOS != "darwin" {
 		modifier = "ctrl"
 	}
+	native := `BMA_TEST_CUA_ELEMENTS=[{"role":"AXTextArea","value":""}]`
+	web := `BMA_TEST_CUA_ELEMENTS=[{"role":"AXWebArea","in_web_content":true},{"role":"AXTextArea","value":"","in_web_content":true}]`
+	paste := []string{`clipboard_read {"include_text":true}`, `clipboard_write {"text":"` + text + `"}`,
+		`hotkey {"keys":["` + modifier + `","v"],"pid":38989,"session":`, `clipboard_write {"text":"CLIPBOARD-PREV"}`}
 	for name, c := range map[string]struct {
-		option  string
-		env     []string
-		req     ComputerActionRequest
-		want    []string
-		without []string
+		noClipboard bool
+		env         []string
+		req         ComputerActionRequest
+		want        []string
+		without     []string
+		reads       int
 	}{
-		"paste by default": {req: req, want: []string{
-			`clipboard_read {"include_text":true}`, `clipboard_write {"text":"` + text + `"}`,
-			`hotkey {"keys":["` + modifier + `","v"],"pid":38989,"session":`, `clipboard_write {"text":"CLIPBOARD-PREV"}`,
-		}, without: []string{"type_text"}},
-		"rich clipboard": {req: req, env: []string{`BMA_TEST_CUA_CLIPBOARD_TYPES=["public.html","public.utf8-plain-text"]`},
-			want: []string{`type_text {"delivery_mode":"foreground"`}, without: []string{"clipboard_write", "hotkey"}},
-		"foreground": {option: NonASCIITextForeground, req: req, want: []string{`type_text {"delivery_mode":"foreground"`}, without: []string{"clipboard"}},
-		"background": {option: NonASCIITextBackground, req: req, want: []string{`type_text {"pid":38989`}, without: []string{"clipboard", "delivery_mode"}},
-		"ascii":      {req: ComputerActionRequest{Action: "type", Text: "rain", PID: 1, WindowID: 2}, want: []string{`type_text {"pid":1`}, without: []string{"clipboard", "delivery_mode"}},
-		"no window":  {req: ComputerActionRequest{Action: "type", Text: text}, want: []string{`type_text {"scope":"desktop"`}, without: []string{"clipboard", "delivery_mode"}},
+		"native field, non-ASCII": {env: []string{native}, req: req, want: []string{`type_text {"pid":38989`}, without: []string{"clipboard", "delivery_mode"}, reads: 2},
+		"web field, non-ASCII":    {env: []string{web}, req: req, want: paste, without: []string{"type_text"}, reads: 2},
+		"web field, ASCII": {env: []string{web}, req: ComputerActionRequest{Action: "type", Text: "rain", PID: 1, WindowID: 2},
+			want: []string{`type_text {"pid":1`}, without: []string{"clipboard", "delivery_mode"}, reads: 1},
+		"rich clipboard": {env: []string{web, `BMA_TEST_CUA_CLIPBOARD_TYPES=["public.html","public.utf8-plain-text"]`}, req: req,
+			want: []string{`clipboard_read`, `type_text {"delivery_mode":"foreground"`}, without: []string{"clipboard_write", "hotkey"}, reads: 2},
+		"unreadable window": {req: req, want: paste, without: []string{"type_text"}, reads: 2},
+		"no clipboard": {noClipboard: true, env: []string{web}, req: req,
+			want: []string{`type_text {"delivery_mode":"foreground"`}, without: []string{"clipboard"}, reads: 2},
+		"no window": {req: ComputerActionRequest{Action: "type", Text: text}, want: []string{`type_text {"scope":"desktop"`},
+			without: []string{"clipboard", "delivery_mode"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			exe, err := os.Executable()
@@ -407,7 +416,7 @@ func TestTypeNonASCII(t *testing.T) {
 				t.Fatal(err)
 			}
 			logPath := filepath.Join(t.TempDir(), "cua.log")
-			driver, err := NewCuaDriver(context.Background(), CuaDriverOptions{Path: exe, NonASCIIText: c.option,
+			driver, err := NewCuaDriver(context.Background(), CuaDriverOptions{Path: exe, NoClipboard: c.noClipboard,
 				Env: append([]string{"BMA_TEST_HELPER=cua", "BMA_TEST_CUA_LOG=" + logPath}, c.env...)})
 			if err != nil {
 				t.Fatal(err)
@@ -417,7 +426,7 @@ func TestTypeNonASCII(t *testing.T) {
 				t.Fatalf("type = %+v, %v", blocks, err)
 			}
 			// The fake driver's summary echoes its input; the paste summary is the SDK's.
-			if strings.Contains(blocks[0].Text, "CLIPBOARD-PREV") || (name == "paste by default" && strings.Contains(blocks[0].Text, text)) {
+			if strings.Contains(blocks[0].Text, "CLIPBOARD-PREV") || (strings.Contains(blocks[0].Text, "pasted") && strings.Contains(blocks[0].Text, text)) {
 				t.Fatalf("the result repeats the text or the clipboard: %q", blocks[0].Text)
 			}
 			raw, _ := os.ReadFile(logPath)
@@ -435,11 +444,10 @@ func TestTypeNonASCII(t *testing.T) {
 					t.Fatalf("driver log has %q:\n%s", w, log)
 				}
 			}
+			if got := strings.Count(log, `"tree_format":"elements"`); got != c.reads {
+				t.Fatalf("%d accessibility reads, want %d:\n%s", got, c.reads, log)
+			}
 		})
-	}
-	exe, _ := os.Executable()
-	if _, err := NewCuaDriver(context.Background(), CuaDriverOptions{Path: exe, NonASCIIText: "clipboard", Env: []string{"BMA_TEST_HELPER=cua"}}); err == nil {
-		t.Fatal("an unknown NonASCIIText was accepted")
 	}
 }
 

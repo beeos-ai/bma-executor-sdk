@@ -33,21 +33,28 @@
   and counts the others as not usable. `(*CuaDriver).OpenApp` returns the
   same as `OpenAppResult`. Observations also leave out windows on another
   Space.
-- **Go: typing says whether the text landed, and non-ASCII text is pasted.**
-  `type` ends with `typed: verified` (the driver confirmed it, or a native
-  field of the window shows it), `typed: mismatch — ...` (no field shows it;
-  with the closest field's text) or `typed: unverified — ...` (web content,
-  or nothing to read), from one accessibility read without a screenshot
-  (`CuaDriverOptions.SkipTypeReadback` leaves it out). A driver's
-  `type_text_incomplete` whose text the field shows is a success. Text with
-  non-ASCII characters for a window is pasted by default
-  (`CuaDriverOptions.NonASCIIText`: `paste`, `foreground`, `background`):
-  synthesized key events in the background garbled it in Electron fields
-  (2026-11-14, Lark: 13 incomplete deliveries, characters out of order). The
-  clipboard is used only when it holds plain text alone, which is put back
-  right after; other content is never replaced, and the text is then typed
-  with the window briefly in front. The typed text is not logged or repeated
-  in the result.
+- **Go: typing says whether the text landed, and picks its route by the
+  field.** `type` ends with `typed: verified` (the driver confirmed it, or a
+  native field of the window shows it), `typed: mismatch — ...` (no field
+  shows it; with the closest field's text) or `typed: unverified — ...` (web
+  content, or nothing to read), from one accessibility read without a
+  screenshot. A driver's `type_text_incomplete` whose text the field shows is
+  a success. The route follows the field, not the text: the driver's default
+  inserts text through accessibility, exact for any Unicode, without the
+  clipboard or a focus change; only web content (Electron, browsers) falls
+  back to key events posted in the background, which garbled non-ASCII text
+  (2026-11-14, Lark: 13 incomplete deliveries, characters out of order). So a
+  window without web content, and ASCII text, keep the default; non-ASCII
+  text into a window with web content is pasted, the usual way to insert text
+  a keyboard cannot type (as Keyboard Maestro's Insert Text by Pasting,
+  https://wiki.keyboardmaestro.com/action/Insert_Text), at the cost of the
+  clipboard for a moment. The clipboard is used only when it holds plain text
+  alone, which is put back right after; otherwise, or with
+  `CuaDriverOptions.NoClipboard`, the text is typed with the window briefly
+  in front. The window is judged by one accessibility read before non-ASCII
+  text (about 0.5 s on a Lark window; the driver's elements carry no focus flag, so a window
+  with any web content, or one it cannot read, counts as web content). The
+  typed text is not logged or repeated in the result.
 - **Go: driver advice names only what the model can call.** Driver hints,
   next calls and escalations naming `run_steps`, `delivery_mode`,
   `get_browser_state`, `set_value` and other tools the model does not have

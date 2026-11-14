@@ -50,7 +50,9 @@ daemon. Telemetry is off (`CUA_TELEMETRY=0`). The executor runs
   (`menu_path` with `pid` and `window_id`: the driver's `invoke_menu`). Both
   tools take a `description` of the step for clients to show; a call without
   it still runs. `type` ends with `typed: verified`, `typed: mismatch` or
-  `typed: unverified` (see the CHANGELOG, 1.6.9).
+  `typed: unverified`; non-ASCII text into a window with web content is
+  pasted (clipboard put back) or typed in the foreground (see the CHANGELOG,
+  1.6.9).
 - Driver advice that names tools the model cannot call is dropped or
   rewritten into `computer_*` actions.
 - Degradation: no driver or daemon at start leaves `computer_use` off.

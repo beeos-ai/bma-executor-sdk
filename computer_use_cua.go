@@ -385,23 +385,30 @@ func (r OpenAppResult) text() string {
 }
 
 // --- typing ---
-
-// Values of CuaDriverOptions.NonASCIIText: how text with non-ASCII
-// characters (Chinese, emoji, ...) is typed into a named window.
-const (
-	// NonASCIITextBackground leaves it to the driver: accessibility
-	// insertion, else synthesized key events posted to the app in the
-	// background (no focus change). Unreliable in Electron and web fields.
-	NonASCIITextBackground = "background"
-	// NonASCIITextForeground has the driver bring the window to the front
-	// briefly, type and give the front back.
-	NonASCIITextForeground = "foreground"
-	// NonASCIITextPaste (the default) puts the text on the clipboard, pastes
-	// it into the window and puts the previous clipboard back. Only when the clipboard
-	// holds plain text alone (or nothing), which can be put back exactly;
-	// otherwise the text is typed as with NonASCIITextForeground.
-	NonASCIITextPaste = "paste"
-)
+//
+// type picks its route by the field, not by the text. The driver's default
+// (background) inserts text through accessibility (kAXSelectedText): exact
+// for any Unicode, no clipboard, no focus change. Only where a field does not
+// take that (Electron and other web content) does it fall back to key events
+// posted in the background, which garble non-ASCII text there (2026-11-14,
+// Lark: 13 incomplete deliveries, characters out of order). So:
+//
+//   - a window without web content, or ASCII text: background;
+//   - non-ASCII text into a window with web content: paste (the previous
+//     clipboard is put back), or foreground typing when the clipboard holds
+//     more than plain text or the host does not allow the clipboard
+//     (CuaDriverOptions.NoClipboard).
+//
+// Pasting is the usual way to insert text a keyboard cannot type (Keyboard
+// Maestro's Insert Text by Pasting, https://wiki.keyboardmaestro.com/action/Insert_Text),
+// at the cost of replacing the clipboard for a moment.
+//
+// The driver's element list has no focus flag, so the field is judged by
+// its window: one accessibility read (no screenshot) before non-ASCII text
+// into a window, about 0.5 s (measured 2026-11-13 on a Lark window of about
+// 620 elements); a
+// window it cannot read counts as web content. ASCII text needs no read.
+// After typing one more read checks the result (typedVerdict).
 
 // plainTextTypes are clipboard types that a plain-text write recreates.
 var plainTextTypes = map[string]bool{
@@ -419,30 +426,26 @@ func hasNonASCII(s string) bool {
 }
 
 // typeText types req.Text and adds a verdict line: "typed: verified",
-// "typed: mismatch — ..." or "typed: unverified — ...". The verdict never
-// contains the text or a field's value.
+// "typed: mismatch — ..." or "typed: unverified — ...". Neither the result
+// nor a log repeats the text.
 func (d *CuaDriver) typeText(ctx context.Context, req ComputerActionRequest) ([]ContentBlock, error) {
 	tool, args := cuaAction(req)
 	if req.WindowID != 0 {
 		args["session"] = d.windowSession(req.SessionID)
 	}
-	route := NonASCIITextBackground
-	if req.WindowID != 0 && hasNonASCII(req.Text) {
-		route = d.nonASCII
-	}
 	var result map[string]any
 	var err error
 	var note string
-	if route == NonASCIITextPaste {
-		var pasted bool
-		if result, note, pasted, err = d.paste(ctx, req); !pasted && err == nil {
-			route = NonASCIITextForeground
+	typed := false
+	if req.WindowID != 0 && hasNonASCII(req.Text) && d.webContent(ctx, req) {
+		if !d.noClipboard {
+			result, note, typed, err = d.paste(ctx, req)
+		}
+		if !typed {
+			args["delivery_mode"] = "foreground"
 		}
 	}
-	if route == NonASCIITextForeground {
-		args["delivery_mode"] = "foreground"
-	}
-	if route != NonASCIITextPaste {
+	if !typed {
 		result, err = d.callAction(ctx, tool, args, req)
 	}
 	var driverErr *CuaDriverError
@@ -462,6 +465,35 @@ func (d *CuaDriver) typeText(ctx context.Context, req ComputerActionRequest) ([]
 		text += "\n" + note
 	}
 	return []ContentBlock{{Type: ContentBlockTypeText, Text: text + "\ntyped: " + verdict}}, nil
+}
+
+// windowElements reads a window's accessibility elements without a
+// screenshot (the window's pixel frame stays the model's).
+func (d *CuaDriver) windowElements(ctx context.Context, req ComputerActionRequest) (map[string]any, []any, error) {
+	state, err := d.call(ctx, "get_window_state", map[string]any{
+		"pid": req.PID, "window_id": req.WindowID, "session": d.windowSession(req.SessionID),
+		"include_screenshot": false, "tree_format": "elements", "max_elements": 2000,
+	}, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	elements, _ := state["elements"].([]any)
+	return state, elements, nil
+}
+
+// webContent reports whether the window has web content, or cannot be read
+// (then it is treated as web content).
+func (d *CuaDriver) webContent(ctx context.Context, req ComputerActionRequest) bool {
+	_, elements, err := d.windowElements(ctx, req)
+	if err != nil || len(elements) == 0 {
+		return true
+	}
+	for _, entry := range elements {
+		if element, _ := entry.(map[string]any); element["in_web_content"] == true {
+			return true
+		}
+	}
+	return false
 }
 
 func asCuaDriverError(err error, target **CuaDriverError) bool {
@@ -520,13 +552,7 @@ func (d *CuaDriver) typedVerdict(ctx context.Context, req ComputerActionRequest,
 	if req.WindowID == 0 {
 		return "unverified — typed into the front app; check the screenshot before typing again"
 	}
-	if d.noReadback {
-		return "unverified — observe the field before typing again"
-	}
-	state, err := d.call(ctx, "get_window_state", map[string]any{
-		"pid": req.PID, "window_id": req.WindowID, "session": d.windowSession(req.SessionID),
-		"include_screenshot": false, "tree_format": "elements", "max_elements": 2000,
-	}, "")
+	state, elements, err := d.windowElements(ctx, req)
 	if err != nil {
 		return "unverified — the field could not be read back; observe it before typing again"
 	}
@@ -535,7 +561,6 @@ func (d *CuaDriver) typedVerdict(ctx context.Context, req ComputerActionRequest,
 	var closest string // the editable field's value that starts most like the text
 	var closestWeb bool
 	best := 0
-	elements, _ := state["elements"].([]any)
 	for _, entry := range elements {
 		element, _ := entry.(map[string]any)
 		isWeb := element["in_web_content"] == true

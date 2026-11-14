@@ -603,24 +603,11 @@ type CuaDriverOptions struct {
 	Env []string
 	// Timeout bounds one driver call (default 30 s).
 	Timeout time.Duration
-	// NonASCIIText is how text with non-ASCII characters (Chinese, emoji,
-	// ...) is typed into a named window: NonASCIITextPaste (empty: the
-	// default), NonASCIITextForeground or NonASCIITextBackground. ASCII
-	// text and text typed without a window always go the driver's default
-	// way. The default is paste because synthesized key events posted in the
-	// background garble such text in Electron and web fields (2026-11-14,
-	// Lark: 13 incomplete deliveries in one task, some with the first
-	// character moved to the end); a paste is one key chord. It uses the
-	// clipboard only when it holds plain text alone (or nothing), which is
-	// put back right after; other content is never replaced and the text is
-	// typed with NonASCIITextForeground instead. A clipboard history app may
-	// record the pasted text: choose foreground or background for text that
-	// must not reach the clipboard.
-	NonASCIIText string
-	// SkipTypeReadback leaves out the read-back of the window after typing
-	// (one accessibility read, no screenshot); the result then says
-	// unverified unless the driver itself confirmed the text.
-	SkipTypeReadback bool
+	// NoClipboard keeps the clipboard out of typing: non-ASCII text into a
+	// window with web content is then typed with the window briefly in
+	// front instead of pasted (see typeText). A clipboard history app may
+	// record pasted text.
+	NoClipboard bool
 }
 
 // CuaDriver is the ComputerUseBackend on Cua Driver
@@ -636,8 +623,7 @@ type CuaDriver struct {
 	sessionNamespace string
 	env              []string
 	timeout          time.Duration
-	nonASCII         string
-	noReadback       bool
+	noClipboard      bool
 }
 
 // NewCuaDriver checks that the driver and its daemon work (a screen-size call)
@@ -654,19 +640,12 @@ func NewCuaDriver(ctx context.Context, opts CuaDriverOptions) (*CuaDriver, error
 	if opts.Timeout <= 0 {
 		opts.Timeout = 30 * time.Second
 	}
-	switch opts.NonASCIIText {
-	case "":
-		opts.NonASCIIText = NonASCIITextPaste
-	case NonASCIITextBackground, NonASCIITextForeground, NonASCIITextPaste:
-	default:
-		return nil, fmt.Errorf("bmaexecutor: CuaDriverOptions.NonASCIIText %q is not background, foreground or paste", opts.NonASCIIText)
-	}
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrComputerUseUnavailable, err)
 	}
 	driver := &CuaDriver{path: resolved, socket: opts.Socket, env: opts.Env, timeout: opts.Timeout, sessionNamespace: fmt.Sprintf("%x", nonce),
-		nonASCII: opts.NonASCIIText, noReadback: opts.SkipTypeReadback}
+		noClipboard: opts.NoClipboard}
 	if _, err := driver.call(ctx, "get_screen_size", map[string]any{}, ""); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrComputerUseUnavailable, err)
 	}
