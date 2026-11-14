@@ -88,6 +88,14 @@ See [`examples/sandboxed-folder`](../../examples/sandboxed-folder): metadata `ow
 
 `computer_observe` and `computer_action` are `ask` by default: each call is approved on the platform. A `CoreOptions.ComputerUse` backend that also implements `ComputerUseApprover` (`NeedsObserveApproval`, `NeedsActionApproval`) decides per call instead: a call it answers `false` for is reported as `allow` (`agent.tool_use` `evaluated_permission`), recorded as allowed for the gate and runs without an `interaction.request`; `true` asks as before. It decides only while the ask is the tools' declared default: when the platform's `metadata.tool_policy` or `ACPAgentOptions.ToolPolicy` names the tool, that value applies and the approver is not consulted. The answer for a call is asked once. A host that cannot judge a call (for example it cannot tell what a click would hit) should answer `true`. Go only, as computer use is.
 
+### Refusing computer use before approval: `ComputerUsePreflighter`
+
+A backend that also implements `ComputerUsePreflighter` (`PreflightObserve`, `PreflightAction`) can refuse a call before anyone is asked, for example a click on another app or a window on another Space. A local brain's call goes: input checks (including `window_frame_required`), preflight, approval (`ComputerUseApprover` or the platform's policy), execution; a refused call is reported `allow` with the refusal as its error result, and nobody is asked. A platform brain's `tool.call` was approved on the platform before it arrived, so there it is input checks, preflight, execution. The refusal text is `<reason>: <message>` for an `*RPCError` with a data reason (`NewReasonError`), the error's text when it starts with `<code>: `, else `computer_use_refused: <text>`. Requests carry `SessionID` and, for actions, `Frame` (the session's last observation the coordinates refer to).
+
+### Models that read text only: `CoreOptions.ComputerVision`
+
+`ComputerVision(ctx, ComputerVisionQuery{SessionID, Model})` tells whether the model reading a session's results takes images (`Model` is the turn's model in a local brain's turn, empty for a `tool.call`). For `ComputerVisionTextOnly` an observation's screenshot is still taken (actions use its pixels) but not sent; the result says so. `ComputerVisionUnknown` (and no callback) sends it.
+
 TypeScript and Python have no process runtime, so there is no Launch hook: the executor's own `process.start` handler is the equivalent (read the context, check, then spawn), and it sees `package_install` in its params, so installs get the same decision point as commands. See [`typescript/examples/session-context`](../../typescript/examples/session-context/main.mjs) and [`python/examples/session_context.py`](../../python/examples/session_context.py): missing `agent_session_id` (except a hosted `initiator: "platform"`) and `package_install` are refused before the session context is read.
 
 ## Session files root

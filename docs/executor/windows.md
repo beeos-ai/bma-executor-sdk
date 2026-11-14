@@ -42,10 +42,19 @@ daemon. Telemetry is off (`CUA_TELEMETRY=0`). The executor runs
   `coordinate`). Without `pid`/`window_id` coordinates are screen pixels of the
   last full observation and input goes to the focused app; with them input is
   delivered to that window in the background and coordinates are window-local.
+  A click, scroll or drag without `pid`/`window_id` right after a window
+  observation is refused (`window_frame_required`).
   A local brain's `computer_action` also has `open_app` (`app`: name or
   bundle id), which runs the driver's `launch_app` (macOS drivers only) and
-  `bring_to_front`. Both tools take a `description` of the step for clients
-  to show; a call without it still runs.
+  `bring_to_front` and lists only windows on the current desktop, and `menu`
+  (`menu_path` with `pid` and `window_id`: the driver's `invoke_menu`). Both
+  tools take a `description` of the step for clients to show; a call without
+  it still runs. `type` ends with `typed: verified`, `typed: mismatch` or
+  `typed: unverified`; non-ASCII text into a window with web content is
+  pasted (clipboard put back) or typed in the foreground (see the CHANGELOG,
+  1.6.9).
+- Driver advice that names tools the model cannot call is dropped or
+  rewritten into `computer_*` actions.
 - Degradation: no driver or daemon at start leaves `computer_use` off.
 
 ## Install

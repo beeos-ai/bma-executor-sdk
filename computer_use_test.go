@@ -62,6 +62,9 @@ func TestComputerUseWithCuaDriver(t *testing.T) {
 	if window.IsError || !strings.Contains(window.Content[1].Text, `[0] Edit "Text Editor"`) {
 		t.Fatalf("window observe = %+v", window)
 	}
+	// Screen coordinates again: the last observation decides the frame of an
+	// action without a window.
+	callComputer(t, session, ToolNameComputerObserve, map[string]any{})
 
 	for _, input := range []map[string]any{
 		{"action": "click", "coordinate": []int{10, 20}, "button": "right", "click_count": 2},

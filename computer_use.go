@@ -2,6 +2,7 @@ package bmaexecutor
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -9,13 +10,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"image/jpeg"
 	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Computer use (computer_observe / computer_action) is an optional capability
@@ -42,30 +46,121 @@ var ErrComputerUseUnavailable = errors.New("bmaexecutor: computer use backend is
 // computer_action of a local brain, not of the contract's ComputerAction enum.
 const ComputerActionOpenApp = "open_app"
 
-// maxAppName bounds ComputerActionRequest.App.
-const maxAppName = 256
+// ComputerActionMenu runs an item of an app's menu bar by its labels
+// (ComputerActionRequest.MenuPath, for example ["Window", "Weixin"]) in the
+// window PID/WindowID names. Like open_app it is an action of the host tool
+// only.
+const ComputerActionMenu = "menu"
+
+// maxAppName bounds ComputerActionRequest.App; maxMenuItems and maxMenuLabel
+// bound ComputerActionRequest.MenuPath.
+const (
+	maxAppName   = 256
+	maxMenuItems = 16
+	maxMenuLabel = 200
+)
+
+// ComputerErrorWindowFrameRequired is the error code of a click, scroll or
+// drag without pid and window_id while the session's last observation was a
+// window: its coordinates would be read as screen pixels although the model
+// looked at window pixels.
+const ComputerErrorWindowFrameRequired = "window_frame_required"
+
+// ComputerFrame is a screenshot a computer use call's coordinates refer to:
+// the session's last successful observation of the screen (PID and WindowID
+// zero) or of one window. Width and Height are the pixels of the screenshot
+// the model was given (zero when the observation returned no readable image).
+type ComputerFrame struct {
+	PID, WindowID int
+	Width, Height int
+}
+
+// ComputerVision is whether a model takes images (CoreOptions.ComputerVision).
+type ComputerVision string
+
+const (
+	// ComputerVisionUnknown: not known; screenshots are sent.
+	ComputerVisionUnknown ComputerVision = ""
+	// ComputerVisionImages: the model reads images; screenshots are sent.
+	ComputerVisionImages ComputerVision = "images"
+	// ComputerVisionTextOnly: the model reads text only; screenshots are
+	// not sent.
+	ComputerVisionTextOnly ComputerVision = "text_only"
+)
+
+// ComputerVisionQuery asks CoreOptions.ComputerVision about one session's
+// model. Model is the turn's model for a local brain's turn (BrainHost),
+// empty for a platform brain's tool.call, whose model the host knows from
+// the platform.
+type ComputerVisionQuery struct {
+	SessionID string
+	Model     string
+}
+
+// ComputerVisionAnswer is the host's answer. Model names the model in the
+// note the model reads (empty: the query's model, else "this model").
+type ComputerVisionAnswer struct {
+	Model  string
+	Vision ComputerVision
+}
+
+// computerModelKey carries a local brain turn's model to Core.
+type computerModelKey struct{}
+
+// withoutImages drops an observation's image blocks for a model that reads
+// text only, with a note in their place.
+func (c *Core) withoutImages(ctx context.Context, sessionID string, blocks []ContentBlock) []ContentBlock {
+	if c.opts.ComputerVision == nil {
+		return blocks
+	}
+	model, _ := ctx.Value(computerModelKey{}).(string)
+	answer := c.opts.ComputerVision(ctx, ComputerVisionQuery{SessionID: sessionID, Model: model})
+	if answer.Vision != ComputerVisionTextOnly {
+		return blocks
+	}
+	name := cmp.Or(answer.Model, model, "this model")
+	kept := []ContentBlock{{Type: ContentBlockTypeText, Text: fmt.Sprintf(
+		"The model %s cannot read images, so the screenshot was not sent. Find what to act on from the window list and the accessibility tree below; coordinates are still pixels of the screenshot, whose size is given.", name)}}
+	for _, block := range blocks {
+		if block.Type != ContentBlockTypeImage {
+			kept = append(kept, block)
+		}
+	}
+	return kept
+}
+
+// ComputerUsePreflighter is optionally implemented by a ComputerUseBackend
+// whose host can refuse a computer use call before anyone is asked to approve
+// it, for example a click that lands on another app or a window on another
+// Space. Core calls it after checking the input and before approval
+// (ComputerUseApprover or the platform's policy) and execution. An error
+// refuses the call: nobody is asked, the backend does not run, and the tool
+// result is an error whose text is "<reason>: <message>" for an *RPCError
+// with a data reason (NewReasonError) and the error's text otherwise. For a
+// platform brain's tool.call the approval happened on the platform before the
+// call arrived, so there the order is check, preflight, execution.
+type ComputerUsePreflighter interface {
+	PreflightObserve(ctx context.Context, req ComputerObserveRequest) error
+	PreflightAction(ctx context.Context, req ComputerActionRequest) error
+}
 
 // ErrComputerActionRejected means the driver explicitly refused the action
 // before input. Transport errors and incomplete/undecodable results never use
 // this classification, even if their text mentions a known rejection.
 var ErrComputerActionRejected = errors.New("computer_action_rejected")
 
-func cuaRejection(tool string, stdout []byte, runErr error) error {
+// cuaFailure is the error of a driver call that exited with status 1 and a
+// structured result (CuaDriverError), or nil. Only structured pre-dispatch
+// refusals of the driver contract (cuaRejectedCodes, effect "refused") are
+// ErrComputerActionRejected; arbitrary stderr, partial-action failures and
+// unknown codes are not.
+func cuaFailure(tool string, stdout []byte, runErr error, req ComputerActionRequest) error {
 	var exit *exec.ExitError
 	if !errors.As(runErr, &exit) || exit.ExitCode() != 1 {
 		return nil
 	}
-	// Only structured pre-dispatch refusals verified in the driver contract.
-	// Do not classify arbitrary stderr, partial-action failures, or unknown codes.
-	var result struct {
-		Code string `json:"code"`
-	}
-	if json.Unmarshal(stdout, &result) != nil {
-		return nil
-	}
-	switch result.Code {
-	case "invalid_arguments", "desktop_scope_disabled", "stale_element_token", "screenshot_context_missing", "zoom_context_missing":
-		return fmt.Errorf("%w: cua-driver %s: %s", ErrComputerActionRejected, tool, result.Code)
+	if failure, ok := newCuaDriverError(tool, stdout, req); ok {
+		return failure
 	}
 	return nil
 }
@@ -98,6 +193,13 @@ type ComputerActionRequest struct {
 	// App is the app open_app opens: a name such as "TextEdit" or a bundle
 	// id such as "com.apple.TextEdit".
 	App string
+	// MenuPath are the menu labels of a menu action, from the menu bar to
+	// the item (1-16 labels, each 1-200 characters, trimmed).
+	MenuPath []string
+	// Frame is the screenshot the coordinates refer to, filled by Core: for
+	// an action with PID/WindowID the session's last observation of that
+	// window, otherwise its last observation. Nil when there was none.
+	Frame *ComputerFrame
 }
 
 // ComputerUseBackend performs computer use on the machine's interactive
@@ -122,7 +224,8 @@ type ComputerUseApprover interface {
 }
 
 // computerNeedsApproval asks the backend's ComputerUseApprover about one
-// computer use call. No approver, or an input the tool would refuse, is asked.
+// computer use call that passed its checks (computerCheck). No approver, or an
+// input the tool would refuse, is asked.
 func (c *Core) computerNeedsApproval(ctx context.Context, sessionID, tool string, raw map[string]any) bool {
 	approver, ok := c.opts.ComputerUse.(ComputerUseApprover)
 	if !ok {
@@ -132,25 +235,14 @@ func (c *Core) computerNeedsApproval(ctx context.Context, sessionID, tool string
 	if err != nil {
 		return true
 	}
-	var input computerInput
-	if json.Unmarshal(payload, &input) != nil || (input.PID == 0) != (input.WindowID == 0) || (input.Display != "" && input.Display != "primary") {
+	call, err := c.prepareComputer(coreKey{acpBrain, sessionID}, tool, payload)
+	if err != nil {
 		return true
 	}
-	switch tool {
-	case ToolNameComputerObserve:
-		if validateObserveFormat(input.ImageFormat) != nil {
-			return true
-		}
-		return approver.NeedsObserveApproval(ctx, ComputerObserveRequest{SessionID: sessionID, PID: input.PID, WindowID: input.WindowID, ImageFormat: input.ImageFormat})
-	case ToolNameComputerAction:
-		request, err := input.actionRequest()
-		if err != nil {
-			return true
-		}
-		request.SessionID = sessionID
-		return approver.NeedsActionApproval(ctx, request)
+	if call.tool == ToolNameComputerObserve {
+		return approver.NeedsObserveApproval(ctx, call.observe)
 	}
-	return true
+	return approver.NeedsActionApproval(ctx, call.action)
 }
 
 // computerInput is the superset input of computer_observe and computer_action
@@ -169,39 +261,250 @@ type computerInput struct {
 	PID             int       `json:"pid"`
 	WindowID        int       `json:"window_id"`
 	App             string    `json:"app"`
+	MenuPath        []string  `json:"menu_path"`
 }
 
-func (c *Core) computerTool(ctx context.Context, params ToolCallParams) (ToolResultParams, error) {
+// computerCall is one checked computer use call: its tool and the request the
+// preflighter, the approver and the backend see.
+type computerCall struct {
+	tool    string
+	observe ComputerObserveRequest
+	action  ComputerActionRequest
+}
+
+// computerRefusal is a computer use call refused before it ran: by its
+// checks (window_frame_required) or by the host's ComputerUsePreflighter.
+type computerRefusal struct{ code, message string }
+
+func (e *computerRefusal) Error() string { return e.code + ": " + e.message }
+
+// asComputerRefusal gives a preflighter's error its code: the data reason of
+// an *RPCError, the "<code>: " prefix of its text, else computer_use_refused.
+func asComputerRefusal(err error) *computerRefusal {
+	var refusal *computerRefusal
+	if errors.As(err, &refusal) {
+		return refusal
+	}
+	var rpcErr *RPCError
+	if errors.As(err, &rpcErr) && rpcErr.Data != nil && rpcErr.Data.Reason != "" {
+		return &computerRefusal{rpcErr.Data.Reason, rpcErr.Message}
+	}
+	text := err.Error()
+	if code, rest, ok := strings.Cut(text, ": "); ok && isErrorCode(code) {
+		return &computerRefusal{code, rest}
+	}
+	return &computerRefusal{"computer_use_refused", text}
+}
+
+// isErrorCode reports whether s looks like a machine-readable code
+// (lower-case letters, digits and underscores, starting with a letter).
+func isErrorCode(s string) bool {
+	if s == "" || len(s) > 64 || s[0] < 'a' || s[0] > 'z' {
+		return false
+	}
+	for _, r := range s {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+// prepareComputer checks a call's input and its coordinate frame and returns
+// the request for it, with the session's frame filled in.
+func (c *Core) prepareComputer(key coreKey, tool string, raw []byte) (computerCall, error) {
 	var input computerInput
-	if len(params.Input) > 0 {
-		if err := json.Unmarshal(params.Input, &input); err != nil {
-			return ToolResultParams{}, fmt.Errorf("invalid tool input: %w", err)
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &input); err != nil {
+			return computerCall{}, fmt.Errorf("invalid tool input: %w", err)
 		}
 	}
 	if input.Display != "" && input.Display != "primary" {
-		return ToolResultParams{}, fmt.Errorf("display %q is not available: only the primary display is", input.Display)
+		return computerCall{}, fmt.Errorf("display %q is not available: only the primary display is", input.Display)
 	}
 	if (input.PID == 0) != (input.WindowID == 0) {
-		return ToolResultParams{}, errors.New("pid and window_id go together")
+		return computerCall{}, errors.New("pid and window_id go together")
 	}
-	var blocks []ContentBlock
-	var err error
-	if params.Tool == ToolNameComputerObserve {
+	call := computerCall{tool: tool}
+	if tool == ToolNameComputerObserve {
 		if err := validateObserveFormat(input.ImageFormat); err != nil {
+			return computerCall{}, err
+		}
+		call.observe = ComputerObserveRequest{SessionID: key.session, PID: input.PID, WindowID: input.WindowID, ImageFormat: input.ImageFormat}
+		return call, nil
+	}
+	request, err := input.actionRequest()
+	if err != nil {
+		return computerCall{}, err
+	}
+	request.SessionID = key.session
+	request.Frame = c.frames.frameFor(key, request.PID, request.WindowID)
+	if err := checkActionFrame(c.frames.last(key), request); err != nil {
+		return computerCall{}, err
+	}
+	call.action = request
+	return call, nil
+}
+
+// checkActionFrame refuses a click, scroll or drag without a window while the
+// session's last observation was a window: the model read window pixels, the
+// driver would read screen pixels. It is refused rather than converted: a
+// converted screen point can land on another window in front of this one.
+func checkActionFrame(last *ComputerFrame, req ComputerActionRequest) error {
+	switch req.Action {
+	case ComputerActionClick, ComputerActionScroll, ComputerActionDrag:
+	default:
+		return nil
+	}
+	if req.WindowID != 0 || last == nil || last.WindowID == 0 {
+		return nil
+	}
+	return &computerRefusal{ComputerErrorWindowFrameRequired, fmt.Sprintf(
+		"the last observation was window pid=%d window_id=%d; pass that pid and window_id with pixels from its screenshot, or observe the screen first",
+		last.PID, last.WindowID)}
+}
+
+// preflightComputer asks the backend's ComputerUsePreflighter about a checked call.
+func (c *Core) preflightComputer(ctx context.Context, call computerCall) error {
+	preflighter, ok := c.opts.ComputerUse.(ComputerUsePreflighter)
+	if !ok {
+		return nil
+	}
+	var err error
+	if call.tool == ToolNameComputerObserve {
+		err = preflighter.PreflightObserve(ctx, call.observe)
+	} else {
+		err = preflighter.PreflightAction(ctx, call.action)
+	}
+	if err != nil {
+		return asComputerRefusal(err)
+	}
+	return nil
+}
+
+// computerChecked marks a ctx whose call already passed its checks and the
+// preflighter (a local brain's turn checks before it asks for approval).
+type computerCheckedKey struct{}
+
+// computerCheck checks a call and asks the preflighter, and returns the
+// refusal a tool result carries, or nil when the call may go on.
+func (c *Core) computerCheck(ctx context.Context, key coreKey, tool string, input map[string]any) *RouteResult {
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return refused("invalid_tool_input", err.Error())
+	}
+	call, err := c.prepareComputer(key, tool, raw)
+	if err == nil {
+		err = c.preflightComputer(ctx, call)
+	}
+	if err == nil {
+		return nil
+	}
+	var refusal *computerRefusal
+	if errors.As(err, &refusal) {
+		return refused(refusal.code, refusal.message)
+	}
+	return refused("invalid_tool_input", err.Error())
+}
+
+func (c *Core) computerTool(ctx context.Context, key coreKey, params ToolCallParams) (ToolResultParams, error) {
+	call, err := c.prepareComputer(key, params.Tool, params.Input)
+	if err != nil {
+		return ToolResultParams{}, err
+	}
+	if ctx.Value(computerCheckedKey{}) == nil {
+		if err := c.preflightComputer(ctx, call); err != nil {
 			return ToolResultParams{}, err
 		}
-		blocks, err = c.opts.ComputerUse.Observe(ctx, ComputerObserveRequest{SessionID: params.SessionID, PID: input.PID, WindowID: input.WindowID, ImageFormat: input.ImageFormat})
-	} else {
-		var request ComputerActionRequest
-		if request, err = input.actionRequest(); err == nil {
-			request.SessionID = params.SessionID
-			blocks, err = c.opts.ComputerUse.Action(ctx, request)
+	}
+	var blocks []ContentBlock
+	if call.tool == ToolNameComputerObserve {
+		if blocks, err = c.opts.ComputerUse.Observe(ctx, call.observe); err == nil {
+			c.frames.record(key, call.observe, blocks)
+			blocks = c.withoutImages(ctx, key.session, blocks)
 		}
+	} else {
+		blocks, err = c.opts.ComputerUse.Action(ctx, call.action)
 	}
 	if err != nil {
 		return ToolResultParams{}, err
 	}
 	return ToolResultParams{Outcome: ToolOutcomeSucceeded, Content: blocks}, nil
+}
+
+// computerFrames are the sessions' last observations: the last one of each
+// session and the last one of each window it observed.
+type computerFrames struct {
+	mu      sync.Mutex
+	latest  map[coreKey]ComputerFrame
+	windows map[coreKey]map[[2]int]ComputerFrame
+}
+
+// record keeps a successful observation's frame; the screenshot size is read
+// from the image's header.
+func (f *computerFrames) record(key coreKey, req ComputerObserveRequest, blocks []ContentBlock) {
+	frame := ComputerFrame{PID: req.PID, WindowID: req.WindowID}
+	frame.Width, frame.Height = blocksImageSize(blocks)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.latest == nil {
+		f.latest, f.windows = map[coreKey]ComputerFrame{}, map[coreKey]map[[2]int]ComputerFrame{}
+	}
+	f.latest[key] = frame
+	if req.WindowID != 0 {
+		if f.windows[key] == nil {
+			f.windows[key] = map[[2]int]ComputerFrame{}
+		}
+		f.windows[key][[2]int{req.PID, req.WindowID}] = frame
+	}
+}
+
+// last is the session's last observation, nil without one.
+func (f *computerFrames) last(key coreKey) *ComputerFrame {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	frame, ok := f.latest[key]
+	if !ok {
+		return nil
+	}
+	return &frame
+}
+
+// frameFor is the frame of an action: the window's last observation, or the
+// session's last one for an action without a window.
+func (f *computerFrames) frameFor(key coreKey, pid, windowID int) *ComputerFrame {
+	if windowID == 0 {
+		return f.last(key)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	frame, ok := f.windows[key][[2]int{pid, windowID}]
+	if !ok {
+		return nil
+	}
+	return &frame
+}
+
+func (f *computerFrames) forget(key coreKey) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.latest, key)
+	delete(f.windows, key)
+}
+
+// blocksImageSize is the pixel size of the first image block (0, 0 without one).
+func blocksImageSize(blocks []ContentBlock) (int, int) {
+	for _, block := range blocks {
+		if block.Type != ContentBlockTypeImage || block.Data == "" {
+			continue
+		}
+		cfg, _, err := image.DecodeConfig(base64.NewDecoder(base64.StdEncoding, strings.NewReader(block.Data)))
+		if err != nil {
+			return 0, 0
+		}
+		return cfg.Width, cfg.Height
+	}
+	return 0, 0
 }
 
 func (in computerInput) actionRequest() (ComputerActionRequest, error) {
@@ -264,8 +567,25 @@ func (in computerInput) actionRequest() (ComputerActionRequest, error) {
 		if in.PID != 0 || in.WindowID != 0 {
 			return request, errors.New("open_app takes no pid or window_id")
 		}
+	case ComputerActionMenu:
+		if in.PID == 0 || in.WindowID == 0 {
+			return request, errors.New("menu needs the pid and window_id of a window of the app whose menu it runs")
+		}
+		if len(in.MenuPath) == 0 || len(in.MenuPath) > maxMenuItems {
+			return request, fmt.Errorf(`menu_path must be 1-%d menu labels from the menu bar to the item, for example ["Window", "Weixin"]`, maxMenuItems)
+		}
+		for _, label := range in.MenuPath {
+			label = strings.TrimSpace(label)
+			if label == "" || utf8.RuneCountInString(label) > maxMenuLabel {
+				return request, fmt.Errorf("every menu_path label must be 1-%d characters", maxMenuLabel)
+			}
+			request.MenuPath = append(request.MenuPath, label)
+		}
+		if len(in.Coordinate) > 0 || in.Text != "" {
+			return request, errors.New("menu takes no coordinate or text")
+		}
 	default:
-		return request, fmt.Errorf("action %q is not click, type, key, scroll, drag or open_app", in.Action)
+		return request, fmt.Errorf("action %q is not click, type, key, scroll, drag, open_app or menu", in.Action)
 	}
 	return request, nil
 }
@@ -283,6 +603,11 @@ type CuaDriverOptions struct {
 	Env []string
 	// Timeout bounds one driver call (default 30 s).
 	Timeout time.Duration
+	// NoClipboard keeps the clipboard out of typing: non-ASCII text into a
+	// window with web content is then typed with the window briefly in
+	// front instead of pasted (see typeText). A clipboard history app may
+	// record pasted text.
+	NoClipboard bool
 }
 
 // CuaDriver is the ComputerUseBackend on Cua Driver
@@ -298,6 +623,7 @@ type CuaDriver struct {
 	sessionNamespace string
 	env              []string
 	timeout          time.Duration
+	noClipboard      bool
 }
 
 // NewCuaDriver checks that the driver and its daemon work (a screen-size call)
@@ -318,7 +644,8 @@ func NewCuaDriver(ctx context.Context, opts CuaDriverOptions) (*CuaDriver, error
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrComputerUseUnavailable, err)
 	}
-	driver := &CuaDriver{path: resolved, socket: opts.Socket, env: opts.Env, timeout: opts.Timeout, sessionNamespace: fmt.Sprintf("%x", nonce)}
+	driver := &CuaDriver{path: resolved, socket: opts.Socket, env: opts.Env, timeout: opts.Timeout, sessionNamespace: fmt.Sprintf("%x", nonce),
+		noClipboard: opts.NoClipboard}
 	if _, err := driver.call(ctx, "get_screen_size", map[string]any{}, ""); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrComputerUseUnavailable, err)
 	}
@@ -328,6 +655,16 @@ func NewCuaDriver(ctx context.Context, opts CuaDriverOptions) (*CuaDriver, error
 // call runs one tool. With screenshot set the driver writes the response's
 // image there; the JSON result is returned.
 func (d *CuaDriver) call(ctx context.Context, tool string, args map[string]any, screenshot string) (map[string]any, error) {
+	return d.run(ctx, tool, args, screenshot, ComputerActionRequest{})
+}
+
+// callAction runs one tool of an action: a structured failure's advice
+// names the action's window.
+func (d *CuaDriver) callAction(ctx context.Context, tool string, args map[string]any, req ComputerActionRequest) (map[string]any, error) {
+	return d.run(ctx, tool, args, "", req)
+}
+
+func (d *CuaDriver) run(ctx context.Context, tool string, args map[string]any, screenshot string, req ComputerActionRequest) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(ctx, d.timeout)
 	defer cancel()
 	payload, err := json.Marshal(args)
@@ -352,8 +689,8 @@ func (d *CuaDriver) call(ctx context.Context, tool string, args map[string]any, 
 		return nil, fmt.Errorf("cua-driver %s: %w", tool, ctx.Err())
 	}
 	if runErr != nil {
-		if rejected := cuaRejection(tool, stdout.buf.Bytes(), runErr); rejected != nil {
-			return nil, rejected
+		if failure := cuaFailure(tool, bytes.TrimSpace(stdout.buf.Bytes()), runErr, req); failure != nil {
+			return nil, failure
 		}
 		message := strings.TrimSpace(stderr.String())
 		if message == "" {
@@ -427,7 +764,7 @@ func windowList(result map[string]any) string {
 	var out strings.Builder
 	for _, entry := range windows {
 		window, _ := entry.(map[string]any)
-		if window["is_on_screen"] == false || window["minimized"] == true {
+		if window["is_on_screen"] == false || window["minimized"] == true || window["on_current_space"] == false {
 			continue
 		}
 		bounds, _ := window["bounds"].(map[string]any)
@@ -446,51 +783,39 @@ func (d *CuaDriver) windowSession(sessionID string) string {
 	return fmt.Sprintf("bma-%x", sum[:16])
 }
 
-// Action performs one computer_action and returns the driver's summary.
+// Action performs one computer_action and returns the driver's summary,
+// with the driver's advice in terms of the computer use tools.
 func (d *CuaDriver) Action(ctx context.Context, req ComputerActionRequest) ([]ContentBlock, error) {
-	if req.Action == ComputerActionOpenApp {
-		return d.openApp(ctx, req.App)
+	switch req.Action {
+	case ComputerActionOpenApp:
+		result, err := d.OpenApp(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		return []ContentBlock{{Type: ContentBlockTypeText, Text: result.text()}}, nil
+	case ComputerActionMenu:
+		return d.menu(ctx, req)
+	case ComputerActionType:
+		return d.typeText(ctx, req)
 	}
 	tool, args := cuaAction(req)
 	if req.WindowID != 0 {
 		args["session"] = d.windowSession(req.SessionID)
 	}
-	result, err := d.call(ctx, tool, args, "")
+	result, err := d.callAction(ctx, tool, args, req)
 	if err != nil {
 		return nil, err
 	}
-	summary, _ := result["summary"].(string)
-	if summary == "" {
-		raw, _ := json.Marshal(result)
-		summary = string(raw)
+	fallback := map[string]any{}
+	for key, value := range result {
+		switch key {
+		case "hint", "next_call", "escalation":
+		default:
+			fallback[key] = value
+		}
 	}
-	if hint, _ := result["hint"].(string); hint != "" {
-		summary += "\n" + hint
-	}
-	return []ContentBlock{{Type: ContentBlockTypeText, Text: summary}}, nil
-}
-
-// openApp launches the app (launch_app starts it in the background), brings
-// it to the front and returns its pid and windows for computer_observe.
-func (d *CuaDriver) openApp(ctx context.Context, app string) ([]ContentBlock, error) {
-	args := map[string]any{"name": app}
-	if looksLikeBundleID(app) {
-		args = map[string]any{"bundle_id": app}
-	}
-	result, err := d.call(ctx, "launch_app", args, "")
-	if err != nil {
-		return nil, err
-	}
-	pid, _ := result["pid"].(float64)
-	if pid <= 0 {
-		return nil, fmt.Errorf("cua-driver launch_app: no pid for %q", app)
-	}
-	front := "brought to the front"
-	if _, err := d.call(ctx, "bring_to_front", map[string]any{"pid": int(pid)}, ""); err != nil {
-		front = "not brought to the front: " + truncate(err.Error(), 200)
-	}
-	text := fmt.Sprintf("opened %v (%v) pid=%d, %s\n", result["name"], result["bundle_id"], int(pid), front)
-	return []ContentBlock{{Type: ContentBlockTypeText, Text: text + windowList(result)}}, nil
+	raw, _ := json.Marshal(fallback)
+	return []ContentBlock{{Type: ContentBlockTypeText, Text: cuaResultText(result, string(raw))}}, nil
 }
 
 // looksLikeBundleID tells a bundle id ("com.apple.TextEdit") from an app name.

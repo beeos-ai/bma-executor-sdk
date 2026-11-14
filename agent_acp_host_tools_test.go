@@ -339,3 +339,85 @@ func TestACPAgentComputerUseIsAHostToolApprovedOnThePlatform(t *testing.T) {
 		t.Fatalf("model saw tools %s", tools)
 	}
 }
+
+// A local brain's computer use call passes its checks and the host's
+// ComputerUsePreflighter before its approval: a refusal asks nobody and runs
+// nothing (the call is reported allowed and its result is the refusal); a
+// call that passes is then approved (here by the ComputerUseApprover) and runs.
+// A text-only model gets no screenshot; the turn's model is in the query.
+func TestACPAgentComputerUsePreflightBeforeApproval(t *testing.T) {
+	command := bmaDshAcpCommand(t)
+	for name, c := range map[string]struct {
+		tool, args string
+		refuse     bool
+		textOnly   bool
+		calls      string
+		result     string
+		images     int
+	}{
+		"refused": {tool: ToolNameComputerAction, args: `{"action":"click","coordinate":[1,2],"description":"x"}`, refuse: true,
+			calls: "preflight", result: "computer_use_denied_app: Terminal is off limits"},
+		"passes": {tool: ToolNameComputerAction, args: `{"action":"click","coordinate":[1,2],"description":"x"}`,
+			calls: "preflight,approve,action", result: "clicked"},
+		"text-only model": {tool: ToolNameComputerObserve, args: `{"description":"x"}`, textOnly: true,
+			calls: "preflight,approve,observe", result: "cannot read images"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newScriptedToolModel(t)
+			model.name, model.args = c.tool, c.args
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			computer := &recordingComputer{}
+			if c.refuse {
+				computer.preflight = func(ComputerActionRequest) error {
+					return NewReasonError(CodeForbidden, "computer_use_denied_app", "Terminal is off limits")
+				}
+			}
+			var models []string
+			var modelsMu sync.Mutex
+			core, err := NewCore(CoreOptions{WorkRoot: filepath.Join(t.TempDir(), "work"), ComputerUse: computer,
+				ComputerVision: func(_ context.Context, q ComputerVisionQuery) ComputerVisionAnswer {
+					modelsMu.Lock()
+					models = append(models, q.Model)
+					modelsMu.Unlock()
+					if c.textOnly {
+						return ComputerVisionAnswer{Vision: ComputerVisionTextOnly}
+					}
+					return ComputerVisionAnswer{}
+				}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(core.Close)
+			f := startACPFixture(t, ctx, ACPAgentOptions{Command: command, Core: core, Upstream: ACPModelUpstream{BaseURL: model.server.URL + "/v1", Model: "scripted"}})
+			f.start(t, ctx, "sesn_pf", "turn_1", "use the computer")
+			assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
+			if len(f.platform.interactions) != 0 {
+				t.Fatalf("asked %d times, want none", len(f.platform.interactions))
+			}
+			if got := computer.seen(); got != c.calls {
+				t.Fatalf("calls = %s, want %s", got, c.calls)
+			}
+			events := eventsOf(f.platform.snapshot(), "turn_1")
+			if got := strings.Join(eventTypes(events), ","); got != "session.status_running,agent.tool_use,agent.tool_result,agent.message,session.status_idle" {
+				t.Fatalf("events = %s", got)
+			}
+			if got := fmt.Sprint(eventJSON(t, events[1])["evaluated_permission"]); got != "map[type:allow]" {
+				t.Fatalf("evaluated_permission = %s", got)
+			}
+			result := eventJSON(t, events[2])
+			if text := fmt.Sprint(result["content"]); !strings.Contains(text, c.result) || result["is_error"] != c.refuse {
+				t.Fatalf("tool_result = %v", result)
+			}
+			model.mu.Lock()
+			images := model.images
+			model.mu.Unlock()
+			if images != c.images {
+				t.Fatalf("the model got %d images, want %d", images, c.images)
+			}
+			if c.tool == ToolNameComputerObserve && (len(models) != 1 || models[0] == "") {
+				t.Fatalf("vision queries = %q, want the turn's model", models)
+			}
+		})
+	}
+}
