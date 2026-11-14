@@ -75,6 +75,29 @@ jobs:
   # Anthropic's release bucket, checked against its manifest and the SDK's
   # pins). The model endpoint is scripted and the API key made up: no
   # credential is used.
+
+  bma-package:
+    name: bma assets build and install.sh installs them
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
+          cache-dependency-path: go.sum
+
+      - name: Package, install from the assets, refuse a tampered archive
+        run: |
+          ./tools/package_bma.sh 0.0.0 "$RUNNER_TEMP/assets"
+          home="$(mktemp -d)"
+          HOME="$home" BMA_INSTALL_BASE="file://$RUNNER_TEMP/assets" sh packaging/unix/install.sh
+          test "$("$home/.bma/bin/bma" version)" = 0.0.0
+          cp -r "$RUNNER_TEMP/assets" "$RUNNER_TEMP/bad"
+          printf 'x' >> "$RUNNER_TEMP/bad/bma-linux-amd64.tar.gz"
+          ! HOME="$(mktemp -d)" BMA_INSTALL_BASE="file://$RUNNER_TEMP/bad" sh packaging/unix/install.sh
   claude-code:
     name: Claude adapter with the pinned claude CLI
     runs-on: ubuntu-latest

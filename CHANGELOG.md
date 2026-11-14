@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.6.13
+
+- **`bma`: connect this computer to BMA with one command.** `cmd/bma` is a
+  release binary (macOS and Linux, arm64 and x86_64):
+  `curl -fsSL https://beeos.ai/bma/install.sh | sh` (or
+  `brew install beeos-ai/tap/bma`), then `bma up`. `bma up` signs the
+  computer in through the console (device authorization: the owner approves
+  a short code in the browser and picks the workspace, name and labels; no
+  token is copied), asks which harnesses to use, downloads their pinned
+  releases into `~/.bma/harnesses/<id>/<version>/` and checks them against
+  the pinned sha256, checks the owner's own harness login (offering the
+  harness's sign-in), and installs a user service (LaunchAgent on macOS,
+  systemd user unit on Linux) that runs `bma run`: this computer's hands and
+  the harness as its brain on one executor connection. The machine token is
+  kept in the login keychain (macOS) or a 0600 file. Also `bma status`,
+  `bma harness list|add|login`, `bma disconnect`. `remote_brain` is off unless
+  the owner turns it on (`--remote-brain` or the question in `bma up`).
+- **Go: harness catalog** (`Harnesses`, `HarnessByID`, `HarnessKind`): each
+  harness a node can run as its brain with the owner's credentials — its
+  pinned releases (URL and sha256 per platform), the arguments of its login
+  check and sign-in, the variables handed to it, and `HarnessKind.NewBrain`,
+  which starts it through its adapter. Claude Code (`claude-code`, adapter
+  `claude-cli`) is the first; its releases are the adapter's pins.
+- Release assets: `bma-<os>-<arch>.tar.gz`, `bma-manifest.json` (version and
+  sha256 of each archive, read by `install.sh`), `install.sh`, `bma.rb`.
+
 ## 1.6.12
 
 - **Go: a turn whose agent defines `ask_user_question` runs again with

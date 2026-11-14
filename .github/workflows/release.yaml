@@ -120,3 +120,59 @@ jobs:
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           packages-dir: python/dist/
+
+  bma:
+    # The bma command (cmd/bma): per-platform archives, the manifest and
+    # install.sh as assets of the GitHub release of the tag (install.sh and
+    # https://beeos.ai/bma/install.sh read them), and the Homebrew formula
+    # pushed to beeos-ai/homebrew-tap (deploy key of that repository).
+    if: github.event_name == 'push' || inputs.publish == 'all'
+    name: Publish bma (GitHub release, Homebrew tap)
+    needs: [checks, verify]
+    runs-on: ubuntu-latest
+    environment:
+      name: releases
+      url: https://github.com/beeos-ai/bma-executor-sdk/releases
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
+          cache-dependency-path: go.sum
+
+      - name: Build the assets
+        run: ./tools/package_bma.sh "${TAG#v}" dist
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "$TAG" --notes "See CHANGELOG.md. Install bma: curl -fsSL https://beeos.ai/bma/install.sh | sh"
+          fi
+
+      - name: Update the Homebrew tap
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/tap && chmod 600 ~/.ssh/tap
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone --depth 1 git@github.com:beeos-ai/homebrew-tap.git tap
+          mkdir -p tap/Formula && cp dist/bma.rb tap/Formula/bma.rb
+          cd tap
+          git config user.name "bma-executor-sdk release"
+          git config user.email "release@beeos.ai"
+          git add Formula/bma.rb
+          git diff --cached --quiet || { git commit -m "bma ${TAG#v}" && git push origin HEAD; }
