@@ -35,6 +35,34 @@ bmad is built on the Go SDK, and the BMA server speaks the same contract.
 
 The rest of this README is the Go module; see [`typescript/README.md`](typescript/README.md) and [`python/README.md`](python/README.md) for the other languages.
 
+## Connect your computer (`bma`)
+
+```sh
+curl -fsSL https://beeos.ai/bma/install.sh | sh    # or: brew install beeos-ai/tap/bma
+bma up                                            # add --api <console origin> for another deployment
+```
+
+`bma up` prints a short code and opens the console, where you approve this
+computer and choose its workspace, name and labels (no token is copied). It
+asks which harnesses to use (`bma harness list`), downloads their pinned
+releases into `~/.bma/harnesses/<id>/<version>/`, verifies them, checks that
+you are signed in to each with your own account (offering its sign-in), and
+installs a user service that keeps this computer connected: a LaunchAgent on
+macOS (it runs while you are logged in; turn on automatic login for an
+unattended Mac), a systemd user unit on Linux. Run it again at any time; it
+only does what is missing.
+
+| Command | |
+|---|---|
+| `bma status [--json]` | connection, service, harness logins, labels |
+| `bma harness list \| add <id> \| login <id>` | the harnesses this computer runs |
+| `bma disconnect` | stop the service and remove this computer from BMA |
+| `bma run` | the executor in the foreground (the service runs this) |
+
+Your harness credentials stay on this computer and are never sent to BMA.
+Other machines' brains may use this computer as their hands only if you pass
+`--remote-brain` (or answer yes in `bma up`).
+
 ## Executor quick start
 
 An executor registers with BMA (or a local harness) and answers tool calls:
