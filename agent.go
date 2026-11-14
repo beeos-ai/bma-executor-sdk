@@ -514,7 +514,7 @@ func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (T
 	if existing, _ := r.session(params.SessionID, false); existing != nil {
 		existing.mu.Lock()
 		result, known := existing.results[params.TurnID]
-		running := existing.turn != nil
+		running := existing.turn
 		existing.mu.Unlock()
 		if known {
 			if err := validateInputSkillReceipt(params, result); err != nil {
@@ -522,7 +522,18 @@ func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (T
 			}
 			return result, nil
 		}
-		if running {
+		if running != nil && running.ended.Load() {
+			// The previous turn has ended (its session.status_idle may already be
+			// out): the session is released right after, so a client starting the
+			// next turn on that idle waits for it instead of a conflict.
+			select {
+			case <-running.done:
+				running = nil
+			case <-ctx.Done():
+				return TurnStartResult{}, ctx.Err()
+			}
+		}
+		if running != nil {
 			return TurnStartResult{}, &RPCError{Code: CodeConflict, Message: "a turn is already running; use turn.input"}
 		}
 	}
