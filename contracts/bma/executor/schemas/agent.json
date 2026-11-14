@@ -881,7 +881,7 @@
     },
     "InteractionScope": {
       "type": "string",
-      "description": "How long a permission grant lasts: this tool use only, or the rest of the session. A session grant is recorded by the platform (the single source): later permission requests of the same session for the same tool name are answered allow by the platform without asking (responder platform), whichever executor or brain asks, until the grant is revoked; the executor may also apply it locally.",
+      "description": "How long a permission grant lasts: this tool use only, or the rest of the session. A session grant is recorded by the platform (the single source) under a grant id (tgr_...) with a rule: the tool and, for the shell tool, the program of a simple command or one exact command. Later permission requests of the same session that a grant's rule covers are answered allow by the platform without asking (responder platform), whichever executor or brain asks, until the grant is revoked by its id; the executor may also apply it locally.",
       "enum": [
         "once",
         "session"

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.10
+
+- The contract snapshot and the generated types (Go, TypeScript, Python) are
+  at contract 1.10.1: `InteractionScope` names what a session grant covers
+  (a grant id and its rule: the tool and, for the shell tool, a command's
+  program or one exact command). No behaviour of the SDK changes.
+
 ## 1.6.9
 
 - **Go: computer use is checked before anyone approves it
