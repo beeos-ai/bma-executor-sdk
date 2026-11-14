@@ -221,50 +221,67 @@ var cuaRefusedBeforeInput = map[string]bool{"background_unavailable": true, "off
 var cuaInputTools = map[string]bool{"click": true, "type_text": true, "press_key": true, "hotkey": true}
 
 // callFronting runs an input tool of an action in the background (the
-// default: no focus change). When the driver refuses it before input and
-// recommends the foreground, it brings the window to the front with
-// bring_to_front, which leaves it there, and runs the same input once more.
-// The driver's own foreground delivery (delivery_mode "foreground") is not
-// used: it gives the front back right after the input, and that hand-back
-// ended edits that live only while their app is in front (2026-11-15:
-// Finder's rename field kept 9 of 12 characters; with Finder in front, 3 of 3
-// renames were whole). Sheets and panels that must be the key window
-// (Finder's Go to Folder) take input this way too. A window that is truly on
-// another Space is the host's to refuse first (preflight); this follows the
-// driver's recommendation only. fronted reports that the window was brought
-// to the front.
-func (d *CuaDriver) callFronting(ctx context.Context, tool string, args map[string]any, req ComputerActionRequest) (result map[string]any, fronted bool, err error) {
+// default: no focus change) and, when the window did not take it, once more
+// with the window in front. note says what was done for the retry ("" when
+// there was none).
+//
+// Keys (type_text, press_key, hotkey): after no_focused_text_input, or a
+// refusal before input that recommends the foreground, the window's app is
+// made the front app if it is not (bring_to_front, which leaves it there) and
+// the keys are sent again with delivery_mode "foreground". macOS sends keys
+// only to the key window of the front app; with the app already in front the
+// driver's "give the front back" after a foreground delivery does nothing, so
+// an edit that lives only while its app is in front (Finder's rename field)
+// keeps going: 2026-11-15, Finder in front, foreground keystrokes renamed 3
+// of 3 whole, while the background route answered no_focused_text_input
+// every time (12 of 12). The Pinyin input method (ITABC, Chinese mode) does
+// not take these keystrokes: 6 of 6 ASCII names landed whole with it
+// selected. Without a way to tell the front app (not macOS) nothing is
+// retried.
+//
+// Clicks: after a refusal before input that recommends the foreground, the
+// window is brought to the front and the click sent again the default way.
+//
+// A window that is truly on another Space is the host's to refuse first
+// (preflight).
+func (d *CuaDriver) callFronting(ctx context.Context, tool string, args map[string]any, req ComputerActionRequest) (result map[string]any, note string, err error) {
 	result, err = d.callAction(ctx, tool, args, req)
 	var refusal *CuaDriverError
 	if err == nil || !asCuaDriverError(err, &refusal) || req.WindowID == 0 || !cuaInputTools[tool] {
-		return result, false, err
+		return result, "", err
 	}
-	if !refusal.foreground && !(cuaKeyboardTools[tool] && refusal.Code == "no_focused_text_input" && d.inBackground(ctx, req.PID)) {
-		return result, false, err
+	if cuaKeyboardTools[tool] {
+		if (!refusal.foreground && refusal.Code != "no_focused_text_input") || args["delivery_mode"] == "foreground" || d.frontPID == nil {
+			return result, "", err
+		}
+		front, frontErr := d.frontPID(ctx)
+		if frontErr != nil || front <= 0 {
+			return result, "", err
+		}
+		note = fmt.Sprintf("sent with window %d (pid %d) in front: the window did not take the keys in the background", req.WindowID, req.PID)
+		if front != req.PID {
+			if !d.bringToFront(ctx, req) {
+				return result, "", err
+			}
+			note = frontedNote(req)
+		}
+		retry := make(map[string]any, len(args)+1)
+		for k, v := range args {
+			retry[k] = v
+		}
+		retry["delivery_mode"] = "foreground"
+		result, err = d.callAction(ctx, tool, retry, req)
+		return result, note, err
 	}
-	if !d.bringToFront(ctx, req) {
-		return result, false, err
+	if !refusal.foreground || !d.bringToFront(ctx, req) {
+		return result, "", err
 	}
 	result, err = d.callAction(ctx, tool, args, req)
-	return result, true, err
+	return result, frontedNote(req), err
 }
 
 // cuaKeyboardTools are the input tools that send keys.
 var cuaKeyboardTools = map[string]bool{"type_text": true, "press_key": true, "hotkey": true}
-
-// inBackground reports that pid is known not to be the front app. macOS
-// sends keyboard input only to the key window of the front app, so keys for
-// an app in the background have nowhere to go: the driver answers
-// no_focused_text_input (its advice is a click to focus, which does not help
-// then). With the app in front the same answer means no field has the focus,
-// and the model should click it. Unknown (no front app query) is false.
-func (d *CuaDriver) inBackground(ctx context.Context, pid int) bool {
-	if d.frontPID == nil {
-		return false
-	}
-	front, err := d.frontPID(ctx)
-	return err == nil && front > 0 && front != pid
-}
 
 // frontAppPID asks LaunchServices for the front app's pid
 // (/usr/bin/lsappinfo, about 15 ms; NSWorkspace in a process without a
@@ -608,10 +625,9 @@ func (d *CuaDriver) typeText(ctx context.Context, req ComputerActionRequest) ([]
 			fronted = true
 		}
 	}
+	retryNote := ""
 	if !typed {
-		var retried bool
-		result, retried, err = d.callFronting(ctx, tool, args, req)
-		fronted = fronted || retried
+		result, retryNote, err = d.callFronting(ctx, tool, args, req)
 	}
 	var driverErr *CuaDriverError
 	incomplete := err != nil && asCuaDriverError(err, &driverErr) && driverErr.Code == "type_text_incomplete"
@@ -628,6 +644,9 @@ func (d *CuaDriver) typeText(ctx context.Context, req ComputerActionRequest) ([]
 	}
 	if fronted {
 		text += "\n" + frontedNote(req)
+	}
+	if retryNote != "" {
+		text += "\n" + retryNote
 	}
 	if note != "" {
 		text += "\n" + note
@@ -732,12 +751,8 @@ func (d *CuaDriver) paste(ctx context.Context, req ComputerActionRequest) (resul
 	if runtime.GOOS != "darwin" {
 		modifier = "ctrl"
 	}
-	var fronted bool
-	result, fronted, err = d.callFronting(ctx, "hotkey", map[string]any{"keys": []string{modifier, "v"}, "pid": req.PID, "window_id": req.WindowID,
+	result, note, err = d.callFronting(ctx, "hotkey", map[string]any{"keys": []string{modifier, "v"}, "pid": req.PID, "window_id": req.WindowID,
 		"session": d.windowSession(req.SessionID)}, req)
-	if fronted {
-		note = frontedNote(req)
-	}
 	if _, restoreErr := d.call(ctx, "clipboard_write", map[string]any{"text": before}, ""); restoreErr != nil {
 		note = strings.TrimPrefix(note+"\nthe clipboard could not be put back: it holds the typed text", "\n")
 	}

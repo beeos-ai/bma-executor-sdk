@@ -1078,7 +1078,7 @@ func (d *CuaDriver) Action(ctx context.Context, req ComputerActionRequest) ([]Co
 	if req.WindowID != 0 {
 		args["session"] = d.windowSession(req.SessionID)
 	}
-	result, fronted, err := d.callFronting(ctx, tool, args, req)
+	result, retryNote, err := d.callFronting(ctx, tool, args, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1092,8 +1092,8 @@ func (d *CuaDriver) Action(ctx context.Context, req ComputerActionRequest) ([]Co
 	}
 	raw, _ := json.Marshal(fallback)
 	text := cuaResultText(result, string(raw))
-	if fronted {
-		text += "\n" + frontedNote(req)
+	if retryNote != "" {
+		text += "\n" + retryNote
 	}
 	return []ContentBlock{{Type: ContentBlockTypeText, Text: text}}, nil
 }

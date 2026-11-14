@@ -102,7 +102,8 @@ func runFakeCua() {
 	}
 	// BMA_TEST_CUA_BG_REFUSE_TOOL / _STDOUT: that tool exits 1 with that
 	// result until bring_to_front made its window the front one (a marker
-	// file next to the log; BMA_TEST_CUA_FG_REFUSE=1 refuses even then).
+	// file next to the log) or it is sent with delivery_mode "foreground";
+	// BMA_TEST_CUA_FG_REFUSE=1 refuses even then.
 	fronted := os.Getenv("BMA_TEST_CUA_LOG") + ".fronted"
 	if tool == "bring_to_front" && os.Getenv("BMA_TEST_CUA_BG_REFUSE_TOOL") != "" {
 		logCall()
@@ -110,7 +111,7 @@ func runFakeCua() {
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"activated": true, "status": "activated"})
 		return
 	}
-	if _, front := os.Stat(fronted); tool == os.Getenv("BMA_TEST_CUA_BG_REFUSE_TOOL") && (front != nil || os.Getenv("BMA_TEST_CUA_FG_REFUSE") == "1") {
+	if _, front := os.Stat(fronted); tool == os.Getenv("BMA_TEST_CUA_BG_REFUSE_TOOL") && ((front != nil && input["delivery_mode"] != "foreground") || os.Getenv("BMA_TEST_CUA_FG_REFUSE") == "1") {
 		logCall()
 		fmt.Fprintln(os.Stdout, os.Getenv("BMA_TEST_CUA_BG_REFUSE_STDOUT"))
 		os.Exit(1)

@@ -545,11 +545,14 @@ func TestComputerVision(t *testing.T) {
 	}
 }
 
-// TestForegroundOnRefusal: an input the driver refuses before delivery and
-// recommends in the foreground (a sheet such as Finder's Go to Folder that
-// must be the key window) runs once more with delivery_mode "foreground",
-// and the result says so; without that recommendation, without a window, or
-// after a partial delivery it is not retried.
+// TestForegroundOnRefusal: keys the window did not take in the background
+// (no_focused_text_input, or a refusal before input that recommends the
+// foreground) are sent once more with delivery_mode "foreground" after the
+// window's app is made the front app if it was not (bring_to_front, which
+// stays); with the app already in front nothing is brought forward. Without a
+// front app query, without a window or after a partial delivery nothing is
+// retried. A click refused with that recommendation is sent again the default
+// way after bring_to_front; no_focused_text_input does not apply to clicks.
 func TestForegroundOnRefusal(t *testing.T) {
 	offSpace := `{"code":"off_space_or_ax_unresolved","effect":"refused","escalation":{"recommended":"foreground"},"window_id":142026}`
 	notKey := `{"code":"window_not_key","escalation":{"recommended":"foreground"}}`
@@ -565,27 +568,35 @@ func TestForegroundOnRefusal(t *testing.T) {
 		}
 		return r
 	}
+	const behind, inFront = 999, 501
+	type step struct{ tool, mode string } // mode: "" default, "fg" delivery_mode foreground
 	for name, c := range map[string]struct {
 		tool, stdout string
 		fgRefuse     bool
 		front        int // the front app's pid; 0: unknown
 		req          ComputerActionRequest
-		retried      bool
+		calls        []step
+		note         string
 		wantErr      string
 	}{
-		"type into a sheet":        {tool: "type_text", stdout: offSpace, req: with(window, "type", "/Users"), retried: true},
-		"key into a sheet":         {tool: "press_key", stdout: notKey, req: with(window, "key", "Return"), retried: true},
-		"chord into a sheet":       {tool: "hotkey", stdout: notKey, req: with(window, "key", "cmd+a"), retried: true},
-		"click behind":             {tool: "click", stdout: background, req: with(window, "click", ""), retried: true},
-		"type, app in background":  {tool: "type_text", stdout: noField, front: 999, req: with(window, "type", "/Users"), retried: true},
-		"key, app in background":   {tool: "press_key", stdout: noField, front: 999, req: with(window, "key", "Return"), retried: true},
-		"type, app in front":       {tool: "type_text", stdout: noField, front: 501, req: with(window, "type", "/Users"), wantErr: "no_focused_text_input: no text field has the focus"},
-		"type, front unknown":      {tool: "type_text", stdout: noField, req: with(window, "type", "/Users"), wantErr: "no_focused_text_input: "},
-		"click, app in background": {tool: "click", stdout: noField, front: 999, req: with(window, "click", ""), wantErr: "no_focused_text_input: "},
-		"no recommendation":        {tool: "type_text", stdout: noAdvice, req: with(window, "type", "/Users"), wantErr: "off_space_or_ax_unresolved: window 142026 is not on the current desktop"},
-		"no window":                {tool: "press_key", stdout: notKey, req: with(ComputerActionRequest{}, "key", "Return"), wantErr: "window_not_key: "},
-		"partial delivery":         {tool: "type_text", stdout: partial, req: with(window, "type", "/Users"), wantErr: "type_text_incomplete: "},
-		"foreground refused, too":  {tool: "press_key", stdout: notKey, fgRefuse: true, req: with(window, "key", "Return"), wantErr: "window_not_key: window 142026 is not the app's focused window"},
+		"type, app in front, no field (Finder rename)": {tool: "type_text", stdout: noField, front: inFront, req: with(window, "type", "cu3-4x2ty8ws"),
+			calls: []step{{"type_text", ""}, {"type_text", "fg"}}, note: "sent with window 142026 (pid 501) in front"},
+		"type, app behind, no field": {tool: "type_text", stdout: noField, front: behind, req: with(window, "type", "/Users"),
+			calls: []step{{"type_text", ""}, {"bring_to_front", ""}, {"type_text", "fg"}}, note: "brought window 142026 (pid 501) to the front, where it stays"},
+		"type into a sheet, app behind": {tool: "type_text", stdout: offSpace, front: behind, req: with(window, "type", "/Users"),
+			calls: []step{{"type_text", ""}, {"bring_to_front", ""}, {"type_text", "fg"}}, note: "brought window 142026"},
+		"key into a sheet, app in front": {tool: "press_key", stdout: notKey, front: inFront, req: with(window, "key", "Return"),
+			calls: []step{{"press_key", ""}, {"press_key", "fg"}}, note: "sent with window 142026"},
+		"chord, app behind": {tool: "hotkey", stdout: notKey, front: behind, req: with(window, "key", "cmd+a"),
+			calls: []step{{"hotkey", ""}, {"bring_to_front", ""}, {"hotkey", "fg"}}, note: "brought window 142026"},
+		"click behind": {tool: "click", stdout: background, req: with(window, "click", ""),
+			calls: []step{{"click", ""}, {"bring_to_front", ""}, {"click", ""}}, note: "brought window 142026"},
+		"type, front unknown":     {tool: "type_text", stdout: noField, req: with(window, "type", "/Users"), calls: []step{{"type_text", ""}}, wantErr: "no_focused_text_input: no text field has the focus"},
+		"click, no field":         {tool: "click", stdout: noField, front: behind, req: with(window, "click", ""), calls: []step{{"click", ""}}, wantErr: "no_focused_text_input: "},
+		"no recommendation":       {tool: "type_text", stdout: noAdvice, front: inFront, req: with(window, "type", "/Users"), calls: []step{{"type_text", ""}}, wantErr: "off_space_or_ax_unresolved: window 142026 is not on the current desktop"},
+		"no window":               {tool: "press_key", stdout: notKey, front: inFront, req: with(ComputerActionRequest{}, "key", "Return"), calls: []step{{"press_key", ""}}, wantErr: "window_not_key: "},
+		"partial delivery":        {tool: "type_text", stdout: partial, front: inFront, req: with(window, "type", "/Users"), calls: []step{{"type_text", ""}}, wantErr: "type_text_incomplete: "},
+		"foreground refused, too": {tool: "press_key", stdout: notKey, fgRefuse: true, front: inFront, req: with(window, "key", "Return"), calls: []step{{"press_key", ""}, {"press_key", "fg"}}, wantErr: "window_not_key: window 142026 is not the app's focused window"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			env := []string{"BMA_TEST_CUA_BG_REFUSE_TOOL=" + c.tool, "BMA_TEST_CUA_BG_REFUSE_STDOUT=" + c.stdout, `BMA_TEST_CUA_ELEMENTS=[{"role":"AXTextField","value":"/Us"}]`}
@@ -602,27 +613,32 @@ func TestForegroundOnRefusal(t *testing.T) {
 			}
 			blocks, err := driver.Action(context.Background(), c.req)
 			raw, _ := os.ReadFile(logPath)
-			calls := strings.Count(string(raw), c.tool+" ")
-			fronts := strings.Count(string(raw), "bring_to_front ")
+			var got []step
+			for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+				tool := strings.SplitN(line, " ", 2)[0]
+				if tool != c.tool && tool != "bring_to_front" {
+					continue
+				}
+				mode := ""
+				if strings.Contains(line, `"delivery_mode":"foreground"`) {
+					mode = "fg"
+				}
+				got = append(got, step{tool, mode})
+			}
+			if fmt.Sprint(got) != fmt.Sprint(c.calls) {
+				t.Fatalf("calls = %v, want %v:\n%s", got, c.calls, raw)
+			}
 			if c.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 					t.Fatalf("err = %v, want %q", err, c.wantErr)
-				}
-				if want := map[bool]int{true: 2, false: 1}[c.fgRefuse]; calls != want || fronts != want-1 {
-					t.Fatalf("%s called %d times, bring_to_front %d, want %d:\n%s", c.tool, calls, fronts, want, raw)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			// bring_to_front, then the same input again, never delivered in
-			// the foreground (which gives the front back).
-			log := string(raw)
-			first, front, second := strings.Index(log, c.tool+" "), strings.Index(log, "bring_to_front "), strings.LastIndex(log, c.tool+" ")
-			if calls != 2 || fronts != 1 || !(first < front && front < second) || strings.Contains(log, `"delivery_mode":"foreground"`) ||
-				!strings.Contains(blocks[0].Text, "brought window 142026 (pid 501) to the front, where it stays") {
-				t.Fatalf("calls %d, bring_to_front %d, text %q:\n%s", calls, fronts, blocks[0].Text, raw)
+			if !strings.Contains(blocks[0].Text, c.note) {
+				t.Fatalf("text %q lacks %q", blocks[0].Text, c.note)
 			}
 		})
 	}

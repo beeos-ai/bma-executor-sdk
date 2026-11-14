@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.6.28
+
+- **Go: keys the window did not take in the background are sent in the
+  foreground with the app in front.** 1.6.23 dropped the foreground key
+  delivery and only brought an app in the background to the front, so with
+  Finder already in front every `type` into its rename field ended in
+  `no_focused_text_input` (beework-local 0.1.12, CU3: 5 of 5 and 7 of 7).
+  Now `type` and `key` that end in `no_focused_text_input`, or in a refusal
+  before input that recommends the foreground, are sent once more with
+  `delivery_mode: "foreground"` after the window's app is made the front app
+  if it is not (`bring_to_front`, which leaves it there; LaunchServices tells
+  the front app). With the app already in front the driver's hand-back of
+  the front after a foreground delivery does nothing, so an edit that lives
+  only while its app is in front keeps going. On a real Mac (2026-11-15,
+  Cua Driver 0.38.0, Finder in front, Pinyin ITABC selected) 6 of 6 names
+  typed this way landed whole (`a1`-`b3-4x2ty8ws`, checked on disk), the
+  input method did not take the keystrokes, and no key reached another app.
+  The result says "sent with window W (pid P) in front" or "brought window W
+  (pid P) to the front, where it stays". Without a front app query (not
+  macOS) nothing is retried. Clicks are unchanged. A folder created with
+  ⌘⇧N while Finder is in the background does not stay in rename: the model
+  still has to bring Finder to the front first (0 of 3 that way).
+
 ## 1.6.27
 
 - **`bma`: quieter service log and the Mac's own name.** `bma run` leaves out
