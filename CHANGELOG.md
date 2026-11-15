@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.6.33
+
+- **Tested with bma-dsh-acp 0.3.1** (`testdata/bma-dsh-acp`; BMA tag
+  dsh-acp-v0.3.1, #1509): its model requests that fail before any content
+  with HTTP 502/503/504, a `retryable` error body or a connection error are
+  retried up to twice with backoff, so one gateway 503 no longer ends a
+  local turn. The SDK's model proxy passes the status and body through and
+  does not retry itself. Hosts that pin the bundled brain to the SDK's
+  testdata version (beework-local `versions.lock`) move to 0.3.1 with this
+  release.
+
 ## 1.6.32
 
 - **Go: `wait` ignores a window instead of refusing the call.** A batch whose
