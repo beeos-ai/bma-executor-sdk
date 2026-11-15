@@ -2,7 +2,7 @@ asyncapi: 3.0.0
 id: https://contracts.bma.beeos.ai/executor.asyncapi
 info:
   title: BMA Executor Protocol channels
-  version: 1.14.0
+  version: 1.18.0
   description: "WebSocket channels for bma.executor.v1 and bma.executor.v1.1. The control channel carries JSON-RPC 2.0 requests, notifications, and responses. The mcp channel carries raw MCP JSON-RPC with no BMA wrapper. PTY bytes travel on per-attach outbound host sockets (subprotocol bma.terminal.v1), not on these channels. Contract 1.4.0 adds the platform tools endpoint (x-bma-platform-tools): the HTTP MCP endpoint a brain on one machine calls to run its tools on the session's hands machine."
   license:
     name: Apache-2.0
@@ -129,6 +129,10 @@ channels:
         $ref: "#/components/messages/terminalAttach"
       terminalClose:
         $ref: "#/components/messages/terminalClose"
+      desktopAttach:
+        $ref: "#/components/messages/desktopAttach"
+      desktopWallpaper:
+        $ref: "#/components/messages/desktopWallpaper"
       skillInstall:
         $ref: "#/components/messages/skillInstall"
       workspaceBackup:
@@ -137,6 +141,8 @@ channels:
         $ref: "#/components/messages/fsMount"
       fsUnmount:
         $ref: "#/components/messages/fsUnmount"
+      sessionFilesFlush:
+        $ref: "#/components/messages/sessionFilesFlush"
       turnStart:
         $ref: "#/components/messages/turnStart"
       turnInput:
@@ -147,6 +153,8 @@ channels:
         $ref: "#/components/messages/sessionClose"
       sessionEventDelta:
         $ref: "#/components/messages/sessionEventDelta"
+      sessionHistory:
+        $ref: "#/components/messages/sessionHistory"
       interactionRequest:
         $ref: "#/components/messages/interactionRequest"
       interactionResponse:
@@ -358,6 +366,18 @@ operations:
       $ref: "#/channels/control"
     messages:
       - $ref: "#/components/messages/terminalClose"
+  desktopAttachReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/desktopAttach"
+  desktopWallpaperReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/desktopWallpaper"
   skillInstallReceive:
     action: receive
     channel:
@@ -382,6 +402,12 @@ operations:
       $ref: "#/channels/control"
     messages:
       - $ref: "#/components/messages/fsUnmount"
+  sessionFilesFlushReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/sessionFilesFlush"
   turnStartReceive:
     action: receive
     channel:
@@ -412,6 +438,12 @@ operations:
       $ref: "#/channels/control"
     messages:
       - $ref: "#/components/messages/sessionEventDelta"
+  sessionHistorySend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/sessionHistory"
   interactionRequestSend:
     action: send
     channel:
@@ -1750,6 +1782,106 @@ components:
       x-bma-kind: request
       x-bma-channel: control
       x-bma-idempotent-by: terminal_id
+    desktopAttach:
+      name: desktop.attach
+      title: desktop.attach
+      summary: Attach a desktop session to the machine's running desktop.
+      description: Harness to executor request (machine-scoped executors that claim display.desktop). The machine's desktop agent runs from machine start (desktop-relay.md §1); the executor hands it the session and answers once the agent accepted it. The agent then dials the session's relay lanes at relay_url with the ticket (Authorization bearer) and serves the session until it is closed (session_close, or a lane refused with 4001/4003/4004) or attached again, which replaces the earlier attach. width and height, together, resize the desktop unless the same size was asked for last. wallpaper names the environment's default wallpaper; the result asks for its bytes (desktop.wallpaper) when the machine lacks them. Waits at most 5 s for a desktop that is still starting, then answers ResourceUnavailable with data.reason desktop_starting and data.retryable true (the platform answers 409 machine_starting stage=desktop_starting with Retry-After).
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: desktop.attach
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              machine_id:
+                type: string
+              relay_url:
+                type: string
+              ticket:
+                type: string
+              width:
+                type: integer
+                x-go-type: int
+              height:
+                type: integer
+                x-go-type: int
+              wallpaper:
+                $ref: schemas/desktop.json#/$defs/DesktopWallpaper
+            required:
+              - session_id
+              - machine_id
+              - relay_url
+              - ticket
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: desktop.attach
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: session_id
+    desktopWallpaper:
+      name: desktop.wallpaper
+      title: desktop.wallpaper
+      summary: Send one chunk of the default wallpaper a desktop.attach asked for.
+      description: Harness to executor request. Chunks follow each other from offset 0 (data is standard base64, at most max_process_write_bytes decoded); the chunk with done installs the image when its sha256 matches and applies it to the running desktop.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: desktop.wallpaper
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              sha256:
+                type: string
+              ext:
+                type: string
+              offset:
+                type: integer
+              data:
+                type: string
+              done:
+                type: boolean
+            required:
+              - sha256
+              - ext
+              - offset
+              - data
+              - done
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: desktop.wallpaper
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
     skillInstall:
       name: skill.install
       title: skill.install
@@ -1852,7 +1984,7 @@ components:
       name: fs.mount
       title: fs.mount
       summary: Mount session file views backed by bma-file.
-      description: Harness to executor request (machine-scoped). The executor mounts each listed view at its path as a FUSE file system that reads from service_url with the view's token, and keeps the token in memory only. Idempotent by (session_id, view), so resending the same mounts with new tokens renews the tokens without remounting; a changed path or readonly remounts. Sent when the session is bound to the machine and again after a resume or reconnect, because tokens are bound to the binding epoch. Sessions are independent, so a request for one session never changes the mounts of another, and fs.unmount ends one session only. An executor that declared fs.skills_per_session receives the skills view of each session at its own path (<session_files.root>/<agent_session_id>/skills) and removes the mount points it created on fs.unmount; any other executor receives skills at the fixed /mnt/skills and one session at a time.
+      description: Harness to executor request (machine-scoped). The executor mounts each listed view at its path as a FUSE file system that reads from service_url with the view's token, and keeps the token in memory only. Idempotent by (session_id, view), so resending the same mounts with new tokens renews the tokens without remounting; a changed path or readonly remounts. Sent when the session is bound to the machine and again after a resume or reconnect, because tokens are bound to the binding epoch. Sessions are independent, so a request for one session never changes the mounts of another, and fs.unmount ends one session only. An executor that declared fs.skills_per_session receives the skills view of each session at its own path (<session_files.root>/<agent_session_id>/skills) and removes the mount points it created on fs.unmount; any other executor receives skills at the fixed /mnt/skills and one session at a time. Since contract 1.18.0 an executor that declared fs.copy_views (and a session_files.root) also receives fs.mount, for those views only, at <root>/<agent_session_id>/<view>; it copies the view as read-only files through the bma-file read routes instead of mounting it (see FsCapability.copy_views and file.json).
       contentType: application/json
       payload:
         type: object
@@ -1897,7 +2029,7 @@ components:
       name: fs.unmount
       title: fs.unmount
       summary: Unmount the session file views.
-      description: Harness to executor request (machine-scoped). Unmounts every view of the session and drops its tokens. With flush the executor first commits pending writes (none for read-only views). Idempotent by session_id, a session with nothing mounted answers "unmounted".
+      description: Harness to executor request (machine-scoped). Unmounts every view of the session and drops its tokens. With flush the executor first commits pending writes (none for read-only views). Idempotent by session_id, a session with nothing mounted answers "unmounted". For a view placed by copying (fs.copy_views) the executor deletes that session's copied directory.
       contentType: application/json
       payload:
         type: object
@@ -1931,6 +2063,37 @@ components:
       x-bma-kind: request
       x-bma-channel: control
       x-bma-idempotent-by: session_id
+    sessionFilesFlush:
+      name: session_files.flush
+      title: session_files.flush
+      summary: Upload the session outputs written so far and wait for the uploads.
+      description: Harness to executor request (machine-scoped, contract 1.13.0). Before the platform pauses or hibernates the machine it asks the executor to upload every changed file under the outputs of every session it shows (what the periodic scan would upload next, without waiting for the file to be seen stable) and answers when all uploads are done. "flushed" means no upload is outstanding; "failed" means at least one upload failed and may be retried, so the platform must not pause yet. A file the platform refuses for good (size, quota, name) is not a failure. Idempotent; an executor that does not know the method answers -32601, which the platform treats as nothing to flush.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: session_files.flush
+          params:
+            type: object
+            additionalProperties: false
+            properties: {}
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: session_files.flush
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
     turnStart:
       name: turn.start
       title: turn.start
@@ -2163,6 +2326,51 @@ components:
       x-bma-jsonrpc-method: session.event_delta
       x-bma-direction: executor-to-harness
       x-bma-kind: notification
+      x-bma-channel: control
+    sessionHistory:
+      name: session.history
+      title: session.history
+      summary: Read the conversation of a session before a turn.
+      description: "Executor to harness request (capability agent, contract 1.15.0). The executor that is the session's brain (the target the session's turns are dispatched to) reads the session's conversation as the platform's event log keeps it, the single source of truth of a session: the durable events before the opening input of the given running turn, a page at a time in log order (has_more says more follow). Only the conversation travels: user.message, agent.message, agent.tool_use, agent.tool_result, agent.custom_tool_use, user.custom_tool_result, agent.mcp_tool_use and agent.mcp_tool_result, each with its bma_sequence, id, type and official body. A brain calls it when it opens a session it holds no local state for although the session has a past, for example a session whose earlier turns ran on another brain (data migration from another stack) or whose state was lost; it rebuilds its context from the events, replaying messages, tool calls and their results in its model's format under its usual context limits, and answers the turn.start with context_rebuilt true. Only the session's brain may read it: any other connection gets forbidden (-32001), before any turn of the session was dispatched not_dispatched (-32013, retryable); a turn that is not open is session_not_active (-32007); an unknown or deleted session is session_not_found (-32002). A harness without the method answers -32601; the brain then has no history to rebuild from."
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: session.history
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              turn_id:
+                type: string
+              after:
+                type: integer
+                minimum: 0
+              limit:
+                type: integer
+                minimum: 1
+                maximum: 500
+            required:
+              - session_id
+              - turn_id
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: session.history
+      x-bma-direction: executor-to-harness
+      x-bma-kind: request
       x-bma-channel: control
     interactionRequest:
       name: interaction.request
@@ -2647,13 +2855,14 @@ x-bma-platform-tools:
     - edit
     - glob
     - grep
+  mcp-tools: "Contract 1.14.0. The names of the turn.start AgentTurnConfig.mcp_tools entries (mcp__<mcp_server_name>__<tool_name>) are tools of the endpoint for that turn too: tools/list lists them after the platform tools, and tools/call runs the named tool on its MCP server (not on the hands machine) with the server's credential, through the same token, policy, approval and idempotency checks; a name the turn was not given answers invalid params. The answer is the server's CallToolResult (text over 100,000 characters replaced by a preview), with structuredContent outcome; a server that could not be used answers isError with outcome not_forwarded (could not connect, credential refused: safe to retry) or unknown (the request left and no answer came: never rerun) and error_code mcp_connection_failed or mcp_authentication_failed."
   tools-call-meta:
     ai.beeos.bma/approval: "Approval evidence for a call the policy resolved as always_ask: the interaction id the user answered with allow. A missing or mismatched value answers approval_required or approval_invalid."
     ai.beeos.bma/idempotency_key: Caller-chosen key (1-200 bytes) that makes a repeated call return the stored result instead of running the tool again; the same key with different input answers idempotency_key_reused. Results are kept for 24 hours.
     ai.beeos.bma/sync_wait_ms: How long the call waits for the hands machine before it answers in_progress (the work continues and the same key fetches the result).
   structured-content:
     outcome: "executed | not_forwarded | unknown. executed: ran and finished. not_forwarded: certainly not run (for example the hands machine was offline for the whole wait). unknown: forwarded but the result is lost (hands restarted or disconnected); the platform never reruns it."
-    error_code: "Open set, set when the call did not execute normally: environment_unavailable, permission_denied, approval_required, approval_invalid, in_progress, idempotency_key_reused; receivers must accept values they do not know."
+    error_code: "Open set, set when the call did not execute normally: environment_unavailable, machine_starting, machine_rebuilding, permission_denied, approval_required, approval_invalid, in_progress, idempotency_key_reused; receivers must accept values they do not know. A paused pool hands machine is woken for the call; machine_starting / machine_rebuilding (outcome not_forwarded, retryable: the text says when to call again) is a pool machine still starting or being rebuilt when the wait of the call ends; environment_unavailable is a machine that is offline (contracts/bma/platform-tool-machine-wake.vectors.json)."
     replayed: true when the result is the stored one of an earlier call with the same idempotency key.
     output_file: Path on the hands machine of the full output when it was truncated.
     pid: Process id on the hands machine of a call that is still running (in_progress).

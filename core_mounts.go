@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 // The directories of a session's files (ADR-0021) are <root>/<session id>/
@@ -33,9 +34,9 @@ type sessionMount struct {
 }
 
 // sessionMountsFor returns the directories of sessionID below root: uploads
-// and skills read-only, outputs writable. The session id must be a single safe
-// directory name.
-func sessionMountsFor(root, sessionID string) ([]*sessionMount, error) {
+// and skills read-only, outputs writable; only those named in names, or all
+// three for nil. The session id must be a single safe directory name.
+func sessionMountsFor(root, sessionID string, names []string) ([]*sessionMount, error) {
 	if !filepath.IsAbs(root) {
 		return nil, fmt.Errorf("session files root %q is not an absolute path", root)
 	}
@@ -48,6 +49,9 @@ func sessionMountsFor(root, sessionID string) ([]*sessionMount, error) {
 		name     string
 		writable bool
 	}{{SessionMountUploads, false}, {SessionMountSkills, false}, {SessionMountOutputs, true}} {
+		if names != nil && !slices.Contains(names, m.name) {
+			continue
+		}
 		mounts = append(mounts, &sessionMount{name: m.name, root: root, session: sessionID,
 			dir: filepath.Join(root, sessionID, m.name), writable: m.writable})
 	}
@@ -56,7 +60,7 @@ func sessionMountsFor(root, sessionID string) ([]*sessionMount, error) {
 
 // setLocalMounts lets the file tools of a local session reach the session's
 // directories below root; an empty root clears them.
-func (c *Core) setLocalMounts(sessionID, root string) error {
+func (c *Core) setLocalMounts(sessionID, root string, names []string) error {
 	session := c.session(coreKey{acpBrain, sessionID})
 	if session == nil {
 		return errors.New("the session is not open")
@@ -64,7 +68,7 @@ func (c *Core) setLocalMounts(sessionID, root string) error {
 	var mounts []*sessionMount
 	if root != "" {
 		var err error
-		if mounts, err = sessionMountsFor(root, sessionID); err != nil {
+		if mounts, err = sessionMountsFor(root, sessionID, names); err != nil {
 			return err
 		}
 	}

@@ -16,10 +16,13 @@ var Requests = struct {
 	TerminalOpen          RequestMethod[TerminalOpenParams, TerminalOpenResult]
 	TerminalAttach        RequestMethod[TerminalAttachParams, TerminalAttachResult]
 	TerminalClose         RequestMethod[TerminalCloseParams, TerminalCloseResult]
+	DesktopAttach         RequestMethod[DesktopAttachParams, DesktopAttachResult]
+	DesktopWallpaper      RequestMethod[DesktopWallpaperParams, DesktopWallpaperResult]
 	SkillInstall          RequestMethod[SkillInstallParams, SkillInstallResult]
 	WorkspaceBackup       RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]
 	FsMount               RequestMethod[FsMountParams, FsMountResult]
 	FsUnmount             RequestMethod[FsUnmountParams, FsUnmountResult]
+	SessionFilesFlush     RequestMethod[SessionFilesFlushParams, SessionFilesFlushResult]
 	AgentCustomToolResult RequestMethod[AgentCustomToolResultParams, CustomToolResultResult]
 }{
 	ScreenStart:           RequestMethod[ScreenStartParams, ScreenStartResult]{Method: "screen.start"},
@@ -33,10 +36,13 @@ var Requests = struct {
 	TerminalOpen:          RequestMethod[TerminalOpenParams, TerminalOpenResult]{Method: "terminal.open"},
 	TerminalAttach:        RequestMethod[TerminalAttachParams, TerminalAttachResult]{Method: "terminal.attach"},
 	TerminalClose:         RequestMethod[TerminalCloseParams, TerminalCloseResult]{Method: "terminal.close"},
+	DesktopAttach:         RequestMethod[DesktopAttachParams, DesktopAttachResult]{Method: "desktop.attach"},
+	DesktopWallpaper:      RequestMethod[DesktopWallpaperParams, DesktopWallpaperResult]{Method: "desktop.wallpaper"},
 	SkillInstall:          RequestMethod[SkillInstallParams, SkillInstallResult]{Method: "skill.install"},
 	WorkspaceBackup:       RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]{Method: "workspace.backup"},
 	FsMount:               RequestMethod[FsMountParams, FsMountResult]{Method: "fs.mount"},
 	FsUnmount:             RequestMethod[FsUnmountParams, FsUnmountResult]{Method: "fs.unmount"},
+	SessionFilesFlush:     RequestMethod[SessionFilesFlushParams, SessionFilesFlushResult]{Method: "session_files.flush"},
 	AgentCustomToolResult: RequestMethod[AgentCustomToolResultParams, CustomToolResultResult]{Method: "agent.custom_tool_result"},
 }
 
@@ -47,6 +53,7 @@ var Calls = struct {
 	SessionEvent       CallMethod[SessionEventParams, SessionEventResult]
 	SessionEnded       CallMethod[SessionEndedParams, Ack]
 	ToolResult         CallMethod[ToolResultParams, Ack]
+	SessionHistory     CallMethod[SessionHistoryParams, SessionHistoryResult]
 	InteractionRequest CallMethod[InteractionRequestParams, InteractionRequestResult]
 	InteractionCancel  CallMethod[InteractionCancelParams, Ack]
 	ModelTokenRefresh  CallMethod[ModelTokenRefreshParams, ModelTokenRefreshResult]
@@ -56,6 +63,7 @@ var Calls = struct {
 	SessionEvent:       CallMethod[SessionEventParams, SessionEventResult]{Method: "session.event"},
 	SessionEnded:       CallMethod[SessionEndedParams, Ack]{Method: "session.ended"},
 	ToolResult:         CallMethod[ToolResultParams, Ack]{Method: "tool.result"},
+	SessionHistory:     CallMethod[SessionHistoryParams, SessionHistoryResult]{Method: "session.history"},
 	InteractionRequest: CallMethod[InteractionRequestParams, InteractionRequestResult]{Method: "interaction.request"},
 	InteractionCancel:  CallMethod[InteractionCancelParams, Ack]{Method: "interaction.cancel"},
 	ModelTokenRefresh:  CallMethod[ModelTokenRefreshParams, ModelTokenRefreshResult]{Method: "model_token.refresh"},

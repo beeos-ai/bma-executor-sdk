@@ -201,6 +201,13 @@ type ACPAgentOptions struct {
 	// id must be a single safe directory name. Absolute, or empty for
 	// the workspace only.
 	SessionFilesRoot string
+	// SessionMounts limits the session's directories below SessionFilesRoot
+	// that the file tools reach and the model is told about to these of
+	// "uploads", "skills" and "outputs"; nil means all three. A host whose
+	// local turns get only the skills view (SkillViews) and do not sync
+	// uploads or outputs sets []string{"skills"}, so the model is not told to
+	// write deliverables nobody collects.
+	SessionMounts []string
 	// InputFiles fetches the bytes of an image the user attached (a file
 	// block of turn.start / turn.input; see agent_acp_images.go) when the
 	// platform hands the turn no tools endpoint to download it from. With it
@@ -438,6 +445,14 @@ func NewBrainHost(ctx context.Context, adapter BrainAdapter, opts ACPAgentOption
 	if opts.SessionFilesRoot != "" && !filepath.IsAbs(opts.SessionFilesRoot) {
 		return nil, fmt.Errorf("bmaexecutor: ACPAgentOptions.SessionFilesRoot must be an absolute path, got %q", opts.SessionFilesRoot)
 	}
+	if opts.SessionMounts != nil {
+		for _, name := range opts.SessionMounts {
+			if name != SessionMountUploads && name != SessionMountSkills && name != SessionMountOutputs {
+				return nil, fmt.Errorf("bmaexecutor: ACPAgentOptions.SessionMounts: %q is not uploads, skills or outputs", name)
+			}
+		}
+		opts.SessionMounts = slices.Clone(opts.SessionMounts)
+	}
 	if opts.Model == "" {
 		opts.Model = opts.Upstream.Model
 	}
@@ -650,7 +665,7 @@ func (a *BrainHost) OpenTurn(ctx context.Context, params TurnStartParams) (TurnS
 		return TurnStartResult{}, err
 	}
 	if mountNote != "" {
-		if err := a.opts.Core.setLocalMounts(params.SessionID, a.opts.SessionFilesRoot); err != nil {
+		if err := a.opts.Core.setLocalMounts(params.SessionID, a.opts.SessionFilesRoot, a.opts.SessionMounts); err != nil {
 			return TurnStartResult{}, &RPCError{Code: CodeInternalError, Message: "session files: " + err.Error()}
 		}
 	}
@@ -903,14 +918,31 @@ func (a *BrainHost) sessionFilesNote(sessionID string, remote bool) string {
 	if a.opts.SessionFilesRoot == "" || remote {
 		return ""
 	}
-	mounts, err := sessionMountsFor(a.opts.SessionFilesRoot, sessionID)
+	mounts, err := sessionMountsFor(a.opts.SessionFilesRoot, sessionID, a.opts.SessionMounts)
 	if err != nil {
 		a.log(LogWarn, "session files are not reachable for session "+sessionID, err)
 		return ""
 	}
-	return fmt.Sprintf("Session files (absolute paths; use the read, glob and grep tools): the files the user gave this session are in %s and its skills in %s, both read-only. "+
-		"Write the deliverables you want the user to get into %s (write and edit work there and nowhere outside the working directory).",
-		mounts[0].dir, mounts[1].dir, mounts[2].dir)
+	dir := map[string]string{}
+	for _, m := range mounts {
+		dir[m.name] = m.dir
+	}
+	var parts []string
+	switch {
+	case dir[SessionMountUploads] != "" && dir[SessionMountSkills] != "":
+		parts = append(parts, fmt.Sprintf("the files the user gave this session are in %s and its skills in %s, both read-only.", dir[SessionMountUploads], dir[SessionMountSkills]))
+	case dir[SessionMountUploads] != "":
+		parts = append(parts, fmt.Sprintf("the files the user gave this session are in %s, read-only.", dir[SessionMountUploads]))
+	case dir[SessionMountSkills] != "":
+		parts = append(parts, fmt.Sprintf("this session's skills are in %s (one directory per skill, each with a SKILL.md), read-only.", dir[SessionMountSkills]))
+	}
+	if dir[SessionMountOutputs] != "" {
+		parts = append(parts, fmt.Sprintf("Write the deliverables you want the user to get into %s (write and edit work there and nowhere outside the working directory).", dir[SessionMountOutputs]))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Session files (absolute paths; use the read, glob and grep tools): " + strings.Join(parts, " ")
 }
 
 // route is the platform's per-turn model endpoint when turn.start hands one,

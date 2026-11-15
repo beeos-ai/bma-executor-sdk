@@ -9,6 +9,10 @@ from .generated import (
     Ack,
     AgentCustomToolResultParams,
     CustomToolResultResult,
+    DesktopAttachParams,
+    DesktopAttachResult,
+    DesktopWallpaperParams,
+    DesktopWallpaperResult,
     ExecutorCapabilitiesUpdateParams,
     FsMountParams,
     FsMountResult,
@@ -37,6 +41,10 @@ from .generated import (
     SessionEventDeltaParams,
     SessionEventParams,
     SessionEventResult,
+    SessionFilesFlushParams,
+    SessionFilesFlushResult,
+    SessionHistoryParams,
+    SessionHistoryResult,
     SessionReadyParams,
     SessionStatusParams,
     SkillInstallParams,
@@ -67,15 +75,19 @@ __all__ = [
     "TERMINAL_OPEN",
     "TERMINAL_ATTACH",
     "TERMINAL_CLOSE",
+    "DESKTOP_ATTACH",
+    "DESKTOP_WALLPAPER",
     "SKILL_INSTALL",
     "WORKSPACE_BACKUP",
     "FS_MOUNT",
     "FS_UNMOUNT",
+    "SESSION_FILES_FLUSH",
     "AGENT_CUSTOM_TOOL_RESULT",
     "SESSION_READY",
     "SESSION_EVENT",
     "SESSION_ENDED",
     "TOOL_RESULT",
+    "SESSION_HISTORY",
     "INTERACTION_REQUEST",
     "INTERACTION_CANCEL",
     "MODEL_TOKEN_REFRESH",
@@ -99,10 +111,13 @@ PROCESS_LIST: Request[ProcessListParams, ProcessListResult] = Request("process.l
 TERMINAL_OPEN: Request[TerminalOpenParams, TerminalOpenResult] = Request("terminal.open")
 TERMINAL_ATTACH: Request[TerminalAttachParams, TerminalAttachResult] = Request("terminal.attach")
 TERMINAL_CLOSE: Request[TerminalCloseParams, TerminalCloseResult] = Request("terminal.close")
+DESKTOP_ATTACH: Request[DesktopAttachParams, DesktopAttachResult] = Request("desktop.attach")
+DESKTOP_WALLPAPER: Request[DesktopWallpaperParams, DesktopWallpaperResult] = Request("desktop.wallpaper")
 SKILL_INSTALL: Request[SkillInstallParams, SkillInstallResult] = Request("skill.install")
 WORKSPACE_BACKUP: Request[WorkspaceBackupParams, WorkspaceBackupResult] = Request("workspace.backup")
 FS_MOUNT: Request[FsMountParams, FsMountResult] = Request("fs.mount")
 FS_UNMOUNT: Request[FsUnmountParams, FsUnmountResult] = Request("fs.unmount")
+SESSION_FILES_FLUSH: Request[SessionFilesFlushParams, SessionFilesFlushResult] = Request("session_files.flush")
 AGENT_CUSTOM_TOOL_RESULT: Request[AgentCustomToolResultParams, CustomToolResultResult] = Request("agent.custom_tool_result")
 
 # Executor-to-harness requests a client sends with call.
@@ -110,6 +125,7 @@ SESSION_READY: Call[SessionReadyParams, Ack] = Call("session.ready")
 SESSION_EVENT: Call[SessionEventParams, SessionEventResult] = Call("session.event")
 SESSION_ENDED: Call[SessionEndedParams, Ack] = Call("session.ended")
 TOOL_RESULT: Call[ToolResultParams, Ack] = Call("tool.result")
+SESSION_HISTORY: Call[SessionHistoryParams, SessionHistoryResult] = Call("session.history")
 INTERACTION_REQUEST: Call[InteractionRequestParams, InteractionRequestResult] = Call("interaction.request")
 INTERACTION_CANCEL: Call[InteractionCancelParams, Ack] = Call("interaction.cancel")
 MODEL_TOKEN_REFRESH: Call[ModelTokenRefreshParams, ModelTokenRefreshResult] = Call("model_token.refresh")

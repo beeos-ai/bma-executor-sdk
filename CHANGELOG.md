@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.6.34
+
+- **Go: skills by copy for executors without FUSE (`SkillViews`).** macOS
+  and Windows local services cannot mount bma-file (ADR-0021 §9), so a local
+  brain never got its session's skills. `NewSkillViews(SkillViewsOptions{Root:
+  <session_files.root>})` with `core.Register(views.Capability())` declares
+  `capabilities.fs.copy_views: ["skills"]` (contract 1.18.0); the platform
+  then sends the same `fs.mount` / `fs.unmount` it sends a FUSE executor, and
+  SkillViews copies the view: bma-file `/list` (paged) and `/read` (in
+  ranges), each file's size and sha256 checked, a temporary directory renamed
+  into `<root>/<session>/skills`, read-only. `mounted` only when every file
+  is there; `fs_unavailable` or `mount_failed` otherwise, nothing left
+  behind; a path that is not the session's skills directory is `-32602`. A
+  repeated `fs.mount` (token renewal, reconnect) replaces the in-memory token
+  and copies nothing; a copy longer than 25 s goes on and the next
+  `fs.mount` answers; a copy already on disk that matches is kept;
+  `fs.unmount` removes only the skills directory. `Mounted` and `Remove` for
+  hosts that reap session directories.
+- **Go: `ACPAgentOptions.SessionMounts`** narrows the session directories a
+  local turn's file tools reach and the model is told about (`uploads`,
+  `skills`, `outputs`; nil: all three). With `[]string{"skills"}` the note
+  names only the skills directory, so a host that does not collect outputs
+  does not ask for deliverables there.
+- **Contract 1.18.0** snapshot from BMA main 574fdf45 (`make contract-sdk`):
+  `copy_views` and `FsEntry` (1.18.0), `desktop.attach` (1.16.0),
+  `session.history` (1.15.0), and the computer use contract this SDK has
+  carried since 1.6.24, now merged in BMA as 1.17.0. Since 1.6.24 the
+  snapshot had come from an unmerged BMA pull request; it now regenerates
+  exactly from BMA main (`tools/check_contract.py --regenerate`).
+
 ## 1.6.33
 
 - **Tested with bma-dsh-acp 0.3.1** (`testdata/bma-dsh-acp`; BMA tag
