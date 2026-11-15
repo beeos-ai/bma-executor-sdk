@@ -4,6 +4,7 @@ package bmaexecutor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -354,5 +355,51 @@ func TestACPAgentSessionFilesRoot(t *testing.T) {
 	assertIdle(t, plain.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
 	if m := plain.agent.opts.Core.session(coreKey{acpBrain, rigSession}).sessionMounts(); len(m) != 0 {
 		t.Fatalf("mounts without a root = %v", m)
+	}
+}
+
+// ACPAgentOptions.SessionMounts: with only the skills view the turn reaches
+// skills and nothing else, the note names only skills, and the files copied
+// by SkillViews are the ones the file tools read.
+func TestACPAgentSessionMountsSkillsOnly(t *testing.T) {
+	self, err := os.Executable()
+	noErr(t, err)
+	core, err := NewCore(CoreOptions{WorkRoot: t.TempDir()})
+	noErr(t, err)
+	t.Cleanup(core.Close)
+	if _, err = NewACPAgent(context.Background(), ACPAgentOptions{Command: []string{self}, Core: core, StateDir: t.TempDir(),
+		Upstream: ACPModelUpstream{BaseURL: "http://127.0.0.1:1/v1"}, SessionFilesRoot: t.TempDir(), SessionMounts: []string{"skills", "memory"}}); err == nil {
+		t.Fatal("an unknown mount was accepted")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	root := filepath.Join(t.TempDir(), "session")
+	t.Cleanup(func() { chmodWritable(root) })
+	f := newFakeBmaFile(t, testSkills)
+	views, err := NewSkillViews(SkillViewsOptions{Root: root})
+	noErr(t, err)
+	raw, _ := json.Marshal(mountParams(f, root, rigSession, "tok-1"))
+	got, err := views.Capability().Methods[MethodFsMount](ctx, Request{Params: raw})
+	wantMounted(t, got, err)
+
+	a := startACPFixture(t, ctx, ACPAgentOptions{SessionFilesRoot: root, SessionMounts: []string{SessionMountSkills}})
+	a.start(t, ctx, rigSession, "turn_1", "hello")
+	assertIdle(t, a.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
+	session := a.agent.opts.Core.session(coreKey{acpBrain, rigSession})
+	mounts := session.sessionMounts()
+	if len(mounts) != 1 || mounts[0].name != SessionMountSkills || mounts[0].dir != filepath.Join(root, rigSession, "skills") {
+		t.Fatalf("mounts = %+v", mounts)
+	}
+	note := a.agent.sessionFilesNote(rigSession, false)
+	if !strings.Contains(note, filepath.Join(root, rigSession, "skills")) || !strings.Contains(note, "SKILL.md") || strings.Contains(note, "uploads") || strings.Contains(note, "outputs") || strings.Contains(note, "deliverables") {
+		t.Fatalf("note = %q", note)
+	}
+	read, err := a.agent.opts.Core.fileTool(session, ToolNameRead, ToolInput{Path: filepath.Join(root, rigSession, "skills", "cu-finder", "SKILL.md")})
+	if err != nil || !strings.Contains(textOf(read), "Open Finder with open_app.") {
+		t.Fatalf("read skill = %+v %v", read, err)
+	}
+	if _, err := a.agent.opts.Core.fileTool(session, ToolNameWrite, ToolInput{Path: filepath.Join(root, rigSession, "outputs", "x.txt"), Content: "x"}); err == nil {
+		t.Fatal("outputs is writable without the outputs mount")
 	}
 }

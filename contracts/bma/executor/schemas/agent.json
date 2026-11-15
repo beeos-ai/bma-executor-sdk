@@ -69,6 +69,10 @@
           "type": "boolean",
           "description": "Contract 1.8.0. The executor's brain offers the model the host tools a turn.start declares (AgentTurnConfig.host_tools) and runs them through the turn's tools endpoint. Without it the platform does not send host_tools, and a session whose hands machine has computer use gets no computer use tools from this brain. Absent means false."
         },
+        "mcp_tools": {
+          "type": "boolean",
+          "description": "Contract 1.14.0. The executor's brain offers the model the MCP tools a turn.start declares (AgentTurnConfig.mcp_tools), runs them through the turn's tools endpoint under their name, and reports each call as agent.mcp_tool_use and agent.mcp_tool_result (not agent.tool_use). Without it the platform does not send mcp_tools, and a turn of an agent whose mcp_toolset enables tools, sent with tools_mcp_* to this executor, ends failed with session.error (bma_error_code mcp_tools_unsupported), never with the tools silently dropped. An executor that runs its tools itself (no tools_mcp_* in turn.start) is never sent the agent's MCP tools, declared or not, and its turns run without them. Absent means false."
+        },
         "harness": {
           "$ref": "agent.json#/$defs/AgentHarnessCapability",
           "description": "Deprecated: one hosted agent. Use harnesses; an executor that sets both lists this one in harnesses too."
@@ -238,7 +242,15 @@
           "items": {
             "$ref": "agent.json#/$defs/HostTool"
           },
-          "description": "Contract 1.8.0. Requested only, sent only to an executor that declared agent.host_tools and only with tools_mcp_* in metadata. Tools of the session's hands machine the brain offers the model next to its own tools: computer_observe and computer_action when the hands machine declared computer_use, absent otherwise (absent = none, so a session without a desktop never sees them). Every entry is offered under its name and input_schema exactly, and runs like the brain's other tools through tools_mcp_url under that name. Its permission is metadata tool_policy[name] when present, else the entry's permission: an ask call is approved once per call (interaction kind permission, the brain's deterministic interaction id). A tool result image (an image content block of the tools endpoint answer) reaches the model with that result as an image and is never written to a session event (agent.tool_result carries the text only); the brain keeps the images of the session's 3 most recent such calls in memory and sends only those (older calls, and every call after a brain restart, keep their text). An invalid entry (a name that is not one of these two tools, a repeated name, a missing description, an input_schema that is not an object schema, a permission other than allow or ask) answers -32602 invalid params. The set may differ from turn to turn; a turn sees the set of its own turn.start."
+          "description": "Contract 1.8.0. Requested only, sent only to an executor that declared agent.host_tools and only with tools_mcp_* in metadata. Tools of the session's hands machine the brain offers the model next to its own tools: computer_observe and computer_action when the hands machine declared computer_use, absent otherwise (absent = none, so a session without a desktop never sees them). Every entry is offered under its name and input_schema exactly, and runs like the brain's other tools through tools_mcp_url under that name. Its permission is metadata tool_policy[name] when present, else the entry's permission: an ask call is approved once per call (interaction kind permission, the brain's deterministic interaction id). A tool result image (an image content block of the tools endpoint answer) reaches the model with that result as an image and is never written to a session event (agent.tool_result carries the text only); the brain keeps the images of the session's such calls in memory and prunes them in batches: once more than 28 calls have images, the oldest 25 drop together (keep 3, interval 25), so the request prefix stays unchanged between two prunes (pruned calls, and every call after a brain restart, keep their text). An invalid entry (a name that is not one of these two tools, a repeated name, a missing description, an input_schema that is not an object schema, a permission other than allow or ask) answers -32602 invalid params. The set may differ from turn to turn; a turn sees the set of its own turn.start."
+        },
+        "mcp_tools": {
+          "type": "array",
+          "maxItems": 512,
+          "items": {
+            "$ref": "agent.json#/$defs/McpToolDefinition"
+          },
+          "description": "Contract 1.14.0. Requested only, sent only to an executor that declared agent.mcp_tools and only with tools_mcp_* in metadata (omitted when the turn has none). The enabled tools of the MCP servers of the turn's agent version (official mcp_servers with an mcp_toolset): the platform connects each server with its credential (the server's bma_auth, else the session's vaults), lists its tools when the turn starts and evaluates the mcp_toolset permission of each. The brain offers every entry to the model under name with input_schema exactly, next to its own tools, and runs a call like its other tools through tools_mcp_url under that name; the brain never connects an MCP server itself and never sees its credential. A server that could not be listed contributes no entry; the platform reports it as session.error (mcp_connection_failed_error or mcp_authentication_failed_error) and the turn goes on. A name that collides with one of the brain's own tools answers -32602 invalid params. The set may differ from turn to turn; a turn sees the set of its own turn.start."
         },
         "harness": {
           "type": "string",
@@ -370,7 +382,7 @@
         },
         "executor_session_ref": {
           "type": "string",
-          "description": "Opaque local session handle (for example the local agent's conversation id). The platform stores it and sends it back in the next turn.start so the executor can resume the local conversation after a restart."
+          "description": "Opaque local session handle (for example the local agent's conversation id). The platform stores it and sends it back in the next turn.start so the executor can resume the local conversation after a restart. It names the local conversation, not only the session: an executor that no longer has the session's local state (state directory or volume lost, another instance without it) starts a new conversation and answers resumed false with a handle different from every one it answered before for the session (for example the session id qualified by a generation of its state directory). A different handle with resumed false is how the platform learns the earlier context is gone and tells the user (agent.message with bma_user_notice harness_context_lost); a handle the executor keeps is a continuation whatever resumed says."
         },
         "resumed": {
           "type": "boolean",
@@ -378,6 +390,10 @@
         },
         "effective": {
           "$ref": "agent.json#/$defs/AgentTurnConfig"
+        },
+        "context_rebuilt": {
+          "type": "boolean",
+          "description": "Contract 1.15.0. true when the executor had no local state for the session and rebuilt the conversation from the session's history (session.history) instead: the turn continues with the earlier context, and the platform tells the user once (agent.message with bma_user_notice harness_context_rebuilt). Answered with resumed false. Absent means false: with resumed false and a new executor_session_ref the context is lost (harness_context_lost)."
         }
       },
       "required": [
@@ -452,6 +468,66 @@
         "tools_mcp_token",
         "tools_mcp_url",
         "expires_at"
+      ],
+      "additionalProperties": true
+    },
+    "SessionHistoryResult": {
+      "type": "object",
+      "description": "Contract 1.15.0. session.history result: a page of the session's conversation before the turn's opening input, in log order.",
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "agent.json#/$defs/SessionHistoryEvent"
+          }
+        },
+        "has_more": {
+          "type": "boolean",
+          "description": "More events follow: read again with after = the last bma_sequence of this page."
+        }
+      },
+      "required": [
+        "events",
+        "has_more"
+      ],
+      "additionalProperties": true
+    },
+    "SessionHistoryEvent": {
+      "type": "object",
+      "description": "Contract 1.15.0. One durable event of a session's conversation as the platform's log keeps it. A tool result names its call by the id of the call's event (tool_use_id, custom_tool_use_id, mcp_tool_use_id).",
+      "properties": {
+        "bma_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "id": {
+          "type": "string",
+          "description": "The event id."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "user.message",
+            "agent.message",
+            "agent.tool_use",
+            "agent.tool_result",
+            "agent.custom_tool_use",
+            "user.custom_tool_result",
+            "agent.mcp_tool_use",
+            "agent.mcp_tool_result"
+          ]
+        },
+        "payload": {
+          "type": "object",
+          "description": "The official event body without id, type and bma_sequence.",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "bma_sequence",
+        "id",
+        "type",
+        "payload"
       ],
       "additionalProperties": true
     },
@@ -694,7 +770,7 @@
     },
     "AgentMcpToolUseEvent": {
       "type": "object",
-      "description": "An MCP tool the local agent is calling. Its event_id is the mcp_tool_use_id.",
+      "description": "An MCP tool the local agent is calling. Its event_id is the mcp_tool_use_id. A brain reports a call of an AgentTurnConfig.mcp_tools entry with this event (mcp_server_name and name: the entry's mcp_server_name and tool_name), never as agent.tool_use (contract 1.14.0).",
       "properties": {
         "type": {
           "type": "string",
@@ -1101,6 +1177,53 @@
         "name",
         "description",
         "input_schema"
+      ],
+      "additionalProperties": true
+    },
+    "McpToolDefinition": {
+      "type": "object",
+      "description": "Contract 1.14.0. One tool of an MCP server of the turn's agent, as AgentTurnConfig.mcp_tools carries it.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^mcp__[a-zA-Z][a-zA-Z0-9-]{0,31}__[a-zA-Z][a-zA-Z0-9_-]{0,63}$",
+          "description": "Name the model sees and the tools endpoint runs: mcp__<mcp_server_name>__<tool_name>, at most 64 characters. A tool whose name would not fit the pattern is not offered."
+        },
+        "mcp_server_name": {
+          "type": "string",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9-]{0,31}$",
+          "description": "The agent's name of the MCP server (mcp_servers[].name); agent.mcp_tool_use.mcp_server_name."
+        },
+        "tool_name": {
+          "type": "string",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,63}$",
+          "description": "The server's own name of the tool (MCP tools/list name); agent.mcp_tool_use.name."
+        },
+        "description": {
+          "type": "string",
+          "description": "The server's description of the tool; absent when it gave none."
+        },
+        "input_schema": {
+          "type": "object",
+          "description": "The server's JSON Schema of the input object (type object), offered to the model as is.",
+          "additionalProperties": true
+        },
+        "permission": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "ask"
+          ],
+          "description": "The mcp_toolset permission of the tool (always_allow: allow, always_ask: ask). ask: the brain asks once per call (interaction kind permission, the brain's deterministic interaction id) and sends the answer as ai.beeos.bma/approval; the tools endpoint evaluates the same policy again."
+        }
+      },
+      "required": [
+        "name",
+        "mcp_server_name",
+        "tool_name",
+        "input_schema",
+        "permission"
       ],
       "additionalProperties": true
     }

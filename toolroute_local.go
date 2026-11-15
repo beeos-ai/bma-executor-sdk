@@ -135,7 +135,7 @@ func NewLocalToolRoute(opts LocalToolRouteOptions) (*LocalToolRoute, error) {
 	if err := opts.Core.openLocal(acpBrain, opts.SessionID, opts.Workspace); err != nil {
 		return nil, err
 	}
-	if err := opts.Core.setLocalMounts(opts.SessionID, opts.SessionFilesRoot); err != nil {
+	if err := opts.Core.setLocalMounts(opts.SessionID, opts.SessionFilesRoot, nil); err != nil {
 		return nil, fmt.Errorf("bmaexecutor: LocalToolRouteOptions.SessionFilesRoot: %w", err)
 	}
 	ledger, err := opts.Core.local.ledger(ledgerPath(opts.StateDir, opts.SessionID), opts.SessionID)

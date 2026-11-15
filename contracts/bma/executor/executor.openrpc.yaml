@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 1.14.0
+  version: 1.16.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -1324,7 +1324,10 @@ methods:
       mounts of another, and fs.unmount ends one session only. An executor that declared fs.skills_per_session
       receives the skills view of each session at its own path (<session_files.root>/<agent_session_id>/skills)
       and removes the mount points it created on fs.unmount; any other executor receives skills at the fixed
-      /mnt/skills and one session at a time.
+      /mnt/skills and one session at a time. Since contract 1.16.0 an executor that declared fs.copy_views (and a
+      session_files.root) also receives fs.mount, for those views only, at <root>/<agent_session_id>/<view>;
+      it copies the view as read-only files through the bma-file read routes instead of mounting it (see
+      FsCapability.copy_views and file.json).
     tags:
       - name: fs
     x-bma-direction: harness-to-executor
@@ -1363,7 +1366,8 @@ methods:
     summary: Unmount the session file views.
     description: Harness to executor request (machine-scoped). Unmounts every view of the session and
       drops its tokens. With flush the executor first commits pending writes (none for read-only
-      views). Idempotent by session_id, a session with nothing mounted answers "unmounted".
+      views). Idempotent by session_id, a session with nothing mounted answers "unmounted". For a view
+      placed by copying (fs.copy_views) the executor deletes that session's copied directory.
     tags:
       - name: fs
     x-bma-direction: harness-to-executor
@@ -1386,6 +1390,31 @@ methods:
         $ref: schemas/file.json#/$defs/FsUnmountResult
     errors:
       - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: session_files.flush
+    summary: Upload the session outputs written so far and wait for the uploads.
+    description: Harness to executor request (machine-scoped, contract 1.13.0). Before the platform
+      pauses or hibernates the machine it asks the executor to upload every changed file under the
+      outputs of every session it shows (what the periodic scan would upload next, without waiting
+      for the file to be seen stable) and answers when all uploads are done. "flushed" means no
+      upload is outstanding; "failed" means at least one upload failed and may be retried, so the
+      platform must not pause yet. A file the platform refuses for good (size, quota, name) is not
+      a failure. Idempotent; an executor that does not know the method answers -32601, which the
+      platform treats as nothing to flush.
+    tags:
+      - name: file
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: session_files
+    params: []
+    result:
+      name: SessionFilesFlushResult
+      schema:
+        $ref: schemas/file.json#/$defs/SessionFilesFlushResult
+    errors:
       - $ref: "#/components/errors/CapabilityUnavailable"
       - $ref: "#/components/errors/InternalError"
   - name: turn.start
@@ -1627,6 +1656,66 @@ methods:
         description: Text appended to the block.
         schema:
           type: string
+  - name: session.history
+    summary: Read the conversation of a session before a turn.
+    description: >-
+      Executor to harness request (capability agent, contract 1.15.0). The executor that is the session's
+      brain (the target the session's turns are dispatched to) reads the session's conversation as the
+      platform's event log keeps it, the single source of truth of a session: the durable events before the
+      opening input of the given running turn, a page at a time in log order (has_more says more follow).
+      Only the conversation travels: user.message, agent.message, agent.tool_use, agent.tool_result,
+      agent.custom_tool_use, user.custom_tool_result, agent.mcp_tool_use and agent.mcp_tool_result, each with
+      its bma_sequence, id, type and official body. A brain calls it when it opens a session it holds no
+      local state for although the session has a past, for example a session whose earlier turns ran on
+      another brain (data migration from another stack) or whose state was lost; it rebuilds its context from
+      the events, replaying messages, tool calls and their results in its model's format under its usual
+      context limits, and answers the turn.start with context_rebuilt true. Only the session's brain may read
+      it: any other connection gets forbidden (-32001), before any turn of the session was dispatched
+      not_dispatched (-32013, retryable); a turn that is not open is session_not_active (-32007); an unknown or
+      deleted session is session_not_found (-32002). A harness without the method answers -32601; the brain
+      then has no history to rebuild from.
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        description: Platform session id.
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        description: The running turn whose past is read; its opening input is not part of the history.
+        schema:
+          type: string
+      - name: after
+        required: false
+        description: Read the events with a bma_sequence greater than this (default 0, from the start).
+        schema:
+          type: integer
+          minimum: 0
+      - name: limit
+        required: false
+        description: At most this many events (1-500, default 500); a page also stays within 512 KiB of event bodies (one event always fits).
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 500
+    result:
+      name: SessionHistoryResult
+      schema:
+        $ref: schemas/agent.json#/$defs/SessionHistoryResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/NotFound"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
   - name: interaction.request
     summary: Ask the platform for an approval or an answer.
     description: Executor to harness request (capability agent). The harness opens one platform agent

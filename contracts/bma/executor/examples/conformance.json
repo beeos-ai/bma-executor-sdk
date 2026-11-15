@@ -167,6 +167,44 @@
       }
     },
     {
+      "name": "executor.register request (skills by copy)",
+      "method": "executor.register",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_1",
+        "method": "executor.register",
+        "params": {
+          "protocol": "bma.executor.v1.1",
+          "environment_id": "",
+          "executor": {
+            "name": "desktop-agent",
+            "os": "darwin",
+            "arch": "arm64",
+            "version": "1.3.0"
+          },
+          "capabilities": {
+            "shell": {
+              "enabled": true
+            },
+            "process": {
+              "enabled": true,
+              "file_transfer": true
+            },
+            "session_files": {
+              "root": "/Users/alice/Library/Application Support/Agent/sessions"
+            },
+            "fs": {
+              "fuse": false,
+              "copy_views": [
+                "skills"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "executor.heartbeat request",
       "method": "executor.heartbeat",
       "kind": "request",
@@ -1109,6 +1147,26 @@
       }
     },
     {
+      "name": "session_files.flush request",
+      "method": "session_files.flush",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_session_files_flush",
+        "method": "session_files.flush",
+        "params": {}
+      }
+    },
+    {
+      "name": "session_files.flush result",
+      "method": "session_files.flush",
+      "kind": "result",
+      "result": {
+        "state": "flushed",
+        "uploaded": 2
+      }
+    },
+    {
       "name": "turn.start request",
       "method": "turn.start",
       "kind": "request",
@@ -1223,6 +1281,84 @@
         "tools_mcp_token": "bma_cap_v1.example-payload.example-mac",
         "tools_mcp_url": "https://executor.example.com/v1/machines/mch_brain/mcp",
         "expires_at": "2026-11-10T16:23:50Z"
+      }
+    },
+    {
+      "name": "session.history request",
+      "method": "session.history",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_session_history",
+        "method": "session.history",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "after": 4,
+          "limit": 500
+        }
+      }
+    },
+    {
+      "name": "session.history result",
+      "method": "session.history",
+      "kind": "result",
+      "result": {
+        "events": [
+          {
+            "bma_sequence": 1,
+            "id": "sevt_01JUSER",
+            "type": "user.message",
+            "payload": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "My codename is HERON."
+                }
+              ]
+            }
+          },
+          {
+            "bma_sequence": 3,
+            "id": "sevt_01JTOOL",
+            "type": "agent.tool_use",
+            "payload": {
+              "name": "bash",
+              "input": {
+                "command": "date"
+              }
+            }
+          },
+          {
+            "bma_sequence": 4,
+            "id": "sevt_01JRESULT",
+            "type": "agent.tool_result",
+            "payload": {
+              "tool_use_id": "sevt_01JTOOL",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Sun Nov 15"
+                }
+              ],
+              "is_error": false
+            }
+          },
+          {
+            "bma_sequence": 5,
+            "id": "sevt_01JREPLY",
+            "type": "agent.message",
+            "payload": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Noted."
+                }
+              ]
+            }
+          }
+        ],
+        "has_more": false
       }
     },
     {

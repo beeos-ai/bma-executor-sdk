@@ -59,6 +59,12 @@
 
 声明了 `capabilities.session_files` 的机器上，平台把每个会话的文件挂载为 `<root>/<会话 id>/uploads`（用户文件，只读）、`.../skills`（会话技能，只读）和 `.../outputs`（交付物，可写）。把声明的 `root` 交给 `ACPAgentOptions.SessionFilesRoot`（或 `LocalToolRouteOptions.SessionFilesRoot`），该会话回合的文件工具除工作区外，按绝对路径只可访问这三个目录：`read`、`glob`、`grep` 三个都可，`write`、`edit` 仅限 `outputs`。其余一律拒绝：其他会话的目录、根下的其他路径、`..`、指向目录之外的符号链接，以及顶替会话目录或挂载目录的链接（每个目录各自以 `os.Root` 打开，且必须是真目录）。`glob`、`grep` 对挂载目录报告绝对路径。`CoreOptions.FileAccess` 对这些路径同样被询问，`FileAccessRequest.Mount` 为 `uploads`/`skills`/`outputs`，`Path` 相对该目录，因此只守护工作区的钩子必须检查 `Mount`。在带 FUSE 会话挂载的执行端上，写入 `outputs` 的文件在关闭时由挂载提交；SDK 自带的 `SessionFiles` 扫描只上传启动过进程的会话的 outputs（其 daemon 路由以进程为锚），所以收不到只有 ACP 回合的会话的产出。工具在另一台机器上执行的回合（`tools_mcp_*`）不会在本机得到这些挂载。
 
+`ACPAgentOptions.SessionMounts` 把它缩小为 `uploads`、`skills`、`outputs` 中的几个（nil 表示三个都有）：文件工具只能访问这些，给模型的说明也只提这些。本机回合只拿 skills 视图、不同步 uploads 和 outputs 的宿主，设为 `[]string{"skills"}`。
+
+#### 不能挂 FUSE 的执行端用复制落地 skills（`SkillViews`）
+
+`NewSkillViews(SkillViewsOptions{Root: <session_files.root>})` 加 `core.Register(views.Capability())` 会声明 `capabilities.fs.copy_views: ["skills"]`（`fuse` 为 false；没人声明 `session_files.root` 时也一并声明）。平台随后发 `fs.mount`，会话的 skills 视图在 `<root>/<agent_session_id>/skills`，带只读令牌；SkillViews 从 bma-file 列目录（`/list`）、分段读每个文件（`/read`），校验每个文件的大小和 sha256，写到目标旁的临时目录，再原子改名到位，只读（文件 0444，可执行文件和目录 0555）。所有文件都到位才回 `mounted`；失败回 `failed`，码为 `fs_unavailable`（bma-file 连不上，或重试两次后仍是 429/5xx）或 `mount_failed`（其他情况，写明 HTTP 码），不留半成品。路径不是 `<root>/<会话>/skills` 或会话 id 不安全时回 `-32602`。重复的 `fs.mount`（令牌续期、重连）只换内存里的令牌，不重新复制；超过 `MountWait`（25 秒，平台等 30 秒）的复制在后台继续，下一次 `fs.mount` 在完成时回答；盘上已有且与列表一致的视图直接保留。`fs.unmount` 删除该会话的 skills 目录，会话目录空了也一并删除。回收会话目录的宿主可以用 `Mounted` 跳过、用 `Remove` 删除视图（视图只读，直接 `RemoveAll` 会话目录会失败）。令牌只放内存。
+
 在这些检查接好之前想关掉某个工具，用下面的 `ACPAgentOptions.ToolPolicy`；它是上限，`deny` 严于 `ask` 严于 `allow`，平台的 `tool_policy` 和权限模式只能更严。
 
 实现 `SessionFileTransferer` 的文件传输器改收 `TransferSessionFile(ctx, ProcessContext, transfer)`。

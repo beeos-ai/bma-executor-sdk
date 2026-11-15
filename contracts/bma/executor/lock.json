@@ -1,30 +1,30 @@
 {
   "source_repository": "beeos-ai/beeos-managed-agents",
-  "source_commit": "3234d435fce6069f84a3abcc919fe63d377894e5",
+  "source_commit": "a79f49579b75615953c5c36ec84bf7a5fbd67eb3",
   "protocols": [
     "bma.executor.v1",
     "bma.executor.v1.1"
   ],
-  "contract_version": "1.14.0",
+  "contract_version": "1.16.0",
   "contract": {
-    "contracts/bma/executor/examples/conformance.json": "6756c86ace11578716fabb967073a1d8900c6374602d9c062567db75ab655503",
-    "contracts/bma/executor/executor.asyncapi.yaml": "d6ebb61d876566c70a6d0a2fdc2f969757a698e3ac8188d307dde04ff53e2613",
-    "contracts/bma/executor/executor.openrpc.yaml": "772bf264b81df141dc28f31dcb6b55fc077c9846aa60515f555d63a4419cdec7",
-    "contracts/bma/executor/schemas/agent.json": "16f5a6864e7ce4161af370e6ad54051d15b3dcf0173e8021e550506384f173bf",
-    "contracts/bma/executor/schemas/common.json": "ad01c086fb4df2b5122753ab9557c1ab8d987723e56e24ab8419b859ee434df8",
-    "contracts/bma/executor/schemas/executor.json": "755adffed9c1c61b0fafede60803d1cf838b9c639a79e159dad37e9c19567ab5",
-    "contracts/bma/executor/schemas/file.json": "2299157f8960a8b3df170ec5c06b0d2c7d6870b937750b2bfccad343a00b45da",
+    "contracts/bma/executor/examples/conformance.json": "1b464ca673eba80e8f0d10f621929bd74b2a8d3e7ed57fa28c62079ce0ed4046",
+    "contracts/bma/executor/executor.asyncapi.yaml": "3ad3ddc8e1fdf36bbdc71de98427a87a3eb8f0865d7cfb847677b7f9f228b8f4",
+    "contracts/bma/executor/executor.openrpc.yaml": "53bfda4aaf434d148e988fb645a35a8c1cf95b38a89c2b60e1c8fd5df2158a94",
+    "contracts/bma/executor/schemas/agent.json": "277839a7b9a29aa3c2a6e73ed641a39cdff8bedb25698fbb6efff868a65ef7b8",
+    "contracts/bma/executor/schemas/common.json": "a838906a968534ee5cda4a32d44bb20be851ae75baa3c8e6e5069e6c5f992b75",
+    "contracts/bma/executor/schemas/executor.json": "a424fe2be9967b95d23875abf9ae431e39f31b993ada78536556dee0da00ad9b",
+    "contracts/bma/executor/schemas/file.json": "1f8214cec7076ebb2232d96c68a6a971116054023b7648109843a5a414db606e",
     "contracts/bma/executor/schemas/mcp.json": "0fe0ef4b0c5e45cd2e1e00d2ef0f99dd313186a547bbd07f0ddfdf19bd814840",
     "contracts/bma/executor/schemas/process.json": "c04e10d9bf6fb333b77333630e534c62b78a4bd90b1a6141a2efbd9e7191ca54",
     "contracts/bma/executor/schemas/session.json": "a4a2ce81841bb9bbf639b4c520dd9699364861b0ea5295f3aa0788120379a8fb",
     "contracts/bma/executor/schemas/skill.json": "76ee971d664319d7a9add3bb2c5a2846c22bfac870b2dd975badbee2b2ffcf73",
     "contracts/bma/executor/schemas/terminal.json": "9266028342f5d4725efbac813848e2b26406761f337a044a03c6e0a5512c4ab3",
-    "contracts/bma/executor/schemas/tool.json": "35cc82ccb8d127bc3c21a0d4f300fed9c008f7b0a65f29ac5b6d513dab5c2239",
+    "contracts/bma/executor/schemas/tool.json": "d9c9e47d37bb54fed41e00c6a054d955ca1d34fa51ecea48d744fdff66876c17",
     "contracts/bma/executor/schemas/workspace.json": "980435059173d01aa4287a8ec5d0ebb0b3424322e15cebf8cce70f74c21b8012"
   },
   "generated": {
-    "generated.go": "13575b428311bb88493917213f8f07e740fe629df74f5a8604c5320aacd4c672",
-    "python/src/bma_executor_sdk/generated.py": "6bdb9a06fec82ed94cd5849c83007e434183275364663a3e989a34602422daef",
-    "typescript/src/generated/executor.ts": "151dd5c4b7666e018c37505a6cc6de8b5756b1a5f2e3f491dc5d968434559aea"
+    "generated.go": "830d5d56e7d0453306131023c4df0770b21994cbcc893bac59744fa48f7a0a91",
+    "python/src/bma_executor_sdk/generated.py": "325c9bed3fdf1a04c80b783b737c21b00001568ce62c3def022d52053406a210",
+    "typescript/src/generated/executor.ts": "34751b7afd899c6d62a5b31b50a2a580cfaac45f48493512b6d7e40a838a9781"
   }
 }
