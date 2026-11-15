@@ -49,21 +49,38 @@ jobs:
       - name: Verify the tag matches every package version
         run: ./tools/check_versions.sh "${{ inputs.tag || github.ref_name }}"
 
-      # Fails closed: a release needs the contract snapshot to come from a
-      # merged BMA commit and to regenerate exactly there
-      # (tools/check_contract.py --regenerate). beeos-managed-agents is
-      # private, so this needs the BMA_CONTRACT_READ_TOKEN secret (contents:
-      # read on that repository); without it the release stops here.
-      - name: BMA read token is set
+      # The contract snapshot must come from a merged BMA commit and
+      # regenerate exactly there (tools/check_contract.py --regenerate).
+      # beeos-managed-agents is private, so this needs the
+      # BMA_CONTRACT_READ_TOKEN secret (contents: read on that repository).
+      # With the token the check must pass. Without it the release goes on
+      # with a warning: whoever tags runs the check locally against a BMA
+      # checkout and records the result in the release pull request.
+      # SWITCH: once BMA_CONTRACT_READ_TOKEN is set, change
+      # CONTRACT_GATE_WITHOUT_TOKEN to "fail" so a missing token stops the
+      # release (fail closed).
+      - name: BMA read token
+        id: bma-token
         env:
           BMA_CONTRACT_READ_TOKEN: ${{ secrets.BMA_CONTRACT_READ_TOKEN }}
+          CONTRACT_GATE_WITHOUT_TOKEN: warn
         run: |
-          if [ -z "$BMA_CONTRACT_READ_TOKEN" ]; then
-            echo "::error::BMA_CONTRACT_READ_TOKEN is not set: the contract snapshot's source cannot be checked against beeos-ai/beeos-managed-agents main, so the release stops (add a token with contents: read on that repository)"
+          if [ -n "$BMA_CONTRACT_READ_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "present=false" >> "$GITHUB_OUTPUT"
+          message="BMA_CONTRACT_READ_TOKEN is not set: the contract snapshot was NOT checked against beeos-ai/beeos-managed-agents main (tools/check_contract.py --regenerate). Run it locally against a BMA checkout and record the result in the release PR; set the secret (contents: read on that repository)."
+          if [ "$CONTRACT_GATE_WITHOUT_TOKEN" = "fail" ]; then
+            echo "::error::$message"
             exit 1
           fi
+          echo "::warning::$message"
+          echo "### Contract snapshot NOT checked against BMA main" >> "$GITHUB_STEP_SUMMARY"
+          echo "$message" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check out BMA
+        if: steps.bma-token.outputs.present == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: beeos-ai/beeos-managed-agents
@@ -72,11 +89,13 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Node
+        if: steps.bma-token.outputs.present == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .bma/.node-version
 
       - name: Contract snapshot is regenerated from BMA main
+        if: steps.bma-token.outputs.present == 'true'
         run: python3 tools/check_contract.py --source .bma --ref origin/main --regenerate
 
   npm:
