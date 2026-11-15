@@ -189,14 +189,23 @@ func (c *Core) readFrom(file io.Reader, input ToolInput) (ToolResultParams, erro
 	return textResult(false, out.String()), nil
 }
 
+func (c *Core) withFileIdentity(fn func() error) error {
+	if c.opts.RunAs == nil {
+		return fn()
+	}
+	return withFileIdentity(c.opts.RunAs, fn)
+}
+
 func (c *Core) write(session *CoreSession, input ToolInput) (ToolResultParams, error) {
-	err := session.withRoot(input.Path, true, func(root *os.Root, rel string) error {
-		if dir := filepath.Dir(rel); dir != "." {
-			if err := root.MkdirAll(dir, 0o700); err != nil {
-				return err
+	err := c.withFileIdentity(func() error {
+		return session.withRoot(input.Path, true, func(root *os.Root, rel string) error {
+			if dir := filepath.Dir(rel); dir != "." {
+				if err := root.MkdirAll(dir, 0o700); err != nil {
+					return err
+				}
 			}
-		}
-		return root.WriteFile(rel, []byte(input.Content), 0o600)
+			return root.WriteFile(rel, []byte(input.Content), 0o600)
+		})
 	})
 	if err != nil {
 		return ToolResultParams{}, err
@@ -211,17 +220,19 @@ func (c *Core) editFile(session *CoreSession, input ToolInput, all bool) (matche
 	if input.OldString == "" {
 		return 0, errors.New("edit requires old_string and new_string")
 	}
-	err = session.withRoot(input.Path, true, func(root *os.Root, rel string) error {
-		raw, err := root.ReadFile(rel)
-		if err != nil {
-			return err
-		}
-		text := string(raw)
-		matched = strings.Count(text, input.OldString)
-		if matched == 0 || (matched != 1 && !all) {
-			return nil
-		}
-		return root.WriteFile(rel, []byte(strings.ReplaceAll(text, input.OldString, input.NewString)), 0o600)
+	err = c.withFileIdentity(func() error {
+		return session.withRoot(input.Path, true, func(root *os.Root, rel string) error {
+			raw, err := root.ReadFile(rel)
+			if err != nil {
+				return err
+			}
+			text := string(raw)
+			matched = strings.Count(text, input.OldString)
+			if matched == 0 || (matched != 1 && !all) {
+				return nil
+			}
+			return root.WriteFile(rel, []byte(strings.ReplaceAll(text, input.OldString, input.NewString)), 0o600)
+		})
 	})
 	return matched, err
 }

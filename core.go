@@ -119,9 +119,9 @@ type CoreOptions struct {
 	// RunAs, when set, is the OS identity every bash tool, process and stdio
 	// MCP server runs as, so a privileged executor (for example root) keeps
 	// its own credentials and state out of the workload's reach. HOME and
-	// USER in bash and process environments are the workload's. File tools
-	// (read/write/edit/glob/grep) run inside the executor and would bypass
-	// that boundary, so they are refused. Unix only.
+	// USER in bash and process environments are the workload's. On Linux,
+	// write/edit use the workload's file identity; the other file tools are
+	// refused. Unix only.
 	RunAs *RunAs
 	// Launch runs before each bash tool command starts (tool.call and
 	// LocalToolRoute, so also ACPAgent's own tools), with the semantics of
@@ -829,7 +829,7 @@ func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams
 	case ToolNameBash:
 		result = c.bash(ctx, session, params, input)
 	case ToolNameRead, ToolNameWrite, ToolNameEdit, ToolNameGlob, ToolNameGrep:
-		if c.opts.RunAs != nil {
+		if c.opts.RunAs != nil && params.Tool != ToolNameWrite && params.Tool != ToolNameEdit {
 			err = fmt.Errorf("tool %q is unavailable: this executor runs workloads as another OS user; use bash", params.Tool)
 			break
 		}

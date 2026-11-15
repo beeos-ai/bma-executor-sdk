@@ -600,9 +600,6 @@ func (r *LocalToolRoute) replaceAll(input ToolInput) (string, bool) {
 	if session == nil {
 		return "session_not_active: the session is not open", true
 	}
-	if r.core.opts.RunAs != nil {
-		return `tool "edit" is unavailable: this executor runs workloads as another OS user; use bash`, true
-	}
 	if input.OldString == "" {
 		return "edit requires old_string and new_string", true
 	}
