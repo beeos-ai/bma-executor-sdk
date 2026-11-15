@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -218,6 +219,9 @@ func TestSkillViewsCopyTheView(t *testing.T) {
 		}
 	}
 	for p, mode := range map[string]fs.FileMode{"cu-finder/SKILL.md": 0o444, "cu-finder/scripts/check.sh": 0o555, "cu-finder": 0o555, ".": 0o555} {
+		if runtime.GOOS == "windows" && p == "cu-finder/scripts/check.sh" {
+			continue // Windows has no execute bit
+		}
 		info, _ := os.Stat(filepath.Join(dir, p))
 		if info.Mode().Perm() != mode {
 			t.Errorf("%s mode = %v, want %v", p, info.Mode().Perm(), mode)
