@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.6.32
+
+- **Go: `wait` ignores a window instead of refusing the call.** A batch whose
+  `wait` step named `pid` and `window_id` was refused whole
+  (`invalid_tool_input: step 2: wait takes only duration`, 2026-11-15). A
+  window changes nothing about a wait and grants nothing, so it is dropped
+  and the step's result says "pid and window_id are not used by wait and
+  were ignored"; `coordinate` or `text` on a wait is still refused. An input
+  that does not check stays the call's tool error (`is_error`), which the
+  model reads while the turn goes on, on every route (now covered by a test
+  with the real bma-dsh-acp). The turn that failed after that error
+  failed on its next model request (HTTP 503 from the model endpoint), not
+  on the error.
+
 ## 1.6.31
 
 - **Go: `menu` needs the full path.** A `menu_path` of one top-level label

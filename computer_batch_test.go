@@ -145,6 +145,7 @@ func TestComputerBatchRefusals(t *testing.T) {
 		"hold_key without duration":     {"action": "hold_key", "text": "shift"},
 		"wait too long":                 {"action": "wait", "duration": 11},
 		"mouse_move without coordinate": {"action": "mouse_move"},
+		"wait with text":                {"action": "wait", "duration": 1, "text": "x"},
 	} {
 		if result := callComputer(t, session, ToolNameComputerAction, input); !result.IsError {
 			t.Errorf("%s = %+v", name, result)
@@ -283,5 +284,23 @@ func TestComputerViewerObservationKeepsItsSize(t *testing.T) {
 	images := resultImages(t, viewer)
 	if len(images) != 1 || images[0].Bounds().Dx() != 1920 || strings.Contains(textOf(viewer), "scaled") {
 		t.Fatalf("viewer observation = %d images, text %q", len(images), textOf(viewer))
+	}
+}
+
+// TestComputerWaitIgnoresAWindow: a wait step that names a window still runs;
+// the window does not change what wait does, so it is dropped and the result
+// says so (2026-11-15: such a batch was refused whole).
+func TestComputerWaitIgnoresAWindow(t *testing.T) {
+	backend := &screenBackend{w: 800, h: 600}
+	session, _ := computerSession(t, CoreOptions{ComputerUse: backend})
+	result := callComputer(t, session, ToolNameComputerAction, map[string]any{"action": "batch", "actions": []map[string]any{
+		{"action": "key", "text": "Escape", "pid": 5, "window_id": 6},
+		{"action": "wait", "duration": 0.1, "pid": 5, "window_id": 6, "description": "wait for it"},
+	}})
+	if result.IsError || !strings.Contains(textOf(result), "waited 0.1s (pid and window_id are not used by wait and were ignored)") {
+		t.Fatalf("batch = %+v", result)
+	}
+	if actions, _ := backend.calls(); len(actions) != 1 || actions[0].Action != ComputerActionKey {
+		t.Fatalf("actions = %+v", actions)
 	}
 }
