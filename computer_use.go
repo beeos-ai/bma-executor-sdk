@@ -225,6 +225,9 @@ type ComputerActionRequest struct {
 	// an action with PID/WindowID the session's last observation of that
 	// window, otherwise its last observation. Nil when there was none.
 	Frame *ComputerFrame
+	// ignored names inputs the action does not use and that were dropped
+	// (the result says so).
+	ignored string
 }
 
 // ComputerUseBackend performs computer use on the machine's interactive
@@ -575,7 +578,11 @@ func (c *Core) computerAction(ctx context.Context, req ComputerActionRequest) ([
 		return nil, ctx.Err()
 	case <-time.After(req.Duration):
 	}
-	return []ContentBlock{{Type: ContentBlockTypeText, Text: fmt.Sprintf("waited %gs", req.Duration.Seconds())}}, nil
+	text := fmt.Sprintf("waited %gs", req.Duration.Seconds())
+	if req.ignored != "" {
+		text += " (" + req.ignored + ")"
+	}
+	return []ContentBlock{{Type: ContentBlockTypeText, Text: text}}, nil
 }
 
 // batchHalt is the text of a batch step after a failed one (the Anthropic
@@ -804,8 +811,15 @@ func (in computerInput) actionRequest() (ComputerActionRequest, error) {
 		if err := duration(); err != nil {
 			return request, err
 		}
-		if in.PID != 0 || len(in.Coordinate) > 0 || in.Text != "" {
+		if len(in.Coordinate) > 0 || in.Text != "" {
 			return request, errors.New("wait takes only duration")
+		}
+		// A window does not change what wait does, and grants nothing: it is
+		// ignored, and the result says so (2026-11-15: a batch with a wait
+		// step that named the window was refused whole).
+		if in.PID != 0 || in.WindowID != 0 {
+			request.PID, request.WindowID = 0, 0
+			request.ignored = "pid and window_id are not used by wait and were ignored"
 		}
 	case ComputerActionOpenApp:
 		request.App = strings.TrimSpace(in.App)

@@ -493,3 +493,35 @@ func TestACPAgentPlatformAskUserQuestionIsTheCustomTool(t *testing.T) {
 		t.Fatalf("model saw tools %s", tools)
 	}
 }
+
+// A computer_action whose input does not check is the call's tool error: the
+// model reads it and the turn goes on (2026-11-15: a batch with a bad step).
+func TestACPAgentComputerActionBadInputIsAToolError(t *testing.T) {
+	command := bmaDshAcpCommand(t)
+	model := newScriptedToolModel(t)
+	model.name, model.args = ToolNameComputerAction, `{"action":"batch","description":"x","actions":[{"action":"key","text":"Escape","pid":5,"window_id":6},{"action":"click","pid":5,"window_id":6}]}`
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	computer := &recordingComputer{}
+	core, err := NewCore(CoreOptions{WorkRoot: filepath.Join(t.TempDir(), "work"), ComputerUse: computer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(core.Close)
+	f := startACPFixture(t, ctx, ACPAgentOptions{Command: command, Core: core, Upstream: ACPModelUpstream{BaseURL: model.server.URL + "/v1", Model: "scripted"}})
+	f.start(t, ctx, "sesn_bad", "turn_1", "go")
+	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
+	events := eventsOf(f.platform.snapshot(), "turn_1")
+	if got := strings.Join(eventTypes(events), ","); got != "session.status_running,agent.tool_use,agent.tool_result,agent.message,session.status_idle" {
+		t.Fatalf("events = %s", got)
+	}
+	if result := eventJSON(t, events[2]); result["is_error"] != true || !strings.Contains(fmt.Sprint(result["content"]), "invalid_tool_input: step 2: coordinate must be [x, y]") {
+		t.Fatalf("tool_result = %v", result)
+	}
+	if !strings.Contains(fmt.Sprint(eventJSON(t, events[3])["content"]), "invalid_tool_input") {
+		t.Fatalf("the model did not read the tool error: %v", eventJSON(t, events[3]))
+	}
+	if got := computer.seen(); got != "" {
+		t.Fatalf("a refused batch ran: %s", got)
+	}
+}
