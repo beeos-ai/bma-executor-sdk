@@ -110,7 +110,7 @@
         },
         "desktop": {
           "type": "boolean",
-          "description": "The machine can host its own desktop for a desktop session (it carries bma-desktop-session, started through process.start). Absent means unknown (an executor that predates the field)."
+          "description": "The machine runs its own desktop (bmad supervises bma-desktop-session from machine start) and serves desktop.attach. Absent means unknown (an executor that predates the field)."
         },
         "native_webrtc": {
           "type": "boolean",
@@ -248,7 +248,7 @@
             ]
           },
           "uniqueItems": true,
-          "description": "Contract 1.16.0. Views the executor places by copying instead of mounting, for an executor that cannot mount FUSE (macOS, Windows; ADR-0021 decision 9). Only skills, an immutable view (versions frozen when the session was created). Declare it only together with session_files.root. The harness then sends fs.mount and fs.unmount for these views exactly as for a FUSE mount (same read-only token, same service_url, path <root>/<agent_session_id>/skills); the executor reads the view through the bma-file read routes (list, lookup, read; see file.json) and writes it as read-only files at that path, the same as a read-only mount: it answers fs.mount mounted only once every file is in place and its sha256 checked (nothing half-copied stays), failed with error_code fs_unavailable (bma-file unreachable, or 429/5xx after retries) or mount_failed (anything else), and invalid_params for a path outside <root>/<agent_session_id>/skills. The harness waits at most 30 s for an answer: a copy that takes longer goes on, and the repeated fs.mount of the same session and path joins it. A repeated fs.mount of the same session and path (token renewal, reconnect) only replaces the token and needs no new copy. Sessions are independent, several may be placed at once, and fs.unmount deletes that session's directory only. A view listed in both views (with fuse true) and copy_views is mounted. Absent: nothing changes."
+          "description": "Contract 1.18.0. Views the executor places by copying instead of mounting, for an executor that cannot mount FUSE (macOS, Windows; ADR-0021 decision 9). Only skills, an immutable view (versions frozen when the session was created). Declare it only together with session_files.root. The harness then sends fs.mount and fs.unmount for these views exactly as for a FUSE mount (same read-only token, same service_url, path <root>/<agent_session_id>/skills); the executor reads the view through the bma-file read routes (list, lookup, read; see file.json) and writes it as read-only files at that path, the same as a read-only mount: it answers fs.mount mounted only once every file is in place and its sha256 checked (nothing half-copied stays), failed with error_code fs_unavailable (bma-file unreachable, or 429/5xx after retries) or mount_failed (anything else), and invalid_params for a path outside <root>/<agent_session_id>/skills. The harness waits at most 30 s for an answer: a copy that takes longer goes on, and the repeated fs.mount of the same session and path joins it. A repeated fs.mount of the same session and path (token renewal, reconnect) only replaces the token and needs no new copy. Sessions are independent, several may be placed at once, and fs.unmount deletes that session's directory only. A view listed in both views (with fuse true) and copy_views is mounted. Absent: nothing changes."
         }
       },
       "required": [

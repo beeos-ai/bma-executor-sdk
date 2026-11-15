@@ -9,6 +9,10 @@ from .generated import (
     Ack,
     AgentCustomToolResultParams,
     CustomToolResultResult,
+    DesktopAttachParams,
+    DesktopAttachResult,
+    DesktopWallpaperParams,
+    DesktopWallpaperResult,
     ExecutorCapabilitiesUpdateParams,
     FsMountParams,
     FsMountResult,
@@ -71,6 +75,8 @@ __all__ = [
     "TERMINAL_OPEN",
     "TERMINAL_ATTACH",
     "TERMINAL_CLOSE",
+    "DESKTOP_ATTACH",
+    "DESKTOP_WALLPAPER",
     "SKILL_INSTALL",
     "WORKSPACE_BACKUP",
     "FS_MOUNT",
@@ -105,6 +111,8 @@ PROCESS_LIST: Request[ProcessListParams, ProcessListResult] = Request("process.l
 TERMINAL_OPEN: Request[TerminalOpenParams, TerminalOpenResult] = Request("terminal.open")
 TERMINAL_ATTACH: Request[TerminalAttachParams, TerminalAttachResult] = Request("terminal.attach")
 TERMINAL_CLOSE: Request[TerminalCloseParams, TerminalCloseResult] = Request("terminal.close")
+DESKTOP_ATTACH: Request[DesktopAttachParams, DesktopAttachResult] = Request("desktop.attach")
+DESKTOP_WALLPAPER: Request[DesktopWallpaperParams, DesktopWallpaperResult] = Request("desktop.wallpaper")
 SKILL_INSTALL: Request[SkillInstallParams, SkillInstallResult] = Request("skill.install")
 WORKSPACE_BACKUP: Request[WorkspaceBackupParams, WorkspaceBackupResult] = Request("workspace.backup")
 FS_MOUNT: Request[FsMountParams, FsMountResult] = Request("fs.mount")

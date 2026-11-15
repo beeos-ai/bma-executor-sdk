@@ -16,6 +16,8 @@ var Requests = struct {
 	TerminalOpen          RequestMethod[TerminalOpenParams, TerminalOpenResult]
 	TerminalAttach        RequestMethod[TerminalAttachParams, TerminalAttachResult]
 	TerminalClose         RequestMethod[TerminalCloseParams, TerminalCloseResult]
+	DesktopAttach         RequestMethod[DesktopAttachParams, DesktopAttachResult]
+	DesktopWallpaper      RequestMethod[DesktopWallpaperParams, DesktopWallpaperResult]
 	SkillInstall          RequestMethod[SkillInstallParams, SkillInstallResult]
 	WorkspaceBackup       RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]
 	FsMount               RequestMethod[FsMountParams, FsMountResult]
@@ -34,6 +36,8 @@ var Requests = struct {
 	TerminalOpen:          RequestMethod[TerminalOpenParams, TerminalOpenResult]{Method: "terminal.open"},
 	TerminalAttach:        RequestMethod[TerminalAttachParams, TerminalAttachResult]{Method: "terminal.attach"},
 	TerminalClose:         RequestMethod[TerminalCloseParams, TerminalCloseResult]{Method: "terminal.close"},
+	DesktopAttach:         RequestMethod[DesktopAttachParams, DesktopAttachResult]{Method: "desktop.attach"},
+	DesktopWallpaper:      RequestMethod[DesktopWallpaperParams, DesktopWallpaperResult]{Method: "desktop.wallpaper"},
 	SkillInstall:          RequestMethod[SkillInstallParams, SkillInstallResult]{Method: "skill.install"},
 	WorkspaceBackup:       RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]{Method: "workspace.backup"},
 	FsMount:               RequestMethod[FsMountParams, FsMountResult]{Method: "fs.mount"},

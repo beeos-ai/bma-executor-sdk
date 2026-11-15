@@ -6,7 +6,7 @@
   and Windows local services cannot mount bma-file (ADR-0021 §9), so a local
   brain never got its session's skills. `NewSkillViews(SkillViewsOptions{Root:
   <session_files.root>})` with `core.Register(views.Capability())` declares
-  `capabilities.fs.copy_views: ["skills"]` (contract 1.16.0); the platform
+  `capabilities.fs.copy_views: ["skills"]` (contract 1.18.0); the platform
   then sends the same `fs.mount` / `fs.unmount` it sends a FUSE executor, and
   SkillViews copies the view: bma-file `/list` (paged) and `/read` (in
   ranges), each file's size and sha256 checked, a temporary directory renamed
@@ -23,11 +23,12 @@
   `skills`, `outputs`; nil: all three). With `[]string{"skills"}` the note
   names only the skills directory, so a host that does not collect outputs
   does not ask for deliverables there.
-- **Contract 1.16.0** snapshot (`copy_views`, `FsEntry`, and the additive
-  `session.history` / `session_files.flush` methods). It is generated from a
-  local merge of BMA #1725 with #1594 (the computer use contract of 1.6.24,
-  still unmerged), not from BMA main; it is re-synced from main once both
-  are merged (the release check against BMA main fails until then).
+- **Contract 1.18.0** snapshot from BMA main 574fdf45 (`make contract-sdk`):
+  `copy_views` and `FsEntry` (1.18.0), `desktop.attach` (1.16.0),
+  `session.history` (1.15.0), and the computer use contract this SDK has
+  carried since 1.6.24, now merged in BMA as 1.17.0. Since 1.6.24 the
+  snapshot had come from an unmerged BMA pull request; it now regenerates
+  exactly from BMA main (`tools/check_contract.py --regenerate`).
 
 ## 1.6.33
 

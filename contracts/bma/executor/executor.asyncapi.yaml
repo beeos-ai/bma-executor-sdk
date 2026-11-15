@@ -2,7 +2,7 @@ asyncapi: 3.0.0
 id: https://contracts.bma.beeos.ai/executor.asyncapi
 info:
   title: BMA Executor Protocol channels
-  version: 1.16.0
+  version: 1.18.0
   description: "WebSocket channels for bma.executor.v1 and bma.executor.v1.1. The control channel carries JSON-RPC 2.0 requests, notifications, and responses. The mcp channel carries raw MCP JSON-RPC with no BMA wrapper. PTY bytes travel on per-attach outbound host sockets (subprotocol bma.terminal.v1), not on these channels. Contract 1.4.0 adds the platform tools endpoint (x-bma-platform-tools): the HTTP MCP endpoint a brain on one machine calls to run its tools on the session's hands machine."
   license:
     name: Apache-2.0
@@ -129,6 +129,10 @@ channels:
         $ref: "#/components/messages/terminalAttach"
       terminalClose:
         $ref: "#/components/messages/terminalClose"
+      desktopAttach:
+        $ref: "#/components/messages/desktopAttach"
+      desktopWallpaper:
+        $ref: "#/components/messages/desktopWallpaper"
       skillInstall:
         $ref: "#/components/messages/skillInstall"
       workspaceBackup:
@@ -362,6 +366,18 @@ operations:
       $ref: "#/channels/control"
     messages:
       - $ref: "#/components/messages/terminalClose"
+  desktopAttachReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/desktopAttach"
+  desktopWallpaperReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/desktopWallpaper"
   skillInstallReceive:
     action: receive
     channel:
@@ -1766,6 +1782,106 @@ components:
       x-bma-kind: request
       x-bma-channel: control
       x-bma-idempotent-by: terminal_id
+    desktopAttach:
+      name: desktop.attach
+      title: desktop.attach
+      summary: Attach a desktop session to the machine's running desktop.
+      description: Harness to executor request (machine-scoped executors that claim display.desktop). The machine's desktop agent runs from machine start (desktop-relay.md §1); the executor hands it the session and answers once the agent accepted it. The agent then dials the session's relay lanes at relay_url with the ticket (Authorization bearer) and serves the session until it is closed (session_close, or a lane refused with 4001/4003/4004) or attached again, which replaces the earlier attach. width and height, together, resize the desktop unless the same size was asked for last. wallpaper names the environment's default wallpaper; the result asks for its bytes (desktop.wallpaper) when the machine lacks them. Waits at most 5 s for a desktop that is still starting, then answers ResourceUnavailable with data.reason desktop_starting and data.retryable true (the platform answers 409 machine_starting stage=desktop_starting with Retry-After).
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: desktop.attach
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              machine_id:
+                type: string
+              relay_url:
+                type: string
+              ticket:
+                type: string
+              width:
+                type: integer
+                x-go-type: int
+              height:
+                type: integer
+                x-go-type: int
+              wallpaper:
+                $ref: schemas/desktop.json#/$defs/DesktopWallpaper
+            required:
+              - session_id
+              - machine_id
+              - relay_url
+              - ticket
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: desktop.attach
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: session_id
+    desktopWallpaper:
+      name: desktop.wallpaper
+      title: desktop.wallpaper
+      summary: Send one chunk of the default wallpaper a desktop.attach asked for.
+      description: Harness to executor request. Chunks follow each other from offset 0 (data is standard base64, at most max_process_write_bytes decoded); the chunk with done installs the image when its sha256 matches and applies it to the running desktop.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: desktop.wallpaper
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              sha256:
+                type: string
+              ext:
+                type: string
+              offset:
+                type: integer
+              data:
+                type: string
+              done:
+                type: boolean
+            required:
+              - sha256
+              - ext
+              - offset
+              - data
+              - done
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: desktop.wallpaper
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
     skillInstall:
       name: skill.install
       title: skill.install
@@ -1868,7 +1984,7 @@ components:
       name: fs.mount
       title: fs.mount
       summary: Mount session file views backed by bma-file.
-      description: Harness to executor request (machine-scoped). The executor mounts each listed view at its path as a FUSE file system that reads from service_url with the view's token, and keeps the token in memory only. Idempotent by (session_id, view), so resending the same mounts with new tokens renews the tokens without remounting; a changed path or readonly remounts. Sent when the session is bound to the machine and again after a resume or reconnect, because tokens are bound to the binding epoch. Sessions are independent, so a request for one session never changes the mounts of another, and fs.unmount ends one session only. An executor that declared fs.skills_per_session receives the skills view of each session at its own path (<session_files.root>/<agent_session_id>/skills) and removes the mount points it created on fs.unmount; any other executor receives skills at the fixed /mnt/skills and one session at a time. Since contract 1.16.0 an executor that declared fs.copy_views (and a session_files.root) also receives fs.mount, for those views only, at <root>/<agent_session_id>/<view>; it copies the view as read-only files through the bma-file read routes instead of mounting it (see FsCapability.copy_views and file.json).
+      description: Harness to executor request (machine-scoped). The executor mounts each listed view at its path as a FUSE file system that reads from service_url with the view's token, and keeps the token in memory only. Idempotent by (session_id, view), so resending the same mounts with new tokens renews the tokens without remounting; a changed path or readonly remounts. Sent when the session is bound to the machine and again after a resume or reconnect, because tokens are bound to the binding epoch. Sessions are independent, so a request for one session never changes the mounts of another, and fs.unmount ends one session only. An executor that declared fs.skills_per_session receives the skills view of each session at its own path (<session_files.root>/<agent_session_id>/skills) and removes the mount points it created on fs.unmount; any other executor receives skills at the fixed /mnt/skills and one session at a time. Since contract 1.18.0 an executor that declared fs.copy_views (and a session_files.root) also receives fs.mount, for those views only, at <root>/<agent_session_id>/<view>; it copies the view as read-only files through the bma-file read routes instead of mounting it (see FsCapability.copy_views and file.json).
       contentType: application/json
       payload:
         type: object

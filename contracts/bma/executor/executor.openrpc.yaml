@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 1.16.0
+  version: 1.18.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -797,8 +797,8 @@ methods:
         description: >-
           Who started the process. A process an agent tool started (a command, a file transfer, a
           package install) always carries agent_session_id (the public agent session id) and
-          tool_call_id; it carries no initiator. A process the platform started on its own, such as
-          the machine desktop agent, carries initiator "platform" and no agent_session_id. A process
+          tool_call_id; it carries no initiator. A process the platform started on its own carries
+          initiator "platform" and no agent_session_id. A process
           with neither is not started by the harness: an executor that resolves a directory, files or
           owner per session refuses it (reason session_rejected) instead of using a default.
           Human console terminals are terminal.attach, not process.start.
@@ -1223,6 +1223,109 @@ methods:
       - $ref: "#/components/errors/InvalidParams"
       - $ref: "#/components/errors/CapabilityUnavailable"
       - $ref: "#/components/errors/InternalError"
+  - name: desktop.attach
+    summary: Attach a desktop session to the machine's running desktop.
+    description: Harness to executor request (machine-scoped executors that claim display.desktop).
+      The machine's desktop agent runs from machine start (desktop-relay.md §1); the executor hands
+      it the session and answers once the agent accepted it. The agent then dials the session's
+      relay lanes at relay_url with the ticket (Authorization bearer) and serves the session until
+      it is closed (session_close, or a lane refused with 4001/4003/4004) or attached again, which
+      replaces the earlier attach. width and height, together, resize the desktop unless the same
+      size was asked for last. wallpaper names the environment's default wallpaper; the result asks
+      for its bytes (desktop.wallpaper) when the machine lacks them. Waits at most 5 s for a desktop
+      that is still starting, then answers ResourceUnavailable with data.reason desktop_starting and
+      data.retryable true (the platform answers 409 machine_starting stage=desktop_starting with
+      Retry-After).
+    tags:
+      - name: desktop
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: display.desktop
+    x-bma-idempotent-by: session_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: machine_id
+        required: true
+        schema:
+          type: string
+      - name: relay_url
+        required: true
+        schema:
+          type: string
+      - name: ticket
+        required: true
+        schema:
+          type: string
+      - name: width
+        required: false
+        schema:
+          type: integer
+          x-go-type: int
+      - name: height
+        required: false
+        schema:
+          type: integer
+          x-go-type: int
+      - name: wallpaper
+        required: false
+        schema:
+          $ref: schemas/desktop.json#/$defs/DesktopWallpaper
+    result:
+      name: DesktopAttachResult
+      schema:
+        $ref: schemas/desktop.json#/$defs/DesktopAttachResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/ResourceUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: desktop.wallpaper
+    summary: Send one chunk of the default wallpaper a desktop.attach asked for.
+    description: Harness to executor request. Chunks follow each other from offset 0 (data is
+      standard base64, at most max_process_write_bytes decoded); the chunk with done installs the
+      image when its sha256 matches and applies it to the running desktop.
+    tags:
+      - name: desktop
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: display.desktop
+    params:
+      - name: sha256
+        required: true
+        schema:
+          type: string
+      - name: ext
+        required: true
+        schema:
+          type: string
+      - name: offset
+        required: true
+        schema:
+          type: integer
+      - name: data
+        required: true
+        schema:
+          type: string
+      - name: done
+        required: true
+        schema:
+          type: boolean
+    result:
+      name: DesktopWallpaperResult
+      schema:
+        $ref: schemas/desktop.json#/$defs/DesktopWallpaperResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/ResourceUnavailable"
+      - $ref: "#/components/errors/InternalError"
   - name: skill.install
     summary: Install one skill revision on the machine.
     description: Harness to executor request (machine-scoped). The executor downloads the revision
@@ -1324,7 +1427,7 @@ methods:
       mounts of another, and fs.unmount ends one session only. An executor that declared fs.skills_per_session
       receives the skills view of each session at its own path (<session_files.root>/<agent_session_id>/skills)
       and removes the mount points it created on fs.unmount; any other executor receives skills at the fixed
-      /mnt/skills and one session at a time. Since contract 1.16.0 an executor that declared fs.copy_views (and a
+      /mnt/skills and one session at a time. Since contract 1.18.0 an executor that declared fs.copy_views (and a
       session_files.root) also receives fs.mount, for those views only, at <root>/<agent_session_id>/<view>;
       it copies the view as read-only files through the bma-file read routes instead of mounting it (see
       FsCapability.copy_views and file.json).

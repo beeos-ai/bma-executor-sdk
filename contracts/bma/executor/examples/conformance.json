@@ -1036,6 +1036,63 @@
       }
     },
     {
+      "name": "desktop.attach request",
+      "method": "desktop.attach",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_60",
+        "method": "desktop.attach",
+        "params": {
+          "session_id": "dsn_01",
+          "machine_id": "mch_01",
+          "relay_url": "wss://api.example.com/internal/desktop-relay/ticket",
+          "ticket": "eyJtYWNoaW5lX2lkIjoibWNoXzAxIn0.c2ln",
+          "width": 1920,
+          "height": 1080,
+          "wallpaper": {
+            "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "ext": "png",
+            "size": 204800
+          }
+        }
+      }
+    },
+    {
+      "name": "desktop.attach result",
+      "method": "desktop.attach",
+      "kind": "result",
+      "result": {
+        "accepted": true,
+        "wallpaper": "need"
+      }
+    },
+    {
+      "name": "desktop.wallpaper request",
+      "method": "desktop.wallpaper",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_61",
+        "method": "desktop.wallpaper",
+        "params": {
+          "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+          "ext": "png",
+          "offset": 0,
+          "data": "iVBORw0KGgo=",
+          "done": false
+        }
+      }
+    },
+    {
+      "name": "desktop.wallpaper result",
+      "method": "desktop.wallpaper",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
       "name": "skill.install request",
       "method": "skill.install",
       "kind": "request",
