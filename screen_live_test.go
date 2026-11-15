@@ -3,6 +3,7 @@ package bmaexecutor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"testing"
@@ -168,5 +169,57 @@ func TestScreenLiveTimeoutDoesNotEndParentLifeline(t *testing.T) {
 	case <-p.ParentDone():
 	case <-time.After(time.Second):
 		t.Fatal("parent EOF did not close lifeline")
+	}
+}
+
+func TestScreenLiveMissingStartAckStillAllowsStop(t *testing.T) {
+	requestReader, requestWriter := io.Pipe()
+	replyReader, replyWriter := io.Pipe()
+	t.Cleanup(func() {
+		requestReader.Close()
+		requestWriter.Close()
+		replyReader.Close()
+		replyWriter.Close()
+	})
+	p := NewScreenLivePipe(replyReader, requestWriter)
+	requests := make(chan ScreenLiveCommand, 2)
+	parentDone := make(chan error, 1)
+	go func() {
+		reader := json.NewDecoder(requestReader)
+		for i := 0; i < 2; i++ {
+			var row struct {
+				ID      string            `json:"id"`
+				Command ScreenLiveCommand `json:"command"`
+			}
+			if err := reader.Decode(&row); err != nil {
+				parentDone <- err
+				return
+			}
+			requests <- row.Command
+			if i == 1 {
+				parentDone <- json.NewEncoder(replyWriter).Encode(map[string]any{
+					"type": "screen_live_result", "id": row.ID, "ok": true,
+				})
+			}
+		}
+	}()
+	start := ScreenLiveCommand{Type: "screen_live_start", SessionID: "view", Room: "room", Generation: 1}
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	if _, err := p.Call(ctx, start); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("start: got %v, want missing ACK timeout", err)
+	}
+	stop := start
+	stop.Type = "screen_live_stop"
+	cleanup, finish := context.WithTimeout(context.Background(), time.Second)
+	defer finish()
+	if result, err := p.Call(cleanup, stop); err != nil || !result.Accepted {
+		t.Fatalf("stop after missing start ACK: result=%+v error=%v", result, err)
+	}
+	if err := <-parentDone; err != nil {
+		t.Fatal(err)
+	}
+	if first, second := <-requests, <-requests; first != start || second != stop {
+		t.Fatal("parent did not receive start and stop for the same attempt")
 	}
 }
