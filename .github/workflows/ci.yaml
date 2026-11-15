@@ -86,6 +86,44 @@ jobs:
   # pins). The model endpoint is scripted and the API key made up: no
   # credential is used.
 
+  # Where the contract snapshot comes from: the lock's source_commit is on BMA
+  # main and `make contract-sdk` at it gives exactly this snapshot
+  # (tools/check_contract.py --regenerate). beeos-managed-agents is private:
+  # the job needs the BMA_CONTRACT_READ_TOKEN secret (contents: read on that
+  # repository). Without it (forks, or before it is set) this job only warns;
+  # the release workflow fails closed instead.
+  contract-upstream:
+    name: Contract snapshot is regenerated from BMA main
+    runs-on: ubuntu-latest
+    env:
+      HAS_BMA_TOKEN: ${{ secrets.BMA_CONTRACT_READ_TOKEN != '' }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: No BMA read token
+        if: env.HAS_BMA_TOKEN != 'true'
+        run: echo "::warning::BMA_CONTRACT_READ_TOKEN is not set; the contract snapshot's source is checked at release only"
+
+      - name: Check out BMA
+        if: env.HAS_BMA_TOKEN == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: beeos-ai/beeos-managed-agents
+          token: ${{ secrets.BMA_CONTRACT_READ_TOKEN }}
+          path: .bma
+          fetch-depth: 0
+
+      - name: Set up Node
+        if: env.HAS_BMA_TOKEN == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .bma/.node-version
+
+      - name: Snapshot source is on BMA main and regenerates exactly
+        if: env.HAS_BMA_TOKEN == 'true'
+        run: python3 tools/check_contract.py --source .bma --ref origin/main --regenerate
+
   bma-package:
     name: bma assets build and install.sh installs them
     runs-on: ubuntu-latest

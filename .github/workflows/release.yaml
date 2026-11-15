@@ -49,6 +49,36 @@ jobs:
       - name: Verify the tag matches every package version
         run: ./tools/check_versions.sh "${{ inputs.tag || github.ref_name }}"
 
+      # Fails closed: a release needs the contract snapshot to come from a
+      # merged BMA commit and to regenerate exactly there
+      # (tools/check_contract.py --regenerate). beeos-managed-agents is
+      # private, so this needs the BMA_CONTRACT_READ_TOKEN secret (contents:
+      # read on that repository); without it the release stops here.
+      - name: BMA read token is set
+        env:
+          BMA_CONTRACT_READ_TOKEN: ${{ secrets.BMA_CONTRACT_READ_TOKEN }}
+        run: |
+          if [ -z "$BMA_CONTRACT_READ_TOKEN" ]; then
+            echo "::error::BMA_CONTRACT_READ_TOKEN is not set: the contract snapshot's source cannot be checked against beeos-ai/beeos-managed-agents main, so the release stops (add a token with contents: read on that repository)"
+            exit 1
+          fi
+
+      - name: Check out BMA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: beeos-ai/beeos-managed-agents
+          token: ${{ secrets.BMA_CONTRACT_READ_TOKEN }}
+          path: .bma
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .bma/.node-version
+
+      - name: Contract snapshot is regenerated from BMA main
+        run: python3 tools/check_contract.py --source .bma --ref origin/main --regenerate
+
   npm:
     if: github.event_name == 'push' || inputs.publish == 'all' || inputs.publish == 'npm'
     name: Publish @beeos-ai/bma-executor-sdk to npm
