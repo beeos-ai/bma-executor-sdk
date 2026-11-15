@@ -162,6 +162,22 @@ func (p *ScreenLivePipe) Call(ctx context.Context, command ScreenLiveCommand) (S
 		return ScreenLiveResult{}, errors.New("screen_host_busy")
 	}
 	result := make(chan error, 1)
+	writeStarted := make(chan struct{})
+	writeFinished := make(chan struct{})
+	onTimeout := func() {
+		// A complete frame can still be followed by a fenced stop. The lease
+		// bounds capture if no stop arrives. A partial frame cannot be followed
+		// safely: close stdout so the parent disposes the publisher.
+		select {
+		case <-writeStarted:
+			select {
+			case <-writeFinished:
+			default:
+				p.close()
+			}
+		default:
+		}
+	}
 	go func() {
 		defer func() { <-p.slots }()
 		// Assign IDs in write order, not caller scheduling order.
@@ -195,7 +211,16 @@ func (p *ScreenLivePipe) Call(ctx context.Context, command ScreenLiveCommand) (S
 			err = errors.New("screen_command_too_large")
 		}
 		if err == nil {
+			close(writeStarted)
+			if ctx.Err() != nil {
+				p.writeMu.Unlock()
+				result <- ctx.Err()
+				return
+			}
 			_, err = p.writer.Write(append(raw, '\n'))
+			if err == nil {
+				close(writeFinished)
+			}
 		}
 		p.writeMu.Unlock()
 		if err != nil {
@@ -219,7 +244,7 @@ func (p *ScreenLivePipe) Call(ctx context.Context, command ScreenLiveCommand) (S
 	select {
 	case err := <-result:
 		if ctx.Err() != nil {
-			p.close()
+			onTimeout()
 			return ScreenLiveResult{}, ctx.Err()
 		}
 		if err != nil {
@@ -227,9 +252,7 @@ func (p *ScreenLivePipe) Call(ctx context.Context, command ScreenLiveCommand) (S
 		}
 		return ScreenLiveResult{Accepted: true, Published: command.Type == "screen_live_start"}, nil
 	case <-ctx.Done():
-		// An unacknowledged command has unknown outcome. Retire the whole parent
-		// lane; stdout EOF stops host capture. The parent lifeline stays separate.
-		p.close()
+		onTimeout()
 		return ScreenLiveResult{}, ctx.Err()
 	case <-p.done:
 		return ScreenLiveResult{}, errors.New("screen_host_disconnected")
