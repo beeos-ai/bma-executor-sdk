@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 1.19.0
+  version: 1.21.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -1235,7 +1235,10 @@ methods:
       for its bytes (desktop.wallpaper) when the machine lacks them. Waits at most 5 s for a desktop
       that is still starting, then answers ResourceUnavailable with data.reason desktop_starting and
       data.retryable true (the platform answers 409 machine_starting stage=desktop_starting with
-      Retry-After).
+      Retry-After). With capture_id, attach only the media relay of that already running screen_live
+      capture on machine_id; session_id remains the desktop relay session. This requires an exact
+      active machine/capture match and forbids width, height and wallpaper. It never starts a capture,
+      the legacy peer-to-peer path or another input worker, and a missing capture is rejected.
     tags:
       - name: desktop
     x-bma-direction: harness-to-executor
@@ -1249,6 +1252,11 @@ methods:
         required: true
         schema:
           type: string
+      - name: capture_id
+        required: false
+        schema:
+          type: string
+          description: The active screen_live capture to attach as media only (contract 1.21.0); distinct from the desktop session_id.
       - name: machine_id
         required: true
         schema:
@@ -1425,9 +1433,10 @@ methods:
       session is bound to the machine and again after a resume or reconnect, because tokens are bound
       to the binding epoch. Sessions are independent, so a request for one session never changes the
       mounts of another, and fs.unmount ends one session only. An executor that declared fs.skills_per_session
-      receives the skills view of each session at its own path (<session_files.root>/<agent_session_id>/skills)
-      and removes the mount points it created on fs.unmount; any other executor receives skills at the fixed
-      /mnt/skills and one session at a time. Since contract 1.18.0 an executor that declared fs.copy_views (and a
+      receives the skills view of each session at its own path (<session_files.root>/<agent_session_id>/skills,
+      root /mnt/session when it declared none) and removes the mount points it created on fs.unmount; any
+      other executor receives no skills view (there is no machine-wide skills path).
+      Since contract 1.18.0 an executor that declared fs.copy_views (and a
       session_files.root) also receives fs.mount, for those views only, at <root>/<agent_session_id>/<view>;
       it copies the view as read-only files through the bma-file read routes instead of mounting it (see
       FsCapability.copy_views and file.json).

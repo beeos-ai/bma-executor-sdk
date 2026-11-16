@@ -46,7 +46,7 @@
     },
     "FsMount": {
       "type": "object",
-      "description": "One view to mount. path is the absolute mount point on the executor host (derived from session_files by the harness; the skills view is at <root>/<agent_session_id>/skills for an executor that declared fs.skills_per_session or fs.copy_views and a root, otherwise /mnt/skills). For a view the executor declared in fs.copy_views, \"mount\" means: copy the view's files to path as read-only files (see FsCapability.copy_views). Mount points of different sessions never overlap, and the executor mounts exactly the path it is given. readonly is also fixed inside token; the executor mounts read-only when it is true. token is a capability token for this session and machine: keep it in memory only, never write it to disk, argv, environment or logs.",
+      "description": "One view to mount. path is the absolute mount point on the executor host (derived from session_files by the harness; the skills view is at <root>/<agent_session_id>/skills for an executor that declared fs.skills_per_session or fs.copy_views, and is not mounted for any other executor). For a view the executor declared in fs.copy_views, \"mount\" means: copy the view's files to path as read-only files (see FsCapability.copy_views). Mount points of different sessions never overlap, and the executor mounts exactly the path it is given. readonly is also fixed inside token; the executor mounts read-only when it is true. token is a capability token for this session and machine: keep it in memory only, never write it to disk, argv, environment or logs.",
       "properties": {
         "view": {
           "type": "string",
