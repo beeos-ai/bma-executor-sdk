@@ -401,19 +401,28 @@ func TestSkillViewsFailures(t *testing.T) {
 func TestSkillViewsSlowCopy(t *testing.T) {
 	f := newFakeBmaFile(t, testSkills)
 	f.slow = make(chan struct{})
-	_, root, call := skillViewsFor(t, SkillViewsOptions{MountWait: 50 * time.Millisecond})
+	release := sync.OnceFunc(func() { close(f.slow) })
+	t.Cleanup(release)
+	v, root, call := skillViewsFor(t, SkillViewsOptions{MountWait: 50 * time.Millisecond})
 	got, err := call(MethodFsMount, mountParams(f, root, "ses_a", "tok-1"))
 	if err != nil || got.(FsMountResult).State != "failed" || !strings.Contains(got.(FsMountResult).Error, "still being copied") {
 		t.Fatalf("first fs.mount = %+v %v", got, err)
 	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		got, err = call(MethodFsMount, mountParams(f, root, "ses_a", "tok-2"))
-	}()
-	time.Sleep(20 * time.Millisecond)
-	close(f.slow)
-	<-done
+	job := v.jobs["ses_a"]
+	got, err = call(MethodFsMount, mountParams(f, root, "ses_a", "tok-2"))
+	if err != nil || got.(FsMountResult).State != "failed" || !strings.Contains(got.(FsMountResult).Error, "still being copied") {
+		t.Fatalf("second fs.mount = %+v %v", got, err)
+	}
+	if v.jobs["ses_a"] != job || *job.token.Load() != "tok-2" {
+		t.Fatal("the second fs.mount did not renew the existing copy")
+	}
+	release()
+	select {
+	case <-job.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the released copy did not finish")
+	}
+	got, err = call(MethodFsMount, mountParams(f, root, "ses_a", "tok-2"))
 	wantMounted(t, got, err)
 	if tok, _ := f.lastTok.Load().(string); tok != "tok-2" {
 		t.Fatalf("the copy kept the old token: %q", tok)
