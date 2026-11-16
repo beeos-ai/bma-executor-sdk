@@ -92,7 +92,7 @@ func (g *DesktopControlGate) grant(ctx context.Context, epoch uint64, lease, ide
 	if epoch == g.epoch {
 		valid := g.state == "human" && g.lease == lease && g.identity == identity && bytes.Equal(g.key, key) && g.mediaID == mediaID && now.Before(g.until) && now.Before(g.heartbeat)
 		if valid {
-			g.until = now.Add(time.Until(deadline))
+			g.until = now.Add(deadline.Sub(now))
 			g.armLocked()
 		}
 		g.mu.Unlock()
@@ -136,7 +136,7 @@ func (g *DesktopControlGate) grant(ctx context.Context, epoch uint64, lease, ide
 	g.mediaID = mediaID
 	g.lease = lease
 	g.identity = identity
-	g.until = time.Now().Add(time.Until(deadline))
+	g.until = now.Add(deadline.Sub(now))
 	g.heartbeat = time.Now().Add(5 * time.Second)
 	g.state = "human"
 	g.armLocked()

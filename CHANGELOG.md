@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.36
+
+- Go: preserve the exact millisecond deadline and local monotonic clock when
+  granting or renewing signed screen input. A valid packet is no longer
+  rejected because clock resampling shortened its acknowledged lease.
+
 ## 1.6.34
 
 - **Go: skills by copy for executors without FUSE (`SkillViews`).** macOS
