@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.6.37
+
+- **Optional session context maintenance (contract 1.19.0).** Typed
+  `session.compact` and `session.compact_cancel`. Go (`AgentSessionCompactor`)
+  and TypeScript (`AgentHandler.compactSession` / `cancelCompactSession`)
+  agent runtimes offer an explicitly enabled maintenance handler: turns,
+  close and suspension are excluded while it settles, exact concurrent
+  retries join, and the durable receipt and summary hash are validated.
+  Cancellation binds the same version, source input and model and requires a
+  durable publication fence or the already-applied receipt; `settled` is
+  filled by the SDK from its own pending work. Both handlers are required
+  before `agent.context_maintenance` is advertised (Go withholds it,
+  TypeScript refuses the configuration). No ordinary turn or message event
+  is emitted. A failed `session.close` releases its close reservation, so
+  the session keeps taking turns.
+- Python carries the generated methods and types, refuses both RPCs and
+  refuses to advertise the capability. Existing agents are unchanged.
+- The SDK does not authorize platform users, compact context itself or
+  enable a product capability.
+- Contract 1.19.0 snapshot regenerated from BMA main (#1848/#1849).
+
 ## 1.6.36
 
 - Go: preserve the exact millisecond deadline and local monotonic clock when
