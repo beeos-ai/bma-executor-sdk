@@ -15,6 +15,14 @@ var ErrDesktopControl = errors.New("desktop_control_not_current")
 var ErrDesktopObservation = errors.New("desktop_observation_required")
 var ErrDesktopDraining = errors.New("human_takeover_pending")
 var ErrDesktopInputUnknown = errors.New("desktop_input_outcome_unknown")
+
+// ErrDesktopResizeUnsupported means no resize was dispatched. Other native
+// errors remain uncertain and block input until cleanup is confirmed.
+var ErrDesktopResizeUnsupported = errors.New("desktop_resize_unsupported")
+
+// DesktopResizeTimeout bounds the existing native desktop fit operation.
+const DesktopResizeTimeout = 15 * time.Second
+
 var ErrDesktopRecoveryRequired = errors.New("desktop_input_recovery_required")
 
 // ComputerInputRecovery is an optional trusted driver capability. Success must
@@ -28,6 +36,14 @@ type NativeDesktopInput interface {
 	Apply(context.Context, DesktopInputEvent) error
 	ReleaseAll(context.Context) error
 }
+
+// NativeDesktopResizer is optional. Resize must return only after its native
+// operation has ended, including after cancellation. Unsupported is a refusal
+// before dispatch; it must never represent an uncertain native outcome.
+type NativeDesktopResizer interface {
+	Resize(context.Context, uint16, uint16) error
+}
+
 type DesktopInputEvent struct {
 	Type    string  `json:"type"`
 	X       float64 `json:"x,omitempty"`
@@ -38,6 +54,8 @@ type DesktopInputEvent struct {
 	Keysym  uint32  `json:"keysym,omitempty"`
 	Down    bool    `json:"down,omitempty"`
 	DY      float64 `json:"dy,omitempty"`
+	Width   uint16  `json:"width,omitempty"`
+	Height  uint16  `json:"height,omitempty"`
 }
 
 // DesktopControlGate guards the physical input device, not model/file work.
@@ -58,6 +76,7 @@ type DesktopControlGate struct {
 	timer                  *time.Timer
 	closed                 bool
 	agentUnknown           bool
+	nativeCancel           context.CancelFunc
 }
 
 func NewDesktopControlGate(backend ComputerUseBackend, native NativeDesktopInput) *DesktopControlGate {
@@ -202,7 +221,11 @@ func (g *DesktopControlGate) release(ctx context.Context, epoch uint64, lease st
 		g.timer.Stop()
 	}
 	if g.state == "blocked" {
+		cancel := g.nativeCancel
 		g.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
 		// Release may retry native cleanup, but never implicitly resume an Agent.
 		if resume {
 			return ErrDesktopRecoveryRequired
@@ -212,7 +235,11 @@ func (g *DesktopControlGate) release(ctx context.Context, epoch uint64, lease st
 	g.state = "releasing"
 	g.observed = map[string]uint64{}
 	g.resume = false
+	cancel := g.nativeCancel
 	g.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	if err := g.lock(ctx); err != nil {
 		g.mu.Lock()
 		g.state = "blocked"
@@ -371,10 +398,23 @@ func (g *DesktopControlGate) HumanInput(ctx context.Context, epoch uint64, lease
 	defer g.unlock()
 	g.mu.Lock()
 	valid := !g.closed && g.state == "human" && epoch == g.epoch && lease == g.lease && identity == g.identity && seq > g.lastSeq && seq-g.lastSeq <= 4096 && time.Now().Before(g.until) && time.Now().Before(g.heartbeat)
+	resizer, canResize := g.native.(NativeDesktopResizer)
+	var inputCtx context.Context
+	var cancel context.CancelFunc
 	if valid {
 		g.lastSeq = seq
 		g.heartbeat = time.Now().Add(5 * time.Second)
 		g.armLocked()
+		if event.Type != "heartbeat" && (event.Type != "resize" || canResize) {
+			deadline := g.until
+			if event.Type == "resize" {
+				if bound := time.Now().Add(DesktopResizeTimeout); bound.Before(deadline) {
+					deadline = bound
+				}
+			}
+			inputCtx, cancel = context.WithDeadline(ctx, deadline)
+			g.nativeCancel = cancel
+		}
 	}
 	g.mu.Unlock()
 	if !valid {
@@ -383,11 +423,29 @@ func (g *DesktopControlGate) HumanInput(ctx context.Context, epoch uint64, lease
 	if event.Type == "heartbeat" {
 		return nil
 	}
+	if event.Type == "resize" && !canResize {
+		return ErrDesktopResizeUnsupported
+	}
+	defer func() {
+		cancel()
+		g.mu.Lock()
+		g.nativeCancel = nil
+		g.mu.Unlock()
+	}()
 	var err error
-	if event.Type == "release_all" {
-		err = g.native.ReleaseAll(ctx)
-	} else {
-		err = g.native.Apply(ctx, event)
+	switch event.Type {
+	case "release_all":
+		err = g.native.ReleaseAll(inputCtx)
+	case "resize":
+		err = resizer.Resize(inputCtx, event.Width, event.Height)
+	default:
+		err = g.native.Apply(inputCtx, event)
+	}
+	if event.Type == "resize" && errors.Is(err, ErrDesktopResizeUnsupported) {
+		return err
+	}
+	if err == nil {
+		err = inputCtx.Err()
 	}
 	if err != nil {
 		g.mu.Lock()
@@ -401,6 +459,11 @@ func (g *DesktopControlGate) HumanInput(ctx context.Context, epoch uint64, lease
 func validateDesktopInput(e DesktopInputEvent) error {
 	switch e.Type {
 	case "heartbeat", "release_all":
+		return nil
+	case "resize":
+		if e.Width == 0 || e.Height == 0 {
+			return ErrDesktopControl
+		}
 		return nil
 	case "key":
 		if e.Keysym == 0 || e.Keysym > 0x0110ffff {

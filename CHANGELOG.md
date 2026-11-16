@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.38
+
+- Go: add signed desktop resize input through the existing control lease and
+  optional native resizer. Resize is cancelled when its lease expires or is
+  released; unsupported hosts return an explicit rejection.
+- Go: preserve native input order while processing screen lease heartbeats
+  independently of long-running resize operations.
+
 ## 1.6.37
 
 - **Optional session context maintenance (contract 1.19.0).** Typed

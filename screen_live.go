@@ -83,34 +83,42 @@ type ScreenLivePipe struct {
 	sequence     uint64
 	inputHandler func(context.Context, DesktopInputMessage) error
 	slots        chan struct{}
+	inputCancel  context.CancelFunc
+}
+
+type screenPipeInput struct {
+	Type    string              `json:"type"`
+	ID      string              `json:"id"`
+	Message DesktopInputMessage `json:"message"`
 }
 
 func NewScreenLivePipe(reader io.Reader, writer io.WriteCloser) *ScreenLivePipe {
-	p := &ScreenLivePipe{writer: writer, pending: map[string]chan bool{}, done: make(chan struct{}), parentDone: make(chan struct{}), slots: make(chan struct{}, 32)}
+	inputCtx, cancel := context.WithCancel(context.Background())
+	p := &ScreenLivePipe{writer: writer, pending: map[string]chan bool{}, done: make(chan struct{}),
+		parentDone: make(chan struct{}), slots: make(chan struct{}, 32), inputCancel: cancel}
+	inputs, heartbeats := make(chan screenPipeInput, 32), make(chan screenPipeInput, 32)
+	var workers sync.WaitGroup
+	for _, queue := range []<-chan screenPipeInput{inputs, heartbeats} {
+		workers.Add(1)
+		go func() { defer workers.Done(); p.runInputs(inputCtx, queue) }()
+	}
 	go func() {
-		defer close(p.parentDone)
-		defer p.close()
+		defer func() { p.close(); workers.Wait(); close(p.parentDone) }()
 		scanner := bufio.NewScanner(reader)
 		scanner.Buffer(make([]byte, 4096), 65536)
 		for scanner.Scan() {
-			var input struct {
-				Type    string              `json:"type"`
-				ID      string              `json:"id"`
-				Message DesktopInputMessage `json:"message"`
-			}
+			var input screenPipeInput
 			if json.Unmarshal(scanner.Bytes(), &input) == nil && input.Type == "screen_input" {
-				p.mu.Lock()
-				handler := p.inputHandler
-				p.mu.Unlock()
-				err := ErrDesktopControl
-				if handler != nil {
-					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-					err = handler(ctx, input.Message)
-					cancel()
+				queue := inputs
+				if len(input.Message.Packet) == 0 && input.Message.Event.Type == "heartbeat" {
+					queue = heartbeats
 				}
-				p.writeMu.Lock()
-				_ = json.NewEncoder(p.writer).Encode(map[string]any{"type": "screen_input_result", "id": input.ID, "ok": err == nil})
-				p.writeMu.Unlock()
+				select {
+				case <-inputCtx.Done():
+				case queue <- input:
+				default:
+					p.inputResult(input.ID, ErrDesktopControl)
+				}
 				continue
 			}
 			var reply struct {
@@ -131,11 +139,60 @@ func NewScreenLivePipe(reader io.Reader, writer io.WriteCloser) *ScreenLivePipe 
 				}
 			}
 		}
-		// A malformed reply retires media, but only actual parent EOF ends tasks.
+		// Media failure cancels pending native work, but only actual parent EOF ends tasks.
 		p.close()
 		_, _ = io.Copy(io.Discard, reader)
 	}()
 	return p
+}
+
+func (p *ScreenLivePipe) runInputs(parent context.Context, queue <-chan screenPipeInput) {
+	for {
+		var input screenPipeInput
+		select {
+		case <-parent.Done():
+			return
+		case input = <-queue:
+		}
+		if parent.Err() != nil {
+			return
+		}
+		p.mu.Lock()
+		handler := p.inputHandler
+		p.mu.Unlock()
+		err := ErrDesktopControl
+		if handler != nil {
+			timeout := time.Second
+			// Type only selects a bounded execution budget. The gate still verifies
+			// the full signature and authority before dispatching any native operation.
+			var packet DesktopSignedInput
+			if input.Message.Event.Type == "resize" || json.Unmarshal(input.Message.Packet, &packet) == nil && packet.Input.Type == "resize" {
+				timeout = DesktopResizeTimeout
+			}
+			ctx, cancel := context.WithTimeout(parent, timeout)
+			err = handler(ctx, input.Message)
+			cancel()
+		}
+		p.inputResult(input.ID, err)
+	}
+}
+
+func (p *ScreenLivePipe) inputResult(id string, err error) {
+	code := ""
+	if errors.Is(err, ErrDesktopResizeUnsupported) {
+		code = "resize_unsupported"
+	}
+	p.writeMu.Lock()
+	writeErr := json.NewEncoder(p.writer).Encode(struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+		OK   bool   `json:"ok"`
+		Code string `json:"code,omitempty"`
+	}{"screen_input_result", id, err == nil, code})
+	p.writeMu.Unlock()
+	if writeErr != nil {
+		p.close()
+	}
 }
 
 // ParentDone is the supervisor lifeline. Media timeout alone must not end Agent tasks.
@@ -143,6 +200,7 @@ func (p *ScreenLivePipe) ParentDone() <-chan struct{} { return p.parentDone }
 func (p *ScreenLivePipe) Done() <-chan struct{}       { return p.done }
 func (p *ScreenLivePipe) close() {
 	p.once.Do(func() {
+		p.inputCancel()
 		close(p.done)
 		_ = p.writer.Close()
 	})

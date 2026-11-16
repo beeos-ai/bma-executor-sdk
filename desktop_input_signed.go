@@ -29,6 +29,8 @@ type DesktopSignedInput struct {
 		Buttons uint8  `json:"buttons"`
 		Keysym  uint32 `json:"keysym"`
 		Down    bool   `json:"down"`
+		Width   uint16 `json:"width"`
+		Height  uint16 `json:"height"`
 	} `json:"input"`
 	Signature string `json:"signature"`
 }
@@ -52,12 +54,34 @@ func (g *DesktopControlGate) SignedInput(ctx context.Context, identity string, r
 	if len(key) != ed25519.PublicKeySize || !bytes.Equal(key, p.Grant.InputKey) || p.Grant.Holder != identity || p.Grant.Generation != 1 || p.Grant.ExpiresAt > uint64(until.UnixMilli()) || p.Grant.ExpiresAt <= uint64(time.Now().UnixMilli()) {
 		return ErrDesktopControl
 	}
+	payload, err := desktopInputPayload(p, key)
+	if err != nil {
+		return err
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(p.Signature)
+	if err != nil || !ed25519.Verify(key, payload, signature) {
+		return ErrDesktopControl
+	}
+	event := DesktopInputEvent{Type: p.Input.Type, X: float64(p.Input.X), Y: float64(p.Input.Y), W: w, H: h, Buttons: p.Input.Buttons, Keysym: p.Input.Keysym, Down: p.Input.Down, Width: p.Input.Width, Height: p.Input.Height}
+	if event.Type == "pointer" && (event.Buttons == 8 || event.Buttons == 16) {
+		event.Type = "wheel"
+		event.DY = 1
+		if event.Buttons == 8 {
+			event.DY = -1
+		}
+		event.Buttons = 0
+	}
+	return g.HumanInput(ctx, epoch, p.Grant.LeaseID, identity, p.Sequence, event)
+}
+
+// desktopInputPayload preserves the existing v1 bytes; resize adds only tag4 and its two uint16 dimensions.
+func desktopInputPayload(p DesktopSignedInput, key []byte) ([]byte, error) {
 	var b bytes.Buffer
 	b.WriteString("beeos.desktop.input.v1\x00")
 	put := func(v any) { _ = binary.Write(&b, binary.BigEndian, v) }
 	for _, s := range []string{p.Grant.Epoch, p.Grant.LeaseID, p.Grant.Holder} {
 		if len(s) < 1 || len(s) > 128 {
-			return ErrDesktopControl
+			return nil, ErrDesktopControl
 		}
 		put(uint64(len(s)))
 		b.WriteString(s)
@@ -82,21 +106,12 @@ func (g *DesktopControlGate) SignedInput(ctx context.Context, identity string, r
 		put(v)
 	case "release_all":
 		put(uint8(3))
+	case "resize":
+		put(uint8(4))
+		put(p.Input.Width)
+		put(p.Input.Height)
 	default:
-		return ErrDesktopControl
+		return nil, ErrDesktopControl
 	}
-	signature, err := base64.RawURLEncoding.DecodeString(p.Signature)
-	if err != nil || !ed25519.Verify(key, b.Bytes(), signature) {
-		return ErrDesktopControl
-	}
-	event := DesktopInputEvent{Type: p.Input.Type, X: float64(p.Input.X), Y: float64(p.Input.Y), W: w, H: h, Buttons: p.Input.Buttons, Keysym: p.Input.Keysym, Down: p.Input.Down}
-	if event.Type == "pointer" && (event.Buttons == 8 || event.Buttons == 16) {
-		event.Type = "wheel"
-		event.DY = 1
-		if event.Buttons == 8 {
-			event.DY = -1
-		}
-		event.Buttons = 0
-	}
-	return g.HumanInput(ctx, epoch, p.Grant.LeaseID, identity, p.Sequence, event)
+	return b.Bytes(), nil
 }

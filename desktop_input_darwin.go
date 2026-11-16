@@ -148,6 +148,10 @@ func (n *macDesktopInput) Apply(ctx context.Context, e DesktopInputEvent) error 
 		if C.bwMouse(C.int(kind), C.int(button), C.double(n.x), C.double(n.y), C.ulonglong(n.flags())) == 0 {
 			return ErrDesktopInputUnknown
 		}
+	case "resize":
+		return ErrDesktopResizeUnsupported
+	default:
+		return ErrDesktopControl
 	}
 	return nil
 }
