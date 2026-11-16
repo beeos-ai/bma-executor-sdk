@@ -1,16 +1,16 @@
 {
   "source_repository": "beeos-ai/beeos-managed-agents",
-  "source_commit": "574fdf45d3c68e1c0f8494656451e27bcdce65e1",
+  "source_commit": "019356629d3e25f84a7e8ae152dc4b551df7ec47",
   "protocols": [
     "bma.executor.v1",
     "bma.executor.v1.1"
   ],
-  "contract_version": "1.18.0",
+  "contract_version": "1.19.0",
   "contract": {
-    "contracts/bma/executor/examples/conformance.json": "fab8c369d69e32959527c267b5cd1f8523bea3c31967315ae54642b3e6eff903",
-    "contracts/bma/executor/executor.asyncapi.yaml": "0a04fd120670ca93ca6bab57656e923c5ca88632eccf24ba4bd055f63357c420",
-    "contracts/bma/executor/executor.openrpc.yaml": "f26e012c23868a9ffef2e77abf831d0e110a08f0f5b41e3bc8372756e92884db",
-    "contracts/bma/executor/schemas/agent.json": "277839a7b9a29aa3c2a6e73ed641a39cdff8bedb25698fbb6efff868a65ef7b8",
+    "contracts/bma/executor/examples/conformance.json": "98dc59cee3d9abb208b2f18623935eac790d2dbea9748aa839379a33cdb851c6",
+    "contracts/bma/executor/executor.asyncapi.yaml": "37decc66f5fd1e64f3f8790422be021bd1ae37b4ef3d9e781a0e412d63a0fbf1",
+    "contracts/bma/executor/executor.openrpc.yaml": "7d2e25d97754c2d6dfff2c965d5b9cacbe704263e158290f0d67a9ede03fa5e4",
+    "contracts/bma/executor/schemas/agent.json": "eaca61b3e0aa298eb9e62dfcb2cdd0c84563bba3c2140ce224604ae0f82be437",
     "contracts/bma/executor/schemas/common.json": "a838906a968534ee5cda4a32d44bb20be851ae75baa3c8e6e5069e6c5f992b75",
     "contracts/bma/executor/schemas/desktop.json": "7a1b596a67b09bda435185698ee36159315e00e622eb89ae234fa5572a76d4fc",
     "contracts/bma/executor/schemas/executor.json": "db436ac11b35705b0cc41b46666061ba4e614911140f5ce8ecd476772fe98878",
@@ -24,8 +24,8 @@
     "contracts/bma/executor/schemas/workspace.json": "980435059173d01aa4287a8ec5d0ebb0b3424322e15cebf8cce70f74c21b8012"
   },
   "generated": {
-    "generated.go": "d70b8cfabee2b9a0c70d35529c2298920d007a459cee57f14438b8e2dec11c45",
-    "python/src/bma_executor_sdk/generated.py": "7e715ba0680a2d18419efba82a0405954be5646d663f7ea5810eca7c0ff73c3c",
-    "typescript/src/generated/executor.ts": "9ecc99ca6fa2d990e8c16e1f68abf54ee0b9c4e314075c495592ddf2fe618ff8"
+    "generated.go": "9a969d5eed4338c9a62f7e9a2df231665219b57f054d58a9fbf8c7fd02b7f71f",
+    "python/src/bma_executor_sdk/generated.py": "1283fccbf9e02d85ba3a2efafc5efd1ca5ed46d67510962ae1182a39ffbbd787",
+    "typescript/src/generated/executor.ts": "86f1fb7ef3a7148fea9e2692b394a007e9323f3c1459ff1eb1717ab7bcf81239"
   }
 }
