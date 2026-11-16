@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.6.36
+## 1.6.37
 
 - **Optional session context maintenance (contract 1.19.0).** Typed
   `session.compact` and `session.compact_cancel`. Go (`AgentSessionCompactor`)
@@ -19,9 +19,13 @@
   refuses to advertise the capability. Existing agents are unchanged.
 - The SDK does not authorize platform users, compact context itself or
   enable a product capability.
-- Contract 1.19.0 snapshot must be regenerated from BMA main once
-  beeos-ai/beeos-managed-agents context maintenance (#1006/#1009
-  replacements) merges (`make contract-sdk`); the release gate enforces it.
+- Contract 1.19.0 snapshot regenerated from BMA main (#1848/#1849).
+
+## 1.6.36
+
+- Go: preserve the exact millisecond deadline and local monotonic clock when
+  granting or renewing signed screen input. A valid packet is no longer
+  rejected because clock resampling shortened its acknowledged lease.
 
 ## 1.6.34
 
