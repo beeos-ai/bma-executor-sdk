@@ -64,6 +64,7 @@ func (c *Client) ServeDesktopControl(g *DesktopControlGate) error {
 			err = ErrDesktopControl
 		}
 		if err != nil {
+			c.log(LogWarn, desktopControlDiagnostic(p.Action, err), nil)
 			return nil, err
 		}
 		return map[string]bool{"accepted": true}, nil

@@ -77,17 +77,24 @@ func (g *DesktopControlGate) Grant(ctx context.Context, epoch uint64, lease, ide
 }
 func (g *DesktopControlGate) grant(ctx context.Context, epoch uint64, lease, identity string, deadline time.Time, key []byte, mediaID string) error {
 	now := time.Now()
-	if g.native == nil || epoch == 0 || lease == "" || identity == "" || !deadline.After(now) || deadline.After(now.Add(30*time.Second)) {
-		return ErrDesktopControl
+	if g.native == nil || epoch == 0 || lease == "" || identity == "" {
+		return rejectDesktopControl(ErrDesktopControl, "invalid_binding", deadline, now)
+	}
+	if err := desktopControlDeadlineError(deadline, now); err != nil {
+		return err
 	}
 	g.mu.Lock()
 	if g.state == "blocked" {
 		g.mu.Unlock()
-		return ErrDesktopRecoveryRequired
+		return rejectDesktopControl(ErrDesktopRecoveryRequired, "recovery_required", deadline, now)
 	}
-	if g.closed || epoch < g.epoch {
+	if g.closed {
 		g.mu.Unlock()
-		return ErrDesktopControl
+		return rejectDesktopControl(ErrDesktopControl, "gate_closed", deadline, now)
+	}
+	if epoch < g.epoch {
+		g.mu.Unlock()
+		return rejectDesktopControl(ErrDesktopControl, "stale_epoch", deadline, now)
 	}
 	if epoch == g.epoch {
 		valid := g.state == "human" && g.lease == lease && g.identity == identity && bytes.Equal(g.key, key) && g.mediaID == mediaID && now.Before(g.until) && now.Before(g.heartbeat)
@@ -99,12 +106,12 @@ func (g *DesktopControlGate) grant(ctx context.Context, epoch uint64, lease, ide
 		if valid {
 			return nil
 		}
-		return ErrDesktopControl
+		return rejectDesktopControl(ErrDesktopControl, "current_lease_mismatch", deadline, now)
 	}
 	// A second controller cannot silently replace an active or draining one.
 	if g.state == "human" || g.state == "draining" || g.state == "releasing" {
 		g.mu.Unlock()
-		return ErrDesktopControl
+		return rejectDesktopControl(ErrDesktopControl, "controller_busy", deadline, now)
 	}
 	g.epoch = epoch
 	g.state = "draining"
@@ -119,17 +126,21 @@ func (g *DesktopControlGate) grant(ctx context.Context, epoch uint64, lease, ide
 			g.state = "released"
 		}
 		g.mu.Unlock()
-		return ErrDesktopDraining
+		return rejectDesktopControl(ErrDesktopDraining, "drain_failed", deadline, time.Now())
 	}
 	defer g.unlock()
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.closed || g.epoch != epoch || g.state != "draining" || !deadline.After(time.Now()) {
-		return ErrDesktopControl
+	drainNow := time.Now()
+	if g.closed || g.epoch != epoch || g.state != "draining" {
+		return rejectDesktopControl(ErrDesktopControl, "state_changed_during_drain", deadline, drainNow)
+	}
+	if !deadline.After(drainNow) {
+		return rejectDesktopControl(ErrDesktopControl, "deadline_expired_after_drain", deadline, drainNow)
 	}
 	if err := g.native.ReleaseAll(drain); err != nil {
 		g.state = "blocked"
-		return ErrDesktopInputUnknown
+		return rejectDesktopControl(ErrDesktopInputUnknown, "native_release_failed", deadline, time.Now())
 	}
 	g.lastSeq = 0
 	g.key = append([]byte(nil), key...)
