@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.40
+
+- Go (macOS): a `key` input whose keysym is a printable Latin-1 character or
+  an X11 Unicode keysym (`0x01000000 | code point`) without a physical ANSI
+  key is typed whole on key down with `CGEventKeyboardSetUnicodeString`,
+  independent of the keyboard layout and input method; key up holds nothing.
+  Chinese and other non-ANSI text, typed or pasted, no longer fails the input
+  and drops control. Shortcut keys keep their physical key codes.
+
 ## 1.6.39
 
 - Go: optional `NativeDesktopRestorer`. The control gate calls
