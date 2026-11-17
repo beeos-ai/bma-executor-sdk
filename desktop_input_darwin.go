@@ -17,6 +17,14 @@ static int bwKey(int key,int down,unsigned long long flags) {
  CGEventRef e=CGEventCreateKeyboardEvent(NULL,(CGKeyCode)key,down);if(!e)return 0;
  CGEventSetFlags(e,(CGEventFlags)flags);CGEventPost(kCGHIDEventTap,e);CFRelease(e);return 1;
 }
+static int bwText(const UniChar *s,int n){
+ for(int down=1;down>=0;down--){
+  CGEventRef e=CGEventCreateKeyboardEvent(NULL,0,down);if(!e)return 0;
+  CGEventSetFlags(e,0);CGEventKeyboardSetUnicodeString(e,(UniCharCount)n,s);
+  CGEventPost(kCGHIDEventTap,e);CFRelease(e);
+ }
+ return 1;
+}
 static int bwWheel(int dy,unsigned long long flags){
  CGEventRef e=CGEventCreateScrollWheelEvent(NULL,kCGScrollEventUnitLine,1,dy);if(!e)return 0;
  CGEventSetFlags(e,(CGEventFlags)flags);CGEventPost(kCGHIDEventTap,e);CFRelease(e);return 1;
@@ -27,6 +35,9 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"unicode/utf16"
+	"unicode/utf8"
+	"unsafe"
 )
 
 type macDesktopInput struct {
@@ -59,8 +70,8 @@ func (n *macDesktopInput) flags() uint64 {
 	return f
 }
 
-// Keysyms map to physical ANSI keys for shortcuts. Non-ANSI text is deliberately
-// unsupported until a layout-aware text path is connected; it is never guessed.
+// Keysyms map to physical ANSI keys for shortcuts. Characters without one are
+// typed by macText instead.
 func macKey(k uint32) (uint16, bool) {
 	codes := map[uint32]uint16{0xff08: 51, 0xff09: 48, 0xff0d: 36, 0xff1b: 53, 0xffff: 117, 0xff50: 115, 0xff57: 119, 0xff55: 116, 0xff56: 121, 0xff51: 123, 0xff52: 126, 0xff53: 124, 0xff54: 125, 0xffe1: 56, 0xffe2: 60, 0xffe3: 59, 0xffe4: 62, 0xffe9: 58, 0xffea: 61, 0xffeb: 55, 0xffec: 54, ' ': 49}
 	if c, ok := codes[k]; ok {
@@ -81,6 +92,26 @@ func macKey(k uint32) (uint16, bool) {
 	c, ok := pairs[k]
 	return c, ok
 }
+
+// macText maps a printable Latin-1 or X11 Unicode (0x01000000|code point)
+// keysym to UTF-16, the same characters the Linux worker types by keysym.
+// The character is typed whole on key down, independent of the keyboard
+// layout and input method, and holds nothing until key up.
+func macText(k uint32) ([]uint16, bool) {
+	var r rune
+	switch {
+	case k >= 0x20 && k <= 0x7e, k >= 0xa0 && k <= 0xff:
+		r = rune(k)
+	case k > 0x01000000 && k <= 0x0110ffff:
+		r = rune(k & 0x00ffffff)
+	default:
+		return nil, false
+	}
+	if r < 0x20 || (r >= 0x7f && r < 0xa0) || !utf8.ValidRune(r) {
+		return nil, false
+	}
+	return utf16.Encode([]rune{r}), true
+}
 func (n *macDesktopInput) Apply(ctx context.Context, e DesktopInputEvent) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -94,7 +125,14 @@ func (n *macDesktopInput) Apply(ctx context.Context, e DesktopInputEvent) error 
 	case "key":
 		code, ok := macKey(e.Keysym)
 		if !ok {
-			return errors.New("unsupported_desktop_key")
+			text, ok := macText(e.Keysym)
+			if !ok {
+				return errors.New("unsupported_desktop_key")
+			}
+			if e.Down && C.bwText((*C.UniChar)(unsafe.Pointer(&text[0])), C.int(len(text))) == 0 {
+				return ErrDesktopInputUnknown
+			}
+			return nil
 		}
 		if e.Down {
 			n.keys[e.Keysym] = code
