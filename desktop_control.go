@@ -44,6 +44,14 @@ type NativeDesktopResizer interface {
 	Resize(context.Context, uint16, uint16) error
 }
 
+// NativeDesktopRestorer is optional. RestoreDesktop undoes every Resize since
+// the previous restore (a no-op when there was none). The gate calls it when a
+// human lease ends, after its input is released; it reports its own failures,
+// which never change the control outcome.
+type NativeDesktopRestorer interface {
+	RestoreDesktop(context.Context) error
+}
+
 type DesktopInputEvent struct {
 	Type    string  `json:"type"`
 	X       float64 `json:"x,omitempty"`
@@ -259,6 +267,9 @@ func (g *DesktopControlGate) release(ctx context.Context, epoch uint64, lease st
 		return ErrDesktopRecoveryRequired
 	}
 	err := g.native.ReleaseAll(ctx)
+	if err == nil {
+		g.restoreDesktop(ctx)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.key = nil
@@ -371,6 +382,7 @@ func (g *DesktopControlGate) recover(ctx context.Context, epoch uint64, lease st
 	if err := g.native.ReleaseAll(ctx); err != nil {
 		return ErrDesktopRecoveryRequired
 	}
+	g.restoreDesktop(ctx)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -384,6 +396,13 @@ func (g *DesktopControlGate) recover(ctx context.Context, epoch uint64, lease st
 	g.observed = map[string]uint64{}
 	g.state = "released"
 	return nil
+}
+
+// restoreDesktop runs with the input lock held, so no resize interleaves.
+func (g *DesktopControlGate) restoreDesktop(ctx context.Context) {
+	if restorer, ok := g.native.(NativeDesktopRestorer); ok {
+		_ = restorer.RestoreDesktop(ctx)
+	}
 }
 
 // HumanInput receives the authenticated LiveKit participant identity from the

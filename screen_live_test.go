@@ -41,6 +41,22 @@ func TestScreenLiveUsesMachineAuthorityAndIsNotATool(t *testing.T) {
 	if _, err = h(context.Background(), raw); err != nil || called != 1 {
 		t.Fatalf("correct machine: %v", err)
 	}
+	for _, bad := range []ScreenLiveCommand{
+		{Type: "screen_live_start", Width: 1920},
+		{Type: "screen_live_start", Height: 1080},
+		{Type: "screen_live_renew", Width: 1920, Height: 1080},
+	} {
+		bad.MachineID, bad.SessionID, bad.Room, bad.Generation = "mch_test", "s", "r", 1
+		raw, _ = json.Marshal(bad)
+		if _, err = h(context.Background(), raw); err == nil {
+			t.Fatalf("size %dx%d on %s admitted", bad.Width, bad.Height, bad.Type)
+		}
+	}
+	p.Width, p.Height = 1920, 1080
+	raw, _ = json.Marshal(p)
+	if _, err = h(context.Background(), raw); err != nil || called != 2 {
+		t.Fatalf("start with a session size: %v", err)
+	}
 }
 
 func TestScreenLiveParentAcknowledgesPublication(t *testing.T) {
