@@ -257,4 +257,6 @@ func TestDesktopRestoreFailureDoesNotChangeTheRelease(t *testing.T) {
 
 type failingRestoreNative struct{ controlNative }
 
-func (*failingRestoreNative) RestoreDesktop(context.Context) error { return errors.New("xrandr failed") }
+func (*failingRestoreNative) RestoreDesktop(context.Context) error {
+	return errors.New("xrandr failed")
+}
