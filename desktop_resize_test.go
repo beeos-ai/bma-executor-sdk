@@ -208,3 +208,55 @@ func TestResizeLeaseExpiryCancelsNativeOperation(t *testing.T) {
 		t.Fatal("native resize survived lease expiry")
 	}
 }
+
+type restoreNative struct {
+	resizeNative
+	restores atomic.Int32
+}
+
+func (n *restoreNative) RestoreDesktop(context.Context) error { n.restores.Add(1); return nil }
+
+// The size a holder fitted is undone when its lease ends (release, expiry,
+// close), never when control is granted.
+func TestDesktopRestoreRunsWhenTheHumanLeaseEnds(t *testing.T) {
+	n := &restoreNative{resizeNative: resizeNative{resize: func(context.Context, uint16, uint16) error { return nil }}}
+	until := time.Now().Add(20 * time.Second)
+	g, private := resizeGrant(t, n, until)
+	if got := n.restores.Load(); got != 0 {
+		t.Fatalf("grant restored the desktop %d times", got)
+	}
+	if err := g.SignedInput(t.Context(), "viewer", signedResize(t, private, until, 1, 1280, 720), 1920, 1080); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Release(t.Context(), 1, "lease", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := n.restores.Load(); got != 1 {
+		t.Fatalf("release restored the desktop %d times, want 1", got)
+	}
+
+	expiring := &restoreNative{resizeNative: resizeNative{resize: func(context.Context, uint16, uint16) error { return nil }}}
+	g, _ = resizeGrant(t, expiring, time.Now().Add(300*time.Millisecond))
+	deadline := time.Now().Add(5 * time.Second)
+	for expiring.restores.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := expiring.restores.Load(); got != 1 {
+		t.Fatalf("lease expiry restored the desktop %d times, want 1", got)
+	}
+	g.Close()
+}
+
+func TestDesktopRestoreFailureDoesNotChangeTheRelease(t *testing.T) {
+	n := &failingRestoreNative{}
+	g, _ := resizeGrant(t, n, time.Now().Add(20*time.Second))
+	if err := g.Release(t.Context(), 1, "lease", false); err != nil {
+		t.Fatal("restore failure changed the release:", err)
+	}
+}
+
+type failingRestoreNative struct{ controlNative }
+
+func (*failingRestoreNative) RestoreDesktop(context.Context) error {
+	return errors.New("xrandr failed")
+}

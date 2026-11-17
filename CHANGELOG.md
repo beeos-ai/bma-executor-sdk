@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.39
+
+- Go: optional `NativeDesktopRestorer`. The control gate calls
+  `RestoreDesktop` when a human lease ends (release, expiry, recovery, close),
+  after input is released, so the size a holder fitted does not outlive its
+  control. A restore failure never changes the control outcome.
+- Go: `ScreenLiveCommand` carries the session's desktop `width`/`height` on
+  `screen_live_start` (both or neither; rejected on other commands).
+
 ## 1.6.38
 
 - Go: add signed desktop resize input through the existing control lease and

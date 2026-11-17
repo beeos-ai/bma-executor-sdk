@@ -27,6 +27,10 @@ type ScreenLiveCommand struct {
 	Token             string `json:"token,omitempty"`
 	PublisherIdentity string `json:"publisher_identity,omitempty"`
 	ExpiresAtMS       int64  `json:"expires_at_ms"`
+	// Width x Height is the desktop size the session asked for, on
+	// screen_live_start only; both are zero when the session left it to the machine.
+	Width  uint16 `json:"width,omitempty"`
+	Height uint16 `json:"height,omitempty"`
 }
 type ScreenLiveResult struct {
 	Published bool `json:"published"`
@@ -54,7 +58,8 @@ func (c *Client) ServeScreenLive(handler ScreenLiveHandler) error {
 	display["screen_live"] = true
 	c.options.Capabilities.Display, _ = json.Marshal(display)
 	c.requestHandlers[ScreenLiveMethod] = decodeThen(func(ctx context.Context, p ScreenLiveCommand) (ScreenLiveResult, error) {
-		if p.MachineID != c.options.MachineID || p.SessionID == "" || p.Room == "" || p.Generation < 1 {
+		if p.MachineID != c.options.MachineID || p.SessionID == "" || p.Room == "" || p.Generation < 1 ||
+			(p.Width == 0) != (p.Height == 0) || p.Width != 0 && p.Type != "screen_live_start" {
 			return ScreenLiveResult{}, &RPCError{Code: CodeInvalidParams, Message: "invalid_screen_binding"}
 		}
 		switch p.Type {
