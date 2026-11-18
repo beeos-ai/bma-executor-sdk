@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.41
+
+- Go: control release is idempotent. A release of a lease that is no longer
+  current succeeds (it holds no input), and a duplicate release that arrives
+  while the same lease is releasing waits for that release and answers its
+  outcome instead of `desktop_control_not_current`. A viewer that hands
+  control back and is revoked right after is no longer disconnected. Handing
+  back a lease that is no longer current is still refused.
+
 ## 1.6.40
 
 - Go (macOS): a `key` input whose keysym is a printable Latin-1 character or

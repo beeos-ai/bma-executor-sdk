@@ -81,6 +81,7 @@ type DesktopControlGate struct {
 	until, heartbeat       time.Time
 	observed               map[string]uint64
 	resume                 bool
+	releasing              chan struct{}
 	timer                  *time.Timer
 	closed                 bool
 	agentUnknown           bool
@@ -211,11 +212,24 @@ func (g *DesktopControlGate) release(ctx context.Context, epoch uint64, lease st
 	}
 	if epoch != g.epoch || (g.lease != "" && g.lease != lease) {
 		g.mu.Unlock()
-		return ErrDesktopControl
+		// A lease that is no longer current holds no input: releasing it is
+		// done. Handing it back would resume the Agent under another lease.
+		if resume {
+			return ErrDesktopControl
+		}
+		return nil
 	}
 	if g.state == "releasing" {
+		// A duplicate release of this lease answers the outcome of the one
+		// in flight instead of refusing it.
+		done := g.releasing
 		g.mu.Unlock()
-		return ErrDesktopControl
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return g.release(ctx, epoch, lease, resume, expiredOnly)
 	}
 	if g.state == "released" {
 		allowed := !resume || g.resume
@@ -241,6 +255,9 @@ func (g *DesktopControlGate) release(ctx context.Context, epoch uint64, lease st
 		return g.recover(ctx, epoch, lease)
 	}
 	g.state = "releasing"
+	done := make(chan struct{})
+	g.releasing = done
+	defer close(done)
 	g.observed = map[string]uint64{}
 	g.resume = false
 	cancel := g.nativeCancel
