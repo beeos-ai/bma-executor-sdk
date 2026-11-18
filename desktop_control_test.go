@@ -3,6 +3,7 @@ package bmaexecutor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -439,5 +440,85 @@ func TestReleaseWaitingOnAgentCannotClearLateUnknownResult(t *testing.T) {
 				t.Fatal("unknown Agent action allowed takeover")
 			}
 		})
+	}
+}
+
+// pausedRelease holds the next human ReleaseAll until resumed.
+type pausedRelease struct {
+	controlNative
+	mu      sync.Mutex
+	entered chan struct{}
+	resume  chan struct{}
+}
+
+func (n *pausedRelease) pause() (entered, resume chan struct{}) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.entered, n.resume = make(chan struct{}), make(chan struct{})
+	return n.entered, n.resume
+}
+
+func (n *pausedRelease) ReleaseAll(ctx context.Context) error {
+	n.mu.Lock()
+	entered, resume := n.entered, n.resume
+	n.entered, n.resume = nil, nil
+	n.mu.Unlock()
+	if entered != nil {
+		close(entered)
+		<-resume
+	}
+	return n.controlNative.ReleaseAll(ctx)
+}
+
+// Switching watch/control five times sends, per round, a renew and then a
+// release that overlaps the viewer revocation's release of the same lease. A
+// release of a lease that is no longer current succeeds; only its handback,
+// which would resume the Agent, is refused.
+func TestControlReleaseIsIdempotentAcrossFiveWatchControlRounds(t *testing.T) {
+	ctx := context.Background()
+	n := &pausedRelease{}
+	g := NewDesktopControlGate(&controlBackend{}, n)
+	defer g.Close()
+	for round := uint64(1); round <= 5; round++ {
+		lease := fmt.Sprintf("lease-%d", round)
+		if err := g.Grant(ctx, round, lease, "viewer", time.Now().Add(20*time.Second)); err != nil {
+			t.Fatal(round, err)
+		}
+		if err := g.Grant(ctx, round, lease, "viewer", time.Now().Add(20*time.Second)); err != nil {
+			t.Fatal("renew", round, err)
+		}
+		entered, resume := n.pause()
+		first := make(chan error, 1)
+		go func() { first <- g.Release(ctx, round, lease, false) }()
+		<-entered
+		second := make(chan error, 1)
+		go func() { second <- g.Release(ctx, round, lease, false) }()
+		select {
+		case err := <-second:
+			t.Fatal("duplicate release answered before the release in flight", round, err)
+		case <-time.After(20 * time.Millisecond):
+		}
+		close(resume)
+		if err := <-first; err != nil {
+			t.Fatal(round, err)
+		}
+		if err := <-second; err != nil {
+			t.Fatal("duplicate release", round, err)
+		}
+		if round > 1 {
+			old := fmt.Sprintf("lease-%d", round-1)
+			if err := g.Release(ctx, round-1, old, false); err != nil {
+				t.Fatal("late release of an ended lease", round, err)
+			}
+			if err := g.Release(ctx, round-1, old, true); !errors.Is(err, ErrDesktopControl) {
+				t.Fatal("late handback of an ended lease", round, err)
+			}
+		}
+	}
+	n.mu.Lock()
+	released := n.controlNative.released
+	n.mu.Unlock()
+	if released != 10 {
+		t.Fatalf("native releases = %d, want one per grant and one per release", released)
 	}
 }
