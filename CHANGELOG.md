@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.43
+
+- Go: a PTY process (`io_mode: pty`) keeps the output it wrote right before
+  exiting. The PTY master was closed when the process was reaped, which
+  discarded output pump had not read yet (on Linux a command's last lines,
+  such as `stty size`, could be missing). The master now closes when pump
+  reaches end of output, or after a 2 s drain grace if a background process
+  keeps the terminal open.
+
 ## 1.6.42
 
 - Go: signed desktop input carries `text` (tag 5: uint16 byte length and the

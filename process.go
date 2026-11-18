@@ -862,6 +862,10 @@ func spawn(params ProcessStartParams, cwd string, env []string, runAs *RunAs) (*
 	return proc, nil
 }
 
+// ptyDrainGrace bounds how long a PTY master stays open after its process
+// exited so pump can read the output still queued.
+const ptyDrainGrace = 2 * time.Second
+
 func newCommandProcess(id string, cmd *exec.Cmd, tree *processTree) *process {
 	return newProcess(id, cmd.Process.Pid, tree, func() (int, string) {
 		_ = cmd.Wait()
@@ -985,7 +989,15 @@ func (p *processes) watch(session *CoreSession, table *processTable, proc *proce
 		proc.exitCode = &code
 	}
 	if proc.stdin != nil && !proc.stdinClosed {
-		_ = proc.stdin.Close()
+		if proc.pty {
+			// The PTY master is also the output reader: closing it now drops
+			// output the child wrote that pump has not read yet. pump closes
+			// it at end of output; the grace only matters when a background
+			// process keeps the slave open.
+			time.AfterFunc(ptyDrainGrace, func() { _ = proc.stdin.Close() })
+		} else {
+			_ = proc.stdin.Close()
+		}
 		proc.stdinClosed = true
 	}
 	proc.endedAt = time.Now()
