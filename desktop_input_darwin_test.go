@@ -5,6 +5,7 @@ package bmaexecutor
 import (
 	"slices"
 	"testing"
+	"unicode/utf16"
 )
 
 func TestMacTextTypesWhatTheLinuxWorkerTypes(t *testing.T) {
@@ -49,5 +50,23 @@ func TestMacKeyStillOwnsShortcutKeys(t *testing.T) {
 	}
 	if _, ok := macKey(0x01004f60); ok {
 		t.Error("macKey mapped a CJK keysym to a physical key")
+	}
+}
+
+func TestMacTextChunksKeepSurrogatePairsWhole(t *testing.T) {
+	text := "中文输入测试abcdefghijklmn😀z"
+	chunks := macTextChunks(text)
+	var all []uint16
+	for _, c := range chunks {
+		if len(c) == 0 || len(c) > 20 {
+			t.Fatalf("chunk of %d units", len(c))
+		}
+		if last := c[len(c)-1]; last >= 0xd800 && last < 0xdc00 {
+			t.Fatal("chunk ends inside a surrogate pair")
+		}
+		all = append(all, c...)
+	}
+	if string(utf16.Decode(all)) != text {
+		t.Fatalf("chunks lose text: %q", string(utf16.Decode(all)))
 	}
 }
