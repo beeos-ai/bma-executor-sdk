@@ -112,6 +112,7 @@ func macText(k uint32) ([]uint16, bool) {
 	}
 	return utf16.Encode([]rune{r}), true
 }
+
 // macTextChunks splits committed text into the UTF-16 runs one keyboard event
 // carries (CGEventKeyboardSetUnicodeString delivers at most 20 units), never
 // inside a surrogate pair.

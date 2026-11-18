@@ -4,8 +4,8 @@ package bmaexecutor
 
 import (
 	"slices"
-	"unicode/utf16"
 	"testing"
+	"unicode/utf16"
 )
 
 func TestMacTextTypesWhatTheLinuxWorkerTypes(t *testing.T) {
