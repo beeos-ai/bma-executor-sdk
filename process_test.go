@@ -282,3 +282,17 @@ func TestPTYProcessInterruptReachesForegroundGroup(t *testing.T) {
 			list.Processes[0].ExitCode != nil && *list.Processes[0].ExitCode == 130
 	})
 }
+
+func TestPTYProcessKeepsOutputWrittenBeforeExit(t *testing.T) {
+	h := newProcessHarness(t, CoreOptions{}, ProcessOptions{})
+	for i := 0; i < 100; i++ {
+		id := fmt.Sprintf("pty-%d", i)
+		h.mustStart(t, ProcessStartParams{
+			ProcessID: id, IOMode: IOModePTY, Stderr: StderrMerge,
+			Argv: []string{"sh", "-c", "echo tty; stty size"},
+		})
+		if output := readAll(t, h.executor, h.session, id); output != "tty\r\n24 80\r\n" {
+			t.Fatalf("run %d: pty output %q", i, output)
+		}
+	}
+}
