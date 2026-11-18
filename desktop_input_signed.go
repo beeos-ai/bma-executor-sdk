@@ -31,6 +31,7 @@ type DesktopSignedInput struct {
 		Down    bool   `json:"down"`
 		Width   uint16 `json:"width"`
 		Height  uint16 `json:"height"`
+		Text    string `json:"text"`
 	} `json:"input"`
 	Signature string `json:"signature"`
 }
@@ -62,7 +63,7 @@ func (g *DesktopControlGate) SignedInput(ctx context.Context, identity string, r
 	if err != nil || !ed25519.Verify(key, payload, signature) {
 		return ErrDesktopControl
 	}
-	event := DesktopInputEvent{Type: p.Input.Type, X: float64(p.Input.X), Y: float64(p.Input.Y), W: w, H: h, Buttons: p.Input.Buttons, Keysym: p.Input.Keysym, Down: p.Input.Down, Width: p.Input.Width, Height: p.Input.Height}
+	event := DesktopInputEvent{Type: p.Input.Type, X: float64(p.Input.X), Y: float64(p.Input.Y), W: w, H: h, Buttons: p.Input.Buttons, Keysym: p.Input.Keysym, Down: p.Input.Down, Width: p.Input.Width, Height: p.Input.Height, Text: p.Input.Text}
 	if event.Type == "pointer" && (event.Buttons == 8 || event.Buttons == 16) {
 		event.Type = "wheel"
 		event.DY = 1
@@ -74,7 +75,14 @@ func (g *DesktopControlGate) SignedInput(ctx context.Context, identity string, r
 	return g.HumanInput(ctx, epoch, p.Grant.LeaseID, identity, p.Sequence, event)
 }
 
-// desktopInputPayload preserves the existing v1 bytes; resize adds only tag4 and its two uint16 dimensions.
+// SigningBytes are the bytes the packet's Ed25519 signature covers, with the
+// grant's own input key (contracts/bma/desktop-relay.md §5b).
+func (p DesktopSignedInput) SigningBytes() ([]byte, error) {
+	return desktopInputPayload(p, p.Grant.InputKey)
+}
+
+// desktopInputPayload preserves the existing v1 bytes; resize adds tag 4 and
+// its two uint16 dimensions, text tag 5 with a uint16 length and its UTF-8.
 func desktopInputPayload(p DesktopSignedInput, key []byte) ([]byte, error) {
 	var b bytes.Buffer
 	b.WriteString("beeos.desktop.input.v1\x00")
@@ -110,6 +118,13 @@ func desktopInputPayload(p DesktopSignedInput, key []byte) ([]byte, error) {
 		put(uint8(4))
 		put(p.Input.Width)
 		put(p.Input.Height)
+	case "text":
+		if len(p.Input.Text) < 1 || len(p.Input.Text) > DesktopTextMaxBytes {
+			return nil, ErrDesktopControl
+		}
+		put(uint8(5))
+		put(uint16(len(p.Input.Text)))
+		b.WriteString(p.Input.Text)
 	default:
 		return nil, ErrDesktopControl
 	}

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.42
+
+- Go: signed desktop input carries `text` (tag 5: uint16 byte length and the
+  UTF-8, 1–1024 bytes without NUL or control characters other than tab, CR,
+  LF). Committed input-method text is one event instead of per-character
+  keysyms; `DesktopInputEvent.Text` reaches the native input. On macOS it is
+  typed with `CGEventKeyboardSetUnicodeString` in runs of at most 20 UTF-16
+  units. `DesktopSignedInput.SigningBytes` returns the signed bytes.
+- Go: the signed-input golden file is the shared
+  `contracts/bma/desktop-input.vectors.json`; the gate is tested against
+  every vector's ACK.
+
 ## 1.6.41
 
 - Go: control release is idempotent. A release of a lease that is no longer

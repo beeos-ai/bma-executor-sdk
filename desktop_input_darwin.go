@@ -112,6 +112,25 @@ func macText(k uint32) ([]uint16, bool) {
 	}
 	return utf16.Encode([]rune{r}), true
 }
+// macTextChunks splits committed text into the UTF-16 runs one keyboard event
+// carries (CGEventKeyboardSetUnicodeString delivers at most 20 units), never
+// inside a surrogate pair.
+func macTextChunks(text string) [][]uint16 {
+	var chunks [][]uint16
+	var chunk []uint16
+	for _, r := range text {
+		units := utf16.Encode([]rune{r})
+		if len(chunk)+len(units) > 20 {
+			chunks = append(chunks, chunk)
+			chunk = nil
+		}
+		chunk = append(chunk, units...)
+	}
+	if len(chunk) > 0 {
+		chunks = append(chunks, chunk)
+	}
+	return chunks
+}
 func (n *macDesktopInput) Apply(ctx context.Context, e DesktopInputEvent) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -185,6 +204,12 @@ func (n *macDesktopInput) Apply(ctx context.Context, e DesktopInputEvent) error 
 		}
 		if C.bwMouse(C.int(kind), C.int(button), C.double(n.x), C.double(n.y), C.ulonglong(n.flags())) == 0 {
 			return ErrDesktopInputUnknown
+		}
+	case "text":
+		for _, chunk := range macTextChunks(e.Text) {
+			if C.bwText((*C.UniChar)(unsafe.Pointer(&chunk[0])), C.int(len(chunk))) == 0 {
+				return ErrDesktopInputUnknown
+			}
 		}
 	case "resize":
 		return ErrDesktopResizeUnsupported

@@ -9,6 +9,7 @@ import (
 	"math"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 var ErrDesktopControl = errors.New("desktop_control_not_current")
@@ -64,7 +65,11 @@ type DesktopInputEvent struct {
 	DY      float64 `json:"dy,omitempty"`
 	Width   uint16  `json:"width,omitempty"`
 	Height  uint16  `json:"height,omitempty"`
+	Text    string  `json:"text,omitempty"`
 }
+
+// DesktopTextMaxBytes bounds one text event (UTF-8 bytes).
+const DesktopTextMaxBytes = 1024
 
 // DesktopControlGate guards the physical input device, not model/file work.
 // The platform alone grants authority. Media IPC may only use that authority.
@@ -504,6 +509,16 @@ func validateDesktopInput(e DesktopInputEvent) error {
 	case "key":
 		if e.Keysym == 0 || e.Keysym > 0x0110ffff {
 			return ErrDesktopControl
+		}
+		return nil
+	case "text":
+		if len(e.Text) < 1 || len(e.Text) > DesktopTextMaxBytes || !utf8.ValidString(e.Text) {
+			return ErrDesktopControl
+		}
+		for _, r := range e.Text {
+			if r != '\t' && r != '\r' && r != '\n' && (r < 0x20 || r >= 0x7f && r < 0xa0) {
+				return ErrDesktopControl
+			}
 		}
 		return nil
 	case "pointer", "wheel":
