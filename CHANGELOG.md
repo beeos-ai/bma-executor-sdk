@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.47
+
+- Go: write and edit ask `CoreOptions.FileAccess` again right before they
+  change the file (also edit with `replace_all` of a `LocalToolRoute`), and
+  write nothing when the call's session was stopped meanwhile. An access
+  that ended while the call ran (a narrower grant, a stopped turn, an
+  expired switch) no longer lands. A hook now sees each write twice.
+
 ## 1.6.46
 
 - Go: `CoreOptions.OutsideFiles` lets the file tools (read, write, edit,

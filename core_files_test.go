@@ -272,12 +272,16 @@ func TestFileAccessHookSeesToolOperationAndRelativePath(t *testing.T) {
 	wantExecuted(t, r.call("grep", map[string]any{"path": "a", "pattern": "three"}))
 	// A path outside the workspace fails by itself, without asking.
 	wantToolError(t, r.call("read", map[string]any{"file_path": "../outside/secret.txt"}), "read outside")
+	// A write is asked before the call and again right before the file changes.
 	want := []FileAccessRequest{
+		{Tool: "write", Operation: "write", Path: "a/f.txt"},
 		{Tool: "write", Operation: "write", Path: "a/f.txt"},
 		{Tool: "read", Operation: "read", Path: "a/f.txt"},
 		{Tool: "edit", Operation: "read", Path: "a/f.txt"},
 		{Tool: "edit", Operation: "write", Path: "a/f.txt"},
+		{Tool: "edit", Operation: "write", Path: "a/f.txt"},
 		{Tool: "edit", Operation: "read", Path: "a/f.txt"},
+		{Tool: "edit", Operation: "write", Path: "a/f.txt"},
 		{Tool: "edit", Operation: "write", Path: "a/f.txt"},
 		{Tool: "glob", Operation: "read", Path: "."},
 		{Tool: "grep", Operation: "read", Path: "a"},
@@ -423,7 +427,7 @@ func TestOutsideFilesAskTheHookAndUseTheAbsolutePath(t *testing.T) {
 	}
 	wantToolError(t, r.call("read", map[string]any{"file_path": "../outside/secret.txt"}), "relative path outside")
 	calls := log.calls()
-	if len(calls) != 3 || !calls[0].Outside || calls[0].Path != secret || calls[1].Operation != FileOperationWrite || calls[1].Path != target {
+	if len(calls) != 4 || !calls[0].Outside || calls[0].Path != secret || calls[1].Operation != FileOperationWrite || calls[1].Path != target || calls[2] != calls[1] {
 		t.Fatalf("hook calls = %+v", calls)
 	}
 	// The hook decides: refused, nothing is written.
@@ -442,5 +446,44 @@ func TestOutsideFilesAskTheHookAndUseTheAbsolutePath(t *testing.T) {
 func TestOutsideFilesRequireAHook(t *testing.T) {
 	if _, err := NewCore(CoreOptions{WorkRoot: t.TempDir(), OutsideFiles: true}); err == nil {
 		t.Fatal("OutsideFiles without FileAccess accepted")
+	}
+}
+
+// Access that ends while a write or edit runs (a narrower grant, a switch
+// turned off) writes nothing: the hook is asked again right before the file
+// changes, for write, edit and edit with replace_all.
+func TestWriteIsCommittedOnlyWhileAccessStillHolds(t *testing.T) {
+	var asked int
+	log := &accessLog{}
+	log.setFn(func(req FileAccessRequest) error {
+		if req.Operation != FileOperationWrite {
+			return nil
+		}
+		asked++
+		if asked%2 == 0 { // the second ask of each call: access is gone now
+			return NewReasonError(CodeForbidden, ReasonWorkspaceReadOnly, "access changed")
+		}
+		return nil
+	})
+	r := newFileRig(t, CoreOptions{FileAccess: log.hook}, nil)
+	noErr(t, os.WriteFile(filepath.Join(r.workspace, "keep.txt"), []byte("old old\n"), 0o644))
+	for _, c := range []struct {
+		tool string
+		in   map[string]any
+	}{
+		{"write", map[string]any{"file_path": "new.txt", "content": "x"}},
+		{"write", map[string]any{"file_path": "keep.txt", "content": "x"}},
+		{"edit", map[string]any{"file_path": "keep.txt", "old_string": "old old", "new_string": "new"}},
+		{"edit", map[string]any{"file_path": "keep.txt", "old_string": "old", "new_string": "new", "replace_all": true}},
+	} {
+		if got := r.call(c.tool, c.in); !got.IsError || !strings.Contains(got.Text, ReasonWorkspaceReadOnly) {
+			t.Fatalf("%s %v = %+v", c.tool, c.in, got)
+		}
+	}
+	if fileExists(r.workspace, "new.txt") {
+		t.Fatal("a write landed after access ended")
+	}
+	if raw, _ := os.ReadFile(filepath.Join(r.workspace, "keep.txt")); string(raw) != "old old\n" {
+		t.Fatalf("the file changed after access ended: %q", raw)
 	}
 }
