@@ -1,12 +1,22 @@
 # Changelog
 
-## 1.6.46
+## 1.6.47
 
 - Go, Codex: a reply cut at the model's output limit is continued (at most
   three times) before the turn ends `output_limit_reached`, as for every
   brain: a cut text resumes from the cut point; a cut tool call is discarded
   (it never runs) and the model is asked to split the work into smaller
   calls.
+
+## 1.6.46
+
+- Go: `CoreOptions.OutsideFiles` lets the file tools (read, write, edit,
+  glob, grep) use an absolute path beyond the session workspace and mounts,
+  as the user the executor runs as, when `FileAccess` allows that call. The
+  hook is asked with `FileAccessRequest.Outside` and the absolute path; it
+  requires `FileAccess`. Off (the default) such a path fails as before.
+  Relative paths stay in the workspace. A host sets it for sessions with
+  full access to the computer.
 
 ## 1.6.45
 
