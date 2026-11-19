@@ -136,6 +136,12 @@ export interface WebSocketDialerOptions {
    * BMA_MACHINE_ID when environmentId is empty. It must equal the machine of the credential, else 404.
    */
   machineId?: string
+  /**
+   * One instance of a platform brain fleet (contract 1.23.0 ExecutorTokenRequest.instance_id, ADR-0083), for example
+   * the pod name: the instances share the machine credential and each gets a token and control channel of its own.
+   * Only the deployment's platform brain machines may send it. Omitted: the machine's own executor.
+   */
+  instanceId?: string
   executor: ExecutorInfo
   /** POST the token exchange to {baseUrl} with environmentKey, unless tokenSource is set. */
   baseUrl?: string
@@ -194,7 +200,11 @@ function executorTokenSource(options: WebSocketDialerOptions): TokenSource {
       const response = await (options.fetch ?? fetch)(`${base}${path}`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${options.environmentKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ environment_id: options.environmentId, executor: options.executor }),
+        body: JSON.stringify({
+          environment_id: options.environmentId,
+          executor: options.executor,
+          ...(options.instanceId ? { instance_id: options.instanceId } : {}),
+        }),
         signal: AbortSignal.timeout(options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
       })
       if (response.status !== 200) {

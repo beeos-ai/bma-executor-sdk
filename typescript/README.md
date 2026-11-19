@@ -54,7 +54,9 @@ origin, the same value as `BMA_BASE_URL` in bma-sdk (for example `https://api.st
 the client posts the environment key to `{baseUrl}/v1/environments/{environmentId}/token` (a machine daemon token to
 `{baseUrl}/v1/machines/{machineId}/token`) and drops a trailing `/api/v1`. `machineId` and `environmentId` are alternatives;
 an empty `machineId` reads `BMA_MACHINE_ID` (`MACHINE_ID_ENV`), and without any id the legacy `/api/v1/executors/token` alias is used. The SDK does not read
-`BMA_BASE_URL` itself. A `tokenSource` carries its own channel URL and ignores `baseUrl`.
+`BMA_BASE_URL` itself. A `tokenSource` carries its own channel URL and ignores `baseUrl`. `instanceId` (contract 1.23.0)
+makes the executor one instance of a platform brain fleet: the instances share the machine credential and each gets its own
+token and control channel (only the deployment's platform brain machines may send it).
 
 #### A machine-scoped executor must declare `process` or `agent`
 

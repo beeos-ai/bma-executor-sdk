@@ -70,6 +70,22 @@ test('a machine id exchanges the machine token at /v1/machines/{machine_id}/toke
   assert.equal(await tokenUrl({ environmentId: '', machineId: 'a/b' }), 'https://bma.test/v1/machines/a%2Fb/token')
 })
 
+test('instanceId asks for a token of that brain fleet instance; without it the body has no instance_id', async () => {
+  const bodies: unknown[] = []
+  const fetch = (async (_url: string, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)))
+    return new Response('nope', { status: 500 })
+  }) as typeof globalThis.fetch
+  for (const instanceId of ['brain-host-7d9f-x2', undefined]) {
+    const dial = webSocketDialer({ environmentId: '', machineId: 'mch_1', instanceId, executor: executorInfo, baseUrl: 'https://bma.test', environmentKey: 'mtok', fetch })
+    await assert.rejects(dial({ channel: ChannelScope.Control }))
+  }
+  assert.deepEqual(bodies, [
+    { environment_id: '', executor: executorInfo, instance_id: 'brain-host-7d9f-x2' },
+    { environment_id: '', executor: executorInfo },
+  ])
+})
+
 test('BMA_MACHINE_ID supplies the machine id unless an environmentId is set', async () => {
   assert.equal(MACHINE_ID_ENV, 'BMA_MACHINE_ID')
   const previous = process.env[MACHINE_ID_ENV]
