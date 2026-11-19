@@ -1097,11 +1097,16 @@ func (p *cliProc) onStream(prompt *cliPrompt, raw json.RawMessage, abandoned boo
 		}
 		return
 	case "message_delta":
+		// A text reply cut at its output limit is left to the CLI, which asks
+		// the model to go on (a bounded number of times), as every brain does;
+		// a prompt that still ends cut is output_limit_reached (end). A cut
+		// tool call has incomplete input and must never run: the turn fails
+		// here instead.
+		toolCut := e.Delta.StopReason == "max_tokens" && slices.ContainsFunc(slices.Collect(maps.Values(prompt.blocks)),
+			func(b *cliBlock) bool { return b.kind == "tool_use" })
 		prompt.mu.Unlock()
-		if e.Delta.StopReason == "max_tokens" {
-			// The reply was cut at its output limit: the turn fails here, as
-			// for every brain, instead of the CLI asking the model to go on.
-			prompt.fail(AgentErrorCodeOutputLimitReached, "the model reply was cut at its output limit")
+		if toolCut {
+			prompt.fail(AgentErrorCodeOutputLimitReached, "the model reply was cut at its output limit while writing a tool call")
 			p.interrupt()
 		}
 		return
