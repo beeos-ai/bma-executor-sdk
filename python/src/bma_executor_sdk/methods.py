@@ -63,6 +63,10 @@ from .generated import (
     ToolResultParams,
     ToolsTokenRefreshParams,
     ToolsTokenRefreshResult,
+    WorkingLogAppendParams,
+    WorkingLogAppendResult,
+    WorkingLogReadParams,
+    WorkingLogReadResult,
     WorkspaceBackupParams,
     WorkspaceBackupResult,
 )
@@ -98,6 +102,8 @@ __all__ = [
     "INTERACTION_CANCEL",
     "MODEL_TOKEN_REFRESH",
     "TOOLS_TOKEN_REFRESH",
+    "WORKING_LOG_READ",
+    "WORKING_LOG_APPEND",
     "EXECUTOR_CAPABILITIES_UPDATE",
     "SESSION_STATUS",
     "TOOL_PROGRESS",
@@ -138,6 +144,8 @@ INTERACTION_REQUEST: Call[InteractionRequestParams, InteractionRequestResult] = 
 INTERACTION_CANCEL: Call[InteractionCancelParams, Ack] = Call("interaction.cancel")
 MODEL_TOKEN_REFRESH: Call[ModelTokenRefreshParams, ModelTokenRefreshResult] = Call("model_token.refresh")
 TOOLS_TOKEN_REFRESH: Call[ToolsTokenRefreshParams, ToolsTokenRefreshResult] = Call("tools_token.refresh")
+WORKING_LOG_READ: Call[WorkingLogReadParams, WorkingLogReadResult] = Call("working_log.read")
+WORKING_LOG_APPEND: Call[WorkingLogAppendParams, WorkingLogAppendResult] = Call("working_log.append")
 
 # Executor-to-harness notifications a client sends with notify.
 EXECUTOR_CAPABILITIES_UPDATE: Notification[ExecutorCapabilitiesUpdateParams] = Notification("executor.capabilities.update")
