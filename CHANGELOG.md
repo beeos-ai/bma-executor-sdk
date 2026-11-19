@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.45
+
+- Go, Claude: a text reply cut at its output limit is no longer failed at once;
+  the CLI continues it (Claude Code's own bounded recovery) and only a prompt
+  that still ends cut is `output_limit_reached`, as for every brain. A cut
+  tool call (incomplete input) still fails the turn at once and never runs.
+
 ## 1.6.44
 
 - Executor contract 1.25.0 (snapshot and generated types in Go, TypeScript
