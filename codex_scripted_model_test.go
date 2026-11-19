@@ -27,6 +27,11 @@ type scriptedResponses struct {
 	tool   string
 	input  map[string]any
 
+	// cuts are the first model responses, each cut at the output limit
+	// (response.incomplete, max_output_tokens): "text" after some text,
+	// "call" in the middle of a tool call.
+	cuts []string
+
 	mu       sync.Mutex
 	requests []responsesRequest
 	toolUses int
@@ -118,6 +123,18 @@ func (m *scriptedResponses) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	id := fmt.Sprintf("resp_%d", n)
 	event("response.created", map[string]any{"response": map[string]any{"id": id}})
+	if n <= len(m.cuts) {
+		if m.cuts[n-1] == "text" {
+			msg := fmt.Sprintf("msg_%d", n)
+			event("response.output_item.added", map[string]any{"output_index": 0, "item": map[string]any{"type": "message", "role": "assistant", "id": msg, "content": []any{}}})
+			event("response.output_text.delta", map[string]any{"output_index": 0, "content_index": 0, "item_id": msg, "delta": "partial text"})
+		} else {
+			event("response.output_item.added", map[string]any{"output_index": 0, "item": map[string]any{"type": "function_call", "id": fmt.Sprintf("fc_%d", n), "call_id": fmt.Sprintf("call_cut%d", n), "name": tool, "arguments": ""}})
+			event("response.function_call_arguments.delta", map[string]any{"output_index": 0, "item_id": fmt.Sprintf("fc_%d", n), "delta": `{"command": "printf`})
+		}
+		event("response.incomplete", map[string]any{"response": map[string]any{"id": id, "incomplete_details": map[string]any{"reason": "max_output_tokens"}}})
+		return
+	}
 	if needTool {
 		args, _ := json.Marshal(m.input)
 		item := map[string]any{"type": "function_call", "id": fmt.Sprintf("fc_%d", n), "call_id": fmt.Sprintf("call_%02d", uses), "name": tool, "arguments": string(args)}

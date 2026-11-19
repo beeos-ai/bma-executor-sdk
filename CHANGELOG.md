@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.49
+
+- Go, Codex: a reply cut at the model's output limit is continued (at most
+  three times) before the turn ends `output_limit_reached`, as for every
+  brain: a cut text resumes from the cut point; a cut tool call is discarded
+  (it never runs) and the model is asked to split the work into smaller
+  calls.
+
 ## 1.6.48
 
 - Go: with `CoreOptions.RunAs`, a session workspace's missing parent
