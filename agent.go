@@ -276,6 +276,9 @@ type AgentTurn struct {
 	abort context.CancelCauseFunc
 	done  chan struct{}
 	ended atomic.Bool
+	// inputsClosed (under the session's lock): closeInputs ended the turn's
+	// input; a later turn.input answers conflict.
+	inputsClosed bool
 
 	toolsOnce sync.Once
 	tools     ToolRoute
@@ -361,6 +364,20 @@ func (t *AgentTurn) ApprovalID(callID string) string {
 
 // Inputs delivers turn.input messages in arrival order.
 func (t *AgentTurn) Inputs() <-chan TurnInputParams { return t.inputs }
+
+// closeInputs ends the turn's input, so a later turn.input answers conflict
+// (agent.steering: once the turn ends it takes no more input). It closes
+// nothing and reports false while an accepted input waits in Inputs: the
+// caller reads it first.
+func (t *AgentTurn) closeInputs() bool {
+	t.session.mu.Lock()
+	defer t.session.mu.Unlock()
+	if len(t.inputs) > 0 {
+		return false
+	}
+	t.inputsClosed = true
+	return true
+}
 
 // NewEventID returns a fresh event id, for a message that is streamed with
 // Delta before it is emitted with EmitWithID.
@@ -834,7 +851,7 @@ func (r *agentRuntime) turnInput(_ context.Context, params TurnInputParams) (Ack
 	}
 	s.mu.Lock()
 	turn := s.turn
-	if turn == nil || turn.params.TurnID != params.TurnID || turn.ended.Load() {
+	if turn == nil || turn.params.TurnID != params.TurnID || turn.ended.Load() || turn.inputsClosed {
 		s.mu.Unlock()
 		return Ack{}, &RPCError{Code: CodeConflict, Message: "turn is not running; start a new turn"}
 	}
@@ -847,6 +864,14 @@ func (r *agentRuntime) turnInput(_ context.Context, params TurnInputParams) (Ack
 		return Ack{}, &RPCError{Code: CodeConflict, Message: "selected-skill input requires its own turn"}
 	}
 	turn.seen[params.InputID] = true
+	// Queued under the lock, so closeInputs sees it; a full queue frees a
+	// slot only by a read, which moves this input into it (still seen).
+	select {
+	case turn.inputs <- params:
+		s.mu.Unlock()
+		return Ack{Accepted: true}, nil
+	default:
+	}
 	s.mu.Unlock()
 	select {
 	case turn.inputs <- params:

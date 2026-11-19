@@ -535,6 +535,8 @@ func (a *BrainHost) Capability() AgentCapability {
 		// Host tools come with tools_mcp_* (the hands are elsewhere).
 		HostTools:   a.caps.HostTools && a.opts.PlatformTools,
 		InputSkills: a.caps.InputSkills,
+		// A turn.input joins the running prompt at the brain's next step boundary (RunTurn, BrainSession.Steer).
+		Steering: a.caps.Steering,
 		// The host continues a turn an executor restart interrupted (recover).
 		TurnResume:  true,
 		FileInputs:  a.fileInputs(h.ImageInputs),
@@ -783,22 +785,37 @@ func (a *BrainHost) RunTurn(ctx context.Context, turn *AgentTurn) error {
 		}
 		a.mu.Unlock()
 	}()
-	if err := a.runInput(ctx, brain, t, params.InputID, params.Input, plan.skills, overrides); err != nil {
+	// turn.input received while the turn runs: steered into the running
+	// prompt when the brain takes it (agent.steering), otherwise prompted in
+	// order after it, in the same turn.
+	var later []TurnInputParams
+	if err := a.runInput(ctx, brain, t, params.InputID, params.Input, plan.skills, overrides, &later); err != nil {
 		return err
 	}
-	// turn.input received while the turn ran: prompted in order, in the same turn.
 	for {
-		select {
-		case input := <-turn.Inputs():
-			if err := a.runInput(ctx, brain, t, input.InputID, input.Input, nil, overrides); err != nil {
+		if len(later) > 0 {
+			input := later[0]
+			later = later[1:]
+			if err := a.runInput(ctx, brain, t, input.InputID, input.Input, nil, overrides, &later); err != nil {
 				return err
 			}
-		default:
-			if t.local != nil && ctx.Err() == nil {
-				t.local.Complete()
-			}
-			return nil
+			continue
 		}
+		select {
+		case input := <-turn.Inputs():
+			later = append(later, input)
+			continue
+		default:
+		}
+		// The turn takes no input after this: a later turn.input answers
+		// conflict and the platform runs it as a turn of its own.
+		if !turn.closeInputs() {
+			continue
+		}
+		if t.local != nil && ctx.Err() == nil {
+			t.local.Complete()
+		}
+		return nil
 	}
 }
 
@@ -863,7 +880,11 @@ func (a *BrainHost) SuspendSession(ctx context.Context, sessionID string) error 
 // event it produced is acknowledged by the platform. After a restart the
 // turn's inputs come again (turn.start, turn.input); the brain continues the
 // one it recorded without having finished it (same input id).
-func (a *BrainHost) runInput(ctx context.Context, brain BrainSession, t *acpTurn, inputID string, input []AgentInputBlock, skills []InputSkillDocument, policy map[string]string) error {
+//
+// While the brain runs the input, a turn.input that arrives is steered into
+// it (BrainSession.Steer) when the brain takes steering; one it does not take
+// is added to later, to be prompted after it.
+func (a *BrainHost) runInput(ctx context.Context, brain BrainSession, t *acpTurn, inputID string, input []AgentInputBlock, skills []InputSkillDocument, policy map[string]string, later *[]TurnInputParams) error {
 	if t.ledger.inputDone(inputID) {
 		return nil
 	}
@@ -889,13 +910,73 @@ func (a *BrainHost) runInput(ctx context.Context, brain BrainSession, t *acpTurn
 		route := t.route
 		in.Model = &route
 	}
-	if err := brain.Prompt(ctx, in, t); err != nil {
+	steered, err := a.prompt(ctx, brain, t, in, policy, later)
+	if err != nil {
 		return err
 	}
 	if err := t.turn.Flush(ctx); err != nil {
 		return err
 	}
-	return t.ledger.markInputDone(inputID)
+	for _, id := range append(steered, inputID) {
+		if err := t.ledger.markInputDone(id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// prompt runs one input in the brain and, with agent.steering, hands it the
+// turn.input that arrives meanwhile (BrainSession.Steer). It returns the
+// input ids the brain took that way; the others are added to later.
+func (a *BrainHost) prompt(ctx context.Context, brain BrainSession, t *acpTurn, in BrainInput, policy map[string]string, later *[]TurnInputParams) ([]string, error) {
+	if !a.caps.Steering {
+		return nil, brain.Prompt(ctx, in, t)
+	}
+	stop, done := make(chan struct{}), make(chan struct{})
+	var steered []string
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			case p := <-t.turn.Inputs():
+				if a.steer(ctx, brain, t, p, policy) {
+					steered = append(steered, p.InputID)
+				} else {
+					*later = append(*later, p)
+				}
+			}
+		}
+	}()
+	err := brain.Prompt(ctx, in, t)
+	close(stop)
+	<-done
+	return steered, err
+}
+
+// steer hands the running prompt one turn.input; false when the brain does
+// not take it (it is then prompted after the running one).
+func (a *BrainHost) steer(ctx context.Context, brain BrainSession, t *acpTurn, p TurnInputParams, policy map[string]string) bool {
+	if t.ledger.inputDone(p.InputID) {
+		return true // finished by an earlier process (a redelivered turn)
+	}
+	in, err := a.brainInput(ctx, t.turn, p.Input)
+	if err != nil {
+		return false // prompted on its own, where its error ends the turn
+	}
+	in.InputID, in.ToolPolicy, in.Effort = p.InputID, policy, t.effort
+	if a.caps.ModelCredentials == BrainModelPlatform {
+		route := t.route
+		in.Model = &route
+	}
+	switch err := brain.Steer(ctx, in); {
+	case err == nil:
+		return true
+	case !errors.Is(err, ErrNotSteered):
+		a.log(LogWarn, "steering input "+p.InputID+" into the running prompt failed; it runs after it", err)
+	}
+	return false
 }
 
 func (a *BrainHost) systemPrompt(cwd, system string, hands *EnvironmentInfo) string {

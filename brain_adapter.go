@@ -43,6 +43,10 @@ type BrainAdapter interface {
 	Close() error
 }
 
+// ErrNotSteered is what BrainSession.Steer answers for an input the
+// running Prompt does not take; the host prompts it on its own instead.
+var ErrNotSteered = errors.New("the brain does not take this input in the running prompt")
+
 // ErrConversationLost is what Open answers for a req.Ref whose local state
 // the brain does not have: the host opens a new conversation instead and
 // tells the platform (turn.start resumed false, another executor_session_ref).
@@ -60,6 +64,14 @@ type BrainSession interface {
 	// returns ctx.Err(). Errors carry the contract's stop codes: an
 	// *AgentError, or an error whose text starts with "<code>: ".
 	Prompt(ctx context.Context, in BrainInput, sink BrainSink) error
+	// Steer hands the running Prompt one more input (agent.steering): the
+	// brain reads it at its next step boundary, after the results of its
+	// current tool calls and before its next model request, and its reply
+	// comes in that Prompt. ErrNotSteered: the brain cannot take it now (no
+	// Prompt runs, it is ending, the input has what the brain does not take
+	// mid-prompt, or the brain never takes input mid-prompt, without
+	// BrainCapabilities.Steering); the host prompts it after the running one.
+	Steer(ctx context.Context, in BrainInput) error
 	// Suspend releases what the conversation holds in the brain; the next
 	// Open with its Ref loads it again.
 	Suspend(ctx context.Context) error
@@ -210,6 +222,9 @@ type BrainCapabilities struct {
 	CustomTools bool
 	// InputSkills: the brain takes the selected skills of an input (BrainInput.Skills).
 	InputSkills bool
+	// Steering: BrainSession.Steer hands a running Prompt its input at the
+	// brain's next step boundary; the host declares agent.steering.
+	Steering bool
 }
 
 // BrainOpen is what a turn asks the conversation to be.

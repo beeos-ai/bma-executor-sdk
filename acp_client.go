@@ -76,6 +76,8 @@ type acpInitializeResponse struct {
 			PermissionRelay string   `json:"permissionRelay"`
 			// ReasoningEfforts are the levels prompt _meta.bma.reasoningEffort takes (bma-dsh-acp >= 0.2.2).
 			ReasoningEfforts []string `json:"reasoningEfforts"`
+			// Steering: _bma/session/steer is served (bma-dsh-acp >= 0.3.4).
+			Steering bool `json:"steering"`
 		} `json:"bma"`
 	} `json:"_meta"`
 }

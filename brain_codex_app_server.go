@@ -8,6 +8,9 @@ package bmaexecutor
 //	BrainHost / BrainSink        Codex adapter                        codex app-server
 //	Open                         one app server per conversation      thread/start (dynamicTools) | thread/resume
 //	Prompt                       user input                           turn/start {input, model, effort}
+//	Steer                        user input into the running turn     turn/steer {expectedTurnId, input} while a tool call
+//	                                                                  runs (read after its result); one held until the turn
+//	                                                                  ends runs as the next turn/start of the same prompt
 //	Delta                        <-                                   item/agentMessage/delta, item/reasoning/*Delta
 //	Message                      <-                                   item/completed (agentMessage, reasoning)
 //	ToolUse, Permission          <->                                  item/tool/call (server request)
@@ -206,6 +209,8 @@ func (a *codexAdapter) Start(ctx context.Context, env BrainEnv) (BrainCapabiliti
 		HostTools:        true,
 		CustomTools:      true,
 		InputSkills:      true,
+		// turn/steer: an input joins the running turn before its next model request.
+		Steering: true,
 	}, nil
 }
 
@@ -661,8 +666,16 @@ type codexPrompt struct {
 	sink  BrainSink
 	tools map[string]bool // the turn's tools, by platform name
 
-	mu      sync.Mutex
-	turnID  string
+	mu     sync.Mutex
+	turnID string
+	// steerable is the turn of the input (turn/start) while it runs; ""
+	// while codex compacts the conversation (a turn of its own).
+	steerable string
+	// calls are the tool calls codex is waiting for; held the steered
+	// inputs not handed to codex yet; closed: the prompt ends, Steer refuses.
+	calls   int
+	held    []BrainInput
+	closed  bool
 	early   []json.RawMessage // turn/completed before turn/start answered
 	started chan string       // turn/started while the turn id is unknown
 	done    chan codexTurnEnd
@@ -705,18 +718,14 @@ func (c *codexConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) e
 		c.prompt = nil
 		c.mu.Unlock()
 	}()
-	input := []map[string]any{}
+	var input []map[string]any
 	if len(in.Skills) > 0 {
 		// Selected skills of this input: a text item of the input, as for
 		// every brain that reads skills from its input.
 		raw, _ := json.Marshal(in.Skills)
 		input = append(input, map[string]any{"type": "text", "text": "Skills explicitly selected for this input only:\n" + string(raw)})
 	}
-	for _, img := range in.Images {
-		input = append(input, map[string]any{"type": "image", "url": "data:" + img.MimeType + ";base64," + base64.StdEncoding.EncodeToString(img.Data)})
-	}
-	input = append(input, map[string]any{"type": "text", "text": in.Text})
-	params := map[string]any{"threadId": c.thread.Thread, "input": input}
+	params := map[string]any{"threadId": c.thread.Thread, "input": append(input, codexInput(in)...)}
 	if model == "default" {
 		model = ""
 	}
@@ -728,12 +737,38 @@ func (c *codexConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) e
 	if effort := cmp.Or(in.Effort, c.a.efforts[model]); effort != "" {
 		params["effort"] = effort
 	}
+	err := c.run(ctx, proc, p, params)
+	// Inputs steered when no tool call ran, after the last: the next turn of
+	// this prompt, right after (codex reads them in the same conversation).
+	for err == nil {
+		held := p.next()
+		if held == nil {
+			break
+		}
+		params["input"] = held
+		err = c.run(ctx, proc, p, params)
+	}
+	p.mu.Lock()
+	p.closed = true
+	p.mu.Unlock()
+	return err
+}
+
+// run runs one turn/start of a prompt to its end, compacting and running it
+// once more when the conversation does not fit the model's context.
+func (c *codexConv) run(ctx context.Context, proc *codexProc, p *codexPrompt, params map[string]any) error {
 	for compacted := false; ; compacted = true {
 		turn, err := c.startTurn(ctx, proc, p, "turn/start", params)
 		if err != nil {
 			return err
 		}
+		p.mu.Lock()
+		p.steerable = turn
+		p.mu.Unlock()
 		end, err := c.wait(ctx, proc, p, turn)
+		p.mu.Lock()
+		p.steerable = ""
+		p.mu.Unlock()
 		if err != nil || compacted || !end.overflow() || p.failure.Load() != nil {
 			if err != nil {
 				return err
@@ -754,6 +789,87 @@ func (c *codexConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) e
 			return p.end(end)
 		}
 	}
+}
+
+// codexInput are the input items of a user input: its images, then its text.
+func codexInput(in BrainInput) []map[string]any {
+	var items []map[string]any
+	for _, img := range in.Images {
+		items = append(items, map[string]any{"type": "image", "url": "data:" + img.MimeType + ";base64," + base64.StdEncoding.EncodeToString(img.Data)})
+	}
+	return append(items, map[string]any{"type": "text", "text": in.Text})
+}
+
+// Steer hands the running prompt an input at codex's next step boundary.
+// Codex restarts a model request that is still running when an input is
+// steered into it, so the input is handed to codex (turn/steer) only while
+// codex waits for a tool call's result: it reads it after that result,
+// before its next model request. Until then it is held; held when the turn
+// ends, it runs as the prompt's next turn.
+func (c *codexConv) Steer(ctx context.Context, in BrainInput) error {
+	c.mu.Lock()
+	p, proc := c.prompt, c.proc
+	c.mu.Unlock()
+	if p == nil || proc == nil {
+		return ErrNotSteered
+	}
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return ErrNotSteered
+	}
+	p.held = append(p.held, in)
+	calling := p.calls > 0
+	p.mu.Unlock()
+	if calling {
+		proc.steerHeld(ctx, p)
+	}
+	return nil
+}
+
+// steerHeld hands codex the held inputs of prompt (turn/steer) while one
+// of its tool calls runs; one codex refuses stays held for the prompt's next
+// turn.
+func (p *codexProc) steerHeld(ctx context.Context, prompt *codexPrompt) {
+	prompt.mu.Lock()
+	held, turn := prompt.held, prompt.steerable
+	if turn == "" {
+		prompt.mu.Unlock()
+		return
+	}
+	prompt.held = nil
+	prompt.mu.Unlock()
+	p.mu.Lock()
+	thread := p.thread
+	p.mu.Unlock()
+	for i, in := range held {
+		err := p.call(ctx, "turn/steer", map[string]any{"threadId": thread, "expectedTurnId": turn,
+			"input": codexInput(in), "clientUserMessageId": in.InputID}, nil)
+		if err != nil {
+			p.a.log(LogDebug, "codex refused turn/steer; the input runs as the prompt's next turn", err)
+			prompt.mu.Lock()
+			prompt.held = append(slices.Clone(held[i:]), prompt.held...)
+			prompt.mu.Unlock()
+			return
+		}
+	}
+}
+
+// next takes the held inputs as the input of the prompt's next turn; nil
+// (and the prompt refuses more) when none is held.
+func (p *codexPrompt) next() []map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.held) == 0 {
+		p.closed = true
+		return nil
+	}
+	var items []map[string]any
+	for _, in := range p.held {
+		items = append(items, codexInput(in)...)
+	}
+	p.held = nil
+	return items
 }
 
 // startTurn sends a request that starts a turn and returns the turn's id:
@@ -1327,6 +1443,17 @@ func (p *codexProc) onRequest(id json.RawMessage, method string, raw json.RawMes
 	}
 	ctx, cancel := context.WithCancel(prompt.ctx)
 	defer cancel()
+	// While codex waits for this result, inputs steered into the prompt go
+	// to codex: it reads them after the result, before its next request.
+	prompt.mu.Lock()
+	prompt.calls++
+	prompt.mu.Unlock()
+	defer func() {
+		prompt.mu.Lock()
+		prompt.calls--
+		prompt.mu.Unlock()
+	}()
+	p.steerHeld(ctx, prompt)
 	call := BrainCall{ID: r.CallID, Name: r.Tool, Input: r.Arguments}
 	d := prompt.sink.Permission(ctx, call)
 	var result *RouteResult

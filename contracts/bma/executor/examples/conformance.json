@@ -1341,6 +1341,87 @@
       }
     },
     {
+      "name": "working_log.read request",
+      "method": "working_log.read",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_working_log_read",
+        "method": "working_log.read",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "after": 12,
+          "limit": 500
+        }
+      }
+    },
+    {
+      "name": "working_log.read result",
+      "method": "working_log.read",
+      "kind": "result",
+      "result": {
+        "entries": [
+          {
+            "sequence": 1,
+            "id": "evt_in_01",
+            "type": "user.message",
+            "key": "turn_01JAGENT/in/inp_01",
+            "occurred_at": "2026-11-15T01:00:00Z",
+            "payload": {
+              "type": "user.message",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "hello"
+                }
+              ]
+            }
+          }
+        ],
+        "has_more": false,
+        "acked_sequence": 0
+      }
+    },
+    {
+      "name": "working_log.append request",
+      "method": "working_log.append",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_working_log_append",
+        "method": "working_log.append",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "entries": [
+            {
+              "id": "evt_msg_01",
+              "type": "agent.message",
+              "key": "turn_01JAGENT/1/msg/0",
+              "occurred_at": "2026-11-15T01:00:01Z",
+              "payload": {
+                "type": "agent.message",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "hi"
+                  }
+                ]
+              }
+            }
+          ],
+          "acked_sequence": 1
+        }
+      }
+    },
+    {
+      "name": "working_log.append result",
+      "method": "working_log.append",
+      "kind": "result",
+      "result": {
+        "last_sequence": 2
+      }
+    },
+    {
       "name": "session.history request",
       "method": "session.history",
       "kind": "request",

@@ -21,7 +21,7 @@
     },
     "ComputerAction": {
       "type": "string",
-      "description": "Input actions accepted by the computer_action tool. mouse_move, hold_key, wait and batch are contract 1.17.0 (additive).",
+      "description": "Input actions accepted by the computer_action tool. mouse_move, hold_key, wait and batch are contract 1.17.0 (additive); clipboard_read and clipboard_write are contract 1.24.0 (additive).",
       "enum": [
         "click",
         "type",
@@ -31,7 +31,9 @@
         "mouse_move",
         "hold_key",
         "wait",
-        "batch"
+        "batch",
+        "clipboard_read",
+        "clipboard_write"
       ]
     },
     "PermissionMode": {
@@ -314,7 +316,7 @@
         },
         "text": {
           "type": "string",
-          "description": "Text to type, or a key or chord such as Return or ctrl+s."
+          "description": "Text to type (any language), or a key or chord such as Return or ctrl+s; for clipboard_write the text to put on the clipboard."
         },
         "button": {
           "type": "string",
