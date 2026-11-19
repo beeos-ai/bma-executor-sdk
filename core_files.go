@@ -222,9 +222,12 @@ func (c *Core) withFileIdentity(fn func() error) error {
 	return withFileIdentity(c.opts.RunAs, fn)
 }
 
-func (c *Core) write(session *CoreSession, input ToolInput) (ToolResultParams, error) {
+func (c *Core) write(session *CoreSession, input ToolInput, commit func() error) (ToolResultParams, error) {
 	err := c.withFileIdentity(func() error {
 		return session.withRoot(input.Path, true, func(root *os.Root, rel string) error {
+			if err := commit(); err != nil {
+				return err
+			}
 			if dir := filepath.Dir(rel); dir != "." {
 				if err := root.MkdirAll(dir, 0o700); err != nil {
 					return err
@@ -242,7 +245,7 @@ func (c *Core) write(session *CoreSession, input ToolInput) (ToolResultParams, e
 // editFile replaces OldString by NewString in the file: the only match, or
 // with all every match. It reports how many matches there were; nothing is
 // written unless that count is one (or any, with all).
-func (c *Core) editFile(session *CoreSession, input ToolInput, all bool) (matched int, err error) {
+func (c *Core) editFile(session *CoreSession, input ToolInput, all bool, commit func() error) (matched int, err error) {
 	if input.OldString == "" {
 		return 0, errors.New("edit requires old_string and new_string")
 	}
@@ -257,14 +260,17 @@ func (c *Core) editFile(session *CoreSession, input ToolInput, all bool) (matche
 			if matched == 0 || (matched != 1 && !all) {
 				return nil
 			}
+			if err := commit(); err != nil {
+				return err
+			}
 			return root.WriteFile(rel, []byte(strings.ReplaceAll(text, input.OldString, input.NewString)), 0o600)
 		})
 	})
 	return matched, err
 }
 
-func (c *Core) edit(session *CoreSession, input ToolInput) (ToolResultParams, error) {
-	matched, err := c.editFile(session, input, false)
+func (c *Core) edit(session *CoreSession, input ToolInput, commit func() error) (ToolResultParams, error) {
+	matched, err := c.editFile(session, input, false, commit)
 	if err != nil {
 		return ToolResultParams{}, err
 	}
@@ -439,6 +445,37 @@ func (c *Core) checkFileAccess(ctx context.Context, session *CoreSession, agentS
 		}
 	}
 	return nil
+}
+
+// writeCommit is what a write or edit runs right before it changes the file:
+// the session must still be open (session.stop cancels ctx) and FileAccess
+// is asked again about the write, so an access that ended while the call ran
+// (a narrower grant, a stopped turn, an expired switch) writes nothing.
+func (c *Core) writeCommit(ctx context.Context, session *CoreSession, agentSessionID, callID, tool string, input ToolInput) func() error {
+	return func() error {
+		if err := ctx.Err(); err != nil {
+			return errors.New("session_not_active: the call was stopped before the file was written")
+		}
+		if c.opts.FileAccess == nil {
+			return nil
+		}
+		t, err := session.target(input.Path, true)
+		if err != nil {
+			return err
+		}
+		req := FileAccessRequest{SessionID: session.ID(), AgentSessionID: agentSessionID, Tool: tool, ToolCallID: callID,
+			Operation: FileOperationWrite, Path: filepath.ToSlash(t.rel)}
+		if t.mount != nil {
+			req.Mount = t.mount.name
+		}
+		if t.outside != "" {
+			req.Path, req.Outside = t.show(t.rel), true
+		}
+		if err := c.opts.FileAccess(ctx, req); err != nil {
+			return refusalError(&fileAccessError{err})
+		}
+		return nil
+	}
 }
 
 // fileAccessError is a FileAccess hook's refusal.

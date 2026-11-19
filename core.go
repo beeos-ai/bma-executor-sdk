@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"math/rand/v2"
 	"os"
@@ -652,11 +653,31 @@ func (c *Core) createWorkspace(dir string) error {
 	if _, err := os.Stat(dir); err == nil {
 		return nil
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+	// Every directory created here is the RunAs identity's, the missing
+	// parents too (WorkRoot/<brain> below a session workspace): a parent the
+	// executor created for itself would keep the workload user out of the
+	// workspace, and every process of the session would fail to chdir.
+	var missing []string
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Lstat(d); err == nil {
+			break
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		missing = append(missing, d)
+		if filepath.Dir(d) == d {
+			break
+		}
 	}
-	if c.opts.RunAs != nil {
-		return os.Chown(dir, int(c.opts.RunAs.UID), int(c.opts.RunAs.GID))
+	for _, d := range slices.Backward(missing) {
+		if err := os.Mkdir(d, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		if c.opts.RunAs != nil {
+			if err := os.Lchown(d, int(c.opts.RunAs.UID), int(c.opts.RunAs.GID)); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -852,7 +873,12 @@ func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams
 			err = refusalError(err)
 			break
 		}
-		result, err = c.fileTool(session, params.Tool, input)
+		agent := sessionProcessContext(session).AgentSessionID
+		if brain == acpBrain {
+			agent = params.SessionID // a LocalToolRoute session is its own agent session
+		}
+		commit := c.writeCommit(ctx, session, agent, params.ToolCallID, params.Tool, input)
+		result, err = c.fileTool(session, params.Tool, input, commit)
 	case ToolNameComputerObserve, ToolNameComputerAction:
 		if c.opts.ComputerUse == nil {
 			err = fmt.Errorf("capability_unavailable: tool %q is not supported", params.Tool)
@@ -869,14 +895,14 @@ func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams
 	return result
 }
 
-func (c *Core) fileTool(session *CoreSession, tool string, input ToolInput) (ToolResultParams, error) {
+func (c *Core) fileTool(session *CoreSession, tool string, input ToolInput, commit func() error) (ToolResultParams, error) {
 	switch tool {
 	case ToolNameRead:
 		return c.read(session, input)
 	case ToolNameWrite:
-		return c.write(session, input)
+		return c.write(session, input, commit)
 	case ToolNameEdit:
-		return c.edit(session, input)
+		return c.edit(session, input, commit)
 	case ToolNameGlob:
 		return c.glob(session, input)
 	default:

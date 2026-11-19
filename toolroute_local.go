@@ -550,7 +550,7 @@ func (r *LocalToolRoute) runTool(ctx context.Context, callID, name string, in ma
 	switch name {
 	case ToolNameEdit:
 		if flag("replace_all") {
-			return r.replaceAll(input)
+			return r.replaceAll(ctx, callID, input)
 		}
 	case ToolNameRead:
 		if path, ok := r.ownOutputFile(input.Path); ok {
@@ -595,7 +595,7 @@ func (r *LocalToolRoute) toolInput(name string, in map[string]any) ToolInput {
 }
 
 // replaceAll is edit with replace_all (Core's edit replaces exactly one match).
-func (r *LocalToolRoute) replaceAll(input ToolInput) (string, bool) {
+func (r *LocalToolRoute) replaceAll(ctx context.Context, callID string, input ToolInput) (string, bool) {
 	session := r.core.session(coreKey{acpBrain, r.sessionID})
 	if session == nil {
 		return "session_not_active: the session is not open", true
@@ -603,7 +603,7 @@ func (r *LocalToolRoute) replaceAll(input ToolInput) (string, bool) {
 	if input.OldString == "" {
 		return "edit requires old_string and new_string", true
 	}
-	n, err := r.core.editFile(session, input, true)
+	n, err := r.core.editFile(session, input, true, r.core.writeCommit(ctx, session, r.sessionID, callID, ToolNameEdit, input))
 	switch {
 	case err != nil:
 		return err.Error(), true

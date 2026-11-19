@@ -1,12 +1,29 @@
 # Changelog
 
-## 1.6.47
+## 1.6.49
 
 - Go, Codex: a reply cut at the model's output limit is continued (at most
   three times) before the turn ends `output_limit_reached`, as for every
   brain: a cut text resumes from the cut point; a cut tool call is discarded
   (it never runs) and the model is asked to split the work into smaller
   calls.
+
+## 1.6.48
+
+- Go: with `CoreOptions.RunAs`, a session workspace's missing parent
+  directories (the default `WorkRoot/<brain>`, e.g. the sandbox brain's
+  `WorkRoot/acp`) are created owned by the workload user, like the workspace
+  itself. Before, the executor created them for itself (0700), so every process
+  and bash call of such a session failed to start (`fork/exec …: permission
+  denied`).
+
+## 1.6.47
+
+- Go: write and edit ask `CoreOptions.FileAccess` again right before they
+  change the file (also edit with `replace_all` of a `LocalToolRoute`), and
+  write nothing when the call's session was stopped meanwhile. An access
+  that ended while the call ran (a narrower grant, a stopped turn, an
+  expired switch) no longer lands. A hook now sees each write twice.
 
 ## 1.6.46
 
