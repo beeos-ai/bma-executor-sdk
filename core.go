@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"math/rand/v2"
 	"os"
@@ -652,11 +653,31 @@ func (c *Core) createWorkspace(dir string) error {
 	if _, err := os.Stat(dir); err == nil {
 		return nil
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+	// Every directory created here is the RunAs identity's, the missing
+	// parents too (WorkRoot/<brain> below a session workspace): a parent the
+	// executor created for itself would keep the workload user out of the
+	// workspace, and every process of the session would fail to chdir.
+	var missing []string
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Lstat(d); err == nil {
+			break
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		missing = append(missing, d)
+		if filepath.Dir(d) == d {
+			break
+		}
 	}
-	if c.opts.RunAs != nil {
-		return os.Chown(dir, int(c.opts.RunAs.UID), int(c.opts.RunAs.GID))
+	for _, d := range slices.Backward(missing) {
+		if err := os.Mkdir(d, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		if c.opts.RunAs != nil {
+			if err := os.Lchown(d, int(c.opts.RunAs.UID), int(c.opts.RunAs.GID)); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

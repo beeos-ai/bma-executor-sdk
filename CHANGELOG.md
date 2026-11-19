@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.48
+
+- Go: with `CoreOptions.RunAs`, a session workspace's missing parent
+  directories (the default `WorkRoot/<brain>`, e.g. the sandbox brain's
+  `WorkRoot/acp`) are created owned by the workload user, like the workspace
+  itself. Before, the executor created them for itself (0700), so every process
+  and bash call of such a session failed to start (`fork/exec …: permission
+  denied`).
+
 ## 1.6.47
 
 - Go: write and edit ask `CoreOptions.FileAccess` again right before they

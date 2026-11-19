@@ -93,6 +93,49 @@ func TestCoreRunAsRunsEveryWorkloadAsTheWorkloadUser(t *testing.T) {
 	}
 }
 
+// TestCoreRunAsOwnsTheBrainDirectoryOfADefaultWorkspace: the default
+// workspace is WorkRoot/<brain>/<session>; the executor creates the brain
+// directory too, and it must be the workload user's like the workspace, or
+// every process of the session fails to chdir (fork/exec: permission denied).
+// The sandbox brain (BrainHost.turnCwd, brain "acp") and assigned sessions
+// share this path. Needs root, like the executor.
+func TestCoreRunAsOwnsTheBrainDirectoryOfADefaultWorkspace(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("switching to another uid needs root")
+	}
+	ctx := testContext(t)
+	root, err := os.MkdirTemp("", "runas-ws-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runAs := workloadUser
+	core := newTestCore(t, CoreOptions{WorkRoot: root, RunAs: &runAs})
+	b := attachBrain(t, core, "local")
+	session := readySession(t, b, SessionAssignParams{SessionID: "sess_ws", Lease: Lease{Token: "lease"}})
+	bash, err := session.CallTool(ctx, ToolCallParams{Tool: ToolNameBash, Input: NewToolInput(ToolInput{Command: "pwd"})})
+	if err != nil || bash.IsError || !strings.Contains(textOf(bash), filepath.Join(root, "local", "sess_ws")) {
+		t.Fatalf("bash in the default workspace = %q err %v", textOf(bash), err)
+	}
+	acp := core.workspace(acpBrain, "sess_acp")
+	if err := core.createWorkspace(acp); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{filepath.Join(root, "local"), filepath.Join(root, "local", "sess_ws"),
+		filepath.Join(root, acpBrain), acp} {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if owner := fileOwner(info); owner != "65534:65534" {
+			t.Fatalf("%s owner = %s, want the workload user", dir, owner)
+		}
+	}
+}
+
 // TestCoreRunAsRefusesInProcessFileTools: file tools run inside the
 // executor, as its user, so with RunAs they would bypass the boundary.
 // write/edit have their own Linux file identity path.
