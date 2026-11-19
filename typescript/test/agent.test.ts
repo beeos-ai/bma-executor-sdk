@@ -17,6 +17,9 @@ import {
   type HarnessExecutor,
   type InteractionRequestParams,
   type SessionEventDeltaParams,
+  type WorkingLogAppendParams,
+  type WorkingLogEntry,
+  type WorkingLogReadParams,
 } from '../src/index.js'
 import { executorInfo, waitFor } from './helpers.js'
 
@@ -367,13 +370,13 @@ test('an opted-in handler missing its skill receipt cannot start execution', asy
 })
 
 test('working_log.read/append reach the platform hooks; a refusal keeps its code; without hooks method not found', async () => {
-  const log: Record<string, unknown>[] = []
+  const log: WorkingLogEntry[] = []
   const platform = Object.assign(new MemoryPlatform(), {
-    async workingLogRead(_e: HarnessExecutor, p: { session_id: string; after?: number }) {
+    async workingLogRead(_e: HarnessExecutor, p: WorkingLogReadParams) {
       if (p.session_id !== 'as_mine') throw new RpcError(JsonRpcErrorCode.Forbidden, 'not_session_brain')
-      return { entries: log.slice(p.after ?? 0) as never, has_more: false, acked_sequence: 0 }
+      return { entries: log.slice(p.after ?? 0), has_more: false, acked_sequence: 0 }
     },
-    async workingLogAppend(_e: HarnessExecutor, p: { entries?: Record<string, unknown>[] }) {
+    async workingLogAppend(_e: HarnessExecutor, p: WorkingLogAppendParams) {
       for (const e of p.entries ?? []) log.push({ ...e, sequence: log.length + 1 })
       return { last_sequence: log.length }
     },
