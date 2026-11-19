@@ -365,3 +365,36 @@ test('an opted-in handler missing its skill receipt cannot start execution', asy
     assert.equal(platform.events.length,0)
   } finally { await env.close() }
 })
+
+test('working_log.read/append reach the platform hooks; a refusal keeps its code; without hooks method not found', async () => {
+  const log: Record<string, unknown>[] = []
+  const platform = Object.assign(new MemoryPlatform(), {
+    async workingLogRead(_e: HarnessExecutor, p: { session_id: string; after?: number }) {
+      if (p.session_id !== 'as_mine') throw new RpcError(JsonRpcErrorCode.Forbidden, 'not_session_brain')
+      return { entries: log.slice(p.after ?? 0) as never, has_more: false, acked_sequence: 0 }
+    },
+    async workingLogAppend(_e: HarnessExecutor, p: { entries?: Record<string, unknown>[] }) {
+      for (const e of p.entries ?? []) log.push({ ...e, sequence: log.length + 1 })
+      return { last_sequence: log.length }
+    },
+  })
+  for (const [hooks, harness] of [[true, new Harness({ agent: platform })], [false, new Harness({ agent: new MemoryPlatform() })]] as const) {
+    const client = new ExecutorClient({ environmentId: 'env_test', executor: executorInfo, dialer: harness.inProcessDialer() })
+    await client.start()
+    try {
+      await harness.waitExecutor()
+      if (!hooks) {
+        await assert.rejects(client.call('working_log.read', { session_id: 'as_mine' }),
+          (error: unknown) => error instanceof RpcError && error.code === JsonRpcErrorCode.MethodNotFound)
+        continue
+      }
+      assert.deepEqual(await client.call('working_log.append', { session_id: 'as_mine', entries: [{ id: 'e1', type: 'x', payload: { a: 1 } }] }), { last_sequence: 1 })
+      const read = await client.call('working_log.read', { session_id: 'as_mine', after: 0 })
+      assert.deepEqual(read.entries.map((e) => [e.sequence, e.id]), [[1, 'e1']])
+      await assert.rejects(client.call('working_log.read', { session_id: 'as_other' }),
+        (error: unknown) => error instanceof RpcError && error.code === JsonRpcErrorCode.Forbidden)
+    } finally {
+      client.stop()
+    }
+  }
+})

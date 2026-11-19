@@ -49,6 +49,10 @@ import {
   type ToolCancelResult,
   type ToolProgressParams,
   type ToolResultParams,
+  type WorkingLogAppendParams,
+  type WorkingLogAppendResult,
+  type WorkingLogReadParams,
+  type WorkingLogReadResult,
   type TurnCancelParams,
   type TurnCancelResult,
   type TurnInputParams,
@@ -103,6 +107,13 @@ export interface AgentPlatform {
   interactionRequested(executor: HarnessExecutor, request: InteractionRequestParams): Promise<string>
   /** Closes the platform interaction without an answer. */
   interactionCanceled(executor: HarnessExecutor, cancel: InteractionCancelParams): Promise<void>
+  /**
+   * Serves working_log.read (contract 1.22.0, ADR-0083): the session's working log the brain keeps on the platform.
+   * Omitted: working_log.* answer method not found. Throw an RpcError to refuse (for example not_session_brain).
+   */
+  workingLogRead?(executor: HarnessExecutor, params: WorkingLogReadParams): Promise<WorkingLogReadResult>
+  /** Serves working_log.append: resolves once the entries are stored; an entry whose key the log has is skipped. */
+  workingLogAppend?(executor: HarnessExecutor, params: WorkingLogAppendParams): Promise<WorkingLogAppendResult>
 }
 
 export interface HarnessOptions {
@@ -905,6 +916,18 @@ class HarnessConn {
           (error: unknown) => Promise.reject(rpcError(JsonRpcErrorCode.InternalError, String(error), true)),
         )
       }
+      case 'working_log.read': {
+        const read = params as WorkingLogReadParams
+        if (!platform.workingLogRead) return undefined
+        if (!read?.session_id) return Promise.reject(rpcError(JsonRpcErrorCode.InvalidParams, 'invalid working_log.read params', false))
+        return platformCall(() => platform.workingLogRead!(executor, read))
+      }
+      case 'working_log.append': {
+        const append = params as WorkingLogAppendParams
+        if (!platform.workingLogAppend) return undefined
+        if (!append?.session_id) return Promise.reject(rpcError(JsonRpcErrorCode.InvalidParams, 'invalid working_log.append params', false))
+        return platformCall(() => platform.workingLogAppend!(executor, append))
+      }
       case 'interaction.cancel': {
         const cancel = params as InteractionCancelParams
         if (!cancel?.session_id || !cancel.interaction_id) {
@@ -989,4 +1012,11 @@ class HarnessConn {
         return
     }
   }
+}
+
+/** A platform hook's answer: its RpcError as it is, any other failure a retryable internal error. */
+function platformCall<T>(fn: () => Promise<T>): Promise<T> {
+  return fn().catch((error: unknown) =>
+    Promise.reject(error instanceof RpcError ? error : rpcError(JsonRpcErrorCode.InternalError, String(error), true)),
+  )
 }
