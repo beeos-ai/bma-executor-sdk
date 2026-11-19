@@ -19,6 +19,8 @@ import (
 // path outside it and a symbolic link that points out of it are refused by
 // the operating system call itself, also when the path was swapped for a link
 // between a check and the use. A link that stays inside the workspace works.
+// With CoreOptions.OutsideFiles an absolute path beyond the workspace and
+// mounts is opened from its file system root once FileAccess allowed it.
 
 // workspaceDir is the session's workspace (openLocal may re-root it).
 func (s *CoreSession) workspaceDir() string {
@@ -71,12 +73,25 @@ func (s *CoreSession) relPath(p string) (string, error) {
 	return "", outside
 }
 
-// fileTarget is where a file tool's path points: the workspace (mount nil) or
-// one of the session's mounted directories (core_mounts.go). rel is relative
-// to that directory.
+// fileTarget is where a file tool's path points: the workspace (mount nil,
+// outside empty), one of the session's mounted directories (core_mounts.go),
+// or, with CoreOptions.OutsideFiles, the file system root outside names. rel
+// is relative to that directory.
 type fileTarget struct {
-	mount *sessionMount
-	rel   string
+	mount   *sessionMount
+	outside string
+	rel     string
+}
+
+// outsideTarget is an absolute path as relative to its file system root.
+func outsideTarget(p string) (fileTarget, bool) {
+	p = filepath.Clean(p)
+	root := filepath.VolumeName(p) + string(filepath.Separator)
+	rel, err := filepath.Rel(root, p)
+	if err != nil || !filepath.IsLocal(rel) && rel != "." {
+		return fileTarget{}, false
+	}
+	return fileTarget{outside: root, rel: rel}, true
 }
 
 // target resolves a tool's path. The workspace comes first; an absolute path
@@ -100,6 +115,11 @@ func (s *CoreSession) target(p string, write bool) (fileTarget, error) {
 			return fileTarget{mount: m, rel: rel}, nil
 		}
 	}
+	if s.outside {
+		if t, ok := outsideTarget(p); ok {
+			return t, nil
+		}
+	}
 	return fileTarget{}, err
 }
 
@@ -109,6 +129,9 @@ func (s *CoreSession) open(t fileTarget) (*os.Root, error) {
 	if t.mount != nil {
 		return t.mount.open()
 	}
+	if t.outside != "" {
+		return os.OpenRoot(t.outside)
+	}
 	return os.OpenRoot(s.workspaceDir())
 }
 
@@ -117,6 +140,9 @@ func (s *CoreSession) open(t fileTarget) (*os.Root, error) {
 func (t fileTarget) show(rel string) string {
 	if t.mount != nil {
 		return filepath.Join(t.mount.dir, rel)
+	}
+	if t.outside != "" {
+		return filepath.Join(t.outside, rel)
 	}
 	return rel
 }
@@ -359,6 +385,10 @@ type FileAccessRequest struct {
 	// the workspace. A hook that guards the workspace only should treat a
 	// request with a Mount as outside its scope or check it explicitly.
 	Mount string
+	// Outside marks a path beyond the workspace and mounts, asked only with
+	// CoreOptions.OutsideFiles: Path is then absolute, in OS form. A hook
+	// allows it only for a session that may use any file of the computer.
+	Outside bool
 }
 
 // FileAccessFunc is CoreOptions.FileAccess.
@@ -400,6 +430,9 @@ func (c *Core) checkFileAccess(ctx context.Context, session *CoreSession, agentS
 			Operation: operation, Path: filepath.ToSlash(t.rel)}
 		if t.mount != nil {
 			req.Mount = t.mount.name
+		}
+		if t.outside != "" {
+			req.Path, req.Outside = t.show(t.rel), true
 		}
 		if err := c.opts.FileAccess(ctx, req); err != nil {
 			return &fileAccessError{err}

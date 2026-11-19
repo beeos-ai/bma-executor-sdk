@@ -402,3 +402,45 @@ func TestFileToolsWithoutFileAccessRun(t *testing.T) {
 	r := newFileRig(t, CoreOptions{}, nil)
 	wantExecuted(t, r.call("write", map[string]any{"file_path": "x.txt", "content": "x"}))
 }
+
+// CoreOptions.OutsideFiles: an absolute path beyond the workspace is asked
+// about with Outside and its absolute path; allowed, the tools use it there.
+// Relative paths stay in the workspace.
+func TestOutsideFilesAskTheHookAndUseTheAbsolutePath(t *testing.T) {
+	log := &accessLog{}
+	r := newFileRig(t, CoreOptions{FileAccess: log.hook, OutsideFiles: true}, nil)
+	secret := filepath.Join(r.outside, "secret.txt")
+	if got := r.call("read", map[string]any{"file_path": secret}); got.IsError || got.Text != "secret\n" {
+		t.Fatalf("read = %+v", got)
+	}
+	target := filepath.Join(r.outside, "new", "made.txt")
+	wantExecuted(t, r.call("write", map[string]any{"file_path": target, "content": "full\n"}))
+	if raw, err := os.ReadFile(target); err != nil || string(raw) != "full\n" {
+		t.Fatalf("outside write: %q %v", raw, err)
+	}
+	if got := r.call("grep", map[string]any{"path": r.outside, "pattern": "full"}); got.IsError || got.Text != target+":1:full" {
+		t.Fatalf("grep = %+v", got)
+	}
+	wantToolError(t, r.call("read", map[string]any{"file_path": "../outside/secret.txt"}), "relative path outside")
+	calls := log.calls()
+	if len(calls) != 3 || !calls[0].Outside || calls[0].Path != secret || calls[1].Operation != FileOperationWrite || calls[1].Path != target {
+		t.Fatalf("hook calls = %+v", calls)
+	}
+	// The hook decides: refused, nothing is written.
+	log.setFn(func(req FileAccessRequest) error {
+		if req.Outside {
+			return NewReasonError(CodeForbidden, ReasonWorkspaceBoundary, "outside the folder")
+		}
+		return nil
+	})
+	wantRefused(t, r.call("write", map[string]any{"file_path": filepath.Join(r.outside, "no.txt"), "content": "x"}), ReasonWorkspaceBoundary)
+	if fileExists(r.outside, "no.txt") {
+		t.Fatal("a refused outside write ran")
+	}
+}
+
+func TestOutsideFilesRequireAHook(t *testing.T) {
+	if _, err := NewCore(CoreOptions{WorkRoot: t.TempDir(), OutsideFiles: true}); err == nil {
+		t.Fatal("OutsideFiles without FileAccess accepted")
+	}
+}

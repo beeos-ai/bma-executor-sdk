@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.46
+
+- Go: `CoreOptions.OutsideFiles` lets the file tools (read, write, edit,
+  glob, grep) use an absolute path beyond the session workspace and mounts,
+  as the user the executor runs as, when `FileAccess` allows that call. The
+  hook is asked with `FileAccessRequest.Outside` and the absolute path; it
+  requires `FileAccess`. Off (the default) such a path fails as before.
+  Relative paths stay in the workspace. A host sets it for sessions with
+  full access to the computer.
+
 ## 1.6.45
 
 - Go, Claude: a text reply cut at its output limit is no longer failed at once;
