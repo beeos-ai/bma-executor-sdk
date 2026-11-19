@@ -404,10 +404,10 @@ func TestCodexContinuesAReplyCutAtItsOutputLimit(t *testing.T) {
 		prefix string
 		ok     bool
 	}{
-		"text":      {[]string{"text"}, "Your previous reply was cut at the output limit; it ended with:\npartial text", true},
-		"tool call": {[]string{"call"}, "Your previous reply was cut at the output limit while writing a tool call", true},
-		"three":     {[]string{"text", "call", "text"}, "Your previous reply was cut", true},
-		"four":      {[]string{"text", "text", "text", "text"}, "Your previous reply was cut", false},
+		"text":      {[]string{"text"}, "Output token limit hit. Resume directly", true},
+		"tool call": {[]string{"call"}, "Output token limit hit while you were writing a tool call", true},
+		"three":     {[]string{"text", "call", "text"}, "Output token limit hit", true},
+		"four":      {[]string{"text", "text", "text", "text"}, "Output token limit hit", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)

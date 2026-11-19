@@ -789,13 +789,21 @@ func (p *codexPrompt) continuation() []map[string]any {
 	if strings.TrimSpace(cut) != "" {
 		p.sink.Message(BrainKindMessage, id, cut) // the cut text stays in the history
 	}
-	text := "Your previous reply was cut at the output limit while writing a tool call. That call was discarded and nothing ran. Split the work into smaller chunks (several smaller tool calls, for example a large file written in parts) and continue."
+	// The wording every brain sends (the Go brain, dsh-adapter), which the
+	// conformance scenarios match by its prefix.
+	text := "Output token limit hit while you were writing a tool call: the call was cut off, discarded, and did not run. " +
+		"Do not repeat it as one call. Break the work into smaller pieces: write a large file in several chunks " +
+		"(create it, then append to it), or split a long script or command into several calls. " +
+		"Resume directly, without an apology or a recap."
 	if strings.TrimSpace(cut) != "" {
 		tail := cut
 		if r := []rune(tail); len(r) > 400 {
 			tail = string(r[len(r)-400:])
 		}
-		text = "Your previous reply was cut at the output limit; it ended with:\n" + tail + "\nContinue exactly from that point, without repeating anything."
+		// Codex may not keep a cut reply in the thread: the end of it is quoted.
+		text = "Output token limit hit. Resume directly from where you stopped, without an apology or a recap " +
+			"of what you were doing; pick up mid-sentence if that is where the cut happened. Break the remaining " +
+			"work into smaller pieces.\nYour reply ended with:\n" + tail
 	}
 	return []map[string]any{{"type": "text", "text": text}}
 }
