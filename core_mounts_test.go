@@ -297,7 +297,7 @@ func TestSessionMountsPassTheFileAccessHook(t *testing.T) {
 	if fileExists(r.path("outputs"), "private.txt") {
 		t.Fatal("the refused write ran")
 	}
-	want := []string{"read uploads docs/a.txt", "read skills pdf/SKILL.md", "write outputs ok.txt", "write outputs private.txt"}
+	want := []string{"read uploads docs/a.txt", "read skills pdf/SKILL.md", "write outputs ok.txt", "write outputs ok.txt", "write outputs private.txt"}
 	var got []string
 	for _, req := range asked {
 		got = append(got, fmt.Sprintf("%s %s %s", req.Operation, req.Mount, req.Path))
@@ -395,11 +395,11 @@ func TestACPAgentSessionMountsSkillsOnly(t *testing.T) {
 	if !strings.Contains(note, filepath.Join(root, rigSession, "skills")) || !strings.Contains(note, "SKILL.md") || strings.Contains(note, "uploads") || strings.Contains(note, "outputs") || strings.Contains(note, "deliverables") {
 		t.Fatalf("note = %q", note)
 	}
-	read, err := a.agent.opts.Core.fileTool(session, ToolNameRead, ToolInput{Path: filepath.Join(root, rigSession, "skills", "cu-finder", "SKILL.md")})
+	read, err := a.agent.opts.Core.fileTool(session, ToolNameRead, ToolInput{Path: filepath.Join(root, rigSession, "skills", "cu-finder", "SKILL.md")}, func() error { return nil })
 	if err != nil || !strings.Contains(textOf(read), "Open Finder with open_app.") {
 		t.Fatalf("read skill = %+v %v", read, err)
 	}
-	if _, err := a.agent.opts.Core.fileTool(session, ToolNameWrite, ToolInput{Path: filepath.Join(root, rigSession, "outputs", "x.txt"), Content: "x"}); err == nil {
+	if _, err := a.agent.opts.Core.fileTool(session, ToolNameWrite, ToolInput{Path: filepath.Join(root, rigSession, "outputs", "x.txt"), Content: "x"}, func() error { return nil }); err == nil {
 		t.Fatal("outputs is writable without the outputs mount")
 	}
 }

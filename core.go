@@ -852,7 +852,12 @@ func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams
 			err = refusalError(err)
 			break
 		}
-		result, err = c.fileTool(session, params.Tool, input)
+		agent := sessionProcessContext(session).AgentSessionID
+		if brain == acpBrain {
+			agent = params.SessionID // a LocalToolRoute session is its own agent session
+		}
+		commit := c.writeCommit(ctx, session, agent, params.ToolCallID, params.Tool, input)
+		result, err = c.fileTool(session, params.Tool, input, commit)
 	case ToolNameComputerObserve, ToolNameComputerAction:
 		if c.opts.ComputerUse == nil {
 			err = fmt.Errorf("capability_unavailable: tool %q is not supported", params.Tool)
@@ -869,14 +874,14 @@ func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams
 	return result
 }
 
-func (c *Core) fileTool(session *CoreSession, tool string, input ToolInput) (ToolResultParams, error) {
+func (c *Core) fileTool(session *CoreSession, tool string, input ToolInput, commit func() error) (ToolResultParams, error) {
 	switch tool {
 	case ToolNameRead:
 		return c.read(session, input)
 	case ToolNameWrite:
-		return c.write(session, input)
+		return c.write(session, input, commit)
 	case ToolNameEdit:
-		return c.edit(session, input)
+		return c.edit(session, input, commit)
 	case ToolNameGlob:
 		return c.glob(session, input)
 	default:
