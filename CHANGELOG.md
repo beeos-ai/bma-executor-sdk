@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.50
+
+- Go, Codex: the continuation note of a reply cut at the output limit is the
+  one every brain sends (`Output token limit hit…`), so the same conformance
+  scenarios match; the cut text's end is quoted in it.
+
 ## 1.6.49
 
 - Go, Codex: a reply cut at the model's output limit is continued (at most
