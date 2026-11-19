@@ -1,6 +1,7 @@
 package bmaexecutor
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -79,10 +80,10 @@ func TestCoreRunAsWritesAndEditsAsWorkload(t *testing.T) {
 		o.Core, o.Workspace = core, workspace
 	})
 	input = ToolInput{Path: "nested/file", OldString: "after", NewString: "all"}
-	if text, failed := route.replaceAll(input); failed {
+	if text, failed := route.replaceAll(context.Background(), "call_r", input); failed {
 		t.Fatalf("replace_all: %s", text)
 	}
-	if text, failed := route.replaceAll(ToolInput{Path: "private", OldString: "executor-private", NewString: "x"}); !failed || !strings.Contains(text, "permission denied") {
+	if text, failed := route.replaceAll(context.Background(), "call_r", ToolInput{Path: "private", OldString: "executor-private", NewString: "x"}); !failed || !strings.Contains(text, "permission denied") {
 		t.Fatalf("replace_all private: %s", text)
 	}
 	t.Run("concurrent", func(t *testing.T) {
