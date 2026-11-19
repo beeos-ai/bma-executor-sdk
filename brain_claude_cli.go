@@ -8,7 +8,9 @@ package bmaexecutor
 //
 //	BrainHost / BrainSink        Claude adapter                      claude -p (stream-json)
 //	Open                         one CLI process per conversation    --session-id <uuid> | --resume <uuid>
-//	Prompt                       user message                        {"type":"user",...}
+//	Prompt                       user message                        {"type":"user","uuid":...} (replayed when the CLI takes it)
+//	Steer                        user message into the running turn  the CLI reads it with the next tool result; one
+//	                                                                 that comes after the last runs right after the turn
 //	Delta                        <-                                  stream_event text_delta / thinking_delta
 //	Message                      <-                                  stream_event content_block_stop (text, thinking)
 //	ToolUse                      <-                                  stream_event content_block_stop (tool_use)
@@ -171,6 +173,10 @@ func (a *claudeCLIAdapter) Start(ctx context.Context, env BrainEnv) (BrainCapabi
 		HostTools:        true,
 		CustomTools:      true,
 		InputSkills:      true,
+		// A user message written while the CLI runs a turn is read with the
+		// next tool result (one after the last runs right after it); the
+		// prompt ends only when the CLI took every message written to it.
+		Steering: true,
 	}, nil
 }
 
@@ -496,6 +502,12 @@ type cliPrompt struct {
 	// stalled before any, and the CLI's non-streaming request answers next.
 	streamed bool
 	fallback bool
+	// waiting are the uuids of the user messages written for this prompt
+	// (its input and the steered ones) the CLI has not taken yet: it replays
+	// a message when it takes it (--replay-user-messages). ended: the prompt
+	// took its last message and ends; Steer refuses more.
+	waiting map[string]bool
+	ended   bool
 }
 
 // result reports a call's result once.
@@ -520,7 +532,7 @@ func (c *cliConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) err
 	}
 	c.mu.Lock()
 	proc := c.proc
-	p := &cliPrompt{ctx: ctx, sink: sink, blocks: map[int]*cliBlock{}, reported: map[string]bool{}}
+	p := &cliPrompt{ctx: ctx, sink: sink, blocks: map[int]*cliBlock{}, reported: map[string]bool{}, waiting: map[string]bool{}}
 	c.prompt = p
 	c.mu.Unlock()
 	defer func() {
@@ -535,23 +547,28 @@ func (c *cliConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) err
 		raw, _ := json.Marshal(in.Skills)
 		content = append(content, map[string]any{"type": "text", "text": "Skills explicitly selected for this input only:\n" + string(raw)})
 	}
-	for _, img := range in.Images {
-		content = append(content, map[string]any{"type": "image", "source": map[string]any{
-			"type": "base64", "media_type": img.MimeType, "data": base64.StdEncoding.EncodeToString(img.Data)}})
-	}
-	content = append(content, map[string]any{"type": "text", "text": in.Text})
 	results := proc.subscribe(p)
 	defer proc.unsubscribe()
-	if err := proc.write(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": content},
-		"parent_tool_use_id": nil, "session_id": ""}); err != nil {
+	if err := p.send(proc, append(content, cliImages(in.Images)...), in.Text); err != nil {
 		return &AgentError{Code: AgentErrorCodeAgentUnavailable, Message: "write to claude: " + err.Error()}
 	}
-	select {
-	case r := <-results:
-		return p.end(r)
-	case <-proc.done:
-		return &AgentError{Code: AgentErrorCodeAgentUnavailable, Message: "claude exited: " + proc.exitText()}
-	case <-ctx.Done():
+	for {
+		select {
+		case r := <-results:
+			// A message written after the turn's last tool result runs as
+			// the CLI's next turn, right after this one: still this prompt's.
+			if p.finish(r) {
+				return p.end(r)
+			}
+			continue
+		case <-proc.done:
+			return &AgentError{Code: AgentErrorCodeAgentUnavailable, Message: "claude exited: " + proc.exitText()}
+		case <-ctx.Done():
+			p.mu.Lock()
+			p.ended = true
+			p.mu.Unlock()
+		}
+		break
 	}
 	ictx, cancel := context.WithTimeout(context.Background(), c.a.env.CancelGrace)
 	defer cancel()
@@ -564,6 +581,66 @@ func (c *cliConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) err
 		proc.stop(c.a.env.KillGrace)
 	}
 	return ctx.Err()
+}
+
+// cliImages are a user message's image blocks.
+func cliImages(images []BrainImage) []map[string]any {
+	var out []map[string]any
+	for _, img := range images {
+		out = append(out, map[string]any{"type": "image", "source": map[string]any{
+			"type": "base64", "media_type": img.MimeType, "data": base64.StdEncoding.EncodeToString(img.Data)}})
+	}
+	return out
+}
+
+// send writes one user message of the prompt (blocks, then text), which the
+// prompt then waits for the CLI to take; ErrNotSteered once the prompt ended.
+func (p *cliPrompt) send(proc *cliProc, blocks []map[string]any, text string) error {
+	raw := make([]byte, 16)
+	_, _ = rand.Read(raw)
+	raw[6], raw[8] = raw[6]&0x0f|0x40, raw[8]&0x3f|0x80
+	uuid := fmt.Sprintf("%x-%x-%x-%x-%x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ended {
+		return ErrNotSteered
+	}
+	p.waiting[uuid] = true
+	content := append(blocks, map[string]any{"type": "text", "text": text})
+	return proc.write(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": content},
+		"parent_tool_use_id": nil, "session_id": "", "uuid": uuid})
+}
+
+// taken records that the CLI took the user message uuid (its replay).
+func (p *cliPrompt) taken(uuid string) {
+	p.mu.Lock()
+	delete(p.waiting, uuid)
+	p.mu.Unlock()
+}
+
+// finish reports whether result r ends the prompt: a failure does, a success
+// once the CLI took every message written to it (the prompt then refuses
+// more).
+func (p *cliPrompt) finish(r cliResult) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if r.IsError || r.Subtype != "success" || len(p.waiting) == 0 || p.failure.Load() != nil {
+		p.ended = true
+	}
+	return p.ended
+}
+
+// Steer writes a user message into the running turn: the CLI reads it with
+// the next tool result, or runs it right after the turn when the turn had
+// its last one; the prompt waits for it either way.
+func (c *cliConv) Steer(_ context.Context, in BrainInput) error {
+	c.mu.Lock()
+	p, proc := c.prompt, c.proc
+	c.mu.Unlock()
+	if p == nil || proc == nil {
+		return ErrNotSteered
+	}
+	return p.send(proc, cliImages(in.Images), in.Text)
 }
 
 // cliResult is the result message of a prompt.
@@ -657,6 +734,7 @@ func (a *claudeCLIAdapter) mcpConfig(placeholder string) string {
 func (a *claudeCLIAdapter) args(l cliLaunch) []string {
 	args := append(slices.Clone(a.env.Command[1:]),
 		"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+		"--replay-user-messages",
 		"--permission-prompt-tool", "stdio", "--permission-mode", "default",
 		"--tools", "", "--mcp-config", a.mcpConfig(l.placeholder), "--strict-mcp-config", "--setting-sources", "")
 	switch {
@@ -856,6 +934,7 @@ type cliMessage struct {
 	Tools           []string        `json:"tools"`
 	PermissionMode  string          `json:"permissionMode"`
 	Abandoned       json.RawMessage `json:"abandoned_blocks"`
+	UUID            string          `json:"uuid"`
 }
 
 func (p *cliProc) dispatch(line []byte) {
@@ -918,6 +997,7 @@ func (p *cliProc) dispatch(line []byte) {
 			p.onUnstreamed(prompt, m.Message)
 		}
 	case "user":
+		prompt.taken(m.UUID)
 		p.onUser(prompt, m.Message)
 	case "result":
 		var r cliResult

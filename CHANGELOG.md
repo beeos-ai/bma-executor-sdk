@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.6.44
+
+- Executor contract 1.25.0 (snapshot and generated types in Go, TypeScript
+  and Python): `AgentCapability.steering` and the contracts between 1.21.0
+  and 1.25.0; the clipboard computer actions are generated now.
+- Go: steering (`agent.steering`). `BrainSession.Steer` hands the running
+  `Prompt` one more input, read at the brain's next step boundary (after the
+  results of the current tool calls, before the next model request); a
+  brain that cannot take it now answers `ErrNotSteered` and the host prompts
+  it after the running one, in the same turn. `BrainCapabilities.Steering`
+  makes the host declare `agent.steering`. `BrainHost` steers every
+  `turn.input` that arrives while a prompt runs and closes the turn's input
+  before it ends: a later `turn.input` answers conflict, so an accepted
+  input is always read in its turn.
+  - DSH: `_bma/session/steer` (bma-dsh-acp >= 0.3.4, `initialize`
+    `_meta.bma.steering`).
+  - Claude: a user message written while the CLI runs a turn, read with the
+    next tool result (`--replay-user-messages` tells when the CLI took it);
+    one written after the last tool result runs right after the turn, in the
+    same prompt.
+  - Codex: `turn/steer` while codex waits for a tool call's result (codex
+    restarts a model request an input is steered into); an input held until
+    the turn ends runs as the prompt's next `turn/start`.
+
 ## 1.6.43
 
 - Go: a PTY process (`io_mode: pty`) keeps the output it wrote right before

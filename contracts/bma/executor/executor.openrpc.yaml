@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 1.21.0
+  version: 1.25.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -1623,7 +1623,8 @@ methods:
   - name: turn.input
     summary: Add user input to the running turn.
     description: Harness to executor request (capability agent). The local agent consumes the input
-      at its next step. Idempotent by input_id. When turn_id is not the running turn the executor
+      at its next step (contract 1.25.0, agent.steering - at the running turn's next step boundary, before
+      its next model request; without it after the running prompt ends). Idempotent by input_id. When turn_id is not the running turn the executor
       answers -32013 conflict and the harness starts a new turn instead. A request that would
       serialize to more than 48 KiB carries a single input_ref block as its input (contract 1.7.0,
       only to an executor that declared agent.input_by_reference).
@@ -1891,7 +1892,9 @@ methods:
       opening input of the given running turn, a page at a time in log order (has_more says more follow).
       Only the conversation travels: user.message, agent.message, agent.tool_use, agent.tool_result,
       agent.custom_tool_use, user.custom_tool_result, agent.mcp_tool_use and agent.mcp_tool_result, each with
-      its bma_sequence, id, type and official body. A brain calls it when it opens a session it holds no
+      its bma_sequence, id, type and official body. To an executor that declared agent.input_by_reference a
+      user.message whose body is over 48 KiB carries its content as a single input_ref block (contract 1.7.0)
+      whose input_id is the event's id: the inputs endpoint answers the message's content blocks. A brain calls it when it opens a session it holds no
       local state for although the session has a past, for example a session whose earlier turns ran on
       another brain (data migration from another stack) or whose state was lost; it rebuilds its context from
       the events, replaying messages, tool calls and their results in its model's format under its usual
@@ -2256,6 +2259,103 @@ methods:
       - $ref: "#/components/errors/Forbidden"
       - $ref: "#/components/errors/SessionNotActive"
       - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: working_log.read
+    summary: Read a page of the session's working log.
+    description: >-
+      Executor to harness request (capability agent, contract 1.22.0, ADR-0083). The executor that is
+      the session's brain (the target the session's turns are dispatched to) reads the working log it
+      keeps on the platform: its entries after the given sequence, in order, a page at a time
+      (has_more says that more follow), and the highest local
+      sequence the platform has acknowledged. An executor reads it when it opens a session it holds no
+      copy of, for example after another instance of its brain fleet ran the session's earlier turns.
+      Only the session's brain may read it: any other connection gets forbidden (-32001), and before any
+      turn of the session was dispatched not_dispatched (-32013, retryable). An unknown or deleted
+      session is session_not_found (-32002).
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        description: Platform session id.
+        schema:
+          type: string
+      - name: after
+        required: false
+        description: Read the entries with a sequence greater than this (default 0, the whole log).
+        schema:
+          type: integer
+          minimum: 0
+      - name: limit
+        required: false
+        description: At most this many entries (1-500, default 500).
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 500
+    result:
+      name: WorkingLogReadResult
+      schema:
+        $ref: schemas/agent.json#/$defs/WorkingLogReadResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/NotFound"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+  - name: working_log.append
+    summary: Append entries to the session's working log.
+    description: >-
+      Executor to harness request (capability agent, contract 1.22.0, ADR-0083). The session's brain
+      appends entries to the working log it keeps on the platform; the answer means they are stored. An
+      entry whose key the log already has is skipped, so a repeated append is harmless; the entries of
+      one call are stored together or not at all, at most 500 per call. acked_sequence moves the
+      platform's record of the highest acknowledged local sequence up (never down, never beyond the
+      log). The same refusals as working_log.read apply; a refused append means the executor is no
+      longer the session's brain and must stop the session's turn. Invalid entries (no type, a payload
+      that is not an object, too many) and an acked_sequence beyond the log are invalid_params with
+      data.reason invalid_entry, batch_too_large or acked_beyond_log.
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        description: Platform session id.
+        schema:
+          type: string
+      - name: entries
+        required: false
+        description: The entries to append, in order (sequence is ignored). Omitted or empty with acked_sequence only moves the mark.
+        schema:
+          type: array
+          maxItems: 500
+          items:
+            $ref: schemas/agent.json#/$defs/WorkingLogEntry
+      - name: acked_sequence
+        required: false
+        description: The highest local sequence the platform has acknowledged so far.
+        schema:
+          type: integer
+          minimum: 0
+    result:
+      name: WorkingLogAppendResult
+      schema:
+        $ref: schemas/agent.json#/$defs/WorkingLogAppendResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/NotFound"
+      - $ref: "#/components/errors/Conflict"
       - $ref: "#/components/errors/InternalError"
 components:
   errors:

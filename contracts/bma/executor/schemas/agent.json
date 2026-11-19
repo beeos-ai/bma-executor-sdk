@@ -40,6 +40,10 @@
           "type": "boolean",
           "description": "Contract 1.7.0. The executor fetches a turn input the platform does not inline: when turn.start or turn.input would serialize to more than 48 KiB (the 64 KiB control frame limit with headroom), its input is a single input_ref block (AgentInputBlock type input_ref: input_id, size_bytes, sha256) instead of the blocks, and the executor reads them with its machine credential: GET /v1/machines/{machine_id}/inputs/{input_id} on the executor domain answers 200 with the AgentInputBlock array the input would have carried (404 unless the input belongs to a session of the credential's machine; readable until its turn ends). The executor checks size_bytes and sha256 and handles the blocks exactly as if they had come inline. Declare it only when it can make that request. Without it such an input ends its turn: session.error (bma_error_code input_too_large, not retried) and the turn fails; the platform never retries a request that cannot fit. Absent means false."
         },
+        "steering": {
+          "type": "boolean",
+          "description": "Contract 1.25.0. The local agent takes a turn.input at the running turn's next step boundary: after the results of the tool calls of its current step and before its next model request, so the input can change what the agent does next in the same turn. When the model answers without a tool call, the agent reads an input that arrived meanwhile before it ends the turn; once it ends the turn it answers a later turn.input -32013 conflict. The platform admits a steering user.message (bma_delivery_mode steering) only for a brain that declares it. Absent means false: turn.input is taken after the running prompt ends."
+        },
         "max_sessions": {
           "type": "integer",
           "minimum": 1,
@@ -87,6 +91,10 @@
         "input_skills": {
           "type": "boolean",
           "description": "Accepts exact, input-bound selected skill documents and reports their installed versions in TurnStartResult.effective.input_skill_receipt. Absent or false: do not send selected skills."
+        },
+        "working_log": {
+          "type": "boolean",
+          "description": "Contract 1.22.0. The executor keeps its working log of a session (the events it forwards, its local markers, its copy of the inputs, the highest local sequence the platform acknowledged) on the platform with working_log.read and working_log.append instead of its own disk, so that any instance of a brain fleet can go on with the session (ADR-0083). Informational: the platform serves the methods to the session's brain whether or not it declares the member."
         },
         "context_maintenance": {
           "type": "boolean",
@@ -361,7 +369,7 @@
         },
         "input_id": {
           "type": "string",
-          "description": "input_ref only: the platform input id (ain_) to fetch."
+          "description": "input_ref only: the platform input id to fetch (ain_; in session.history the user.message event id)."
         },
         "sha256": {
           "type": "string",
@@ -1228,6 +1236,90 @@
         "tool_name",
         "input_schema",
         "permission"
+      ],
+      "additionalProperties": true
+    },
+    "WorkingLogEntry": {
+      "type": "object",
+      "description": "Contract 1.22.0. One entry of a session's working log. The platform stores entries verbatim, never shows them to tenants and numbers them 1, 2, ... per session in append order.",
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The platform's number of the entry (read only; ignored in an append)."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The executor's id of the entry (for a forwarded event, its event_id)."
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The executor's type of the entry (an AgentEvent type or a local marker type)."
+        },
+        "key": {
+          "type": "string",
+          "description": "Idempotency key: an append of an entry whose key the log already has skips it. Omitted or empty: no key."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the executor wrote the entry; the platform's time of the append when omitted."
+        },
+        "payload": {
+          "type": "object",
+          "description": "The entry's body, stored as given.",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": true
+    },
+    "WorkingLogReadResult": {
+      "type": "object",
+      "description": "Contract 1.22.0. working_log.read result.",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkingLogEntry"
+          },
+          "description": "The entries after the requested sequence, in order: at most limit, and at most about 512 KiB of payload (always at least one entry when any follows)."
+        },
+        "has_more": {
+          "type": "boolean",
+          "description": "More entries follow the last one returned: read again after its sequence."
+        },
+        "acked_sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The highest local sequence the platform has acknowledged, as the last working_log.append set it (0 for none)."
+        }
+      },
+      "required": [
+        "entries",
+        "has_more",
+        "acked_sequence"
+      ],
+      "additionalProperties": true
+    },
+    "WorkingLogAppendResult": {
+      "type": "object",
+      "description": "Contract 1.22.0. working_log.append result.",
+      "properties": {
+        "last_sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The sequence of the log's last entry after the append."
+        }
+      },
+      "required": [
+        "last_sequence"
       ],
       "additionalProperties": true
     },

@@ -523,6 +523,11 @@
         },
         "executor": {
           "$ref": "executor.json#/$defs/ExecutorInfo"
+        },
+        "instance_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+          "description": "Contract 1.23.0, optional (ADR-0083). One instance of a platform brain fleet: the instances of a platform brain machine share its machine credential, and each exchanges it for a token of its own instance (for example its pod name), so each holds its own control channel and the platform spreads sessions over them. Only the deployment's platform brain machines may send it (others: 400 invalid_request_error). Omitted: the machine's own executor."
         }
       },
       "required": [

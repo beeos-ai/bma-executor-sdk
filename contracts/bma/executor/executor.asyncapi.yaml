@@ -2,7 +2,7 @@ asyncapi: 3.0.0
 id: https://contracts.bma.beeos.ai/executor.asyncapi
 info:
   title: BMA Executor Protocol channels
-  version: 1.21.0
+  version: 1.25.0
   description: "WebSocket channels for bma.executor.v1 and bma.executor.v1.1. The control channel carries JSON-RPC 2.0 requests, notifications, and responses. The mcp channel carries raw MCP JSON-RPC with no BMA wrapper. PTY bytes travel on per-attach outbound host sockets (subprotocol bma.terminal.v1), not on these channels. Contract 1.4.0 adds the platform tools endpoint (x-bma-platform-tools): the HTTP MCP endpoint a brain on one machine calls to run its tools on the session's hands machine."
   license:
     name: Apache-2.0
@@ -171,6 +171,10 @@ channels:
         $ref: "#/components/messages/modelTokenRefresh"
       toolsTokenRefresh:
         $ref: "#/components/messages/toolsTokenRefresh"
+      workingLogRead:
+        $ref: "#/components/messages/workingLogRead"
+      workingLogAppend:
+        $ref: "#/components/messages/workingLogAppend"
       jsonRpcSuccessResponse:
         $ref: "#/components/messages/jsonRpcSuccessResponse"
       jsonRpcErrorResponse:
@@ -496,6 +500,18 @@ operations:
       $ref: "#/channels/control"
     messages:
       - $ref: "#/components/messages/toolsTokenRefresh"
+  workingLogReadSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/workingLogRead"
+  workingLogAppendSend:
+    action: send
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/workingLogAppend"
 components:
   messages:
     screenStart:
@@ -2176,7 +2192,7 @@ components:
       name: turn.input
       title: turn.input
       summary: Add user input to the running turn.
-      description: Harness to executor request (capability agent). The local agent consumes the input at its next step. Idempotent by input_id. When turn_id is not the running turn the executor answers -32013 conflict and the harness starts a new turn instead. A request that would serialize to more than 48 KiB carries a single input_ref block as its input (contract 1.7.0, only to an executor that declared agent.input_by_reference).
+      description: Harness to executor request (capability agent). The local agent consumes the input at its next step (contract 1.25.0, agent.steering - at the running turn's next step boundary, before its next model request; without it after the running prompt ends). Idempotent by input_id. When turn_id is not the running turn the executor answers -32013 conflict and the harness starts a new turn instead. A request that would serialize to more than 48 KiB carries a single input_ref block as its input (contract 1.7.0, only to an executor that declared agent.input_by_reference).
       contentType: application/json
       payload:
         type: object
@@ -2462,7 +2478,7 @@ components:
       name: session.history
       title: session.history
       summary: Read the conversation of a session before a turn.
-      description: "Executor to harness request (capability agent, contract 1.15.0). The executor that is the session's brain (the target the session's turns are dispatched to) reads the session's conversation as the platform's event log keeps it, the single source of truth of a session: the durable events before the opening input of the given running turn, a page at a time in log order (has_more says more follow). Only the conversation travels: user.message, agent.message, agent.tool_use, agent.tool_result, agent.custom_tool_use, user.custom_tool_result, agent.mcp_tool_use and agent.mcp_tool_result, each with its bma_sequence, id, type and official body. A brain calls it when it opens a session it holds no local state for although the session has a past, for example a session whose earlier turns ran on another brain (data migration from another stack) or whose state was lost; it rebuilds its context from the events, replaying messages, tool calls and their results in its model's format under its usual context limits, and answers the turn.start with context_rebuilt true. Only the session's brain may read it: any other connection gets forbidden (-32001), before any turn of the session was dispatched not_dispatched (-32013, retryable); a turn that is not open is session_not_active (-32007); an unknown or deleted session is session_not_found (-32002). A harness without the method answers -32601; the brain then has no history to rebuild from."
+      description: "Executor to harness request (capability agent, contract 1.15.0). The executor that is the session's brain (the target the session's turns are dispatched to) reads the session's conversation as the platform's event log keeps it, the single source of truth of a session: the durable events before the opening input of the given running turn, a page at a time in log order (has_more says more follow). Only the conversation travels: user.message, agent.message, agent.tool_use, agent.tool_result, agent.custom_tool_use, user.custom_tool_result, agent.mcp_tool_use and agent.mcp_tool_result, each with its bma_sequence, id, type and official body. To an executor that declared agent.input_by_reference a user.message whose body is over 48 KiB carries its content as a single input_ref block (contract 1.7.0) whose input_id is the event's id: the inputs endpoint answers the message's content blocks. A brain calls it when it opens a session it holds no local state for although the session has a past, for example a session whose earlier turns ran on another brain (data migration from another stack) or whose state was lost; it rebuilds its context from the events, replaying messages, tool calls and their results in its model's format under its usual context limits, and answers the turn.start with context_rebuilt true. Only the session's brain may read it: any other connection gets forbidden (-32001), before any turn of the session was dispatched not_dispatched (-32013, retryable); a turn that is not open is session_not_active (-32007); an unknown or deleted session is session_not_found (-32002). A harness without the method answers -32601; the brain then has no history to rebuild from."
       contentType: application/json
       payload:
         type: object
@@ -2779,6 +2795,91 @@ components:
       x-bma-direction: executor-to-harness
       x-bma-kind: request
       x-bma-channel: control
+    workingLogRead:
+      name: working_log.read
+      title: working_log.read
+      summary: Read a page of the session's working log.
+      description: "Executor to harness request (capability agent, contract 1.22.0, ADR-0083). The executor that is the session's brain (the target the session's turns are dispatched to) reads the working log it keeps on the platform: its entries after the given sequence, in order, a page at a time (has_more says that more follow), and the highest local sequence the platform has acknowledged. An executor reads it when it opens a session it holds no copy of, for example after another instance of its brain fleet ran the session's earlier turns. Only the session's brain may read it: any other connection gets forbidden (-32001), and before any turn of the session was dispatched not_dispatched (-32013, retryable). An unknown or deleted session is session_not_found (-32002)."
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: working_log.read
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              after:
+                type: integer
+                minimum: 0
+              limit:
+                type: integer
+                minimum: 1
+                maximum: 500
+            required:
+              - session_id
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: working_log.read
+      x-bma-direction: executor-to-harness
+      x-bma-kind: request
+      x-bma-channel: control
+    workingLogAppend:
+      name: working_log.append
+      title: working_log.append
+      summary: Append entries to the session's working log.
+      description: Executor to harness request (capability agent, contract 1.22.0, ADR-0083). The session's brain appends entries to the working log it keeps on the platform; the answer means they are stored. An entry whose key the log already has is skipped, so a repeated append is harmless; the entries of one call are stored together or not at all, at most 500 per call. acked_sequence moves the platform's record of the highest acknowledged local sequence up (never down, never beyond the log). The same refusals as working_log.read apply; a refused append means the executor is no longer the session's brain and must stop the session's turn. Invalid entries (no type, a payload that is not an object, too many) and an acked_sequence beyond the log are invalid_params with data.reason invalid_entry, batch_too_large or acked_beyond_log.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: working_log.append
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+              entries:
+                type: array
+                maxItems: 500
+                items:
+                  $ref: schemas/agent.json#/$defs/WorkingLogEntry
+              acked_sequence:
+                type: integer
+                minimum: 0
+            required:
+              - session_id
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: working_log.append
+      x-bma-direction: executor-to-harness
+      x-bma-kind: request
+      x-bma-channel: control
     jsonRpcSuccessResponse:
       name: JSON-RPC success response
       title: JSON-RPC success response
@@ -2993,7 +3094,7 @@ x-bma-platform-tools:
     ai.beeos.bma/sync_wait_ms: How long the call waits for the hands machine before it answers in_progress (the work continues and the same key fetches the result).
   structured-content:
     outcome: "executed | not_forwarded | unknown. executed: ran and finished. not_forwarded: certainly not run (for example the hands machine was offline for the whole wait). unknown: forwarded but the result is lost (hands restarted or disconnected); the platform never reruns it."
-    error_code: "Open set, set when the call did not execute normally: environment_unavailable, machine_starting, machine_rebuilding, permission_denied, approval_required, approval_invalid, in_progress, idempotency_key_reused; receivers must accept values they do not know. A paused pool hands machine is woken for the call; machine_starting / machine_rebuilding (outcome not_forwarded, retryable: the text says when to call again) is a pool machine still starting or being rebuilt when the wait of the call ends; environment_unavailable is a machine that is offline (contracts/bma/platform-tool-machine-wake.vectors.json)."
+    error_code: "Open set, set when the call did not execute normally: environment_unavailable, machine_starting, machine_rebuilding, permission_denied, approval_required, approval_invalid, in_progress, idempotency_key_reused, and for computer use calls desktop_busy and desktop_human_control (a person holds the desktop control lease: observe and action are both refused, nothing runs, no screenshot); receivers must accept values they do not know. A paused pool hands machine is woken for the call; machine_starting / machine_rebuilding (outcome not_forwarded, retryable: the text says when to call again) is a pool machine still starting or being rebuilt when the wait of the call ends; environment_unavailable is a machine that is offline (contracts/bma/platform-tool-machine-wake.vectors.json)."
     replayed: true when the result is the stored one of an earlier call with the same idempotency key.
     output_file: Path on the hands machine of the full output when it was truncated.
     pid: Process id on the hands machine of a call that is still running (in_progress).

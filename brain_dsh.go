@@ -8,6 +8,7 @@ package bmaexecutor
 //	                                      permission mode                   session/set_mode
 //	Prompt                                prompt                            session/prompt (_meta.bma.inputId, toolPolicy, reasoningEffort,
 //	                                                                        hostTools, inputSkills)
+//	Steer                                 input into the running prompt     _bma/session/steer (initialize _meta.bma.steering)
 //	Delta                                 <-                                agent_message_chunk / agent_thought_chunk (messageId)
 //	Message                               <-                                _bma/message (durable text of a messageId)
 //	ToolUse                               <-                                tool_call (_meta.bma.name, permission)
@@ -40,6 +41,9 @@ import (
 	"strings"
 	"sync"
 )
+
+// acpSteer is bma-dsh-acp's request that joins an input to the running prompt.
+const acpSteer = "_bma/session/steer"
 
 // newDSHAdapter is the adapter of bma-dsh-acp.
 func newDSHAdapter() *dshAdapter {
@@ -129,6 +133,7 @@ func (a *dshAdapter) Start(ctx context.Context, env BrainEnv) (BrainCapabilities
 		HostTools:        true,
 		CustomTools:      true,
 		InputSkills:      true,
+		Steering:         init.Meta.Bma.Steering,
 	}, nil
 }
 
@@ -291,6 +296,26 @@ func (c *dshConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) err
 	}
 	params := map[string]any{"sessionId": c.id, "prompt": acpPromptBlocks(in), "_meta": map[string]any{acpMetaKey: meta}}
 	return promptACP(ctx, c.proc, params, a.env.CancelGrace, a.env.KillGrace)
+}
+
+// Steer hands the running prompt a text input (_bma/session/steer): DSH
+// reads it at the prompt's next step boundary. The agent refuses it (invalid
+// request) when its prompt is not running or is ending.
+func (c *dshConv) Steer(ctx context.Context, in BrainInput) error {
+	a := c.a
+	a.mu.Lock()
+	running := c.prompt != nil
+	a.mu.Unlock()
+	if !running || len(in.Images) > 0 || !c.proc.init.Meta.Bma.Steering {
+		return ErrNotSteered
+	}
+	err := c.proc.call(ctx, acpSteer, map[string]any{"sessionId": c.id, "inputId": in.InputID,
+		"prompt": []map[string]any{{"type": "text", "text": in.Text}}}, nil)
+	var acpErr *acpError
+	if errors.As(err, &acpErr) && acpErr.Code == CodeInvalidRequest {
+		return fmt.Errorf("%w: %s", ErrNotSteered, acpErr.Message)
+	}
+	return err
 }
 
 func (c *dshConv) Suspend(ctx context.Context) error {

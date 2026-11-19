@@ -55,17 +55,12 @@ const ComputerActionOpenApp = "open_app"
 // only.
 const ComputerActionMenu = "menu"
 
-// ComputerActionClipboardRead returns the text on the machine's clipboard;
-// ComputerActionClipboardWrite (ComputerActionRequest.Text) puts text on it.
-// Like open_app and menu they are actions of the computer_action tool beyond
-// the contract's ComputerAction enum, and take no coordinate, pid or
-// window_id. Pasting the text where it is wanted is a key action (ctrl+v)
-// the model sends itself; typing non-ASCII text goes through the clipboard
-// on its own (type).
-const (
-	ComputerActionClipboardRead  = "clipboard_read"
-	ComputerActionClipboardWrite = "clipboard_write"
-)
+// ComputerActionClipboardRead (generated, contract ComputerAction) returns
+// the text on the machine's clipboard; ComputerActionClipboardWrite
+// (ComputerActionRequest.Text) puts text on it. They take no coordinate, pid
+// or window_id. Pasting the text where it is wanted is a key action (ctrl+v)
+// the model sends itself; typing non-ASCII text goes through the clipboard on
+// its own (type).
 
 // maxClipboardBytes bounds the text of clipboard_write and what
 // clipboard_read returns.
