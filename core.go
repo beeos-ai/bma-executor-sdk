@@ -140,9 +140,18 @@ type CoreOptions struct {
 	// same call id is answered with it again); a tool.call fails with
 	// "<code>: <message>". Nothing is read or written when it refuses. A host
 	// uses it for read-only sessions, protected paths, revoked grants and
-	// stopped turns. The tools stay within the workspace with or without it.
+	// stopped turns. The tools stay within the workspace with or without it,
+	// unless OutsideFiles is set.
 	// Nil allows every file tool call as before. See FileAccessRequest.
 	FileAccess FileAccessFunc
+	// OutsideFiles lets a file tool use an absolute path outside the session
+	// workspace and mounts (as the user this executor runs as) when
+	// FileAccess allows that call: the request then has Outside set and the
+	// absolute path. FileAccess is required with it. Off, such a path fails
+	// without asking FileAccess, as before. A host sets it for a session
+	// that has full access to the computer; relative paths stay in the
+	// workspace either way.
+	OutsideFiles bool
 	// ToolOutputDir, when set, holds the output files of the bash commands
 	// of a LocalToolRoute (so also ACPAgent's own tools):
 	// ToolOutputDir/<short hash of the session>/, created 0700 (owned by
@@ -267,6 +276,9 @@ type CoreSession struct {
 	// mounts are the session's mounted file directories the file tools may
 	// reach besides the workspace (core_mounts.go); empty for most sessions.
 	mounts []*sessionMount
+	// outside is CoreOptions.OutsideFiles: an absolute path beyond the
+	// workspace and mounts is a target, which FileAccess decides on.
+	outside bool
 }
 
 func (s *CoreSession) ID() string        { return s.key.session }
@@ -323,6 +335,9 @@ func NewCore(opts CoreOptions) (*Core, error) {
 		return nil, err
 	}
 	opts.WorkRoot = root
+	if opts.OutsideFiles && opts.FileAccess == nil {
+		return nil, errors.New("bmaexecutor: CoreOptions.OutsideFiles requires FileAccess")
+	}
 	if opts.ToolOutputDir != "" {
 		if opts.ToolOutputDir, err = filepath.Abs(opts.ToolOutputDir); err != nil {
 			return nil, err
@@ -603,7 +618,7 @@ func (c *Core) assign(brain string, client *Client, params SessionAssignParams) 
 	ctx, cancel := context.WithCancel(context.Background())
 	session := &CoreSession{
 		key: key, workspace: c.workspace(brain, params.SessionID), workRoot: c.opts.WorkRoot, client: client, params: params,
-		ctx: ctx, cancel: cancel, values: map[any]any{},
+		ctx: ctx, cancel: cancel, values: map[any]any{}, outside: c.opts.OutsideFiles,
 	}
 	c.sessions[key] = session
 	c.mu.Unlock()

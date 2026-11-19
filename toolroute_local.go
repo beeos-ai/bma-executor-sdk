@@ -234,7 +234,7 @@ func (c *Core) openLocal(brain, sessionID, workspace string) error {
 		return busy("executor is at its session capacity")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	c.sessions[key] = &CoreSession{key: key, workspace: workspace, ctx: ctx, cancel: cancel, values: map[any]any{}}
+	c.sessions[key] = &CoreSession{key: key, workspace: workspace, ctx: ctx, cancel: cancel, values: map[any]any{}, outside: c.opts.OutsideFiles}
 	return nil
 }
 
