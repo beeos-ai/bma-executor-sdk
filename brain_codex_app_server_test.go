@@ -394,3 +394,56 @@ func TestCodexErrorClasses(t *testing.T) {
 		}
 	}
 }
+
+// A reply cut at the output limit is continued (a text from its cut point, a
+// cut tool call discarded with a split-the-work note) at most three times,
+// then ends output_limit_reached.
+func TestCodexContinuesAReplyCutAtItsOutputLimit(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cuts   []string
+		prefix string
+		ok     bool
+	}{
+		"text":      {[]string{"text"}, "Your previous reply was cut at the output limit; it ended with:\npartial text", true},
+		"tool call": {[]string{"call"}, "Your previous reply was cut at the output limit while writing a tool call", true},
+		"three":     {[]string{"text", "call", "text"}, "Your previous reply was cut", true},
+		"four":      {[]string{"text", "text", "text", "text"}, "Your previous reply was cut", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			defer cancel()
+			model := newScriptedResponses(t, "bash", map[string]any{"command": "true"})
+			model.cuts = tc.cuts
+			f := startCodexFixture(t, ctx, model, ACPAgentOptions{}, t.TempDir())
+			f.start(t, ctx, "sesn_x", "turn_1", "say it")
+			idle := f.platform.waitIdle(t, "turn_1")
+			if tc.ok {
+				assertIdle(t, idle, TurnOutcomeCompleted)
+			} else {
+				assertIdle(t, idle, TurnOutcomeFailed)
+				var message string
+				for _, e := range eventsOf(f.platform.snapshot(), "turn_1") {
+					if e.Type == AgentEventTypeSessionError {
+						message = eventJSON(t, e)["error"].(map[string]any)["message"].(string)
+					}
+				}
+				if !strings.HasPrefix(message, AgentErrorCodeOutputLimitReached+": ") {
+					t.Fatalf("session.error = %q", message)
+				}
+			}
+			wantRequests := min(len(tc.cuts)+1, 4)
+			if got := model.count(); got != wantRequests {
+				t.Fatalf("model requests = %d, want %d", got, wantRequests)
+			}
+			last := model.requests[1].Texts
+			if len(last) == 0 || !strings.HasPrefix(last[len(last)-1], tc.prefix) {
+				t.Fatalf("continuation input = %q, want prefix %q", last, tc.prefix)
+			}
+			for _, r := range model.requests[1:] {
+				if r.Tools == nil {
+					t.Fatal("no tools offered")
+				}
+			}
+		})
+	}
+}

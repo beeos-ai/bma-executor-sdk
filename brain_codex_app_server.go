@@ -738,20 +738,66 @@ func (c *codexConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) e
 		params["effort"] = effort
 	}
 	err := c.run(ctx, proc, p, params)
-	// Inputs steered when no tool call ran, after the last: the next turn of
-	// this prompt, right after (codex reads them in the same conversation).
-	for err == nil {
-		held := p.next()
-		if held == nil {
+	for cuts := 0; ; {
+		if err == nil {
+			// Inputs steered when no tool call ran, after the last: the next
+			// turn of this prompt, right after (codex reads them in the same
+			// conversation).
+			held := p.next()
+			if held == nil {
+				break
+			}
+			params["input"] = held
+			err = c.run(ctx, proc, p, params)
+			continue
+		}
+		// A reply cut at the model's output limit is continued, as every
+		// brain does (a bounded number of times), before it is
+		// output_limit_reached.
+		var stop *AgentError
+		if !errors.As(err, &stop) || stop.Code != AgentErrorCodeOutputLimitReached || p.failure.Load() != nil || cuts == brainOutputContinuations {
 			break
 		}
-		params["input"] = held
+		cuts++
+		params["input"] = p.continuation()
 		err = c.run(ctx, proc, p, params)
 	}
 	p.mu.Lock()
 	p.closed = true
 	p.mu.Unlock()
 	return err
+}
+
+// brainOutputContinuations bounds how often a reply cut at the model's output
+// limit is continued before the turn ends output_limit_reached.
+const brainOutputContinuations = 3
+
+// continuation is the input that continues a reply cut at the output limit:
+// a cut text resumes from the cut point; a cut tool call (never run: codex
+// does not run an incomplete one) is discarded and the model is asked to
+// split the work into smaller calls. It forgets the cut reply's state.
+func (p *codexPrompt) continuation() []map[string]any {
+	p.mu.Lock()
+	var cut, id string
+	for key, b := range p.text {
+		if item, ok := strings.CutPrefix(key, BrainKindMessage); ok {
+			cut, id = b.String(), item
+		}
+	}
+	p.text, p.streamed = map[string]*strings.Builder{}, false
+	p.mu.Unlock()
+	if strings.TrimSpace(cut) != "" {
+		p.sink.Message(BrainKindMessage, id, cut) // the cut text stays in the history
+	}
+	text := "Your previous reply was cut at the output limit while writing a tool call. That call was discarded and nothing ran. Split the work into smaller chunks (several smaller tool calls, for example a large file written in parts) and continue."
+	if strings.TrimSpace(cut) != "" {
+		tail := cut
+		if r := []rune(tail); len(r) > 400 {
+			tail = string(r[len(r)-400:])
+		}
+		text = "Your previous reply was cut at the output limit; it ended with:\n" + tail + "\nContinue exactly from that point, without repeating anything."
+	}
+	return []map[string]any{{"type": "text", "text": text}}
 }
 
 // run runs one turn/start of a prompt to its end, compacting and running it
@@ -1360,6 +1406,10 @@ func (p *codexProc) onItemCompleted(prompt *codexPrompt, raw json.RawMessage) {
 	}
 	switch item.Type {
 	case "agentMessage":
+		// Completed: not the text a cut reply left behind.
+		prompt.mu.Lock()
+		delete(prompt.text, BrainKindMessage+item.ID)
+		prompt.mu.Unlock()
 		if strings.TrimSpace(item.Text) != "" {
 			prompt.sink.Message(BrainKindMessage, item.ID, item.Text)
 		}
