@@ -4,6 +4,7 @@ package bmaexecutor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -485,5 +486,97 @@ func TestWriteIsCommittedOnlyWhileAccessStillHolds(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(filepath.Join(r.workspace, "keep.txt")); string(raw) != "old old\n" {
 		t.Fatalf("the file changed after access ended: %q", raw)
+	}
+}
+
+func TestFileCommitHookFencesAllLocalWriteAndEditMutations(t *testing.T) {
+	var checksUnderGate int
+	var underGate bool
+	var denied bool
+	var commits int
+	var expectedPath, expectedContent string
+	r := newFileRig(t, CoreOptions{OutsideFiles: true, FileAccess: func(_ context.Context, req FileAccessRequest) error {
+		if underGate {
+			if req.Operation != FileOperationWrite || !req.Outside || req.AgentSessionID != rigSession {
+				t.Fatalf("unexpected commit authorization: %+v", req)
+			}
+			checksUnderGate++
+		}
+		return nil
+	}}, nil)
+	r.core.SetFileCommitHook(func(_ context.Context, sessionID string, commit func() error) error {
+		if sessionID != rigSession {
+			t.Fatalf("commit session = %q", sessionID)
+		}
+		commits++
+		if denied {
+			return errors.New("permission revoked at commit")
+		}
+		underGate = true
+		defer func() { underGate = false }()
+		if err := commit(); err != nil {
+			return err
+		}
+		if raw, err := os.ReadFile(expectedPath); err != nil || string(raw) != expectedContent {
+			t.Fatalf("while the gate is held, file = %q, %v", raw, err)
+		}
+		return nil
+	})
+	newDir := filepath.Join(r.outside, "new")
+	newFile := filepath.Join(newDir, "text.txt")
+	existing := filepath.Join(r.outside, "secret.txt")
+	denied = true
+	for _, c := range []struct {
+		name string
+		in   map[string]any
+	}{
+		{ToolNameWrite, map[string]any{"file_path": newFile, "content": "new\n"}},
+		{ToolNameEdit, map[string]any{"file_path": existing, "old_string": "secret", "new_string": "new"}},
+		{ToolNameEdit, map[string]any{"file_path": existing, "old_string": "secret", "new_string": "new", "replace_all": true}},
+	} {
+		got := r.call(c.name, c.in)
+		if !got.IsError || !strings.Contains(got.Text, "permission revoked at commit") {
+			t.Fatalf("%s = %+v", c.name, got)
+		}
+	}
+	if _, err := os.Stat(newDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused write created its parent or file: %v", err)
+	}
+	if got := r.call(ToolNameRead, map[string]any{"file_path": existing}); got.IsError || got.Text != "secret\n" {
+		t.Fatalf("read = %+v", got)
+	}
+	if commits != 3 || checksUnderGate != 0 {
+		t.Fatalf("gate entries = %d, commit checks = %d", commits, checksUnderGate)
+	}
+	denied = false
+	expectedPath, expectedContent = newFile, "first first\n"
+	wantExecuted(t, r.call(ToolNameWrite, map[string]any{"file_path": newFile, "content": "first first\n"}))
+	expectedContent = "second second\n"
+	wantExecuted(t, r.call(ToolNameEdit, map[string]any{"file_path": newFile, "old_string": "first", "new_string": "second", "replace_all": true}))
+	expectedContent = "final\n"
+	wantExecuted(t, r.call(ToolNameEdit, map[string]any{"file_path": newFile, "old_string": "second second", "new_string": "final"}))
+	if raw, err := os.ReadFile(newFile); err != nil || string(raw) != "final\n" {
+		t.Fatalf("file after accepted commits = %q, %v", raw, err)
+	}
+	if commits != 6 || checksUnderGate != 3 {
+		t.Fatalf("gate entries = %d, commit checks = %d", commits, checksUnderGate)
+	}
+}
+
+func TestFileCommitHookRechecksCancellationAfterEnteringGate(t *testing.T) {
+	r := newFileRig(t, CoreOptions{}, nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	r.core.SetFileCommitHook(func(_ context.Context, _ string, commit func() error) error {
+		cancel() // The call became stale while waiting for the host gate.
+		return commit()
+	})
+	got := r.route.Call(ctx, RouteCall{ID: "canceled-write", Name: ToolNameWrite,
+		Input: map[string]any{"file_path": "new/text.txt", "content": "x"}})
+	if !got.IsError || !strings.Contains(got.Text, "session_not_active") {
+		t.Fatalf("canceled write = %+v", got)
+	}
+	if _, err := os.Stat(filepath.Join(r.workspace, "new")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("canceled write created its parent or file: %v", err)
 	}
 }

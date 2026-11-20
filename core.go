@@ -245,6 +245,8 @@ type Core struct {
 	methods      map[string]registeredMethod
 	closed       bool
 
+	fileCommitHook func(context.Context, string, func() error) error
+
 	// local is the state of the local tool routes (toolroute_local.go).
 	local localState
 	// frames are the sessions' last computer use observations (computer_use.go).
@@ -895,7 +897,7 @@ func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams
 	return result
 }
 
-func (c *Core) fileTool(session *CoreSession, tool string, input ToolInput, commit func() error) (ToolResultParams, error) {
+func (c *Core) fileTool(session *CoreSession, tool string, input ToolInput, commit fileCommit) (ToolResultParams, error) {
 	switch tool {
 	case ToolNameRead:
 		return c.read(session, input)
