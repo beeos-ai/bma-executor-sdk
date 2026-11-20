@@ -222,18 +222,17 @@ func (c *Core) withFileIdentity(fn func() error) error {
 	return withFileIdentity(c.opts.RunAs, fn)
 }
 
-func (c *Core) write(session *CoreSession, input ToolInput, commit func() error) (ToolResultParams, error) {
+func (c *Core) write(session *CoreSession, input ToolInput, commit fileCommit) (ToolResultParams, error) {
 	err := c.withFileIdentity(func() error {
 		return session.withRoot(input.Path, true, func(root *os.Root, rel string) error {
-			if err := commit(); err != nil {
-				return err
-			}
-			if dir := filepath.Dir(rel); dir != "." {
-				if err := root.MkdirAll(dir, 0o700); err != nil {
-					return err
+			return commit(func() error {
+				if dir := filepath.Dir(rel); dir != "." {
+					if err := root.MkdirAll(dir, 0o700); err != nil {
+						return err
+					}
 				}
-			}
-			return root.WriteFile(rel, []byte(input.Content), 0o600)
+				return root.WriteFile(rel, []byte(input.Content), 0o600)
+			})
 		})
 	})
 	if err != nil {
@@ -245,7 +244,7 @@ func (c *Core) write(session *CoreSession, input ToolInput, commit func() error)
 // editFile replaces OldString by NewString in the file: the only match, or
 // with all every match. It reports how many matches there were; nothing is
 // written unless that count is one (or any, with all).
-func (c *Core) editFile(session *CoreSession, input ToolInput, all bool, commit func() error) (matched int, err error) {
+func (c *Core) editFile(session *CoreSession, input ToolInput, all bool, commit fileCommit) (matched int, err error) {
 	if input.OldString == "" {
 		return 0, errors.New("edit requires old_string and new_string")
 	}
@@ -260,16 +259,14 @@ func (c *Core) editFile(session *CoreSession, input ToolInput, all bool, commit 
 			if matched == 0 || (matched != 1 && !all) {
 				return nil
 			}
-			if err := commit(); err != nil {
-				return err
-			}
-			return root.WriteFile(rel, []byte(strings.ReplaceAll(text, input.OldString, input.NewString)), 0o600)
+			replaced := []byte(strings.ReplaceAll(text, input.OldString, input.NewString))
+			return commit(func() error { return root.WriteFile(rel, replaced, 0o600) })
 		})
 	})
 	return matched, err
 }
 
-func (c *Core) edit(session *CoreSession, input ToolInput, commit func() error) (ToolResultParams, error) {
+func (c *Core) edit(session *CoreSession, input ToolInput, commit fileCommit) (ToolResultParams, error) {
 	matched, err := c.editFile(session, input, false, commit)
 	if err != nil {
 		return ToolResultParams{}, err
@@ -447,35 +444,77 @@ func (c *Core) checkFileAccess(ctx context.Context, session *CoreSession, agentS
 	return nil
 }
 
-// writeCommit is what a write or edit runs right before it changes the file:
-// the session must still be open (session.stop cancels ctx) and FileAccess
-// is asked again about the write, so an access that ended while the call ran
-// (a narrower grant, a stopped turn, an expired switch) writes nothing.
-func (c *Core) writeCommit(ctx context.Context, session *CoreSession, agentSessionID, callID, tool string, input ToolInput) func() error {
-	return func() error {
-		if err := ctx.Err(); err != nil {
-			return errors.New("session_not_active: the call was stopped before the file was written")
+type fileCommit func(mutate func() error) error
+
+// SetFileCommitHook lets a host serialize built-in write and edit commits with
+// revocation of the same agent session. Set it before serving sessions. The
+// hook either refuses with an error or invokes commit exactly once before
+// returning and propagates its result. The callback rechecks FileAccess and
+// performs all file mutations, including creating parent directories. When
+// no separate agent session ID was supplied, the hook sees the core session
+// ID. A nil hook runs the callback directly. Read tools never call the hook.
+func (c *Core) SetFileCommitHook(hook func(ctx context.Context, sessionID string, commit func() error) error) {
+	c.mu.Lock()
+	c.fileCommitHook = hook
+	c.mu.Unlock()
+}
+
+// writeCommit runs the final access check and the file mutation as one unit
+// under the host's commit hook. The session must still be open (session.stop
+// cancels ctx) and FileAccess is asked again about the write.
+func (c *Core) writeCommit(ctx context.Context, session *CoreSession, agentSessionID, callID, tool string, input ToolInput) fileCommit {
+	return func(mutate func() error) error {
+		commit := func() error {
+			if err := c.checkWriteCommit(ctx, session, agentSessionID, callID, tool, input); err != nil {
+				return err
+			}
+			return mutate()
 		}
-		if c.opts.FileAccess == nil {
-			return nil
+		c.mu.Lock()
+		hook := c.fileCommitHook
+		c.mu.Unlock()
+		if hook == nil {
+			return commit()
 		}
-		t, err := session.target(input.Path, true)
-		if err != nil {
-			return err
+		id := agentSessionID
+		if id == "" {
+			id = session.ID()
 		}
-		req := FileAccessRequest{SessionID: session.ID(), AgentSessionID: agentSessionID, Tool: tool, ToolCallID: callID,
-			Operation: FileOperationWrite, Path: filepath.ToSlash(t.rel)}
-		if t.mount != nil {
-			req.Mount = t.mount.name
+		called := false
+		err := hook(ctx, id, func() error {
+			called = true
+			return commit()
+		})
+		if !called && err == nil {
+			return errors.New("file commit hook did not run the commit")
 		}
-		if t.outside != "" {
-			req.Path, req.Outside = t.show(t.rel), true
-		}
-		if err := c.opts.FileAccess(ctx, req); err != nil {
-			return refusalError(&fileAccessError{err})
-		}
+		return err
+	}
+}
+
+func (c *Core) checkWriteCommit(ctx context.Context, session *CoreSession, agentSessionID, callID, tool string, input ToolInput) error {
+	if err := ctx.Err(); err != nil {
+		return errors.New("session_not_active: the call was stopped before the file was written")
+	}
+	if c.opts.FileAccess == nil {
 		return nil
 	}
+	t, err := session.target(input.Path, true)
+	if err != nil {
+		return err
+	}
+	req := FileAccessRequest{SessionID: session.ID(), AgentSessionID: agentSessionID, Tool: tool, ToolCallID: callID,
+		Operation: FileOperationWrite, Path: filepath.ToSlash(t.rel)}
+	if t.mount != nil {
+		req.Mount = t.mount.name
+	}
+	if t.outside != "" {
+		req.Path, req.Outside = t.show(t.rel), true
+	}
+	if err := c.opts.FileAccess(ctx, req); err != nil {
+		return refusalError(&fileAccessError{err})
+	}
+	return nil
 }
 
 // fileAccessError is a FileAccess hook's refusal.

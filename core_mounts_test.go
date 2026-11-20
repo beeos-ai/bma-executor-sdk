@@ -395,11 +395,11 @@ func TestACPAgentSessionMountsSkillsOnly(t *testing.T) {
 	if !strings.Contains(note, filepath.Join(root, rigSession, "skills")) || !strings.Contains(note, "SKILL.md") || strings.Contains(note, "uploads") || strings.Contains(note, "outputs") || strings.Contains(note, "deliverables") {
 		t.Fatalf("note = %q", note)
 	}
-	read, err := a.agent.opts.Core.fileTool(session, ToolNameRead, ToolInput{Path: filepath.Join(root, rigSession, "skills", "cu-finder", "SKILL.md")}, func() error { return nil })
+	read, err := a.agent.opts.Core.fileTool(session, ToolNameRead, ToolInput{Path: filepath.Join(root, rigSession, "skills", "cu-finder", "SKILL.md")}, nil)
 	if err != nil || !strings.Contains(textOf(read), "Open Finder with open_app.") {
 		t.Fatalf("read skill = %+v %v", read, err)
 	}
-	if _, err := a.agent.opts.Core.fileTool(session, ToolNameWrite, ToolInput{Path: filepath.Join(root, rigSession, "outputs", "x.txt"), Content: "x"}, func() error { return nil }); err == nil {
+	if _, err := a.agent.opts.Core.fileTool(session, ToolNameWrite, ToolInput{Path: filepath.Join(root, rigSession, "outputs", "x.txt"), Content: "x"}, func(commit func() error) error { return commit() }); err == nil {
 		t.Fatal("outputs is writable without the outputs mount")
 	}
 }
