@@ -22,23 +22,14 @@ Any of:
 
 The token is shown once; store it as a secret. Grant the machine to the projects whose agents should use it.
 
-### 0.2 Option A: install bmad
+### 0.2 Option A: install bma
 
 ```sh
-curl -fsSL https://api.bma.beeos.ai/install/bmad.sh | sh   # paste the machine token when prompted
+curl -fsSL https://beeos.ai/bma/install.sh | sh   # or: brew install beeos-ai/tap/bma
+bma up                                            # approve the printed code in the console
 ```
 
-Installs under `~/.bmad` as a user service (systemd/launchd). The **default service still runs the legacy daemon socket**; Executor Protocol mode is explicit:
-
-```sh
-bmad stop                                   # exclusive with daemon mode (shared BMA_HOME lock)
-export BMA_MACHINE_TOKEN=…                  # read from secure storage, do not echo
-bmad executor --executor-url https://api.bma.beeos.ai/api --work-root "$HOME/work"
-```
-
-- `--executor-url` is the origin including `/api`.
-- Omitting `--environment` selects the machine path; `--work-root` bounds process working directories (default: current directory).
-- Pooled cloud machines start this automatically with `BMAD_LAUNCH_MODE=executor`.
+`bma up` pairs this computer and installs a user service (systemd/launchd) that runs `bma run`, the executor on `https://executor.beeos.ai`. A saved executor URL on the retired `api.bma.beeos.ai` is rewritten to the executor host on start. The machine path bounds process working directories with `--work-root` (default: current directory).
 
 ### 0.3 Option B: embedded in the desktop app
 

@@ -22,23 +22,14 @@
 
 token 只显示一次，按机密保存（不要打印到日志）。机器需要被授予到项目，项目里的 agent 才能使用它。
 
-### 0.2 方案 A：安装 bmad
+### 0.2 方案 A：安装 bma
 
 ```sh
-curl -fsSL https://api.bma.beeos.ai/install/bmad.sh | sh   # 按提示粘贴机器 token
+curl -fsSL https://beeos.ai/bma/install.sh | sh   # 或：brew install beeos-ai/tap/bma
+bma up                                            # 在控制台批准屏幕上的配对码
 ```
 
-安装到 `~/.bmad` 并注册为用户服务（Linux systemd / macOS launchd）。注意：**默认服务目前运行旧 daemon socket 模式**；Executor Protocol 模式是显式入口：
-
-```sh
-bmad stop                                   # 与 daemon 模式互斥（共用 BMA_HOME 运行锁）
-export BMA_MACHINE_TOKEN=…                  # 从安全存储读入，不要回显
-bmad executor --executor-url https://api.bma.beeos.ai/api --work-root "$HOME/work"
-```
-
-- `--executor-url` 是带 `/api` 的 origin（bma-api 在 `/api/v1/executors/*` 提供服务）。
-- `--environment` 省略 = 机器路径；`--work-root` 限定进程工作目录（默认当前目录）。
-- 云端池化机器由模板以 `BMAD_LAUNCH_MODE=executor` 自动这样启动。
+`bma up` 配对本机并安装用户服务（systemd/launchd），服务运行 `bma run`，即连接 `https://executor.beeos.ai` 的 executor。已保存的旧 `api.bma.beeos.ai` 地址会在启动时改写为 executor 主机。机器路径用 `--work-root` 限定进程工作目录（默认当前目录）。
 
 ### 0.3 方案 B：Desktop 内嵌
 

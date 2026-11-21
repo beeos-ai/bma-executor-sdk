@@ -35,11 +35,11 @@
 
 | 路径 | 机器路径（bma-api） | environment 路径（managed-agents） |
 | --- | --- | --- |
-| token | `POST /api/v1/executors/token` | `POST /v1/executors/token` |
-| 通道 | `GET /api/v1/executors/channel`（WebSocket） | `GET /v1/executors/channel` |
+| token | `POST /v1/executors/token` | `POST /v1/executors/token` |
+| 通道 | `GET /v1/executors/channel`（WebSocket） | `GET /v1/executors/channel` |
 | 产物 | — | `POST /v1/executors/artifacts`、`GET /v1/executors/artifacts/{id}` |
 
-bma-api 只有在配置了 executor token secret 时才挂载。`bmad executor --executor-url` 传的是带 `/api` 的 origin，例如 `https://api.bma.beeos.ai/api`。
+bma-api 只有在配置了 executor token secret 时才挂载。
 
 自 1.2.0 起，executor 域名按执行端自身资源提供同样的操作；路径中的 id 必须等于凭据的机器/environment，否则 404；`machine_id` 来自 `BMA_MACHINE_ID`。上表路径作为别名保留到契约 2.0。
 
@@ -53,7 +53,7 @@ bma-api 只有在配置了 executor token secret 时才挂载。`bmad executor -
 ### 2.2 换 token：`POST …/v1/executors/token`
 
 ```http
-POST /api/v1/executors/token
+POST /v1/executors/token
 Authorization: Bearer <机器 daemon token 或 environment key>
 Content-Type: application/json
 
@@ -67,7 +67,7 @@ Content-Type: application/json
 
 ```json
 {"executor_id": "exec_<machine uuid>", "token": "<jwt>", "expires_in": 299,
- "ws_url": "wss://api.bma.beeos.ai/api/v1/executors/channel", "channel_scope": ["control"]}
+ "ws_url": "wss://executor.beeos.ai/v1/executors/channel", "channel_scope": ["control"]}
 ```
 
 | 凭据 | `executor_id` | `channel_scope` | JWT 关键 claim |
@@ -83,7 +83,7 @@ JWT：HS256，`iss=bma`、`aud=bma.executor.v1`（两个版本都用这个 audie
 ### 2.3 打开通道
 
 ```http
-GET /api/v1/executors/channel?channel=control
+GET /v1/executors/channel?channel=control
 Sec-WebSocket-Protocol: bma.executor.v1.1
 Authorization: Bearer <jwt>
 ```

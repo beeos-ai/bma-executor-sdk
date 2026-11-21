@@ -64,14 +64,14 @@ WebSocket 上谁是客户端、谁是服务端，与协议角色无关：
 
 | 形态 | executor 进程 | 凭据 | 连到哪里 | 状态 |
 | --- | --- | --- | --- | --- |
-| 云端沙箱（池化机器） | 机器模板里的 `bmad executor` | 机器 daemon token | BMA API `/api/v1/executors/*` | 【已有】 |
-| BYO 机器（用户自己的电脑/服务器） | `bmad`：默认服务仍是旧 daemon socket；`bmad executor` 为 Executor Protocol 的显式入口 | 机器 daemon token | BMA API `/api/v1/executors/*` | 【已有】 |
+| 云端沙箱（池化机器） | 机器模板里的 `bmad executor` | 机器 daemon token | executor host `/v1/executors/*` | 【已有】 |
+| BYO 机器（用户自己的电脑/服务器） | `bmad`：默认服务仍是旧 daemon socket；`bmad executor` 为 Executor Protocol 的显式入口 | 机器 daemon token | executor host `/v1/executors/*` | 【已有】 |
 | Desktop 内嵌（方案 B） | Desktop 进程用 SDK 自己当 executor（`Client` + `Core` + `NewProcessCapability`） | 本机配对得到的机器 token | BMA API | 【已有】（Go SDK） |
 | selfhost worker | selfhost worker | environment key | Managed Agents API `/v1/executors/*` | 【已有】 |
 
 两条服务端路径：
 
-- **机器路径（machine-scoped）**：BMA API 的 `/api/v1/executors/{token,channel}`。机器 token 换出的 JWT 只有 `control` 通道；连接注册后被绑定为这台机器的 daemon runtime，平台的 `run_command` / 进程工具经 `process.*` 执行。
+- **机器路径（machine-scoped）**：executor 主机的 `/v1/executors/{token,channel}`。机器 token 换出的 JWT 只有 `control` 通道；连接注册后被绑定为这台机器的 daemon runtime，平台的 `run_command` / 进程工具经 `process.*` 执行。
 - **environment 路径（selfhost）**：Managed Agents API 的 `/v1/executors/*`。environment key 换出的 JWT 有 `control` + `mcp` 通道；工作队列按“一项工作 = 一次性会话 + 一个 `tool.call`”派发。
 
 ---
