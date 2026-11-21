@@ -17,7 +17,7 @@
 // directory by this machine's policy, never in a session folder. A package
 // install is refused (local_confirmation_denied), which writes outside the folder.
 //
-//	BMA_BASE_URL=https://api.<env>.bma.beeos.ai BMA_MACHINE_TOKEN=... \
+//	BMA_BASE_URL=https://executor.<env>.beeos.ai BMA_MACHINE_TOKEN=... \
 //	go run ./examples/sandboxed-folder -owner u_42 -folder ws_7=$HOME/projects/site \
 //	  -session-files "$HOME/Library/Application Support/example/sessions" \
 //	  -platform-dir "$HOME/Library/Application Support/example/platform"

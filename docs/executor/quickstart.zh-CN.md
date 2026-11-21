@@ -29,7 +29,7 @@ curl -fsSL https://beeos.ai/bma/install.sh | sh   # 或：brew install beeos-ai/
 bma up                                            # 在控制台批准屏幕上的配对码
 ```
 
-`bma up` 配对本机并安装用户服务（systemd/launchd），服务运行 `bma run`，即连接 `https://executor.beeos.ai` 的 executor。已保存的旧 `api.bma.beeos.ai` 地址会在启动时改写为 executor 主机。机器路径用 `--work-root` 限定进程工作目录（默认当前目录）。
+`bma up` 配对本机并安装用户服务（systemd/launchd），服务运行 `bma run`，即连接 `https://executor.beeos.ai` 的 executor。已保存的旧 bma API 主机地址会在启动时改写为 executor 主机。机器路径用 `--work-root` 限定进程工作目录（默认当前目录）。
 
 ### 0.3 方案 B：Desktop 内嵌
 
@@ -59,7 +59,7 @@ selfhost environment 与 environment key 由 BMA 为你开通，请联系 BMA �
 
 ```sh
 cd bma-executor-sdk
-BMA_BASE_URL=https://api.<env>.bma.beeos.ai \
+BMA_BASE_URL=https://executor.<env>.beeos.ai \
 BMA_ENVIRONMENT_ID=shenv_… BMA_ENVIRONMENT_KEY=… \
 go run ./examples/cloud-hand -work-root ~/bma-work
 ```

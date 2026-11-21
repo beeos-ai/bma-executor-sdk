@@ -21,7 +21,7 @@
 // the executor serves process.* itself. This example keeps output in memory
 // and serves process.start, process.read and process.list only.
 //
-//   BMA_BASE_URL=https://api.<env>.bma.beeos.ai BMA_MACHINE_TOKEN=... \
+//   BMA_BASE_URL=https://executor.<env>.beeos.ai BMA_MACHINE_TOKEN=... \
 //   EXAMPLE_OWNER=u_42 EXAMPLE_FOLDERS='{"ws_7":"/Users/me/projects/site"}' \
 //   EXAMPLE_PLATFORM_DIR=/Users/me/bma-platform \
 //   node session-context/main.mjs

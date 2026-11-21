@@ -8,7 +8,7 @@
 // Configuration comes from the process environment, after the optional env
 // file (KEY=VALUE lines):
 //
-//	BMA_BASE_URL        deployment origin, e.g. https://executor.<env>.bma.beeos.ai
+//	BMA_BASE_URL        deployment origin, e.g. https://executor.<env>.beeos.ai
 //	BMA_MACHINE_TOKEN   machine daemon token (never logged)
 //	BMA_MACHINE_ID      machine id (optional; selects /v1/machines/{id}/token)
 //	BMA_WORK_ROOT       session workspaces (default <dir of the env file>\work)
