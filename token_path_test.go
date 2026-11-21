@@ -39,7 +39,7 @@ func TestTokenExchangePathFollowsTheResource(t *testing.T) {
 		"machine id escaped":   {machineID: "a/b", want: "/v1/machines/a%2Fb/token"},
 		"environment":          {environmentID: "env_test", want: "/v1/environments/env_test/token"},
 		"environment wins env": {environmentID: "env_test", env: "mach_env", want: "/v1/environments/env_test/token"},
-		"legacy machine":       {want: "/api/v1/executors/token"},
+		"legacy machine":       {want: "/v1/executors/token"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv(MachineIDEnv, tc.env)

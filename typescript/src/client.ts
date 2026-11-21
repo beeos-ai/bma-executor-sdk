@@ -155,7 +155,7 @@ export function staticToken(wsUrl: string, token = ''): TokenSource {
 export interface WebSocketDialerOptions {
   /**
    * The selfhost environment (POST {baseUrl}/v1/environments/{environmentId}/token). environmentId and
-   * machineId are alternatives. With neither, the legacy alias POST {baseUrl}/api/v1/executors/token
+   * machineId are alternatives. With neither, the legacy alias POST {baseUrl}/v1/executors/token
    * serves a machine daemon token (removed in contract 2.0).
    */
   environmentId: string
@@ -213,7 +213,7 @@ function machineIdOf(options: Pick<WebSocketDialerOptions, 'environmentId' | 'ma
 function tokenPath(environmentId: string, machineId: string): string {
   if (environmentId) return `/v1/environments/${encodeURIComponent(environmentId)}/token`
   if (machineId) return `/v1/machines/${encodeURIComponent(machineId)}/token`
-  return '/api/v1/executors/token'
+  return '/v1/executors/token'
 }
 
 /** options.tokenSource, or the token exchange with environmentKey. */

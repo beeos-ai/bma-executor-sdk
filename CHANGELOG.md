@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.10.0
+
+- A client with neither environment nor machine id posts its token request to `/v1/executors/token` on the executor host (Go, TypeScript, Python); the `/api/v1/executors/token` spelling is gone.
+
 ## 1.9.0
 
 - The default executor base URL is `https://executor.beeos.ai` (Go

@@ -134,7 +134,7 @@ type Options struct {
 	// EnvironmentID is the selfhost environment. EnvironmentID and MachineID
 	// are alternatives: setting both is an error. With neither the client
 	// registers a machine-scoped executor on the legacy alias
-	// POST /api/v1/executors/token (removed in contract 2.0).
+	// POST /v1/executors/token (removed in contract 2.0).
 	EnvironmentID string
 	// MachineID is the machine of a machine-scoped executor, taken from
 	// BMA_MACHINE_ID (MachineIDEnv) when empty and EnvironmentID is empty.
@@ -931,7 +931,7 @@ func tokenPath(environmentID, machineID string) string {
 	case machineID != "":
 		return "/v1/machines/" + url.PathEscape(machineID) + "/token"
 	default:
-		return "/api/v1/executors/token"
+		return "/v1/executors/token"
 	}
 }
 

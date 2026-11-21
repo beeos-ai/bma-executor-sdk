@@ -177,7 +177,7 @@ class ExecutorClient:
         # without one (executor.register in the v1.1 contract). environment_id
         # and machine_id are alternatives; machine_id defaults to BMA_MACHINE_ID
         # when environment_id is empty. With neither, the legacy alias
-        # POST /api/v1/executors/token serves a machine daemon token.
+        # POST /v1/executors/token serves a machine daemon token.
         if environment_id and machine_id:
             raise ValueError("bma_executor_sdk: environment_id and machine_id are alternatives; set one")
         if not environment_id and not machine_id:
@@ -513,7 +513,7 @@ class ExecutorClient:
             return f"/v1/environments/{quote(self._environment_id, safe='')}/token"
         if self._machine_id:
             return f"/v1/machines/{quote(self._machine_id, safe='')}/token"
-        return "/api/v1/executors/token"
+        return "/v1/executors/token"
 
     async def _fetch_token(self) -> ExecutorTokenResponse:
         if self._token_source is not None:
