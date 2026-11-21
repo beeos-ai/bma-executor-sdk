@@ -833,6 +833,69 @@
       "ack": {
         "ok": false
       }
+    },
+    {
+      "ack": {
+        "ok": true
+      },
+      "ack_fixed_display": {
+        "code": "resize_unsupported",
+        "ok": false
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343200000000000000076c656173652d31000000000000000a7669657765725f6f6e650000000000000001000001d1a94a20002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12000000000000000f060b40070800c8",
+      "name": "resize_scaled",
+      "packet": {
+        "grant": {
+          "epoch": "42",
+          "expires_at": 2000000000000,
+          "generation": 1,
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "lease_id": "lease-1"
+        },
+        "input": {
+          "height": 1800,
+          "scale": 200,
+          "type": "resize",
+          "width": 2880
+        },
+        "sequence": 15,
+        "signature": "0oFaQfSP8AE6pkeOzWDGAdA2xyU_9zP6LK2uEkij1JQxcXG7Vul8OojaObMnd7tolNH7JkajYK9N2HGCcL6yDg"
+      },
+      "sender_identity": "viewer_one"
     }
   ]
 }

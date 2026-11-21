@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.0
+
+- Go: a signed `resize` may carry `scale`, the viewer's devicePixelRatio × 100
+  (100–400), signed as tag 6 with the two dimensions and the scale
+  (contracts/bma/desktop-relay.md §5b); without `scale` the bytes stay tag 4.
+  `NativeDesktopResizer.Resize(ctx, width, height, scale)` receives it (0 = not
+  sent, 1×), so a desktop can render at the viewer's device resolution with its
+  UI scaled instead of being upscaled on a high-DPI screen. Breaking for
+  implementers of `NativeDesktopResizer` (one more argument).
+
 ## 1.7.0
 
 - `bma` is now also the command line of the public BMA API (ADR-0102): a
