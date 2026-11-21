@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,11 +16,16 @@ import (
 	"time"
 )
 
-// The device authorization grant (RFC 8628) of the console: this computer
-// asks for a code, the owner approves it in the browser (choosing the
-// workspace, the name and labels), and the poll answers the machine token.
+// The device authorization grant (RFC 8628) of the dashboard: this computer
+// asks for a code, the owner approves it in the browser, and the poll
+// answers what the client is granted: clientMachine (`bma up`) the machine
+// token, clientCLI (`bma login`) a personal access token with the
+// organization and workspace the owner chose.
 
-const clientID = "bma-machine"
+const (
+	clientMachine = "bma-machine"
+	clientCLI     = "bma-cli"
+)
 
 type deviceCodes struct {
 	DeviceCode              string `json:"device_code"`
@@ -31,12 +37,13 @@ type deviceCodes struct {
 }
 
 type deviceGrant struct {
-	AccessToken string   `json:"access_token"`
-	MachineID   string   `json:"bma_machine_id"`
-	WorkspaceID string   `json:"bma_workspace_id"`
-	DisplayName string   `json:"bma_display_name"`
-	Labels      []string `json:"bma_labels"`
-	ExecutorURL string   `json:"bma_executor_url"`
+	AccessToken    string   `json:"access_token"`
+	OrganizationID string   `json:"bma_organization_id"`
+	MachineID      string   `json:"bma_machine_id"`
+	WorkspaceID    string   `json:"bma_workspace_id"`
+	DisplayName    string   `json:"bma_display_name"`
+	Labels         []string `json:"bma_labels"`
+	ExecutorURL    string   `json:"bma_executor_url"`
 }
 
 // apiError is the error envelope of the BMA API.
@@ -87,10 +94,10 @@ func postJSON(ctx context.Context, url string, in, out any) (*apiError, error) {
 	return nil, json.Unmarshal(body, out)
 }
 
-func startDevice(ctx context.Context, api, hostname string) (deviceCodes, error) {
+func startDevice(ctx context.Context, api, client, hostname string) (deviceCodes, error) {
 	var codes deviceCodes
 	e, err := postJSON(ctx, api+"/v1/auth/device_authorizations", map[string]any{
-		"client_id":   clientID,
+		"client_id":   client,
 		"bma_machine": map[string]string{"hostname": hostname, "os": runtime.GOOS, "arch": runtime.GOARCH},
 	}, &codes)
 	if err == nil && e != nil {
@@ -100,7 +107,7 @@ func startDevice(ctx context.Context, api, hostname string) (deviceCodes, error)
 }
 
 // pollDevice waits for the owner's decision (RFC 8628 §3.5).
-func pollDevice(ctx context.Context, api string, codes deviceCodes) (deviceGrant, error) {
+func pollDevice(ctx context.Context, api, client string, codes deviceCodes) (deviceGrant, error) {
 	interval := time.Duration(codes.Interval) * time.Second
 	deadline := time.Now().Add(time.Duration(codes.ExpiresIn) * time.Second)
 	for time.Now().Before(deadline) {
@@ -112,7 +119,7 @@ func pollDevice(ctx context.Context, api string, codes deviceCodes) (deviceGrant
 		var g deviceGrant
 		e, err := postJSON(ctx, api+"/v1/auth/device_authorizations/token", map[string]string{
 			"grant_type": "urn:ietf:params:oauth:grant-type:device_code", "device_code": codes.DeviceCode,
-			"client_id": clientID,
+			"client_id": client,
 		}, &g)
 		switch {
 		case err != nil:
@@ -123,12 +130,12 @@ func pollDevice(ctx context.Context, api string, codes deviceCodes) (deviceGrant
 		case e.Error.Code == "slow_down":
 			interval += 5 * time.Second
 		case e.Error.Code == "access_denied":
-			return deviceGrant{}, fmt.Errorf("the request was denied in the console")
+			return deviceGrant{}, fmt.Errorf("the request was denied in the dashboard")
 		case e.Error.Code == "expired_token":
-			return deviceGrant{}, fmt.Errorf("the code expired: run `bma up` again")
+			return deviceGrant{}, errors.New("the code expired: run the command again")
 		default:
 			return deviceGrant{}, fmt.Errorf("signing in: %s", e)
 		}
 	}
-	return deviceGrant{}, fmt.Errorf("the code expired: run `bma up` again")
+	return deviceGrant{}, errors.New("the code expired: run the command again")
 }

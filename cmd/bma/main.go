@@ -1,80 +1,70 @@
 //go:build darwin || linux
 
-// Command bma connects this computer to BMA: one command (`bma up`) signs
-// the computer in through the console (device authorization, no token is
-// copied), prepares the coding harnesses the owner enables (pinned releases,
-// verified), checks the owner's own harness login, and installs a user
-// service that runs the executor (`bma run`).
+// Command bma is the BMA command line (ADR-0102): one static binary that is
+// both the API client and the BYO executor.
 //
-//	bma up [--api URL] [--labels a,b] [--harness id,...] [--remote-brain] [--reauth] [--no-browser]
-//	bma status [--json]
-//	bma harness list | add <id> | login <id>
-//	bma disconnect
-//	bma run            (the service's entry; also runs in the foreground)
-//	bma version
+// API: `bma login`, then a command per operation of the public API, generated
+// from the OpenAPI document (`bma sessions list`, `bma machines get <id>`,
+// ...), plus `bma sessions events stream`, `bma sessions send`,
+// `bma files upload|download`, `bma skills push`. Every command takes
+// --json / --format json|jsonl|yaml|table and --query <jq>.
 //
-// Files: ~/.bma/config.json (no secrets), ~/.bma/state.json (written by the
-// service), ~/.bma/harnesses/<id>/<version>/ (pinned harness releases). The
-// machine token is kept in the login keychain (macOS) or in
-// ~/.config/bma/machine-token (0600).
+// BYO executor: `bma up` signs this computer in through the dashboard
+// (device authorization, no token is copied), prepares the coding harnesses
+// the owner enables (pinned releases, verified), checks the owner's own
+// harness login, and installs a user service that runs the executor
+// (`bma run`); `bma status`, `bma harness`, `bma disconnect`, `bma upgrade`,
+// `bma uninstall`.
+//
+// Files: ~/.config/bma/config.yaml (CLI profiles, no secrets), the CLI
+// credentials in the login keychain (macOS) or ~/.config/bma/credentials.json
+// (0600); ~/.bma/config.json (the executor, no secrets), ~/.bma/state.json
+// (written by the service), ~/.bma/harnesses/<id>/<version>/; the machine
+// token in the login keychain (macOS) or ~/.config/bma/machine-token (0600).
+//
+// Exit codes: 0 success, 1 other failure, 2 usage, 3 not authenticated or
+// not permitted (401/403), 4 not found (404), 5 conflict or precondition
+// (409/412), 6 rate limited, server error or network after retries, 130
+// interrupted.
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 )
 
 // version is set at release (-ldflags "-X main.version=X.Y.Z").
 var version = "dev"
 
 func main() {
-	if err := dispatch(os.Args[1:]); err != nil {
-		var exit exitCode
-		if errors.As(err, &exit) {
-			os.Exit(int(exit))
-		}
-		fmt.Fprintln(os.Stderr, "bma:", err)
-		os.Exit(1)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	err := newRoot().ExecuteContext(ctx)
+	interrupted := ctx.Err() != nil
+	stop()
+	os.Exit(report(err, interrupted))
+}
+
+// report prints err (once) and answers the exit code.
+func report(err error, interrupted bool) int {
+	if err == nil {
+		return 0
 	}
+	if interrupted {
+		return 130
+	}
+	code := exitCodeOf(err)
+	var silent exitCode
+	if !errors.As(err, &silent) {
+		printError(err)
+	}
+	return code
 }
 
 // exitCode ends the process with a code and no message.
 type exitCode int
 
 func (e exitCode) Error() string { return fmt.Sprintf("exit %d", int(e)) }
-
-const usage = `usage: bma <command>
-
-  up          connect this computer (sign in through the console, prepare harnesses, start the service)
-  status      show the connection, the service and the harnesses
-  harness     list | add <id> | login <id>
-  disconnect  stop the service and remove this computer from BMA
-  run         run the executor in the foreground (the service's entry)
-  version     print the version`
-
-func dispatch(args []string) error {
-	if len(args) == 0 {
-		fmt.Println(usage)
-		return exitCode(2)
-	}
-	switch args[0] {
-	case "up":
-		return cmdUp(args[1:])
-	case "status":
-		return cmdStatus(args[1:])
-	case "harness":
-		return cmdHarness(args[1:])
-	case "disconnect":
-		return cmdDisconnect(args[1:])
-	case "run":
-		return cmdRun(args[1:])
-	case "version", "--version":
-		fmt.Println(version)
-		return nil
-	case "help", "-h", "--help":
-		fmt.Println(usage)
-		return nil
-	}
-	return fmt.Errorf("unknown command %q\n%s", args[0], usage)
-}

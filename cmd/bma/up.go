@@ -172,7 +172,7 @@ func tokenWorks(ctx context.Context, c config) bool {
 
 // signIn runs the device authorization and stores what it grants.
 func signIn(ctx context.Context, c *config, host string, noBrowser, labelsSet bool) error {
-	codes, err := startDevice(ctx, c.APIURL, host)
+	codes, err := startDevice(ctx, c.APIURL, clientMachine, host)
 	if err != nil {
 		return err
 	}
@@ -181,7 +181,7 @@ func signIn(ctx context.Context, c *config, host string, noBrowser, labelsSet bo
 	if !noBrowser && os.Getenv("SSH_CONNECTION") == "" {
 		openBrowser(link)
 	}
-	g, err := pollDevice(ctx, c.APIURL, codes)
+	g, err := pollDevice(ctx, c.APIURL, clientMachine, codes)
 	if err != nil {
 		return err
 	}

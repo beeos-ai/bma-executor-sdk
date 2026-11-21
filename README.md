@@ -57,11 +57,43 @@ only does what is missing.
 | `bma status [--json]` | connection, service, harness logins, labels |
 | `bma harness list \| add <id> \| login <id>` | the harnesses this computer runs |
 | `bma disconnect` | stop the service and remove this computer from BMA |
+| `bma upgrade [--check]` | replace `bma` with the latest release (sha256 checked against its manifest) and restart the service |
+| `bma uninstall [--yes]` | disconnect, remove the service, `~/.bma`, the CLI profiles and `bma` itself |
 | `bma run` | the executor in the foreground (the service runs this) |
 
 Your harness credentials stay on this computer and are never sent to BMA.
 Other machines' brains may use this computer as their hands only if you pass
 `--remote-brain` (or answer yes in `bma up`).
+
+## The BMA command line (`bma`)
+
+The same binary is the command line of the public BMA API (ADR-0102 of
+beeos-managed-agents). Every API operation is one command, generated from the
+public OpenAPI document (`contracts/bma-api/bma.openapi.yaml`) by
+`tools/cligen`; requests go through `github.com/beeos-ai/bma-sdk/v3`.
+
+```sh
+bma login                                   # approve in the dashboard; or: bma login --with-token < key
+bma machines list                           # a table on a terminal, JSON otherwise
+bma machines get mch_123 --query .status    # --json, --format json|jsonl|yaml|table, --query <jq>
+bma sessions send sesn_123 "hello" --wait   # send a message, print the agent's reply
+bma sessions events stream sesn_123         # follow events; resumes with Last-Event-ID
+bma files upload ./report.pdf
+bma skills push ./my-skill                  # a new skill, or --skill <id> for a new version
+bma completion zsh > "${fpath[1]}/_bma"
+```
+
+Credentials: `--api-key` > `BMA_API_KEY` > the profile's credential (login
+keychain on macOS, else `~/.config/bma/credentials.json`, 0600). Profiles
+live in `~/.config/bma/config.yaml` (`bma profiles list|use|set|delete`,
+`--profile`, `BMA_PROFILE`; `BMA_BASE_URL` and `BMA_WORKSPACE_ID` override one
+setting). Exit codes: 0 success, 1 failure, 2 usage, 3 not authenticated or
+permitted, 4 not found, 5 conflict, 6 rate limited/server/network, 130
+interrupted. `bma docs <dir>` writes the full command reference as Markdown.
+
+Regenerate the commands after refreshing the document:
+`go run ./tools/cligen -spec contracts/bma-api/bma.openapi.yaml -out cmd/bma/api_gen.go`
+(the tests fail while `api_gen.go` is stale or an operation has no command).
 
 ## Executor quick start
 
