@@ -2,7 +2,7 @@
 // WebSocket, reconnect with resume, and one tool (bash).
 //
 //   BMA_ENVIRONMENT_KEY=... BMA_ENVIRONMENT_ID=env_... node executor-minimal/main.mjs
-//   (BMA_BASE_URL defaults to https://api.bma.beeos.ai)
+//   (BMA_BASE_URL defaults to https://executor.beeos.ai)
 import { exec } from 'node:child_process'
 import os from 'node:os'
 

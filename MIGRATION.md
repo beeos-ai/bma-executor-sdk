@@ -96,7 +96,7 @@ come in 1.1 next to it, so code written against it keeps compiling.
 
 - **Base URL.** `baseUrl` / `base_url` / `Options.BaseURL` is the deployment
   origin, the same value as `BMA_BASE_URL` in bma-sdk 1.0 (for example
-  `https://api.staging.bma.beeos.ai`). A value ending in `/api/v1` (bma-sdk
+  `https://executor.staging.beeos.ai`). A value ending in `/api/v1` (bma-sdk
   0.x API root) is accepted: the suffix is dropped before
   `/v1/executors/token` is added.
 

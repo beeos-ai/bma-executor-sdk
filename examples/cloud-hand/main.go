@@ -3,7 +3,7 @@
 // execution core runs bash/file tools and the stdio MCP servers named in
 // session.assign, and reports results back over the same connection.
 //
-//	BMA_BASE_URL=https://api.<env>.bma.beeos.ai \
+//	BMA_BASE_URL=https://executor.<env>.beeos.ai \
 //	BMA_ENVIRONMENT_ID=env_... BMA_ENVIRONMENT_KEY=... \
 //	go run ./examples/cloud-hand -work-root ~/bma-work
 package main

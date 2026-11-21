@@ -30,7 +30,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 }
 if ($MachineTokenFile) { $MachineToken = (Get-Content -LiteralPath $MachineTokenFile -Raw).Trim() }
 if (-not $MachineToken) { throw 'Give -MachineTokenFile (or -MachineToken).' }
-if ($BaseUrl -notmatch '^https?://') { throw '-BaseUrl must be the deployment origin, e.g. https://executor.<env>.bma.beeos.ai' }
+if ($BaseUrl -notmatch '^https?://') { throw '-BaseUrl must be the deployment origin, e.g. https://executor.<env>.beeos.ai' }
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $bin = Join-Path $InstallDir 'bin'

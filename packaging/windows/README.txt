@@ -13,7 +13,7 @@ Contents
 Install (Administrator PowerShell, on the machine; the target user is the
 auto-logged-on interactive user):
 
-  .\install.ps1 -BaseUrl https://executor.<env>.bma.beeos.ai `
+  .\install.ps1 -BaseUrl https://executor.<env>.beeos.ai `
                 -MachineTokenFile C:\secrets\machine-token.txt -MachineId mch_... -StartNow
 
 With computer use (Cua Driver v0.44.0, MIT build, checksum required):

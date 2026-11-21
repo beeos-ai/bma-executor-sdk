@@ -29,7 +29,7 @@ curl -fsSL https://beeos.ai/bma/install.sh | sh   # or: brew install beeos-ai/ta
 bma up                                            # approve the printed code in the console
 ```
 
-`bma up` pairs this computer and installs a user service (systemd/launchd) that runs `bma run`, the executor on `https://executor.beeos.ai`. A saved executor URL on the retired `api.bma.beeos.ai` is rewritten to the executor host on start. The machine path bounds process working directories with `--work-root` (default: current directory).
+`bma up` pairs this computer and installs a user service (systemd/launchd) that runs `bma run`, the executor on `https://executor.beeos.ai`. A saved executor URL on the retired bma API host is rewritten to the executor host on start. The machine path bounds process working directories with `--work-root` (default: current directory).
 
 ### 0.3 Option B: embedded in the desktop app
 
@@ -59,7 +59,7 @@ BMA provisions the selfhost environment and environment key for you; ask your BM
 
 ```sh
 cd bma-executor-sdk
-BMA_BASE_URL=https://api.<env>.bma.beeos.ai \
+BMA_BASE_URL=https://executor.<env>.beeos.ai \
 BMA_ENVIRONMENT_ID=shenv_… BMA_ENVIRONMENT_KEY=… \
 go run ./examples/cloud-hand -work-root ~/bma-work
 ```
