@@ -139,7 +139,7 @@ func TestDevicePollFollowsTheGrant(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1/auth/device_authorizations":
 			m, _ := in["bma_machine"].(map[string]any)
-			if in["client_id"] != clientID || m["os"] != runtime.GOOS {
+			if in["client_id"] != clientMachine || m["os"] != runtime.GOOS {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
@@ -163,12 +163,12 @@ func TestDevicePollFollowsTheGrant(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	codes, err := startDevice(context.Background(), srv.URL, "mini")
+	codes, err := startDevice(context.Background(), srv.URL, clientMachine, "mini")
 	if err != nil {
 		t.Fatal(err)
 	}
 	codes.Interval = 0
-	g, err := pollDevice(context.Background(), srv.URL, codes)
+	g, err := pollDevice(context.Background(), srv.URL, clientMachine, codes)
 	if err != nil {
 		t.Fatal(err)
 	}
