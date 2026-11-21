@@ -136,24 +136,6 @@ func TestCoreRunAsOwnsTheBrainDirectoryOfADefaultWorkspace(t *testing.T) {
 	}
 }
 
-// TestCoreRunAsRefusesInProcessFileTools: file tools run inside the
-// executor, as its user, so with RunAs they would bypass the boundary.
-// write/edit have their own Linux file identity path.
-func TestCoreRunAsRefusesInProcessFileTools(t *testing.T) {
-	ctx := testContext(t)
-	// The executor's own ids: the refusal does not depend on privilege.
-	runAs := RunAs{UID: uint32(os.Getuid()), GID: uint32(os.Getgid())}
-	core := newTestCore(t, CoreOptions{RunAs: &runAs})
-	b := attachBrain(t, core, "local")
-	session := readySession(t, b, SessionAssignParams{SessionID: "sess_files", Lease: Lease{Token: "lease"}})
-	for _, tool := range []string{ToolNameRead, ToolNameGlob, ToolNameGrep} {
-		result, err := session.CallTool(ctx, ToolCallParams{Tool: tool, Input: NewToolInput(ToolInput{Path: "x", Content: "y", Pattern: "*", OldString: "a", NewString: "b"})})
-		if err != nil || result.Outcome != ToolOutcomeFailed || !strings.Contains(textOf(result), "another OS user") {
-			t.Fatalf("%s with RunAs = %+v err %v, want refused", tool, textOf(result), err)
-		}
-	}
-}
-
 func fileOwner(info os.FileInfo) string {
 	uid, gid := ownerIDs(info)
 	return fmt.Sprintf("%d:%d", uid, gid)

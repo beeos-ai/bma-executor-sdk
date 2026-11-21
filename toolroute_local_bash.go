@@ -286,12 +286,9 @@ func (r *LocalToolRoute) ownOutputFile(path string) (string, bool) {
 }
 
 // readOutputFile reads an output file of the session with the read tool's
-// offset and limit. Like every file tool it is refused under RunAs; a link
+// offset and limit, with the workload's file identity under RunAs; a link
 // is not followed.
 func (r *LocalToolRoute) readOutputFile(path string, input ToolInput) (string, bool) {
-	if r.core.opts.RunAs != nil {
-		return `tool "read" is unavailable: this executor runs workloads as another OS user; use bash`, true
-	}
 	if info, err := os.Lstat(path); err != nil {
 		return err.Error(), true
 	} else if !info.Mode().IsRegular() {

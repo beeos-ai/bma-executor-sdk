@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.12.1
+
+- Go: with `CoreOptions.RunAs` (Linux), `read`, `glob` and `grep` now work, with the workload's file identity (fsuid, fsgid, supplementary groups) like `write` and `edit`, instead of answering "unavailable: use bash". The executor's own private files stay unreadable to them; the workspace confinement is unchanged.
+
 ## 1.12.0
 
 - Go: `NativeDesktopLease` (optional, next to `NativeDesktopResizer`): an input device with its own exclusive control lease, such as a phone whose own agent must stop while a person controls it. The `DesktopControlGate` calls `Hold(ctx, until)` on a `screen.control` grant (after draining, before the holder's first input; a refusal refuses the grant) and on every renew (a refusal keeps the old deadline), and `Drop(ctx, resume)` when the human lease ends (handback: `resume` true; release, expiry, recovery: false). A failed drop answers the release `ErrDesktopInputUnknown` and is retried by the next release of the same lease. Implementers without it are unaffected.
