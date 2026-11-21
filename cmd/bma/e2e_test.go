@@ -115,8 +115,8 @@ func (e *e2e) exec(env []string, stdin io.Reader, a ...string) (string, string, 
 
 func short(s string) string {
 	s = strings.TrimSpace(s)
-	if len(s) > 300 {
-		s = s[:300] + "…"
+	if len(s) > 900 {
+		s = s[:900] + "…"
 	}
 	return strings.ReplaceAll(s, "\n", " ")
 }
@@ -1245,9 +1245,13 @@ func (e *e2e) testBYO(t *testing.T) {
 	token, _ := created["token"].(string)
 	e.cleanup(t, "machines", "delete", m)
 
-	// An installation in a fresh home: bma copied to ~/.bma/bin, the machine's
-	// config and token as `bma up` leaves them after the device grant.
-	home := filepath.Join(e.dir, "byo-home")
+	// An installation in this (throwaway) computer's home - the systemd user
+	// manager reads units from the real home: bma copied to ~/.bma/bin, the
+	// machine's config and token as `bma up` leaves them after the device grant.
+	home, _ := os.UserHomeDir()
+	if _, err := os.Stat(filepath.Join(home, ".bma")); err == nil {
+		t.Fatalf("%s/.bma exists: BMA_E2E_BYO=1 is for a throwaway computer only", home)
+	}
 	bin := filepath.Join(home, ".bma", "bin", "bma")
 	_ = os.MkdirAll(filepath.Dir(bin), 0o755)
 	src, _ := os.ReadFile(e.bin)
@@ -1287,11 +1291,16 @@ func (e *e2e) testBYO(t *testing.T) {
 	e.feature(t, "upgrade --check", code == 0 && (strings.Contains(errOut, "latest") || strings.Contains(errOut, "available")), short(errOut))
 	_, errOut, code = run("upgrade")
 	v, _, _ := run("version")
+	restore := func() { // the rest tests this tree's bma, not the release (rename: the service runs the file)
+		_ = os.WriteFile(bin+".e2e", src, 0o755)
+		_ = os.Rename(bin+".e2e", bin)
+	}
 	out, _, _ = run("status", "--json")
 	st = map[string]any{}
 	_ = json.Unmarshal([]byte(out), &st)
 	e.feature(t, "upgrade (latest release, manifest-verified, service restarted)", code == 0 && st["service"] == "running",
 		short(errOut)+" → "+strings.TrimSpace(v))
+	restore()
 	out, errOut, code = run("disconnect")
 	gone, _, gcode := e.exec(e.env, nil, "machines", "get", m, "--query", ".lifecycle_state")
 	e.feature(t, "disconnect (service stopped, machine removed)", code == 0 && (gcode == 4 || strings.Contains(gone, "delet")), short(out+errOut+gone))
