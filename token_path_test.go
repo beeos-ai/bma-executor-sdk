@@ -69,23 +69,3 @@ func TestEnvironmentIDAndMachineIDAreExclusive(t *testing.T) {
 		t.Fatalf("NewClient with both ids: err = %v", err)
 	}
 }
-
-// Artifacts hang off the environment (the only executor kind with them).
-func TestArtifactUploadUsesTheEnvironmentPath(t *testing.T) {
-	var got string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = r.URL.EscapedPath()
-		_ = json.NewEncoder(w).Encode(ArtifactRef{})
-	}))
-	defer server.Close()
-	client, err := NewClient(Options{BaseURL: server.URL, EnvironmentKey: "k", EnvironmentID: "env_test", Executor: ExecutorInfo{Name: "t"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.UploadArtifact(context.Background(), "sess", "a.txt", "text/plain", []byte("x")); err != nil {
-		t.Fatal(err)
-	}
-	if want := "/v1/environments/env_test/artifacts"; got != want {
-		t.Fatalf("artifact upload path = %q, want %q", got, want)
-	}
-}

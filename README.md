@@ -174,7 +174,7 @@ Executor types follow one mapping: required members are values, optional members
 - A repeated `tool.call` with the same `tool_call_id` is acknowledged but not executed twice.
 - Call `SessionReady` after workspace and MCP setup, and `SessionEnded` after every child process and MCP server has stopped. The SDK does not infer these transitions because only the adapter knows when setup and cleanup finished.
 - `tool.result` is retried with exponential backoff on `-32009` (`executor_busy`), `-32004` (`timeout`), or `data.retryable: true`. Results are idempotent by `tool_call_id`. When every attempt fails, `OnToolResultLost` is called with the original result so the adapter can persist and replay it; the client never drops a result silently.
-- Large output is reported as artifact references, not base64 in `tool.result`: `Client.UploadArtifact` uploads the bytes, `NewArtifactRef` and `NewArtifactContentBlock` build the blocks.
+- Large output is reported as artifact references, not base64 in `tool.result`: `NewArtifactRef` and `NewArtifactContentBlock` build the blocks for an artifact your own store holds; the SDK has no upload call, and `Core` truncates bash output over `InlineResultBytes`.
 - `OpenMCPChannel` opens the MCP channel for a session and server key and exchanges raw MCP JSON-RPC frames over whatever transport the control channel uses.
 - Session handler errors that are an `*RPCError` keep their code and data on the wire (for example retryable `executor_busy`).
 

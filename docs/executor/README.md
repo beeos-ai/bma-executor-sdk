@@ -164,7 +164,7 @@ Protocol messages are the same on every transport.
 | `terminal.*` (PTY) | v1.1 | available | available (not on Windows) | no helper |
 | `skill.install` | v1.1 | available | available (machine path) | available (`NewSkillInstallCapability`) |
 | file transfer / Git credentials (`process.start` fields) | v1.1 | available | available (machine path) | available (hooks in `ProcessOptions`) |
-| artifact upload `POST /v1/executors/artifacts` | v1.1 | environment path | environment path | available (`Client.UploadArtifact`) |
+| artifact upload `POST /v1/executors/artifacts` | v1.1 | environment path | environment path | no upload helper |
 | MCP channel (`channel=mcp`) | v1 | server channel available (environment path); the platform harness does not dispatch MCP servers to executors in production yet | no | `OpenMCPChannel` and the `Core` stdio supervisor |
 | session files (`/mnt/session/uploads\|outputs`) | machine-token HTTP routes | available | available | — |
 | executor-declared session files root (`capabilities.session_files.root`, `<root>/<session>/{uploads,outputs}`) | v1.1 additive | pending (#411 F2) | no (keeps `/mnt/session`) | 1.1: `SessionFiles` in `ProcessOptions` (TS/Python: declare the capability, sync yourself) |

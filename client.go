@@ -9,8 +9,6 @@ package bmaexecutor
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,9 +62,7 @@ const (
 	minSuspend           = 2 * time.Second
 
 	// Artifact upload (v1.1 §6.5).
-	headerSessionID      = "X-BMA-Session-ID"
-	headerArtifactDigest = "X-BMA-Artifact-Digest"
-	headerArtifactName   = "X-BMA-Artifact-Name"
+	headerSessionID = "X-BMA-Session-ID"
 )
 
 var (
@@ -869,47 +865,6 @@ func (c *Client) rememberToolCallLocked(set map[string]struct{}, id string) {
 		}
 	}
 	set[id] = struct{}{}
-}
-
-// UploadArtifact implements POST /v1/environments/{environment_id}/artifacts (v1.1 §6.5) with
-// the current executor token. It must finish before a tool.result references
-// the artifact; the upload is idempotent by (session, digest).
-func (c *Client) UploadArtifact(ctx context.Context, sessionID, name, mimeType string, content []byte) (ArtifactRef, error) {
-	if len(content) > DefaultMaxArtifactBytes {
-		return ArtifactRef{}, fmt.Errorf("bmaexecutor: artifact is %d bytes, limit is %d", len(content), DefaultMaxArtifactBytes)
-	}
-	if c.options.EnvironmentID == "" {
-		return ArtifactRef{}, errors.New("bmaexecutor: artifact upload needs an environment-scoped executor (EnvironmentID)")
-	}
-	c.mu.Lock()
-	token := c.token.Token
-	c.mu.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.options.BaseURL+"/v1/environments/"+url.PathEscape(c.options.EnvironmentID)+"/artifacts", bytes.NewReader(content))
-	if err != nil {
-		return ArtifactRef{}, err
-	}
-	sum := sha256.Sum256(content)
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Content-Type", mimeType)
-	request.Header.Set(headerSessionID, sessionID)
-	request.Header.Set(headerArtifactDigest, "sha256:"+hex.EncodeToString(sum[:]))
-	request.Header.Set(headerArtifactName, name)
-	response, err := c.httpClient.Do(request)
-	if err != nil {
-		return ArtifactRef{}, err
-	}
-	defer response.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
-	if response.StatusCode != http.StatusCreated && response.StatusCode != http.StatusOK {
-		return ArtifactRef{}, fmt.Errorf("bmaexecutor: artifact upload returned %d", response.StatusCode)
-	}
-	var ref ArtifactRef
-	if err := json.Unmarshal(raw, &ref); err != nil {
-		return ArtifactRef{}, fmt.Errorf("bmaexecutor: decode artifact upload response: %w", err)
-	}
-	return ref, nil
 }
 
 // StaticToken is a TokenSource for a harness reached directly, typically a
