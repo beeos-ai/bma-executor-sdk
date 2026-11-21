@@ -207,6 +207,15 @@ func isParam(seg string) bool { return strings.HasPrefix(seg, "{") }
 
 func kebab(s string) string { return strings.ReplaceAll(s, "_", "-") }
 
+// flagName is the flag of a field or parameter: kebab-case without brackets,
+// which are no flag syntax and which zsh would glob (group_by[] -> group-by,
+// created_at[gte] -> created-at-gte).
+func flagName(s string) string {
+	s = strings.TrimSuffix(s, "[]")
+	s = strings.NewReplacer("[", "-", "]", "").Replace(s)
+	return kebab(s)
+}
+
 // subResource: a trailing segment after a parameter that the document lists
 // (GET of a list) or has items below.
 func (d *doc) subResource(path string) bool {
@@ -347,7 +356,7 @@ func (d *doc) hasCollection(version string, segs []string) bool {
 
 func (d *doc) flagParam(name, in string, s *schema, desc string, required bool) param {
 	s = d.resolve(s)
-	p := param{Name: name, Flag: kebab(name), In: in, Type: "json", Description: oneLine(desc), Required: required}
+	p := param{Name: name, Flag: flagName(name), In: in, Type: "json", Description: oneLine(desc), Required: required}
 	if s != nil {
 		if p.Description == "" {
 			p.Description = oneLine(s.Description)
@@ -420,7 +429,8 @@ func (d *doc) resolve(s *schema) *schema {
 }
 
 // flatten merges allOf into one object schema; a oneOf/anyOf body has no
-// field flags (it is given whole with --body).
+// field flags (it is given whole with --body), and an allOf part that is a
+// oneOf/anyOf adds none (its variants' fields go through --body).
 func (d *doc) flatten(s *schema) *schema {
 	s = d.resolve(s)
 	if s == nil || len(s.OneOf) > 0 || len(s.AnyOf) > 0 {
@@ -433,7 +443,7 @@ func (d *doc) flatten(s *schema) *schema {
 	for _, part := range s.AllOf {
 		f := d.flatten(part)
 		if f == nil {
-			return nil
+			continue
 		}
 		for k, v := range f.Properties {
 			out.Properties[k] = v

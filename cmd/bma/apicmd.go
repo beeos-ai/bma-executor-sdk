@@ -169,6 +169,18 @@ func buildRequest(op *apiOp, positional []string, body string, flag func(string)
 			return "", nil, nil, usageError(fmt.Sprintf("--%s must be one of %s", p.Flag, strings.Join(p.Enum, ", ")))
 		}
 		if p.In == "query" {
+			if p.Type == "json" { // an array is sent once per value
+				v, err := typed(p, raw)
+				if err != nil {
+					return "", nil, nil, err
+				}
+				if list, ok := v.([]any); ok {
+					for _, x := range list {
+						query.Add(p.Name, fmt.Sprint(x))
+					}
+					continue
+				}
+			}
 			query.Set(p.Name, raw)
 			continue
 		}

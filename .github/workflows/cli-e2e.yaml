@@ -1,14 +1,15 @@
 name: CLI e2e
 
-# The bma command line against BMA staging (tools/cli_e2e.sh). It needs the
-# staging acceptance key, so it runs only on main and by hand, in the
-# protected environment staging-e2e: never on pull requests (forks get no
-# secret, and no PR code runs with it).
+# The bma command line against BMA staging: every operation of the public
+# API, bma login (device grant), profiles, event streams, files, skills,
+# completion, docs and the BYO lifecycle (cmd/bma/e2e_test.go). It needs the
+# staging acceptance key and the staging dashboard test user, so it runs only
+# on main and by hand, in the protected environment staging-e2e: never on
+# pull requests (forks get no secret, and no PR code runs with it).
 on:
   push:
     branches: [main]
-    paths: ['cmd/bma/**', 'tools/cligen/**', 'tools/cli_e2e.sh', 'contracts/bma-api/**', 'go.mod', 'go.sum',
-      '.github/workflows/cli-e2e.yaml']
+    paths: ['cmd/bma/**', 'tools/cligen/**', 'contracts/bma-api/**', 'go.mod', 'go.sum', '.github/workflows/cli-e2e.yaml']
   workflow_dispatch:
 
 concurrency:
@@ -22,6 +23,7 @@ jobs:
   staging:
     name: bma CLI against staging
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     environment: staging-e2e
     steps:
       - name: Check out
@@ -33,10 +35,35 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Run tools/cli_e2e.sh
+      # bma up installs a systemd user unit: the runner user gets its user manager.
+      - name: Start the systemd user manager
+        run: |
+          sudo loginctl enable-linger "$USER"
+          uid="$(id -u)"
+          for _ in $(seq 1 30); do [ -S "/run/user/${uid}/bus" ] && break; sleep 1; done
+          echo "XDG_RUNTIME_DIR=/run/user/${uid}" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus" >> "$GITHUB_ENV"
+          sudo apt-get install -y -qq zsh fish >/dev/null
+
+      - name: go test -tags e2e
         env:
           BMA_API_KEY: ${{ secrets.BMA_STAGING_ACCEPTANCE_API_KEY }}
           BMA_BASE_URL: https://api.staging.beeos.ai
           # The Default workspace of the BMA Staging Ops organization (the key reaches two).
           BMA_WORKSPACE_ID: proj_agq4dohyvb2xni7qtoc23hqpg4
-        run: tools/cli_e2e.sh
+          BMA_E2E_AUTH_URL: https://dashboard-api.staging.beeos.ai
+          BMA_E2E_USER_EMAIL: ${{ secrets.BMA_STAGING_E2E_USER_EMAIL }}
+          BMA_E2E_USER_PASSWORD: ${{ secrets.BMA_STAGING_E2E_USER_PASSWORD }}
+          BMA_E2E_MACHINES: '1'
+          BMA_E2E_BYO: '1'
+          BMA_E2E_REPORT: ${{ runner.temp }}/cli-e2e-coverage.md
+          # Operations staging does not serve (organization webhooks are off in bma-automation;
+          # MCP OAuth authorizations are not implemented by bma-core): recorded as known-gap.
+          BMA_E2E_KNOWN_GAPS: >-
+            listWebhookEndpoints,createWebhookEndpoint,getWebhookEndpoint,updateWebhookEndpoint,deleteWebhookEndpoint,
+            regenerateWebhookEndpointSigningSecret,createMCPOAuthAuthorization,getMCPOAuthAuthorization,completeMCPOAuthAuthorization
+        run: go test -tags e2e -run TestE2E -timeout 40m -count=1 -v ./cmd/bma
+
+      - name: Coverage table
+        if: always()
+        run: cat "${RUNNER_TEMP}/cli-e2e-coverage.md" >> "$GITHUB_STEP_SUMMARY" || true

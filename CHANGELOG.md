@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.13.0
+
+- bma: the organization commands `organizations workspaces create|update`, `organizations invites create`,
+  `organizations api-keys update`, `organizations users update` and `organizations workspaces members create`
+  take their fields as flags (the public API document now carries their request bodies), and the admin
+  lists take `--limit`, `--before-id`, `--after-id` and their filters.
+- bma: flags of bracketed query parameters drop the brackets (`--group-by`, `--created-at-gte`; zsh globbed
+  the old `--group-by[]`), and an array value (`--group-by '[workspace_id, description]'`) is sent once per item.
+- bma: a body that is an `allOf` with variants (`machine-pools create`) offers its shared fields as flags.
+- bma: `go test -tags e2e ./cmd/bma` runs every API operation and hand-written command against a deployment
+  (CI: cli-e2e on main), replacing tools/cli_e2e.sh.
+
 ## 1.12.2
 
 - Same API as 1.12.1. The Go module retracts v0.0.0 to v1.12.1; npm and PyPI mark the
