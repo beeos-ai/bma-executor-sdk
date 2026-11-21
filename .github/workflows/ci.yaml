@@ -71,6 +71,7 @@ jobs:
       - name: Go
         run: |
           go vet ./...
+          go vet -tags e2e ./cmd/bma  # the staging e2e (cli-e2e.yaml) compiles on every PR
           go test -race ./...
 
       - name: TypeScript (with Go and Python interop)

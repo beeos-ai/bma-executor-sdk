@@ -1,6 +1,6 @@
 {
   "source_repository": "beeos-ai/beeos-managed-agents",
   "source_path": "api/openapi/bma.openapi.yaml",
-  "source_commit": "fdbd2af6539479973e0d37904e1c22804174f6ac",
-  "sha256": "a4673063673570d04a59e2ce2325e5f2e4b0db32af8a189d5cec8439a0edfaaa"
+  "source_commit": "e2fe05341f18a4629be9f157a7dd539a5321f8eb",
+  "sha256": "78d5db8f18febe2bf262700304260cb4b9d5bdfddb8634f2e97e9882ec0d3d81"
 }

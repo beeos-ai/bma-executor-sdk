@@ -3217,6 +3217,53 @@ paths:
         - organization.api_keys
       summary: List API Keys
       x-bma-extension: false
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Number of items per page.
+          schema:
+            type: number
+        - name: before_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: after_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: created_by_user_id
+          in: query
+          required: false
+          description: Filter by the ID of the User who created the object.
+          schema:
+            type:
+              - string
+              - "null"
+        - name: status
+          in: query
+          required: false
+          description: Filter by API key status.
+          schema:
+            type:
+              - string
+              - "null"
+            enum:
+              - active
+              - archived
+              - expired
+              - inactive
+              - null
+        - name: workspace_id
+          in: query
+          required: false
+          description: Filter by Workspace ID.
+          schema:
+            type:
+              - string
+              - "null"
       responses:
         "200":
           description: Success.
@@ -3284,6 +3331,28 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type:
+                    - string
+                    - "null"
+                  description: Name of the API key.
+                status:
+                  type:
+                    - string
+                    - "null"
+                  enum:
+                    - active
+                    - archived
+                    - inactive
+                    - null
+                  description: Status of the API key.
       responses:
         "200":
           description: Success.
@@ -3330,6 +3399,57 @@ paths:
         - organization.invites
       summary: List the organization's invites.
       x-bma-extension: false
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Number of items per page.
+          schema:
+            type: number
+        - name: before_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: after_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: email
+          in: query
+          required: false
+          description: Filter by the email address the Invite was sent to. Matches the same way as the Users list's `email` filter
+            (normalized, case-insensitive).
+          schema:
+            type: string
+        - name: roles
+          in: query
+          required: false
+          description: >-
+            Filter to items whose `role` equals one of the supplied values. Repeatable; values are OR'ed together.
+
+
+            Accepted values depend on the organization type: Console and API organizations accept `user`, `developer`,
+            `billing`, `admin`, and `claude_code_user`; Claude Enterprise organizations accept `user`, `owner`,
+            `primary_owner`, `membership_admin`, and `managed`.
+          schema:
+            type: array
+            items:
+              type: string
+        - name: statuses
+          in: query
+          required: false
+          description: Filter by Invite status. Repeatable; values are OR'ed together. Omit to return `pending`, `accepted`, and
+            `expired` Invites alike.
+          schema:
+            type: array
+            items:
+              type: string
+              enum:
+                - accepted
+                - expired
+                - pending
       responses:
         "200":
           description: Success.
@@ -3367,6 +3487,42 @@ paths:
         - organization.invites
       summary: Invite a user to join the organization by email.
       x-bma-extension: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  description: Email of the User.
+                role:
+                  type: string
+                  enum:
+                    - billing
+                    - claude_code_user
+                    - developer
+                    - managed
+                    - user
+                  description: >-
+                    Role for the invited User.
+
+
+                    The accepted values depend on the organization type. Console and API organizations accept `user`,
+                    `developer`, `billing`, and `claude_code_user`; `admin` cannot be assigned through the API. Claude
+                    Enterprise organizations accept `user` and `managed`; inviting with the `managed` role requires the
+                    `write:rbac_groups` scope in addition to `write:members`.
+                rbac_group_ids:
+                  type: array
+                  items:
+                    type: string
+                  description: RBAC group IDs to assign to the User when the Invite is accepted. A non-empty array is accepted only for a
+                    Claude Enterprise organization with RBAC groups, and requires the key to carry the
+                    `write:rbac_groups` scope.
+              required:
+                - email
+                - role
       responses:
         "200":
           description: Success.
@@ -3479,6 +3635,43 @@ paths:
         - organization.users
       summary: List the organization's members.
       x-bma-extension: false
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Number of items per page.
+          schema:
+            type: number
+        - name: before_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: after_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: email
+          in: query
+          required: false
+          description: Filter by user email.
+          schema:
+            type: string
+        - name: roles
+          in: query
+          required: false
+          description: >-
+            Filter to items whose `role` equals one of the supplied values. Repeatable; values are OR'ed together.
+
+
+            Accepted values depend on the organization type: Console and API organizations accept `user`, `developer`,
+            `billing`, `admin`, and `claude_code_user`; Claude Enterprise organizations accept `user`, `owner`,
+            `primary_owner`, `membership_admin`, and `managed`.
+          schema:
+            type: array
+            items:
+              type: string
       responses:
         "200":
           description: Success.
@@ -3546,6 +3739,31 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role:
+                  type: string
+                  enum:
+                    - billing
+                    - claude_code_user
+                    - developer
+                    - managed
+                    - user
+                  description: >-
+                    New role for the User.
+
+
+                    The accepted values depend on the organization type. Console and API organizations accept `user`,
+                    `developer`, `billing`, and `claude_code_user`; `admin` cannot be assigned through the API. Claude
+                    Enterprise organizations accept `user` and `managed`; changing a User's role to `managed` requires
+                    the `write:rbac_groups` scope in addition to `write:members`.
+              required:
+                - role
       responses:
         "200":
           description: Success.
@@ -3760,6 +3978,44 @@ paths:
         - organization.workspaces
       summary: List Workspaces
       x-bma-extension: false
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Number of items per page.
+          schema:
+            type: number
+        - name: before_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: after_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: ids
+          in: query
+          required: false
+          description: Only the Workspaces with these IDs, at most 100. `include_archived` and `include_default` still apply, and
+            IDs of Workspaces the caller can't list are left out.
+          schema:
+            type: array
+            items:
+              type: string
+        - name: include_archived
+          in: query
+          required: false
+          description: Whether to include Workspaces that have been archived in the response
+          schema:
+            type: boolean
+        - name: include_default
+          in: query
+          required: false
+          description: Whether to include the organization's default Workspace in the response
+          schema:
+            type: boolean
       responses:
         "200":
           description: Success.
@@ -3797,6 +4053,56 @@ paths:
         - organization.workspaces
       summary: Create Workspace
       x-bma-extension: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: Name of the Workspace.
+                data_residency:
+                  anyOf:
+                    - $ref: "#/components/schemas/DataResidencyCreateConfig"
+                    - type: "null"
+                  description: 'Data residency configuration for the workspace. If omitted, defaults to `workspace_geo: "us"`,
+                    `allowed_inference_geos: "unrestricted"`, and `default_inference_geo: "global"`.'
+                display_color:
+                  type:
+                    - string
+                    - "null"
+                  description: Hex color code representing the Workspace in the Anthropic Console.
+                external_key_id:
+                  type:
+                    - string
+                    - "null"
+                  description: "ID of the customer-managed encryption key (CMEK) configuration to use for this Workspace. Setting this
+                    field requires CMEK to be enabled for your organization. When set, data stored for this Workspace is
+                    encrypted with the referenced key. Create key configurations with the External Keys API. On Claude
+                    Platform on AWS the value for an AWS KMS key is the key's ARN, and your organization's own key must
+                    be a single-Region key in the same AWS account and Region as the Workspace. On that platform the key
+                    is validated against this Workspace when it is attached, so a key-policy problem is reported as an
+                    error on this request. This field is write-once: once a key is attached to a Workspace it cannot be
+                    detached or replaced. To rotate key material, rotate the underlying key on your cloud KMS; the
+                    `external_key_id` stays the same."
+                tags:
+                  anyOf:
+                    - type: object
+                      additionalProperties:
+                        type: string
+                    - type: "null"
+                  description: User-defined tags as string key-value pairs. Keys may not begin with `anthropic`.
+                user_profile_id:
+                  type:
+                    - string
+                    - "null"
+                  description: ID of a user profile to attach to the Workspace. Every inference request through the Workspace must then
+                    name this user profile; the API rejects a request that names none or a different one. The user
+                    profile can't be replaced or removed later; only deleting the user profile clears it.
+              required:
+                - name
       responses:
         "200":
           description: Success.
@@ -3844,6 +4150,50 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data_residency:
+                  anyOf:
+                    - $ref: "#/components/schemas/DataResidencyUpdateConfig"
+                    - type: "null"
+                  description: Data residency configuration for the workspace.
+                display_color:
+                  type: string
+                  description: Hex color code representing the Workspace in the Anthropic Console.
+                external_key_id:
+                  type: string
+                  description: "ID of the customer-managed encryption key (CMEK) configuration to use for this Workspace. Setting this
+                    field requires CMEK to be enabled for your organization. When set, data stored for this Workspace is
+                    encrypted with the referenced key. Create key configurations with the External Keys API. On Claude
+                    Platform on AWS the value for an AWS KMS key is the key's ARN, and your organization's own key must
+                    be a single-Region key in the same AWS account and Region as the Workspace. On that platform the key
+                    is validated against this Workspace when it is attached, so a key-policy problem is reported as an
+                    error on this request. This field is write-once: once a key is attached to a Workspace it cannot be
+                    detached or replaced. To rotate key material, rotate the underlying key on your cloud KMS; the
+                    `external_key_id` stays the same."
+                name:
+                  type: string
+                  description: Name of the Workspace.
+                tags:
+                  anyOf:
+                    - type: object
+                      additionalProperties:
+                        type:
+                          - string
+                          - "null"
+                    - type: "null"
+                  description: User-defined tags as string key-value pairs. Keys may not begin with `anthropic`.
+                user_profile_id:
+                  type: string
+                  description: ID of a user profile to attach to the Workspace. Every inference request through the Workspace must then
+                    name this user profile; the API rejects a request that names none or a different one. Once set, it
+                    can't be replaced or removed (sending the same ID again changes nothing); only deleting the user
+                    profile clears it. The default Workspace can't have a user profile.
       responses:
         "200":
           description: Success.
@@ -3892,6 +4242,22 @@ paths:
           required: true
           schema:
             type: string
+        - name: limit
+          in: query
+          required: false
+          description: Number of items per page.
+          schema:
+            type: number
+        - name: before_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: after_id
+          in: query
+          required: false
+          schema:
+            type: string
       responses:
         "200":
           description: Success.
@@ -3935,6 +4301,22 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id:
+                  type: string
+                  description: ID of the User.
+                workspace_role:
+                  $ref: "#/components/schemas/NoBillingWorkspaceRole"
+                  description: Role of the new Workspace Member. Cannot be `workspace_billing`.
+              required:
+                - user_id
+                - workspace_role
       responses:
         "200":
           description: Success.
@@ -13866,7 +14248,8 @@ components:
           type: object
           additionalProperties: true
         runtime_protection_enabled:
-          description: Whether BMA deletes this pool's machines when the provider remains running after the daemon becomes inactive.
+          description: When true, BMA removes a machine of this pool whose provider instance is still up once its daemon has gone
+            inactive.
           type: boolean
         max_total_machines:
           description: "Deprecated, not enforced: how many machines a pool has no longer blocks new machines. Organization and
@@ -13921,7 +14304,7 @@ components:
           minimum: 1
           maximum: 2147483647
         delete_after_idle_minutes:
-          description: Idle minutes before deleting a machine from this pool, or null when the pool default is unset.
+          description: Minutes a machine of this pool may sit idle before it is deleted; null when the pool sets no default.
           type:
             - integer
             - "null"
@@ -13960,7 +14343,7 @@ components:
         updated_at:
           $ref: "#/components/schemas/Timestamp"
         usage:
-          description: Current quota-consuming usage. Populated when the machine pool is returned by the list or get endpoint.
+          description: Quota currently consumed by the pool's machines. Present only on responses of the list and get operations.
           $ref: "#/components/schemas/MachinePoolUsage"
     EmbeddedMachinePoolID:
       description: Machine pool ID (mpo_...).
@@ -14883,7 +15266,8 @@ components:
           type: object
           additionalProperties: true
         runtime_protection_enabled:
-          description: Whether BMA deletes this pool's machines when the provider remains running after the daemon becomes inactive.
+          description: When true, BMA removes a machine of this pool whose provider instance is still up once its daemon has gone
+            inactive.
           type: boolean
         max_total_machines:
           description: "Deprecated, not enforced: how many machines a pool has no longer blocks new machines. Organization and
@@ -14938,7 +15322,7 @@ components:
           minimum: 1
           maximum: 2147483647
         delete_after_idle_minutes:
-          description: Idle minutes before deleting a machine from this pool, or null when the pool default is unset.
+          description: Minutes a machine of this pool may sit idle before it is deleted; null when the pool sets no default.
           type:
             - integer
             - "null"
@@ -14977,7 +15361,7 @@ components:
         updated_at:
           $ref: "#/components/schemas/Timestamp"
         usage:
-          description: Current quota-consuming usage. Populated when the machine pool is returned by the list or get endpoint.
+          description: Quota currently consumed by the pool's machines. Present only on responses of the list and get operations.
           $ref: "#/components/schemas/MachinePoolUsage"
       additionalProperties: false
     MachinePoolDeleted:
@@ -16824,10 +17208,10 @@ components:
         name:
           $ref: "#/components/schemas/ResourceName"
         description:
-          description: Optional description of the pool.
+          description: Free-text note describing what the pool is for.
           type: string
         default_machine_cpu:
-          description: Default CPU count for new machines in the pool.
+          description: Number of CPUs a newly created machine gets unless the request asks for another value.
           type:
             - integer
             - "null"
@@ -16835,7 +17219,7 @@ components:
           minimum: 1
           maximum: 2147483647
         default_machine_memory_mb:
-          description: Default memory in MB for new machines in the pool.
+          description: Memory in MB a newly created machine gets unless the request asks for another value.
           type:
             - integer
             - "null"
@@ -16856,20 +17240,21 @@ components:
           additionalProperties:
             $ref: "#/components/schemas/SecretID"
         default_machine_provider_options:
-          description: Provider-specific options applied to new machines in the pool.
+          description: Options passed to the machine provider for every machine the pool creates.
           type: object
           additionalProperties: true
         default_cwd:
-          description: Default working directory for processes on machines created from the pool after this change.
+          description: Working directory for processes of machines the pool creates from now on; existing machines keep theirs.
           type: string
         provider_config:
-          description: Provider-specific settings for the pool.
+          description: Settings the machine provider needs for this pool.
           type: object
           additionalProperties: true
         provider_auth_secret_id:
           $ref: "#/components/schemas/SecretID"
         runtime_protection_enabled:
-          description: Whether BMA should delete a pool machine when its provider remains running after its daemon becomes inactive.
+          description: Set true to have BMA remove a machine of this pool whose provider instance is still up after its daemon
+            went inactive.
           type: boolean
         max_total_machines:
           description: "Deprecated, not enforced: how many machines a pool has no longer blocks new machines. Organization and
@@ -16896,7 +17281,7 @@ components:
           minimum: 0
           maximum: 2147483647
         min_machine_cpu:
-          description: Smallest CPU count a single machine in the pool can use.
+          description: Lower bound on the CPU count of any one machine in the pool.
           type:
             - integer
             - "null"
@@ -16904,7 +17289,7 @@ components:
           minimum: 0
           maximum: 2147483647
         min_machine_memory_mb:
-          description: Smallest memory in MB a single machine in the pool can use.
+          description: Lower bound on the memory, in MB, of any one machine in the pool.
           type:
             - integer
             - "null"
@@ -16912,7 +17297,7 @@ components:
           minimum: 0
           maximum: 2147483647
         max_machine_cpu:
-          description: Largest CPU count a single machine in the pool can use.
+          description: Upper bound on the CPU count of any one machine in the pool.
           type:
             - integer
             - "null"
@@ -16920,7 +17305,7 @@ components:
           minimum: 1
           maximum: 2147483647
         max_machine_memory_mb:
-          description: Largest memory in MB a single machine in the pool can use.
+          description: Upper bound on the memory, in MB, of any one machine in the pool.
           type:
             - integer
             - "null"
@@ -16973,10 +17358,10 @@ components:
         agent_ids:
           $ref: "#/components/schemas/MachineAgentIDs"
         cwd:
-          description: Default working directory for processes started on the machine.
+          description: Directory in which processes on this machine start unless they name another.
           type: string
         env:
-          description: Environment variables set for processes started on the machine.
+          description: Variables exported into every process started on this machine.
           type: object
           additionalProperties:
             type: string

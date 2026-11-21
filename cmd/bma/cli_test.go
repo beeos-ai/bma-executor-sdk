@@ -117,6 +117,13 @@ func TestBuildRequestFillsPathQueryAndBody(t *testing.T) {
 	if m["name"] != "n" || m["count"] != float64(3) || fmt.Sprint(m["labels"]) != "[x y]" {
 		t.Fatalf("body %s", body)
 	}
+	// An array query parameter is sent once per value.
+	arr := &apiOp{Method: "GET", Path: "/v1/report", Params: []apiParam{
+		{Name: "group_by[]", Flag: "group-by", In: "query", Type: "json"}}}
+	_, q, _, err = buildRequest(arr, nil, "", func(string) (string, bool) { return "[workspace_id, description]", true })
+	if err != nil || q.Encode() != "group_by%5B%5D=workspace_id&group_by%5B%5D=description" {
+		t.Fatalf("array query %v, %v", q, err)
+	}
 	set["mode"] = "c"
 	if _, _, _, err := buildRequest(op, []string{"x"}, "", func(f string) (string, bool) { v, ok := set[f]; return v, ok }); exitCodeOf(err) != 2 {
 		t.Fatalf("an enum outside its values is a usage error: %v", err)
