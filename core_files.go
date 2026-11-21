@@ -164,8 +164,26 @@ func (s *CoreSession) withRoot(p string, write bool, fn func(root *os.Root, rel 
 
 func (c *Core) read(session *CoreSession, input ToolInput) (ToolResultParams, error) {
 	var result ToolResultParams
-	err := session.withRoot(input.Path, false, func(root *os.Root, rel string) error {
-		file, err := root.Open(rel)
+	err := c.withFileIdentity(func() error {
+		return session.withRoot(input.Path, false, func(root *os.Root, rel string) error {
+			file, err := root.Open(rel)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+			result, err = c.readFrom(file, input)
+			return err
+		})
+	})
+	return result, err
+}
+
+// readPath reads a file outside the workspace by its path (a session's own
+// output file, see LocalToolRoute) with the read tool's offset and limit.
+func (c *Core) readPath(p string, input ToolInput) (ToolResultParams, error) {
+	var result ToolResultParams
+	err := c.withFileIdentity(func() error {
+		file, err := os.Open(p)
 		if err != nil {
 			return err
 		}
@@ -174,17 +192,6 @@ func (c *Core) read(session *CoreSession, input ToolInput) (ToolResultParams, er
 		return err
 	})
 	return result, err
-}
-
-// readPath reads a file outside the workspace by its path (a session's own
-// output file, see LocalToolRoute) with the read tool's offset and limit.
-func (c *Core) readPath(p string, input ToolInput) (ToolResultParams, error) {
-	file, err := os.Open(p)
-	if err != nil {
-		return ToolResultParams{}, err
-	}
-	defer file.Close()
-	return c.readFrom(file, input)
 }
 
 func (c *Core) readFrom(file io.Reader, input ToolInput) (ToolResultParams, error) {
@@ -277,7 +284,15 @@ func (c *Core) edit(session *CoreSession, input ToolInput, commit fileCommit) (T
 	return textResult(false, "edited "+filepath.Base(input.Path)), nil
 }
 
-func (c *Core) glob(session *CoreSession, input ToolInput) (ToolResultParams, error) {
+func (c *Core) glob(session *CoreSession, input ToolInput) (result ToolResultParams, err error) {
+	err = c.withFileIdentity(func() (err error) {
+		result, err = c.globFiles(session, input)
+		return err
+	})
+	return result, err
+}
+
+func (c *Core) globFiles(session *CoreSession, input ToolInput) (ToolResultParams, error) {
 	if input.Pattern == "" {
 		return ToolResultParams{}, errors.New("glob requires pattern")
 	}
@@ -305,7 +320,15 @@ func (c *Core) glob(session *CoreSession, input ToolInput) (ToolResultParams, er
 	return textResult(false, strings.Join(matches, "\n")), nil
 }
 
-func (c *Core) grep(session *CoreSession, input ToolInput) (ToolResultParams, error) {
+func (c *Core) grep(session *CoreSession, input ToolInput) (result ToolResultParams, err error) {
+	err = c.withFileIdentity(func() (err error) {
+		result, err = c.grepFiles(session, input)
+		return err
+	})
+	return result, err
+}
+
+func (c *Core) grepFiles(session *CoreSession, input ToolInput) (ToolResultParams, error) {
 	if input.Pattern == "" {
 		return ToolResultParams{}, errors.New("grep requires pattern")
 	}

@@ -111,3 +111,61 @@ func TestCoreRunAsWritesAndEditsAsWorkload(t *testing.T) {
 		}
 	})
 }
+
+// TestCoreRunAsReadsGlobsAndGrepsAsWorkload: read, glob and grep act with the
+// workload's file identity, so they see what bash sees and nothing more.
+func TestCoreRunAsReadsGlobsAndGrepsAsWorkload(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("switching to another uid needs root")
+	}
+	base, err := os.MkdirTemp("", "file-identity-")
+	noErr(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	noErr(t, os.Chmod(base, 0o755))
+	workspace := filepath.Join(base, "workspace")
+	noErr(t, os.MkdirAll(workspace, 0o755))
+	runAs := workloadUser
+	core := newTestCore(t, CoreOptions{WorkRoot: base, Workspace: func(string, string) string { return workspace }, RunAs: &runAs})
+	b := attachBrain(t, core, "local")
+	session := readySession(t, b, SessionAssignParams{SessionID: "sess_files", Lease: Lease{Token: "lease"}})
+	call := func(tool string, input ToolInput) ToolResultParams {
+		t.Helper()
+		result, err := session.CallTool(testContext(t), ToolCallParams{Tool: tool, Input: NewToolInput(input)})
+		noErr(t, err)
+		return result
+	}
+	// A workload-owned 0600 file is readable by the workload.
+	owned := filepath.Join(workspace, "owned")
+	noErr(t, os.WriteFile(owned, []byte("needle in owned\n"), 0o600))
+	noErr(t, os.Chown(owned, int(runAs.UID), int(runAs.GID)))
+	// A file only the executor may read stays unreadable to the workload.
+	private := filepath.Join(workspace, "private")
+	noErr(t, os.WriteFile(private, []byte("needle in private\n"), 0o600))
+	// Supplementary group access is the workload's.
+	grouped := filepath.Join(workspace, "grouped")
+	noErr(t, os.WriteFile(grouped, []byte("needle in grouped\n"), 0o640))
+	noErr(t, os.Chown(grouped, 0, 65533))
+
+	if result := call(ToolNameRead, ToolInput{Path: "owned"}); result.IsError || !strings.Contains(textOf(result), "needle in owned") {
+		t.Fatalf("read owned: %+v", textOf(result))
+	}
+	if result := call(ToolNameRead, ToolInput{Path: "grouped"}); result.IsError || !strings.Contains(textOf(result), "needle in grouped") {
+		t.Fatalf("read grouped: %+v", textOf(result))
+	}
+	if result := call(ToolNameRead, ToolInput{Path: "private"}); !result.IsError || !strings.Contains(textOf(result), "permission denied") {
+		t.Fatalf("read private: %+v", textOf(result))
+	}
+	if result := call(ToolNameGlob, ToolInput{Pattern: "*"}); result.IsError || !strings.Contains(textOf(result), "owned") {
+		t.Fatalf("glob: %+v", textOf(result))
+	}
+	result := call(ToolNameGrep, ToolInput{Pattern: "needle"})
+	if result.IsError || !strings.Contains(textOf(result), "owned:1:needle in owned") ||
+		!strings.Contains(textOf(result), "grouped:1:") || strings.Contains(textOf(result), "private:") {
+		t.Fatalf("grep: %+v", textOf(result))
+	}
+	// Workspace confinement still rejects a link out of it.
+	noErr(t, os.Symlink(private, filepath.Join(workspace, "link")))
+	if result := call(ToolNameRead, ToolInput{Path: "link"}); !result.IsError {
+		t.Fatal("read followed a link out of the workspace")
+	}
+}
