@@ -1,6 +1,6 @@
 {
-  "source_repository": "beeos-ai/bma-sdk",
-  "source_path": "contracts/bma/v3/extensions.openapi.yaml",
-  "source_commit": "803884d1bab2c8a1dff2f435436a97cdfdb15ebd",
-  "sha256": "698e5f860b106fe8dfeb4273fb995c27d5f9b29590d3b535fa91574b57754206"
+  "source_repository": "beeos-ai/beeos-managed-agents",
+  "source_path": "api/openapi/bma.openapi.yaml",
+  "source_commit": "fdbd2af6539479973e0d37904e1c22804174f6ac",
+  "sha256": "a4673063673570d04a59e2ce2325e5f2e4b0db32af8a189d5cec8439a0edfaaa"
 }
