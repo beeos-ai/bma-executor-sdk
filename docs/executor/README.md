@@ -60,14 +60,14 @@ Status labels used across these documents:
 
 | Shape | Executor process | Credential | Connects to | Status |
 | --- | --- | --- | --- | --- |
-| Cloud sandbox (pooled machines) | the machine template runs `bmad executor` | machine daemon token | BMA API `/api/v1/executors/*` | [Available] |
-| BYO machine | `bmad`: the default service still runs the legacy daemon socket; `bmad executor` is the explicit Executor Protocol entry point | machine daemon token | BMA API `/api/v1/executors/*` | [Available] |
+| Cloud sandbox (pooled machines) | the machine template runs `bmad executor` | machine daemon token | executor host `/v1/executors/*` | [Available] |
+| BYO machine | `bmad`: the default service still runs the legacy daemon socket; `bmad executor` is the explicit Executor Protocol entry point | machine daemon token | executor host `/v1/executors/*` | [Available] |
 | Embedded in a desktop app (option B) | the app is the executor via the SDK (`Client` + `Core` + `NewProcessCapability`) | machine token from pairing | BMA API | [Available] with the Go SDK |
 | Selfhost worker | the selfhost worker | environment key | Managed Agents API `/v1/executors/*` | [Available] |
 
 Two server paths:
 
-- **Machine path**: the BMA API at `/api/v1/executors/{token,channel}`. A machine-token JWT only allows the `control` channel; the connection becomes the machine's daemon runtime and platform `run_command`/process tools run through `process.*`.
+- **Machine path**: the executor host at `/v1/executors/{token,channel}`. A machine-token JWT only allows the `control` channel; the connection becomes the machine's daemon runtime and platform `run_command`/process tools run through `process.*`.
 - **Environment path (selfhost)**: the Managed Agents API at `/v1/executors/*`. An environment-key JWT allows `control` + `mcp`; the work queue dispatches "one work item = one one-shot session + one `tool.call`".
 
 ---

@@ -33,8 +33,8 @@ The machine-readable contract is in this repository: [`executor.openrpc.yaml`](.
 
 | Path | Machine path (bma-api) | Environment path (managed-agents) |
 | --- | --- | --- |
-| token | `POST /api/v1/executors/token` | `POST /v1/executors/token` |
-| channel | `GET /api/v1/executors/channel` (WebSocket) | `GET /v1/executors/channel` |
+| token | `POST /v1/executors/token` | `POST /v1/executors/token` |
+| channel | `GET /v1/executors/channel` (WebSocket) | `GET /v1/executors/channel` |
 | artifacts | — | `POST /v1/executors/artifacts`, `GET /v1/executors/artifacts/{id}` |
 
 Since 1.2.0 the executor host serves the same operations on the executor's own resource; the id in the path must equal the credential's machine or environment, otherwise 404. `machine_id` comes from `BMA_MACHINE_ID`. The paths above stay as aliases until contract 2.0.
@@ -46,12 +46,12 @@ Since 1.2.0 the executor host serves the same operations on the executor's own r
 | artifacts | — | `POST /v1/environments/{environment_id}/artifacts` |
 | bma-file | `/v1/machines/{machine_id}/fs/<op>` | — |
 
-bma-api mounts them only when the executor token secret is configured. `bmad executor --executor-url` takes the origin including `/api`, for example `https://api.bma.beeos.ai/api`.
+bma-api mounts them only when the executor token secret is configured.
 
 ### 2.2 Token exchange: `POST …/v1/executors/token`
 
 ```http
-POST /api/v1/executors/token
+POST /v1/executors/token
 Authorization: Bearer <machine daemon token or environment key>
 Content-Type: application/json
 
@@ -65,7 +65,7 @@ Response:
 
 ```json
 {"executor_id": "exec_<machine uuid>", "token": "<jwt>", "expires_in": 299,
- "ws_url": "wss://api.bma.beeos.ai/api/v1/executors/channel", "channel_scope": ["control"]}
+ "ws_url": "wss://executor.beeos.ai/v1/executors/channel", "channel_scope": ["control"]}
 ```
 
 | Credential | `executor_id` | `channel_scope` | Key JWT claims |
@@ -79,7 +79,7 @@ JWT: HS256, `iss=bma`, `aud=bma.executor.v1` (both versions), `nbf=now-5s`, 5-mi
 ### 2.3 Opening the channel
 
 ```http
-GET /api/v1/executors/channel?channel=control
+GET /v1/executors/channel?channel=control
 Sec-WebSocket-Protocol: bma.executor.v1.1
 Authorization: Bearer <jwt>
 ```
