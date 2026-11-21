@@ -34,11 +34,8 @@ const (
 	coreMCPUnavailableAfter      = 5
 	coreMCPHealthyRun            = time.Second
 	maxGrepMatches               = 200
-	previewBytes                 = 8 * 1024
 	maxEnvEntries                = 64
 	maxEnvTotalBytes             = 16 * 1024
-	// DefaultMaxArtifactBytes bounds one artifact upload (v1.1 §6.5).
-	DefaultMaxArtifactBytes = 16 * 1024 * 1024
 )
 
 var safeName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
@@ -91,8 +88,7 @@ type CoreOptions struct {
 	// MaxOutputBytes caps each captured bash stream (default 1 MiB).
 	MaxOutputBytes int
 	// InlineResultBytes is the largest bash output returned inline (default
-	// 48 KiB, under the 64 KiB control frame). Larger output is uploaded as
-	// an artifact when UploadArtifacts is set, otherwise truncated.
+	// 48 KiB, under the 64 KiB control frame). Larger output is truncated.
 	InlineResultBytes int
 	// ComputerUse serves computer_observe and computer_action and advertises
 	// capabilities.computer_use (for example NewCuaDriver). Nil leaves
@@ -105,10 +101,6 @@ type CoreOptions struct {
 	// a note that the model cannot read images. Nil, or
 	// ComputerVisionUnknown, sends the screenshot.
 	ComputerVision func(ctx context.Context, q ComputerVisionQuery) ComputerVisionAnswer
-	// UploadArtifacts advertises the artifacts capability and offloads large
-	// bash results with Client.UploadArtifact. Only environment-scoped
-	// executors have an artifact store.
-	UploadArtifacts bool
 	// Env is set on every bash tool and process and cannot be overridden by
 	// a request (for example BMA_HOME).
 	Env map[string]string
@@ -413,9 +405,6 @@ func (c *Core) Capabilities() Capabilities {
 		MCP:   &MCPCapability{Stdio: true, SecretEnv: true, MaxServers: c.opts.MaxMCPServersPerSession},
 	}
 	capabilities.ComputerUse = c.opts.ComputerUse != nil
-	if c.opts.UploadArtifacts {
-		capabilities.Artifacts = &ArtifactCapability{Upload: true, MaxBytes: DefaultMaxArtifactBytes}
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, capability := range c.capabilities {
@@ -1263,32 +1252,12 @@ func (c *Core) bashResult(ctx context.Context, session *CoreSession, params Tool
 	if size <= inline {
 		return ToolResultParams{Outcome: ToolOutcomeSucceeded, Content: content}
 	}
-	if !c.opts.UploadArtifacts {
-		return ToolResultParams{Outcome: ToolOutcomeSucceeded, Content: []ContentBlock{
-			{Type: ContentBlockTypeText, Text: truncate(execution.Stdout, inline/2)},
-			{Type: ContentBlockTypeText, Text: truncate(execution.Stderr, inline/4)},
-			{Type: ContentBlockTypeText, Text: fmt.Sprintf("exit_code: %d (output truncated to fit the result; %d bytes total)",
-				execution.ExitCode, len(execution.Stdout)+len(execution.Stderr))},
-		}}
-	}
-	full, err := json.Marshal(execution)
-	if err != nil {
-		return failedToolResult(params, "encode bash result: "+err.Error())
-	}
-	ref, err := session.client.UploadArtifact(ctx, session.key.session, "bash-"+params.ToolCallID+".json", "application/json", full)
-	if err != nil {
-		return failedToolResult(params, "upload bash result artifact: "+err.Error())
-	}
-	return ToolResultParams{
-		Outcome: ToolOutcomeSucceeded,
-		Content: []ContentBlock{
-			{Type: ContentBlockTypeText, Text: truncate(execution.Stdout, previewBytes)},
-			{Type: ContentBlockTypeText, Text: fmt.Sprintf("exit_code: %d (output truncated; full result in artifact %s, %d bytes)",
-				execution.ExitCode, ref.ArtifactID, ref.SizeBytes)},
-			NewArtifactContentBlock(ref),
-		},
-		Artifacts: []ArtifactRef{ref},
-	}
+	return ToolResultParams{Outcome: ToolOutcomeSucceeded, Content: []ContentBlock{
+		{Type: ContentBlockTypeText, Text: truncate(execution.Stdout, inline/2)},
+		{Type: ContentBlockTypeText, Text: truncate(execution.Stderr, inline/4)},
+		{Type: ContentBlockTypeText, Text: fmt.Sprintf("exit_code: %d (output truncated to fit the result; %d bytes total)",
+			execution.ExitCode, len(execution.Stdout)+len(execution.Stderr))},
+	}}
 }
 
 func truncate(value string, limit int) string {

@@ -168,7 +168,7 @@ bma-executor-sdk（Go）
 | `terminal.*`（PTY） | v1.1 | 已有 | 已有（非 Windows） | 无辅助实现 |
 | `skill.install` | v1.1 | 已有 | 已有（机器路径） | 已有（`NewSkillInstallCapability`） |
 | 文件传输 / Git 凭据（`process.start` 附加字段） | v1.1 | 已有 | 已有（机器路径） | 已有（`ProcessOptions` 钩子） |
-| 产物上传 `POST /v1/executors/artifacts` | v1.1 | environment 路径已有 | environment 路径已有 | 已有（`Client.UploadArtifact`） |
+| 产物上传 `POST /v1/executors/artifacts` | v1.1 | environment 路径已有 | environment 路径已有 | 无上传 helper |
 | MCP 通道（`channel=mcp`） | v1 | 服务端通道已有（environment 路径）；平台 harness 尚未在生产路径向 executor 派发 MCP server | 未实现 | `OpenMCPChannel` 与 `Core` stdio supervisor |
 | session files（`/mnt/session/uploads\|outputs`） | 机器 token HTTP 路由 | 已有 | 已有 | — |
 | 执行端声明的会话文件根（`capabilities.session_files.root`，`<root>/<会话>/{uploads,outputs}`） | v1.1 附加 | 待上线（#411 F2） | 否（保持 `/mnt/session`） | 1.1：`ProcessOptions.SessionFiles`（TS/Python：声明能力，自行同步） |
