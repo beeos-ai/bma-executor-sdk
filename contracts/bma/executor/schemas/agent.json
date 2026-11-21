@@ -1,0 +1,1400 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.bma.beeos.ai/schemas/agent.json",
+  "title": "BMA agent executor types",
+  "description": "Agent executor capability: the platform sends natural-language turns to an executor that runs a complete agent (model loop and tools) locally, and the executor streams Anthropic Managed Agents events back. See docs/architecture/executor-agent-capability.zh-CN.md.",
+  "$defs": {
+    "AgentCapability": {
+      "type": "object",
+      "description": "agent capability. Present with enabled=true when the executor runs a complete agent and accepts turn.start, turn.input, turn.cancel, session.close and interaction.response (and agent.custom_tool_result when custom_tools is true).",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "models": {
+          "type": "array",
+          "description": "Models the local agent can run. An empty list means the executor picks its own model and ignores AgentTurnConfig.model.",
+          "items": {
+            "$ref": "agent.json#/$defs/AgentModel"
+          }
+        },
+        "permission_modes": {
+          "type": "array",
+          "description": "Permission mode ids the local agent understands, for example default, accept_edits, plan, bypass_permissions. The executor defines the ids; the platform only passes one back in AgentTurnConfig.permission_mode.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "interaction_kinds": {
+          "type": "array",
+          "description": "Interaction kinds the executor may open with interaction.request.",
+          "items": {
+            "$ref": "agent.json#/$defs/InteractionKind"
+          }
+        },
+        "file_inputs": {
+          "type": "boolean",
+          "description": "The executor fetches the bytes of the file blocks (file_id) of turn.start and turn.input itself. Declare it only when it can: through the tools endpoint of the turn (tools_mcp_url and tools_mcp_token in turn.start metadata, GET <tools_mcp_url without /mcp>/files/<file_id>/content), or, on a machine daemon token, through the turn input files routes (GET /v1/machines/{machine_id}/sessions/{session_id}/turns/{turn_id}/input_files and .../{file_id}/content, docs/architecture/executor-turn-input-files.md). Together with the agent accepting images (harness.image_inputs) it is what lets the platform accept an image input for the agent: without it the input is refused with 400, with it the platform sends the file blocks and never refuses an image the agent accepts. Absent means false."
+        },
+        "input_by_reference": {
+          "type": "boolean",
+          "description": "Contract 1.7.0. The executor fetches a turn input the platform does not inline: when turn.start or turn.input would serialize to more than 48 KiB (the 64 KiB control frame limit with headroom), its input is a single input_ref block (AgentInputBlock type input_ref: input_id, size_bytes, sha256) instead of the blocks, and the executor reads them with its machine credential: GET /v1/machines/{machine_id}/inputs/{input_id} on the executor domain answers 200 with the AgentInputBlock array the input would have carried (404 unless the input belongs to a session of the credential's machine; readable until its turn ends). The executor checks size_bytes and sha256 and handles the blocks exactly as if they had come inline. Declare it only when it can make that request. Without it such an input ends its turn: session.error (bma_error_code input_too_large, not retried) and the turn fails; the platform never retries a request that cannot fit. Absent means false."
+        },
+        "steering": {
+          "type": "boolean",
+          "description": "Contract 1.25.0. The local agent takes a turn.input at the running turn's next step boundary: after the results of the tool calls of its current step and before its next model request, so the input can change what the agent does next in the same turn. When the model answers without a tool call, the agent reads an input that arrived meanwhile before it ends the turn; once it ends the turn it answers a later turn.input -32013 conflict. The platform admits a steering user.message (bma_delivery_mode steering) only for a brain that declares it. Absent means false: turn.input is taken after the running prompt ends."
+        },
+        "max_sessions": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Turns the executor runs at once. A turn.start while that many turns are running answers -32009 executor_busy (retryable). A session with no running turn holds no slot; an executor may release the local resources of its least recently used idle sessions and load them again from executor_session_ref on the next turn.start."
+        },
+        "turn_resume": {
+          "type": "boolean",
+          "description": "The executor keeps the state of its turns across a process restart. When it registers again without a session whose turn was running, the platform starts the same turn again in a new event epoch (turn.start with the same turn_id, input_id and executor_session_ref, then the turn.input the turn already received) and the executor continues the turn from its own state. Without it such a turn ends failed (session.error, session.status_idle retries_exhausted) and is not sent again: an executor without that state would run the turn again from its opening input and repeat tool calls whose effects already happened."
+        },
+        "platform_credentials": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "brain_tools",
+              "harness_model"
+            ]
+          },
+          "description": "Per-turn credentials the executor asks the platform to hand it in turn.start metadata: brain_tools (tools_mcp_url, tools_mcp_token: the session's tools endpoint) and harness_model (model_base_url, model_token: the session's model endpoint; optionally model_context_window and model_max_output_tokens, positive integer strings: the resolved model's context window and output ceiling, absent when the platform has no catalog entry for the model, in which case the executor uses its own defaults). A declaration only states what the executor can use; the platform decides by the executor's identity: a platform service executor gets what it declares; on a platform-managed pool machine an ACP harness turn gets harness_model by default, without a declaration; a BYO machine gets harness_model only when it declares it, and an undeclared BYO machine gets nothing, so it keeps using the model endpoint configured on it and the platform never overrides that upstream. brain_tools (contract 1.4.0) is handed to a tenant executor only when the session binds this machine as the brain machine and a different machine as the hands machine (brain and hands apart, ADR-0029) and the executor declared brain_tools; the token is bound to the org, the session, the turn, this machine and the brain epoch of the turn (the event epoch of the turn.start that carries it), so a turn started again in a new epoch gets a new token and calls made with the previous epoch's token are refused. When one machine is both brain and hands nothing is handed (the executor runs its tools itself); a platform service executor and an executor that did not declare brain_tools never get it. Until contract 1.4.0 brain_tools was never handed to a tenant executor. The harness_model token is a bma-model token bound to the turn's org, session, turn and machine (model_base_url is the machine's proxy path). Tokens are computed for each turn.start, are valid until the turn ends, and are never stored."
+        },
+        "custom_tools": {
+          "type": "boolean",
+          "description": "The executor runs custom tools defined by the platform agent: it emits agent.custom_tool_use for a call to one and waits for agent.custom_tool_result. The platform sends the definitions of the turn's agent with every turn.start (AgentTurnConfig.custom_tools, contract 1.7.0) and only to an executor that declares this member. Without it the platform never sends agent.custom_tool_result and answers a user.custom_tool_result for the session with an error; a turn of an agent that has custom tools sent to an executor without it ends failed with session.error (bma_error_code custom_tools_unsupported), never with the tools silently dropped."
+        },
+        "host_tools": {
+          "type": "boolean",
+          "description": "Contract 1.8.0. The executor's brain offers the model the host tools a turn.start declares (AgentTurnConfig.host_tools) and runs them through the turn's tools endpoint. Without it the platform does not send host_tools, and a session whose hands machine has computer use gets no computer use tools from this brain. Absent means false."
+        },
+        "mcp_tools": {
+          "type": "boolean",
+          "description": "Contract 1.14.0. The executor's brain offers the model the MCP tools a turn.start declares (AgentTurnConfig.mcp_tools), runs them through the turn's tools endpoint under their name, and reports each call as agent.mcp_tool_use and agent.mcp_tool_result (not agent.tool_use). Without it the platform does not send mcp_tools, and a turn of an agent whose mcp_toolset enables tools, sent with tools_mcp_* to this executor, ends failed with session.error (bma_error_code mcp_tools_unsupported), never with the tools silently dropped. An executor that runs its tools itself (no tools_mcp_* in turn.start) is never sent the agent's MCP tools, declared or not, and its turns run without them. Absent means false."
+        },
+        "harness": {
+          "$ref": "agent.json#/$defs/AgentHarnessCapability",
+          "description": "Deprecated: one hosted agent. Use harnesses; an executor that sets both lists this one in harnesses too."
+        },
+        "harnesses": {
+          "type": "array",
+          "items": {
+            "$ref": "agent.json#/$defs/AgentHarnessCapability"
+          },
+          "description": "Every third-party agent the executor can host, by distinct id (for example dsh and claude-code). The platform picks one per turn with AgentTurnConfig.harness; an executor declares only agents that are installed and passed their self-check."
+        },
+        "input_skills": {
+          "type": "boolean",
+          "description": "Accepts exact, input-bound selected skill documents and reports their installed versions in TurnStartResult.effective.input_skill_receipt. Absent or false: do not send selected skills."
+        },
+        "working_log": {
+          "type": "boolean",
+          "description": "Contract 1.22.0. The executor keeps its working log of a session (the events it forwards, its local markers, its copy of the inputs, the highest local sequence the platform acknowledged) on the platform with working_log.read and working_log.append instead of its own disk, so that any instance of a brain fleet can go on with the session (ADR-0083). Informational: the platform serves the methods to the session's brain whether or not it declares the member."
+        },
+        "context_maintenance": {
+          "type": "boolean",
+          "description": "Contract 1.19.0. Explicit idle session.compact and session.compact_cancel with durable versioned receipts. Absent means unsupported. The executor reserves the session independently of ordinary turns, preserves original history, and publishes replacement context only after durable success. It must not declare this before the complete maintenance contract is implemented."
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": true
+    },
+    "AgentHarnessCapability": {
+      "type": "object",
+      "description": "What the third-party agent the executor hosts (for example an ACP agent) supports; an omitted boolean is false. Sent with executor.capabilities.update once the agent has started; absent until then and after a reconnect until the next turn. Informational: the platform records it and reflects it in the session harness capabilities.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Agent profile id, for example dsh."
+        },
+        "version": {
+          "type": "string",
+          "description": "Installed agent package version."
+        },
+        "protocol": {
+          "type": "string",
+          "description": "Protocol the executor speaks to the agent, for example acp/1."
+        },
+        "agent_name": {
+          "type": "string",
+          "description": "Name the agent reported about itself (ACP initialize agentInfo.name)."
+        },
+        "agent_version": {
+          "type": "string",
+          "description": "Version the agent reported about itself (ACP initialize agentInfo.version); may differ from version."
+        },
+        "streaming": {
+          "type": "string",
+          "enum": [
+            "token",
+            "committed"
+          ],
+          "description": "token: agent.message and agent.thinking stream as deltas. committed: each message arrives whole once the agent committed it."
+        },
+        "session_resume": {
+          "type": "boolean",
+          "description": "A conversation continues in a new agent process (ACP session/resume)."
+        },
+        "session_load": {
+          "type": "boolean",
+          "description": "A conversation can be reloaded with its history replayed (ACP session/load)."
+        },
+        "image_inputs": {
+          "type": "boolean",
+          "description": "The agent accepts image input."
+        },
+        "permission_relay": {
+          "type": "string",
+          "enum": [
+            "full",
+            "escalation_only",
+            "none"
+          ],
+          "description": "Which tool calls reach interaction.request. full: every call the agent's policy asks about. escalation_only: only calls that leave the agent's own sandbox; calls inside it (including workspace writes) are never asked. none: the agent never asks, so platform approval covers no tool call."
+        },
+        "structured_errors": {
+          "type": "boolean",
+          "description": "The agent reports typed errors; false means session.error carries agent_error with the agent's text."
+        },
+        "usage": {
+          "type": "string",
+          "enum": [
+            "tokens",
+            "context_only"
+          ],
+          "description": "tokens: the agent reports token usage. context_only: it reports context window occupancy only; usage is metered by the model proxy."
+        },
+        "model_credentials": {
+          "type": "string",
+          "enum": [
+            "platform",
+            "owner"
+          ],
+          "description": "Whose model access the agent uses. platform (or absent): the platform's model endpoint and per-turn credentials (platform_credentials harness_model), models from the platform catalog. owner: only the machine owner's own credentials configured on the machine; the platform never hands this harness harness_model credentials, never routes it through its model proxy and does not bill its model usage; the session's model must be one of this harness's models."
+        },
+        "models": {
+          "type": "array",
+          "description": "The models this agent offers when model_credentials is owner (for example the Claude Code model IDs), each with its thinking levels. The platform accepts AgentTurnConfig.model and thinking_level for a session on this harness only from this list and passes them unchanged. Ignored for model_credentials platform.",
+          "items": {
+            "$ref": "agent.json#/$defs/AgentModel"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "additionalProperties": true
+    },
+    "AgentModel": {
+      "type": "object",
+      "description": "One model the local agent can run.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "thinking_levels": {
+          "type": "array",
+          "description": "Thinking or reasoning-effort levels the model accepts, lowest first. Use the reasoning effort values of the model APIs: none, minimal, low, medium, high, xhigh, max (OpenAI reasoning_effort; Claude Code effort levels are low, medium, high, xhigh, max). An executor that drives an OpenAI-compatible endpoint sends the level as reasoning_effort unchanged. Empty or absent: the model takes no level and AgentTurnConfig.thinking_level is not applied.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "default_thinking_level": {
+          "type": "string",
+          "description": "Level applied when the turn names none; one of thinking_levels. Absent: no level is sent and the model uses its own default."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": true
+    },
+    "AgentTurnConfig": {
+      "type": "object",
+      "description": "Requested (turn.start) or effective (TurnStartResult.effective) turn configuration. Every member is optional in a request; the executor reports the values it actually applied.",
+      "properties": {
+        "model": {
+          "type": "string",
+          "description": "Model the turn runs on. When the capability lists models it must be one of models[].id: an executor answers any other with -32602 invalid params and never substitutes another model. When the capability lists no models the executor picks its own model and ignores this member; effective then reports the model it used."
+        },
+        "thinking_level": {
+          "type": "string",
+          "description": "Reasoning effort of the turn: one of the thinking_levels of the turn's model (AgentModel). Absent: the model's default_thinking_level, or none. A level the model does not list answers -32602 invalid params; for a model that lists no levels the member is ignored and effective omits it."
+        },
+        "permission_mode": {
+          "type": "string",
+          "description": "One of the capability permission_modes. Absent: the executor's default mode. turn.start metadata tool_policy, when present, refines the permission of single tools on top of the mode."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Working directory on the executor host. The executor rejects a directory outside its allowed roots with -32001 forbidden. When turn.start metadata carries tools_mcp_* (brain and hands on different machines, contract 1.4.0) cwd is a path on the hands machine: the executor does not check it against its own allowed roots and does not create a workspace for it on this machine; the hands machine's own policy applies when a tool runs there."
+        },
+        "environment_info": {
+          "$ref": "agent.json#/$defs/EnvironmentInfo",
+          "description": "Contract 1.4.0, optional. Sent only when brain and hands are on different machines (turn.start metadata carries tools_mcp_*): describes the hands machine, so the brain can tell the model where its tools run. Omitted when brain and hands are the same machine, and absent from TurnStartResult.effective."
+        },
+        "system": {
+          "type": "string",
+          "description": "Extra system instructions from the platform agent definition."
+        },
+        "host_tools": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "$ref": "agent.json#/$defs/HostTool"
+          },
+          "description": "Contract 1.8.0. Requested only, sent only to an executor that declared agent.host_tools and only with tools_mcp_* in metadata. Tools of the session's hands machine the brain offers the model next to its own tools: computer_observe and computer_action when the hands machine declared computer_use, absent otherwise (absent = none, so a session without a desktop never sees them). Every entry is offered under its name and input_schema exactly, and runs like the brain's other tools through tools_mcp_url under that name. Its permission is metadata tool_policy[name] when present, else the entry's permission: an ask call is approved once per call (interaction kind permission, the brain's deterministic interaction id). A tool result image (an image content block of the tools endpoint answer) reaches the model with that result as an image and is never written to a session event (agent.tool_result carries the text only); the brain keeps the images of the session's such calls in memory and prunes them in batches: once more than 28 calls have images, the oldest 25 drop together (keep 3, interval 25), so the request prefix stays unchanged between two prunes (pruned calls, and every call after a brain restart, keep their text). An invalid entry (a name that is not one of these two tools, a repeated name, a missing description, an input_schema that is not an object schema, a permission other than allow or ask) answers -32602 invalid params. The set may differ from turn to turn; a turn sees the set of its own turn.start."
+        },
+        "mcp_tools": {
+          "type": "array",
+          "maxItems": 512,
+          "items": {
+            "$ref": "agent.json#/$defs/McpToolDefinition"
+          },
+          "description": "Contract 1.14.0. Requested only, sent only to an executor that declared agent.mcp_tools and only with tools_mcp_* in metadata (omitted when the turn has none). The enabled tools of the MCP servers of the turn's agent version (official mcp_servers with an mcp_toolset): the platform connects each server with its credential (the server's bma_auth, else the session's vaults), lists its tools when the turn starts and evaluates the mcp_toolset permission of each. The brain offers every entry to the model under name with input_schema exactly, next to its own tools, and runs a call like its other tools through tools_mcp_url under that name; the brain never connects an MCP server itself and never sees its credential. A server that could not be listed contributes no entry; the platform reports it as session.error (mcp_connection_failed_error or mcp_authentication_failed_error) and the turn goes on. A name that collides with one of the brain's own tools answers -32602 invalid params. The set may differ from turn to turn; a turn sees the set of its own turn.start."
+        },
+        "harness": {
+          "type": "string",
+          "description": "Id of the hosted agent (one of the capability harnesses[].id) the turn runs on. Omitted: the executor's only harness. An id the executor does not host answers -32012 capability_unavailable."
+        },
+        "input_skills": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": {
+            "$ref": "agent.json#/$defs/InputSkillDocument"
+          },
+          "description": "Requested only. Exact authorized skill revisions for this opening input; never mutates session defaults. Requires agent.input_skills. The platform revalidates grants and the session frozen subset before dispatch."
+        },
+        "input_skill_receipt": {
+          "$ref": "agent.json#/$defs/InputSkillReceipt",
+          "description": "Effective only. Returned after exact selected skill bytes have been installed for the opening input. Missing or mismatched receipt is not successful skill preparation."
+        },
+        "custom_tools": {
+          "type": "array",
+          "items": {
+            "$ref": "agent.json#/$defs/CustomToolDefinition"
+          },
+          "description": "Contract 1.7.0. Requested only. The custom tools of the turn's agent version, sent with every turn.start and only to an executor that declared agent.custom_tools (omitted when the agent has none). The executor exposes exactly these next to its own tools for the turn; a name that collides with one of its own tools answers -32602 invalid params."
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "HostTool": {
+      "type": "object",
+      "description": "Contract 1.8.0. One host tool of AgentTurnConfig.host_tools: the fields of the ACP initialize _meta.bma.hostTools entries the executor SDK declares for bma-dsh-acp (ADR-0027 2026-11-10), so a platform brain and a local brain offer the model the same tool. The platform sends the definitions of the executor SDK (computer_observe: input tool.json ComputerObserveInput; computer_action: input tool.json ComputerActionInput).",
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": [
+            "computer_observe",
+            "computer_action"
+          ],
+          "description": "Tool name the model sees and the tools endpoint runs (tool.json ToolName)."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool description the model sees."
+        },
+        "input_schema": {
+          "type": "object",
+          "description": "JSON Schema of the input object (type object), offered to the model as is.",
+          "additionalProperties": true
+        },
+        "read_only": {
+          "type": "boolean",
+          "description": "The tool has no side effects on the machine (computer_observe), so the brain may run it concurrently with other read-only calls."
+        },
+        "permission": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "ask"
+          ],
+          "description": "Permission when turn.start metadata tool_policy does not name the tool. Absent: ask."
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "input_schema",
+        "read_only"
+      ],
+      "additionalProperties": true
+    },
+    "AgentInputBlockType": {
+      "type": "string",
+      "description": "Agent input block type. input_ref (contract 1.7.0) stands for a whole input the platform did not inline; see AgentInputBlock.",
+      "enum": [
+        "text",
+        "file",
+        "input_ref"
+      ]
+    },
+    "AgentInputBlock": {
+      "type": "object",
+      "description": "One block of user input. A file block references a platform session file by file_id; the executor downloads it through the executor files API. File bytes never travel on the control channel. An input_ref block (contract 1.7.0, only to an executor that declared agent.input_by_reference) is the only block of an input the platform did not inline: input_id, size_bytes and sha256 describe the AgentInputBlock array that GET /v1/machines/{machine_id}/inputs/{input_id} answers.",
+      "properties": {
+        "type": {
+          "$ref": "agent.json#/$defs/AgentInputBlockType"
+        },
+        "text": {
+          "type": "string"
+        },
+        "file_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "input_id": {
+          "type": "string",
+          "description": "input_ref only: the platform input id to fetch (ain_; in session.history the user.message event id)."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "input_ref only: lowercase hex SHA-256 of the fetched JSON array."
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "TurnStartResult": {
+      "type": "object",
+      "description": "turn.start result. Idempotent by turn_id: a repeated turn.start for a turn the executor already accepted returns the same result without starting a second run.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "turn_id": {
+          "type": "string"
+        },
+        "executor_session_ref": {
+          "type": "string",
+          "description": "Opaque local session handle (for example the local agent's conversation id). The platform stores it and sends it back in the next turn.start so the executor can resume the local conversation after a restart. It names the local conversation, not only the session: an executor that no longer has the session's local state (state directory or volume lost, another instance without it) starts a new conversation and answers resumed false with a handle different from every one it answered before for the session (for example the session id qualified by a generation of its state directory). A different handle with resumed false is how the platform learns the earlier context is gone and tells the user (agent.message with bma_user_notice harness_context_lost); a handle the executor keeps is a continuation whatever resumed says."
+        },
+        "resumed": {
+          "type": "boolean",
+          "description": "true when the executor continued an existing local conversation, false when it started a new one."
+        },
+        "effective": {
+          "$ref": "agent.json#/$defs/AgentTurnConfig"
+        },
+        "context_rebuilt": {
+          "type": "boolean",
+          "description": "Contract 1.15.0. true when the executor had no local state for the session and rebuilt the conversation from the session's history (session.history) instead: the turn continues with the earlier context, and the platform tells the user once (agent.message with bma_user_notice harness_context_rebuilt). Answered with resumed false. Absent means false: with resumed false and a new executor_session_ref the context is lost (harness_context_lost)."
+        }
+      },
+      "required": [
+        "accepted",
+        "turn_id",
+        "executor_session_ref",
+        "resumed",
+        "effective"
+      ],
+      "additionalProperties": true
+    },
+    "TurnCancelResult": {
+      "type": "object",
+      "description": "turn.cancel result. canceled=false when the turn is unknown or already ended; the turn still ends with its own session.status_idle event.",
+      "properties": {
+        "canceled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "canceled"
+      ],
+      "additionalProperties": true
+    },
+    "EnvironmentInfo": {
+      "type": "object",
+      "description": "Contract 1.4.0. The hands machine as the platform knows it (AgentTurnConfig.environment_info), from the hands executor's registration and the session's file mounts. Every member is optional; an omitted member is unknown, not empty. Values describe the machine at the time of turn.start.",
+      "properties": {
+        "os": {
+          "type": "string",
+          "description": "Operating system of the hands machine, as ExecutorInfo.os (for example linux, darwin, windows)."
+        },
+        "arch": {
+          "type": "string",
+          "description": "CPU architecture, as ExecutorInfo.arch."
+        },
+        "shell": {
+          "type": "string",
+          "description": "Shell the bash tool runs commands with on the hands machine (for example bash, zsh, powershell)."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Default working directory of tools on the hands machine; the same value as AgentTurnConfig.cwd when that is set."
+        },
+        "session_files_root": {
+          "type": "string",
+          "description": "Directory on the hands machine where the session's files are mounted, when the hands executor declared session_files."
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "ToolsTokenRefreshResult": {
+      "type": "object",
+      "description": "Contract 1.4.0. tools_token.refresh result: the credential for the turn's next platform tool calls, in the form of the turn.start metadata tools_mcp_url, tools_mcp_token and tools_mcp_token_expires_at.",
+      "properties": {
+        "tools_mcp_token": {
+          "type": "string",
+          "description": "Bearer token for tools_mcp_url, bound to the org, session, turn, brain machine and brain epoch of the turn. Valid until expires_at."
+        },
+        "tools_mcp_url": {
+          "type": "string",
+          "description": "The session's platform tools endpoint the token is for (https://<executor host>/v1/machines/{brain_machine_id}/mcp)."
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339 time the token stops being accepted."
+        }
+      },
+      "required": [
+        "tools_mcp_token",
+        "tools_mcp_url",
+        "expires_at"
+      ],
+      "additionalProperties": true
+    },
+    "SessionHistoryResult": {
+      "type": "object",
+      "description": "Contract 1.15.0. session.history result: a page of the session's conversation before the turn's opening input, in log order.",
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "agent.json#/$defs/SessionHistoryEvent"
+          }
+        },
+        "has_more": {
+          "type": "boolean",
+          "description": "More events follow: read again with after = the last bma_sequence of this page."
+        }
+      },
+      "required": [
+        "events",
+        "has_more"
+      ],
+      "additionalProperties": true
+    },
+    "SessionHistoryEvent": {
+      "type": "object",
+      "description": "Contract 1.15.0. One durable event of a session's conversation as the platform's log keeps it. A tool result names its call by the id of the call's event (tool_use_id, custom_tool_use_id, mcp_tool_use_id).",
+      "properties": {
+        "bma_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "id": {
+          "type": "string",
+          "description": "The event id."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "user.message",
+            "agent.message",
+            "agent.tool_use",
+            "agent.tool_result",
+            "agent.custom_tool_use",
+            "user.custom_tool_result",
+            "agent.mcp_tool_use",
+            "agent.mcp_tool_result"
+          ]
+        },
+        "payload": {
+          "type": "object",
+          "description": "The official event body without id, type and bma_sequence.",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "bma_sequence",
+        "id",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": true
+    },
+    "ModelTokenRefreshResult": {
+      "type": "object",
+      "description": "model_token.refresh result: the credential for the turn's next model calls, in the form of the turn.start metadata model_base_url and model_token.",
+      "properties": {
+        "model_token": {
+          "type": "string",
+          "description": "Bearer token for model_base_url. Valid until expires_at."
+        },
+        "model_base_url": {
+          "type": "string",
+          "description": "Base URL the token is for (an OpenAI / Anthropic base URL path)."
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339 time the token stops being accepted."
+        }
+      },
+      "required": [
+        "model_token",
+        "model_base_url",
+        "expires_at"
+      ],
+      "additionalProperties": true
+    },
+    "SessionCloseResult": {
+      "type": "object",
+      "description": "session.close result.",
+      "properties": {
+        "closed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "closed"
+      ],
+      "additionalProperties": true
+    },
+    "AgentEventType": {
+      "type": "string",
+      "description": "Durable events an agent executor emits with session.event. Names and members follow Anthropic Managed Agents session events. user.* events are written by the platform, never by the executor.",
+      "enum": [
+        "agent.message",
+        "agent.thinking",
+        "agent.tool_use",
+        "agent.tool_result",
+        "agent.custom_tool_use",
+        "agent.mcp_tool_use",
+        "agent.mcp_tool_result",
+        "session.status_running",
+        "session.status_idle",
+        "session.error"
+      ]
+    },
+    "AgentEvent": {
+      "description": "One durable agent event. The event id is the session.event event_id; agent.tool_result.tool_use_id references the event_id of its agent.tool_use.",
+      "oneOf": [
+        {
+          "$ref": "agent.json#/$defs/AgentMessageEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/AgentThinkingEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/AgentToolUseEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/AgentToolResultEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/AgentCustomToolUseEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/AgentMcpToolUseEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/AgentMcpToolResultEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/SessionStatusRunningEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/SessionStatusIdleEvent"
+        },
+        {
+          "$ref": "agent.json#/$defs/SessionErrorEvent"
+        }
+      ]
+    },
+    "AgentMessageEvent": {
+      "type": "object",
+      "description": "Final assistant text. Streaming previews for the same event_id arrive earlier as session.event_delta.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "agent.message"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "tool.json#/$defs/ContentBlock"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "content"
+      ],
+      "additionalProperties": true
+    },
+    "AgentThinkingEvent": {
+      "type": "object",
+      "description": "Model thinking. content may be empty when the model only reports that it thought.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "agent.thinking"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "tool.json#/$defs/ContentBlock"
+          }
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "EvaluatedPermission": {
+      "type": "object",
+      "description": "Permission decision the executor applied to a tool use. ask means the executor opened an interaction.request for it.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "ask",
+            "deny"
+          ]
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "AgentToolUseEvent": {
+      "type": "object",
+      "description": "A built-in or custom tool the local agent is calling. Its event_id is the tool_use_id.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "agent.tool_use"
+        },
+        "name": {
+          "type": "string"
+        },
+        "input": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "evaluated_permission": {
+          "$ref": "agent.json#/$defs/EvaluatedPermission"
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "input"
+      ],
+      "additionalProperties": true
+    },
+    "AgentToolResultEvent": {
+      "type": "object",
+      "description": "Result of an agent.tool_use.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "agent.tool_result"
+        },
+        "tool_use_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "tool.json#/$defs/ContentBlock"
+          }
+        },
+        "is_error": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "tool_use_id"
+      ],
+      "additionalProperties": true
+    },
+    "AgentCustomToolUseEvent": {
+      "type": "object",
+      "description": "A custom tool the local agent is calling: a tool the user's application runs and answers (capability agent.custom_tools). Its event_id is the tool_use_id. The platform shows the session as waiting (session.status_idle with stop_reason requires_action naming the event) and delivers the user's result with agent.custom_tool_result. The turn stays open while the executor waits: the executor does not send session.status_idle for it. If its own timeout passes first, the executor ends the call with a failed agent.tool_result naming this event.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "agent.custom_tool_use"
+        },
+        "name": {
+          "type": "string"
+        },
+        "input": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "input"
+      ],
+      "additionalProperties": true
+    },
+    "CustomToolResultResult": {
+      "type": "object",
+      "description": "agent.custom_tool_result result. accepted=true: the executor took the result for the call it was waiting on. accepted=false: it no longer waits (unknown tool_use_id, already answered, timed out, or canceled with its turn); the platform marks its copy stale and does not send it again.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "accepted"
+      ],
+      "additionalProperties": true
+    },
+    "AgentMcpToolUseEvent": {
+      "type": "object",
+      "description": "An MCP tool the local agent is calling. Its event_id is the mcp_tool_use_id. A brain reports a call of an AgentTurnConfig.mcp_tools entry with this event (mcp_server_name and name: the entry's mcp_server_name and tool_name), never as agent.tool_use (contract 1.14.0).",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "agent.mcp_tool_use"
+        },
+        "mcp_server_name": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "input": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "evaluated_permission": {
+          "$ref": "agent.json#/$defs/EvaluatedPermission"
+        }
+      },
+      "required": [
+        "type",
+        "mcp_server_name",
+        "name",
+        "input"
+      ],
+      "additionalProperties": true
+    },
+    "AgentMcpToolResultEvent": {
+      "type": "object",
+      "description": "Result of an agent.mcp_tool_use.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "agent.mcp_tool_result"
+        },
+        "mcp_tool_use_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "tool.json#/$defs/ContentBlock"
+          }
+        },
+        "is_error": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "mcp_tool_use_id"
+      ],
+      "additionalProperties": true
+    },
+    "SessionStatusRunningEvent": {
+      "type": "object",
+      "description": "The local agent started working on the turn.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "session.status_running"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "StopReasonType": {
+      "type": "string",
+      "description": "Anthropic stop_reason types an executor may report. requires_action is not in the list: the platform projects it from open interactions.",
+      "enum": [
+        "end_turn",
+        "retries_exhausted"
+      ]
+    },
+    "StopReason": {
+      "type": "object",
+      "description": "Why the turn stopped.",
+      "properties": {
+        "type": {
+          "$ref": "agent.json#/$defs/StopReasonType"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "TurnOutcome": {
+      "type": "string",
+      "description": "BMA extension on session.status_idle: how the turn ended.",
+      "enum": [
+        "completed",
+        "canceled",
+        "failed"
+      ]
+    },
+    "SessionStatusIdleEvent": {
+      "type": "object",
+      "description": "The turn ended. It is the last event of its turn_id; the platform publishes the turn as finished only after it accepted this event and every lower sequence.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "session.status_idle"
+        },
+        "stop_reason": {
+          "$ref": "agent.json#/$defs/StopReason"
+        },
+        "turn_outcome": {
+          "$ref": "agent.json#/$defs/TurnOutcome"
+        }
+      },
+      "required": [
+        "type",
+        "stop_reason",
+        "turn_outcome"
+      ],
+      "additionalProperties": true
+    },
+    "AgentErrorCode": {
+      "type": "string",
+      "description": "Stop code table: the error types an agent executor reports for a turn that ended failed, so every agent (Go ACP harness, brain hosts, local desktop agents) says the same thing for the same cause. output_limit_reached: the model reply was cut at its output-token limit (ACP stopReason max_tokens, DSH max-tokens, finish_reason length). context_too_large: the conversation does not fit the model context window even after compaction. model_stream_idle: the model stream sent no data for the idle limit (default 90 s). agent_error: any other failure of the agent. agent_unavailable: the agent process is gone or did not answer a cancel in time. agent_auth_required: the agent needs credentials it does not have. agent_protocol_error: the agent rejected the request as malformed or unsupported. The model endpoint failed the turn's model request (no more retries): model_overloaded_error: it answered 5xx or 529, or was unreachable; model_rate_limited_error: it answered 429; billing_error: it answered 402 (the account has no credit); model_request_failed_error: it refused the request otherwise (any other 4xx, including 401/403 for a rejected credential). These four are official session.error types and are projected as themselves. A code is the type of session.error; an executor whose SDK cannot set the type yet (structured_errors false) puts it first in the message as '<code>: <detail>', and the platform reads both forms. The platform keeps the code in error.code and projects a type outside the official session.error union to unknown_error; a platform may map a code to an official type itself (context_too_large to compaction_limit_reached_error, ADR-0010). Executors report only these values; a new cause adds a value here first.",
+      "enum": [
+        "output_limit_reached",
+        "context_too_large",
+        "model_stream_idle",
+        "agent_error",
+        "agent_unavailable",
+        "agent_auth_required",
+        "agent_protocol_error",
+        "model_overloaded_error",
+        "model_rate_limited_error",
+        "model_request_failed_error",
+        "billing_error"
+      ]
+    },
+    "AgentErrorInfo": {
+      "type": "object",
+      "description": "Typed session error.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "An AgentErrorCode value; other strings are tolerated (objects accept unknown members) and projected as unknown_error."
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "SessionErrorEvent": {
+      "type": "object",
+      "description": "A turn-level error. A failed turn still ends with session.status_idle turn_outcome=failed.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "session.error"
+        },
+        "error": {
+          "$ref": "agent.json#/$defs/AgentErrorInfo"
+        }
+      },
+      "required": [
+        "type",
+        "error"
+      ],
+      "additionalProperties": true
+    },
+    "EventDeltaType": {
+      "type": "string",
+      "description": "Durable event type a streaming preview belongs to.",
+      "enum": [
+        "agent.message",
+        "agent.thinking"
+      ]
+    },
+    "InteractionKind": {
+      "type": "string",
+      "description": "Interaction kinds; they map 1:1 to platform agent interactions.",
+      "enum": [
+        "permission",
+        "question"
+      ]
+    },
+    "InteractionScope": {
+      "type": "string",
+      "description": "How long a permission grant lasts: this tool use only, or the rest of the session. A session grant is recorded by the platform (the single source) under a grant id (tgr_...) with a rule: the tool and, for the shell tool, the program of a simple command or one exact command. Later permission requests of the same session that a grant's rule covers are answered allow by the platform without asking (responder platform), whichever executor or brain asks, until the grant is revoked by its id; the executor may also apply it locally.",
+      "enum": [
+        "once",
+        "session"
+      ]
+    },
+    "InteractionQuestionOption": {
+      "type": "object",
+      "description": "One answer option of a question interaction.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "additionalProperties": true
+    },
+    "InteractionQuestion": {
+      "type": "object",
+      "description": "Question shown to the user.",
+      "properties": {
+        "prompt": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "agent.json#/$defs/InteractionQuestionOption"
+          }
+        },
+        "multi_select": {
+          "type": "boolean"
+        },
+        "allow_free_text": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "additionalProperties": true
+    },
+    "InteractionRequestResult": {
+      "type": "object",
+      "description": "interaction.request result. Idempotent by interaction_id: a repeat returns the same platform interaction. platform_interaction_id equals interaction_id when that is an appr_ plus 24 lower-case hex id (adopted); otherwise it is the platform-assigned int_ id.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "platform_interaction_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accepted",
+        "platform_interaction_id"
+      ],
+      "additionalProperties": true
+    },
+    "InteractionOutcome": {
+      "type": "string",
+      "description": "How the platform resolved an interaction. allow/deny answer permission, answered answers question, expired and canceled close either kind without an answer.",
+      "enum": [
+        "allow",
+        "deny",
+        "answered",
+        "expired",
+        "canceled"
+      ]
+    },
+    "InteractionResponder": {
+      "type": "object",
+      "description": "Who answered, for local audit. surface is the client that resolved it, for example desktop, mobile, web, slack.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "surface": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "InteractionResponseResult": {
+      "type": "object",
+      "description": "interaction.response result. accepted=false when the interaction is unknown or already resolved (first answer wins); the platform then marks its copy stale.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "accepted"
+      ],
+      "additionalProperties": true
+    },
+    "InteractionCancelReason": {
+      "type": "string",
+      "description": "Why the executor withdrew an open interaction.",
+      "enum": [
+        "resolved_locally",
+        "turn_canceled",
+        "expired",
+        "tool_canceled"
+      ]
+    },
+    "InputSkillDocument": {
+      "type": "object",
+      "properties": {
+        "skill_id": {
+          "type": "string",
+          "pattern": "^skl_[a-zA-Z0-9_-]{1,124}$"
+        },
+        "revision_id": {
+          "type": "string",
+          "pattern": "^skr_[a-zA-Z0-9_-]{1,124}$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "body_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "skill_id",
+        "revision_id",
+        "name",
+        "body",
+        "body_sha256"
+      ],
+      "additionalProperties": false,
+      "description": "Exact SKILL.md bytes for one authorized frozen revision. Hash covers UTF-8 body bytes, independently verified by the executor. At most 256 KiB across the selected documents."
+    },
+    "InputSkillVersionReceipt": {
+      "type": "object",
+      "properties": {
+        "skill_id": {
+          "type": "string",
+          "pattern": "^skl_[a-zA-Z0-9_-]{1,124}$"
+        },
+        "revision_id": {
+          "type": "string",
+          "pattern": "^skr_[a-zA-Z0-9_-]{1,124}$"
+        },
+        "body_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "skill_id",
+        "revision_id",
+        "body_sha256"
+      ],
+      "additionalProperties": false
+    },
+    "InputSkillReceipt": {
+      "type": "object",
+      "properties": {
+        "input_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "skills": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": {
+            "$ref": "agent.json#/$defs/InputSkillVersionReceipt"
+          }
+        }
+      },
+      "required": [
+        "input_id",
+        "skills"
+      ],
+      "additionalProperties": false
+    },
+    "CustomToolDefinition": {
+      "type": "object",
+      "description": "Contract 1.7.0. One custom tool of the turn's agent: an Anthropic Managed Agents agent tools entry of type custom, as the agent version defines it (name, description, input_schema). The executor offers it to the model next to its own tools; a call to it is an agent.custom_tool_use.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": {
+          "type": "string"
+        },
+        "input_schema": {
+          "type": "object",
+          "description": "JSON Schema of the tool input (an object schema).",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "input_schema"
+      ],
+      "additionalProperties": true
+    },
+    "McpToolDefinition": {
+      "type": "object",
+      "description": "Contract 1.14.0. One tool of an MCP server of the turn's agent, as AgentTurnConfig.mcp_tools carries it.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^mcp__[a-zA-Z][a-zA-Z0-9-]{0,31}__[a-zA-Z][a-zA-Z0-9_-]{0,63}$",
+          "description": "Name the model sees and the tools endpoint runs: mcp__<mcp_server_name>__<tool_name>, at most 64 characters. A tool whose name would not fit the pattern is not offered."
+        },
+        "mcp_server_name": {
+          "type": "string",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9-]{0,31}$",
+          "description": "The agent's name of the MCP server (mcp_servers[].name); agent.mcp_tool_use.mcp_server_name."
+        },
+        "tool_name": {
+          "type": "string",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,63}$",
+          "description": "The server's own name of the tool (MCP tools/list name); agent.mcp_tool_use.name."
+        },
+        "description": {
+          "type": "string",
+          "description": "The server's description of the tool; absent when it gave none."
+        },
+        "input_schema": {
+          "type": "object",
+          "description": "The server's JSON Schema of the input object (type object), offered to the model as is.",
+          "additionalProperties": true
+        },
+        "permission": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "ask"
+          ],
+          "description": "The mcp_toolset permission of the tool (always_allow: allow, always_ask: ask). ask: the brain asks once per call (interaction kind permission, the brain's deterministic interaction id) and sends the answer as ai.beeos.bma/approval; the tools endpoint evaluates the same policy again."
+        }
+      },
+      "required": [
+        "name",
+        "mcp_server_name",
+        "tool_name",
+        "input_schema",
+        "permission"
+      ],
+      "additionalProperties": true
+    },
+    "WorkingLogEntry": {
+      "type": "object",
+      "description": "Contract 1.22.0. One entry of a session's working log. The platform stores entries verbatim, never shows them to tenants and numbers them 1, 2, ... per session in append order.",
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The platform's number of the entry (read only; ignored in an append)."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The executor's id of the entry (for a forwarded event, its event_id)."
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The executor's type of the entry (an AgentEvent type or a local marker type)."
+        },
+        "key": {
+          "type": "string",
+          "description": "Idempotency key: an append of an entry whose key the log already has skips it. Omitted or empty: no key."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the executor wrote the entry; the platform's time of the append when omitted."
+        },
+        "payload": {
+          "type": "object",
+          "description": "The entry's body, stored as given.",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": true
+    },
+    "WorkingLogReadResult": {
+      "type": "object",
+      "description": "Contract 1.22.0. working_log.read result.",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkingLogEntry"
+          },
+          "description": "The entries after the requested sequence, in order: at most limit, and at most about 512 KiB of payload (always at least one entry when any follows)."
+        },
+        "has_more": {
+          "type": "boolean",
+          "description": "More entries follow the last one returned: read again after its sequence."
+        },
+        "acked_sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The highest local sequence the platform has acknowledged, as the last working_log.append set it (0 for none)."
+        }
+      },
+      "required": [
+        "entries",
+        "has_more",
+        "acked_sequence"
+      ],
+      "additionalProperties": true
+    },
+    "WorkingLogAppendResult": {
+      "type": "object",
+      "description": "Contract 1.22.0. working_log.append result.",
+      "properties": {
+        "last_sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The sequence of the log's last entry after the append."
+        }
+      },
+      "required": [
+        "last_sequence"
+      ],
+      "additionalProperties": true
+    },
+    "SessionCompactResult": {
+      "type": "object",
+      "description": "Contract 1.19.0. Durable context replacement receipt. No user message or ordinary turn is created. The operation id and original version identify an immutable retry even after newer compactions.",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "previous_context_version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "context_version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 524288
+        },
+        "summary_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "source_event_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "session_id",
+        "operation_id",
+        "previous_context_version",
+        "context_version",
+        "summary",
+        "summary_sha256",
+        "source_event_count"
+      ],
+      "additionalProperties": false
+    },
+    "SessionCompactCancelResult": {
+      "type": "object",
+      "description": "A durable publication fence or the already-applied receipt. settled is filled by the SDK, independently from the handler's fence.",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "canceled": {
+          "type": "boolean"
+        },
+        "settled": {
+          "type": "boolean"
+        },
+        "receipt": {
+          "$ref": "agent.json#/$defs/SessionCompactResult"
+        }
+      },
+      "required": [
+        "session_id",
+        "operation_id",
+        "canceled",
+        "settled"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

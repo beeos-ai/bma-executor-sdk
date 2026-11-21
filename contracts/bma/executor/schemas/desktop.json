@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.bma.beeos.ai/schemas/desktop.json",
+  "title": "BMA executor desktop types",
+  "description": "v1.1 desktop.* control methods (machine-scoped executors that claim display.desktop, contract 1.11.0, additive). The desktop and its agent run from machine start; a desktop session only attaches to them (desktop-relay.md \u00a71).",
+  "$defs": {
+    "DesktopWallpaper": {
+      "type": "object",
+      "description": "The environment's default wallpaper: sha256 (lowercase hex) of the image, its extension (png, jpg or webp) and size in bytes.",
+      "properties": {
+        "sha256": {
+          "type": "string"
+        },
+        "ext": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sha256",
+        "ext",
+        "size"
+      ],
+      "additionalProperties": true
+    },
+    "DesktopAttachResult": {
+      "type": "object",
+      "description": "desktop.attach result. wallpaper is need when the attach named a wallpaper the machine does not have; the harness then sends it with desktop.wallpaper.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "wallpaper": {
+          "type": "string",
+          "enum": [
+            "need"
+          ]
+        }
+      },
+      "required": [
+        "accepted"
+      ],
+      "additionalProperties": true
+    },
+    "DesktopWallpaperResult": {
+      "type": "object",
+      "description": "desktop.wallpaper result.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "accepted"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

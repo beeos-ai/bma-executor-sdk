@@ -1,0 +1,598 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.bma.beeos.ai/schemas/executor.json",
+  "title": "BMA executor lifecycle types",
+  "description": "Token bootstrap, registration, capabilities, heartbeat and drain.",
+  "$defs": {
+    "ExecutorInfo": {
+      "type": "object",
+      "description": "Executor identity reported at token bootstrap and registration.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9._-]+$"
+          },
+          "description": "Contract 1.4.0, optional. Labels the executor reports about itself (at most 32, each 1-64 characters of a-z 0-9 . _ -), set by the machine's owner in the executor's local configuration (for example BMA_LABELS or the SDK Options.Labels). The platform accepts them as given and does not validate their meaning, and it adds its own os:<os> and arch:<arch> labels from os and arch. Labels only narrow a choice among machines the project is already authorized to use (environment placement selectors); no authorization or security decision depends on them. Omitted: no labels."
+        }
+      },
+      "required": [
+        "name",
+        "os",
+        "arch",
+        "version"
+      ],
+      "additionalProperties": true
+    },
+    "ShellCapability": {
+      "type": "object",
+      "description": "v1 one-shot shell tools.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": true
+    },
+    "FilesCapability": {
+      "type": "object",
+      "description": "v1 file tools.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "read_roots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "write_roots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": true
+    },
+    "McpCapability": {
+      "type": "object",
+      "description": "Environment-origin MCP servers.",
+      "properties": {
+        "stdio": {
+          "type": "boolean"
+        },
+        "http": {
+          "type": "boolean"
+        },
+        "max_servers": {
+          "type": "integer",
+          "x-go-type": "int"
+        },
+        "secret_env": {
+          "type": "boolean",
+          "description": "The executor accepts transport.secret_env on stdio servers: resolved secret values it injects only into the server process environment, never persisting, logging or echoing them. Without it the server keeps secret: references in env, which the executor rejects."
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "DisplayCapability": {
+      "type": "object",
+      "description": "v1.1 display object. v1 sent a boolean; the server accepts both.",
+      "properties": {
+        "rfb": {
+          "type": "boolean"
+        },
+        "desktop": {
+          "type": "boolean",
+          "description": "The machine runs its own desktop (bmad supervises bma-desktop-session from machine start) and serves desktop.attach. Absent means unknown (an executor that predates the field)."
+        },
+        "native_webrtc": {
+          "type": "boolean",
+          "description": "Native screen producer supports screen.start/stop and the bma desktop relay, without process execution. Does not grant input authority."
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "ProcessCapability": {
+      "type": "object",
+      "description": "v1.1 process.* support. pty, file_transfer, package_install and git_credentials are additive: the harness only sends the matching process.start fields to an executor that set them, and fails the process explicitly otherwise.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "max_processes": {
+          "type": "integer",
+          "x-go-type": "int"
+        },
+        "buffer_bytes": {
+          "type": "integer",
+          "x-go-type": "int"
+        },
+        "pty": {
+          "type": "boolean",
+          "description": "Accepts process.start io_mode \"pty\"."
+        },
+        "file_transfer": {
+          "type": "boolean",
+          "description": "Accepts process.start file_transfer."
+        },
+        "git_credentials": {
+          "type": "boolean",
+          "description": "Accepts process.start git_credentials."
+        },
+        "package_install": {
+          "type": "boolean",
+          "description": "Accepts process.start package_install."
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": true
+    },
+    "ArtifactCapability": {
+      "type": "object",
+      "description": "v1.1 artifact upload (POST /v1/environments/{environment_id}/artifacts; legacy alias POST /v1/executors/artifacts). Environment-scoped executors only.",
+      "properties": {
+        "upload": {
+          "type": "boolean"
+        },
+        "max_bytes": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "upload"
+      ],
+      "additionalProperties": true
+    },
+    "TerminalCapability": {
+      "type": "object",
+      "description": "v1.1 terminal.* support. Machine-scoped executors only.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_sessions": {
+          "type": "integer",
+          "x-go-type": "int"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": true
+    },
+    "SkillsCapability": {
+      "type": "object",
+      "description": "skill.install support. Machine-scoped executors only.",
+      "properties": {
+        "install": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "install"
+      ],
+      "additionalProperties": true
+    },
+    "WorkspaceCapability": {
+      "type": "object",
+      "description": "workspace.backup support and the startup restore of a pending backup. Machine-scoped executors only.",
+      "properties": {
+        "backup": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "backup"
+      ],
+      "additionalProperties": true
+    },
+    "FsCapability": {
+      "type": "object",
+      "description": "Session file views mounted by the executor as FUSE file systems backed by bma-file (docs/adr/0021). Declared only after the executor probed that it can mount. Absent, or fuse=false without copy_views: the session files stay on the copy-and-scan protocol (session_files). views lists the views the executor can mount; the harness only mounts those. copy_views lists the read-only views an executor without FUSE places by copying them (fuse=false is allowed with it). Machine-scoped executors only.",
+      "properties": {
+        "fuse": {
+          "type": "boolean"
+        },
+        "views": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skills_per_session": {
+          "type": "boolean",
+          "description": "Contract 1.4.0. The executor mounts the skills view at the path of each fs.mount, whatever it is, and keeps the views of several sessions mounted at once: mounting or unmounting one session never touches another session's views. When true, the harness mounts a session's skills at <root>/<agent_session_id>/skills (next to its uploads and outputs; root is session_files.root, or /mnt/session when none is declared), so sessions sharing a machine each see their own skills; the executor removes the mount points it created when the session is unmounted. Absent or false: the harness mounts no skills view (since 1.20.0 there is no machine-wide /mnt/skills)."
+        },
+        "copy_views": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "skills"
+            ]
+          },
+          "uniqueItems": true,
+          "description": "Contract 1.18.0. Views the executor places by copying instead of mounting, for an executor that cannot mount FUSE (macOS, Windows; ADR-0021 decision 9). Only skills, an immutable view (versions frozen when the session was created). Declare it only together with session_files.root. The harness then sends fs.mount and fs.unmount for these views exactly as for a FUSE mount (same read-only token, same service_url, path <root>/<agent_session_id>/skills); the executor reads the view through the bma-file read routes (list, lookup, read; see file.json) and writes it as read-only files at that path, the same as a read-only mount: it answers fs.mount mounted only once every file is in place and its sha256 checked (nothing half-copied stays), failed with error_code fs_unavailable (bma-file unreachable, or 429/5xx after retries) or mount_failed (anything else), and invalid_params for a path outside <root>/<agent_session_id>/skills. The harness waits at most 30 s for an answer: a copy that takes longer goes on, and the repeated fs.mount of the same session and path joins it. A repeated fs.mount of the same session and path (token renewal, reconnect) only replaces the token and needs no new copy. Sessions are independent, several may be placed at once, and fs.unmount deletes that session's directory only. A view listed in both views (with fuse true) and copy_views is mounted. Absent: nothing changes."
+        }
+      },
+      "required": [
+        "fuse"
+      ],
+      "additionalProperties": true
+    },
+    "SessionFilesCapability": {
+      "type": "object",
+      "description": "Executor-owned per-session file layout. The harness derives <root>/<agent_session_id>/uploads (read-only session inputs) and <root>/<agent_session_id>/outputs (deliverables) from it, with agent_session_id as sent in process.start metadata, and uses these real paths in prompts, tool descriptions, write rules and the session files manifest. Absent: the executor has no session files; the harness names no session path to it. There is no fixed /mnt/session/uploads or /mnt/session/outputs layout: the per-session <root>/<agent_session_id>/{uploads,outputs} is the only one, and platform-hosted machines declare root /mnt/session. With the fs capability skills_per_session or copy_views the same tree also holds <root>/<agent_session_id>/skills (the session's skills view, read-only). Fixed at executor.register: executor.capabilities.update does not change it. Machine-scoped executors only.",
+      "properties": {
+        "root": {
+          "type": "string",
+          "minLength": 2,
+          "description": "Absolute, already-expanded, clean path on the executor host (no ~, no . or .. segments, no trailing /)."
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "additionalProperties": true
+    },
+    "RemoteBrainCapability": {
+      "type": "object",
+      "description": "Contract 1.4.0. The machine's owner allows a brain that runs on another machine to use this machine as its hands (platform tools routed here for a session whose brain machine is a different one). Set only by the executor's local configuration (bmad configuration or SDK Options.RemoteBrain); the platform reads it back and cannot switch it on through any API. Absent or enabled=false: off, which is also what an executor that predates 1.4.0 means. It applies to a BYO (tenant-owned) machine; a platform pool machine does not need it. It does not restrict a platform-hosted brain driving this machine (project authorization is enough there), and a brain and hands on one machine never need it.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": true
+    },
+    "EgressCapability": {
+      "type": "object",
+      "description": "Contract 1.9.0. The executor runs the local egress forwarder (docs/architecture/env-networking-egress.md E6): a loopback HTTP proxy that the processes and terminals of a session are pointed at (HTTP(S)_PROXY, NO_PROXY and a trust store that includes the handoff's ca_bundle), and that tunnels each of their connections to executor.<domain>/v1/machines/{machine_id}/egress?host=<host>&port=<port> (WebSocket, Authorization: Bearer <the session's egress token>). The platform hands an egress handoff (EgressHandoff, session.assign and turn.start metadata egress) only to an executor that declared forwarder=true; a session that needs egress (limited networking or vault environment variables) on an executor that did not declare it is never run there: its turn ends with session.error bma_error_code egress_unsupported (fail closed). Machine-scoped executors only. Absent or forwarder=false: no forwarder, which is also what an executor that predates 1.9.0 means.",
+      "properties": {
+        "forwarder": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "forwarder"
+      ],
+      "additionalProperties": true
+    },
+    "EgressHandoff": {
+      "type": "object",
+      "description": "Contract 1.9.0. The egress of one session, carried as the JSON text of metadata egress (session.assign, turn.start). token is secret material: the executor keeps it in memory for the forwarder only, never puts it in a process environment, a log, a session.event or a tool result, and never uses one session's token for another session's connections (several sessions may share the machine). env maps a vault environment variable name to its placeholder: the executor sets these variables in the processes and terminals it starts for the session; the gateway replaces a placeholder with the secret only on hosts the credential allows, so the plaintext never reaches the machine. A refused host is not a protocol error: the forwarder answers the client with the gateway's HTTP status and body (403 naming the host; 401 expired or unknown token; 404 machine is not the token's; 502 unreachable).",
+      "properties": {
+        "token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ca_bundle": {
+          "type": "string",
+          "description": "PEM of the egress CA (the gateway terminates TLS only on hosts with a credential to substitute)."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "token",
+        "expires_at",
+        "ca_bundle"
+      ],
+      "additionalProperties": false
+    },
+    "Capabilities": {
+      "type": "object",
+      "description": "Executor capability object. The server only sends a method to an executor that advertised its capability; otherwise the executor answers -32012 capability_unavailable.",
+      "properties": {
+        "shell": {
+          "$ref": "executor.json#/$defs/ShellCapability"
+        },
+        "files": {
+          "$ref": "executor.json#/$defs/FilesCapability"
+        },
+        "mcp": {
+          "$ref": "executor.json#/$defs/McpCapability"
+        },
+        "chrome": {
+          "type": "boolean"
+        },
+        "computer_use": {
+          "type": "boolean"
+        },
+        "display": {
+          "description": "v1 boolean or v1.1 DisplayCapability object.",
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "executor.json#/$defs/DisplayCapability"
+            }
+          ],
+          "x-go-type": "json.RawMessage"
+        },
+        "process": {
+          "$ref": "executor.json#/$defs/ProcessCapability"
+        },
+        "artifacts": {
+          "$ref": "executor.json#/$defs/ArtifactCapability"
+        },
+        "terminal": {
+          "$ref": "executor.json#/$defs/TerminalCapability"
+        },
+        "skills": {
+          "$ref": "executor.json#/$defs/SkillsCapability"
+        },
+        "workspace": {
+          "$ref": "executor.json#/$defs/WorkspaceCapability"
+        },
+        "agent": {
+          "$ref": "agent.json#/$defs/AgentCapability"
+        },
+        "session_files": {
+          "$ref": "executor.json#/$defs/SessionFilesCapability"
+        },
+        "fs": {
+          "$ref": "executor.json#/$defs/FsCapability"
+        },
+        "remote_brain": {
+          "$ref": "executor.json#/$defs/RemoteBrainCapability"
+        },
+        "egress": {
+          "$ref": "executor.json#/$defs/EgressCapability"
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "ExecutorResume": {
+      "type": "object",
+      "description": "Reattach state sent on reconnect.",
+      "properties": {
+        "executor_id": {
+          "type": "string"
+        },
+        "last_connection_id": {
+          "type": "string"
+        },
+        "active_sessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "ExecutorRegisterResult": {
+      "type": "object",
+      "description": "executor.register result. protocol and limits are v1.1 only.",
+      "properties": {
+        "executor_id": {
+          "type": "string"
+        },
+        "connection_id": {
+          "type": "string"
+        },
+        "server_time": {
+          "type": "string"
+        },
+        "heartbeat_interval_ms": {
+          "type": "integer"
+        },
+        "lease_ttl_ms": {
+          "type": "integer"
+        },
+        "max_control_frame_bytes": {
+          "type": "integer"
+        },
+        "max_mcp_frame_bytes": {
+          "type": "integer"
+        },
+        "drain": {
+          "type": "boolean"
+        },
+        "protocol": {
+          "$ref": "common.json#/$defs/ProtocolVersion"
+        },
+        "limits": {
+          "$ref": "common.json#/$defs/Limits"
+        }
+      },
+      "required": [
+        "executor_id",
+        "connection_id",
+        "server_time",
+        "heartbeat_interval_ms",
+        "lease_ttl_ms",
+        "max_control_frame_bytes",
+        "max_mcp_frame_bytes",
+        "drain"
+      ],
+      "additionalProperties": true
+    },
+    "ExecutorHeartbeatResult": {
+      "type": "object",
+      "description": "executor.heartbeat result.",
+      "properties": {
+        "server_time": {
+          "type": "string"
+        },
+        "lease_ttl_ms": {
+          "type": "integer"
+        },
+        "drain": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "server_time",
+        "lease_ttl_ms",
+        "drain"
+      ],
+      "additionalProperties": true
+    },
+    "ExecutorTokenRefreshResult": {
+      "type": "object",
+      "description": "executor.token.refresh result: the connection now closes with 4001 at expires_at.",
+      "properties": {
+        "expires_at": {
+          "type": "string",
+          "description": "RFC 3339 time of the new connection deadline."
+        }
+      },
+      "required": [
+        "expires_at"
+      ],
+      "additionalProperties": true
+    },
+    "ExecutorDrainResult": {
+      "type": "object",
+      "description": "executor.drain result.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "active_sessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "accepted",
+        "active_sessions"
+      ],
+      "additionalProperties": true
+    },
+    "ExecutorTokenRequest": {
+      "type": "object",
+      "description": "Token request body for POST /v1/machines/{machine_id}/token (bearer: machine daemon token) and POST /v1/environments/{environment_id}/token (bearer: environment key); the legacy alias POST /v1/executors/token takes either bearer. The id in the path must equal the credential's machine or environment, otherwise 404; on the new paths environment_id may be empty or absent for a machine and, when sent for an environment, must equal the path id. An empty environment_id with a machine token requests a machine-scoped executor: its executor_id is exec_<machine_id>, stable across refreshes, and the JWT carries machine_id and daemon_token_id.",
+      "properties": {
+        "environment_id": {
+          "type": "string"
+        },
+        "executor": {
+          "$ref": "executor.json#/$defs/ExecutorInfo"
+        },
+        "instance_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+          "description": "Contract 1.23.0, optional (ADR-0083). One instance of a platform brain fleet: the instances of a platform brain machine share its machine credential, and each exchanges it for a token of its own instance (for example its pod name), so each holds its own control channel and the platform spreads sessions over them. Only the deployment's platform brain machines may send it (others: 400 invalid_request_error). Omitted: the machine's own executor."
+        }
+      },
+      "required": [
+        "environment_id",
+        "executor"
+      ],
+      "additionalProperties": true
+    },
+    "ExecutorTokenResponse": {
+      "type": "object",
+      "description": "Token response of POST /v1/machines/{machine_id}/token, POST /v1/environments/{environment_id}/token and the legacy alias POST /v1/executors/token.",
+      "properties": {
+        "executor_id": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string",
+          "description": "Short-lived executor JWT, sent only in the Authorization header of the channel upgrade."
+        },
+        "expires_in": {
+          "type": "integer",
+          "description": "Seconds."
+        },
+        "ws_url": {
+          "type": "string"
+        },
+        "channel_scope": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/ChannelScope"
+          }
+        }
+      },
+      "required": [
+        "executor_id",
+        "token",
+        "expires_in",
+        "ws_url",
+        "channel_scope"
+      ],
+      "additionalProperties": true
+    },
+    "ScreenStartResult": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "accepted"
+      ],
+      "additionalProperties": false
+    },
+    "ScreenStopResult": {
+      "type": "object",
+      "properties": {
+        "stopped": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "stopped"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

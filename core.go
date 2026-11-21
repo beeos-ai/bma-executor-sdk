@@ -1,0 +1,1512 @@
+package bmaexecutor
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"maps"
+	"math/rand/v2"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	DefaultCoreMaxSessions       = 16
+	DefaultCoreMaxMCPServers     = 4
+	DefaultCoreBashTimeout       = 10 * time.Minute
+	DefaultCoreMaxOutputBytes    = 1024 * 1024
+	DefaultCoreInlineResultBytes = 48 * 1024
+	coreMCPUnavailableAfter      = 5
+	coreMCPHealthyRun            = time.Second
+	maxGrepMatches               = 200
+	maxEnvEntries                = 64
+	maxEnvTotalBytes             = 16 * 1024
+)
+
+var safeName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+
+// deniedEnv blocks loader/injection variables in request env (v1.1 §3.3, §13).
+var deniedEnv = map[string]bool{
+	"LD_PRELOAD": true, "LD_LIBRARY_PATH": true, "LD_AUDIT": true,
+	"DYLD_INSERT_LIBRARIES": true, "DYLD_LIBRARY_PATH": true, "DYLD_FRAMEWORK_PATH": true,
+	"NODE_OPTIONS": true, "PYTHONSTARTUP": true, "BASH_ENV": true, "ENV": true,
+	"PERL5OPT": true, "RUBYOPT": true,
+}
+
+// baseEnv is the only executor environment a bash tool or process inherits;
+// everything else comes from the request or CoreOptions.Env. On Windows it
+// also carries the variables the system needs to run programs (see
+// processBaseEnv).
+var baseEnv = processBaseEnv(runtime.GOOS)
+
+// mcpBaseEnv is what a stdio MCP server inherits from the executor: the
+// official MCP SDKs' default list (getDefaultEnvironment) without the
+// host-profile variables (HOME on POSIX; HOMEDRIVE, HOMEPATH, USERPROFILE,
+// APPDATA, LOCALAPPDATA on Windows), so package launchers find their
+// tools but not the host's credentials.
+func mcpBaseEnv() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"COMSPEC", "PATH", "PATHEXT", "PROCESSOR_ARCHITECTURE", "PROGRAMDATA",
+			"PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "USERNAME", "WINDIR"}
+	}
+	return []string{"LOGNAME", "PATH", "SHELL", "TERM", "USER"}
+}
+
+// CoreOptions configures the execution core.
+type CoreOptions struct {
+	// WorkRoot holds every session workspace: WorkRoot/<brain>/<session>.
+	WorkRoot string
+	// Workspace overrides the per-session directory (for example a machine
+	// executor whose sessions all share one directory, or a desktop app
+	// mapping a brain to a project folder). Tools are confined to it.
+	Workspace func(brain, sessionID string) string
+	// MaxSessions bounds active sessions across all attached brains;
+	// MaxSessionsPerBrain bounds one brain (defaults to MaxSessions). A full
+	// core answers session.assign with executor_busy (-32009, retryable).
+	MaxSessions         int
+	MaxSessionsPerBrain int
+	// MaxMCPServersPerSession bounds session.assign.mcp_servers (default 4).
+	MaxMCPServersPerSession int
+	// BashTimeout applies when neither tool.call deadline_ms nor the bash
+	// timeout_ms is set (default 10 minutes).
+	BashTimeout time.Duration
+	// MaxOutputBytes caps each captured bash stream (default 1 MiB).
+	MaxOutputBytes int
+	// InlineResultBytes is the largest bash output returned inline (default
+	// 48 KiB, under the 64 KiB control frame). Larger output is truncated.
+	InlineResultBytes int
+	// ComputerUse serves computer_observe and computer_action and advertises
+	// capabilities.computer_use (for example NewCuaDriver). Nil leaves
+	// computer use off: the harness then sends no computer_* tool.
+	ComputerUse ComputerUseBackend
+	// ComputerVision tells whether the model that reads a session's
+	// computer use results takes images. When it answers
+	// ComputerVisionTextOnly, an observation's screenshot is still taken
+	// (actions use its pixels) but not sent: the result carries its text and
+	// a note that the model cannot read images. Nil, or
+	// ComputerVisionUnknown, sends the screenshot.
+	ComputerVision func(ctx context.Context, q ComputerVisionQuery) ComputerVisionAnswer
+	// Env is set on every bash tool and process and cannot be overridden by
+	// a request (for example BMA_HOME).
+	Env map[string]string
+	// DenyEnv reports executor-private variables (credentials, state paths)
+	// that no bash tool, process or stdio MCP server may see: they are
+	// dropped from the inherited environment and a request setting one is
+	// rejected. NewCore rejects an Env entry it denies.
+	DenyEnv func(name string) bool
+	// RunAs, when set, is the OS identity every bash tool, process and stdio
+	// MCP server runs as, so a privileged executor (for example root) keeps
+	// its own credentials and state out of the workload's reach. HOME and
+	// USER in bash and process environments are the workload's. On Linux,
+	// the file tools (read, write, edit, glob, grep) use the workload's file
+	// identity. Unix only.
+	RunAs *RunAs
+	// Launch runs before each bash tool command starts (tool.call and
+	// LocalToolRoute, so also ACPAgent's own tools), with the semantics of
+	// ProcessOptions.Launch: it may change the directory, argv and
+	// environment, or refuse the start; see LaunchFunc. File tools run inside
+	// the executor and do not call it (they stay within the session
+	// workspace). Nil starts commands as before.
+	Launch LaunchFunc
+	// FileAccess runs before every file tool (read, write, edit, glob, grep)
+	// of this machine: a tool.call and the tools of a LocalToolRoute (so also
+	// ACPAgent's). It gets the session, the tool, the operation (read or
+	// write) and the workspace-relative path, and refuses by returning an
+	// error: an *RPCError (NewReasonError) gives its data.reason as the
+	// refusal code, any other error permission_denied. A LocalToolRoute call
+	// is then not_forwarded with the code as Code, recorded like a result (the
+	// same call id is answered with it again); a tool.call fails with
+	// "<code>: <message>". Nothing is read or written when it refuses. A host
+	// uses it for read-only sessions, protected paths, revoked grants and
+	// stopped turns. The tools stay within the workspace with or without it,
+	// unless OutsideFiles is set.
+	// Nil allows every file tool call as before. See FileAccessRequest.
+	FileAccess FileAccessFunc
+	// OutsideFiles lets a file tool use an absolute path outside the session
+	// workspace and mounts (as the user this executor runs as) when
+	// FileAccess allows that call: the request then has Outside set and the
+	// absolute path. FileAccess is required with it. Off, such a path fails
+	// without asking FileAccess, as before. A host sets it for a session
+	// that has full access to the computer; relative paths stay in the
+	// workspace either way.
+	OutsideFiles bool
+	// ToolOutputDir, when set, holds the output files of the bash commands
+	// of a LocalToolRoute (so also ACPAgent's own tools):
+	// ToolOutputDir/<short hash of the session>/, created 0700 (owned by
+	// RunAs when set). Empty keeps them in .bma-bash/ under the turn's
+	// working directory. A host whose Launch sandboxes commands sets it to a
+	// directory outside every folder a session may write, so the executor
+	// writes nothing into the user's folders. The read tool of the session
+	// may read its own output files there. tool.call bash keeps its output
+	// in memory and does not use it.
+	ToolOutputDir string
+	// EndAfterToolCall marks sessions that carry exactly one tool call: the
+	// core ends them (session.ended "completed") after the result is
+	// delivered. BMA's durable selfhost queue assigns such sessions.
+	EndAfterToolCall func(SessionAssignParams) bool
+	// OnAssign runs on every accepted session.assign of the core, the first
+	// one of a session (the session exists, workspace and MCP servers not yet
+	// prepared) and each replay (sent again before tool calls, on reconnect,
+	// to renew a grant). A host keeps per-session state from params.Metadata
+	// here: a replay carries the whole metadata again, a key it no longer
+	// holds is gone, and the session's Assignment shows the newest assign's
+	// once OnAssign returns. A returned error refuses the assign (invalid
+	// params naming it): a first assign creates no session, a replay leaves
+	// the previous metadata. End of the session is the session's Context.
+	// Nil does nothing.
+	OnAssign func(session *CoreSession, params SessionAssignParams) error
+	OnLog    func(LogEvent)
+}
+
+// RunAs is a workload OS identity (CoreOptions.RunAs).
+type RunAs struct {
+	UID, GID uint32
+	// Groups are the supplementary groups (for example one that may write a
+	// shared session directory); empty means none.
+	Groups []uint32
+	// Home and User replace the executor's HOME and USER.
+	Home, User string
+}
+
+// Handler serves one harness-to-executor request method registered by a
+// Capability. A *RPCError result is sent as is; any other error becomes
+// internal_error.
+type Handler func(ctx context.Context, req Request) (any, error)
+
+// Request is one inbound request routed to a Capability handler.
+type Request struct {
+	Brain  string
+	Method string
+	// ID is the JSON-RPC request id, the idempotency key of retried writes.
+	ID     string
+	Params json.RawMessage
+	// Session is the active session named by params.session_id for a
+	// SessionScoped capability, nil otherwise.
+	Session *CoreSession
+	Client  *Client
+}
+
+// Capability is an extension of the core: a set of methods behind one or
+// more capability bits. The core advertises the bits through Capabilities,
+// routes the methods for every attached brain and, for SessionScoped
+// capabilities, answers session_not_active (-32007) for unknown sessions and
+// calls OnSessionEnd before a session reports session.ended.
+type Capability struct {
+	// Advertise sets the capability bits on the register capabilities.
+	Advertise     func(*Capabilities)
+	Methods       map[string]Handler
+	SessionScoped bool
+	OnSessionEnd  func(*CoreSession)
+}
+
+// Core is the executor's execution core ("hands"): bash with process-group
+// cancellation, file tools, a stdio MCP supervisor, per-session cleanup and
+// registered capabilities (process.*, terminal.*, skill.install, ...). It is
+// independent of who drives it: Attach it to one Client per harness
+// ("brain"), whether that is the BMA cloud or a local harness on a local
+// socket, and every brain gets the same protocol behavior.
+//
+// Isolation: sessions are keyed by (brain, session_id), so two brains may use
+// the same session id without seeing each other; a request can only reach
+// sessions its own brain assigned, and each session has its own workspace,
+// processes and MCP servers. Capacity is shared: MaxSessions across brains,
+// MaxSessionsPerBrain per brain. Bash is not a sandbox: every brain runs as
+// the executor's OS user.
+type Core struct {
+	opts CoreOptions
+
+	mu           sync.Mutex
+	brains       map[string]*Client
+	sessions     map[coreKey]*CoreSession
+	capabilities []Capability
+	methods      map[string]registeredMethod
+	closed       bool
+
+	fileCommitHook func(context.Context, string, func() error) error
+
+	// local is the state of the local tool routes (toolroute_local.go).
+	local localState
+	// frames are the sessions' last computer use observations (computer_use.go).
+	frames computerFrames
+}
+
+type registeredMethod struct {
+	handler       Handler
+	sessionScoped bool
+}
+
+type coreKey struct{ brain, session string }
+
+// CoreSession is one assigned session of one brain.
+type CoreSession struct {
+	key       coreKey
+	workspace string
+	// workRoot is CoreOptions.WorkRoot: a cwd equal to it means "the
+	// session's workspace" (see ResolveCwd).
+	workRoot string
+	client   *Client
+	params   SessionAssignParams
+	ctx      context.Context
+	cancel   context.CancelFunc
+
+	mu      sync.Mutex
+	stopped bool
+	wg      sync.WaitGroup
+	values  map[any]any
+	// mounts are the session's mounted file directories the file tools may
+	// reach besides the workspace (core_mounts.go); empty for most sessions.
+	mounts []*sessionMount
+	// outside is CoreOptions.OutsideFiles: an absolute path beyond the
+	// workspace and mounts is a target, which FileAccess decides on.
+	outside bool
+}
+
+func (s *CoreSession) ID() string        { return s.key.session }
+func (s *CoreSession) Brain() string     { return s.key.brain }
+func (s *CoreSession) Workspace() string { return s.workspace }
+func (s *CoreSession) Client() *Client   { return s.client }
+
+// Context is canceled when the session stops.
+func (s *CoreSession) Context() context.Context { return s.ctx }
+
+// Assignment is the session.assign that created the session.
+// A replayed session.assign replaces its metadata (the latest wins), so this
+// is the newest assign's, not necessarily the first's.
+func (s *CoreSession) Assignment() SessionAssignParams {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.params
+}
+
+// Value returns the per-session value for key, creating it with create on
+// first use. Capabilities keep their session state here.
+func (s *CoreSession) Value(key any, create func() any) any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if value, ok := s.values[key]; ok {
+		return value
+	}
+	value := create()
+	s.values[key] = value
+	return value
+}
+
+// enter registers work that stop must wait for; false once stopping.
+func (s *CoreSession) enter() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return false
+	}
+	s.wg.Add(1)
+	return true
+}
+
+// NewCore validates options and creates WorkRoot.
+func NewCore(opts CoreOptions) (*Core, error) {
+	if opts.WorkRoot == "" {
+		return nil, errors.New("bmaexecutor: CoreOptions.WorkRoot is required")
+	}
+	root, err := filepath.Abs(opts.WorkRoot)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, err
+	}
+	opts.WorkRoot = root
+	if opts.OutsideFiles && opts.FileAccess == nil {
+		return nil, errors.New("bmaexecutor: CoreOptions.OutsideFiles requires FileAccess")
+	}
+	if opts.ToolOutputDir != "" {
+		if opts.ToolOutputDir, err = filepath.Abs(opts.ToolOutputDir); err != nil {
+			return nil, err
+		}
+	}
+	if opts.MaxSessions <= 0 {
+		opts.MaxSessions = DefaultCoreMaxSessions
+	}
+	if opts.MaxSessionsPerBrain <= 0 || opts.MaxSessionsPerBrain > opts.MaxSessions {
+		opts.MaxSessionsPerBrain = opts.MaxSessions
+	}
+	if opts.MaxMCPServersPerSession <= 0 {
+		opts.MaxMCPServersPerSession = DefaultCoreMaxMCPServers
+	}
+	if opts.BashTimeout <= 0 {
+		opts.BashTimeout = DefaultCoreBashTimeout
+	}
+	if opts.MaxOutputBytes <= 0 {
+		opts.MaxOutputBytes = DefaultCoreMaxOutputBytes
+	}
+	if opts.InlineResultBytes <= 0 {
+		opts.InlineResultBytes = DefaultCoreInlineResultBytes
+	}
+	if opts.DenyEnv == nil {
+		opts.DenyEnv = func(string) bool { return false }
+	}
+	if opts.RunAs != nil && runtime.GOOS == "windows" {
+		return nil, errors.New("bmaexecutor: CoreOptions.RunAs is not supported on windows")
+	}
+	for key := range opts.Env {
+		if opts.DenyEnv(key) {
+			return nil, fmt.Errorf("bmaexecutor: CoreOptions.Env %s is denied by DenyEnv", key)
+		}
+	}
+	return &Core{
+		opts: opts, brains: map[string]*Client{}, sessions: map[coreKey]*CoreSession{},
+		methods: map[string]registeredMethod{},
+	}, nil
+}
+
+// Register adds a capability. Call it before Attach; a method may be
+// registered once.
+func (c *Core) Register(capability Capability) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.brains) > 0 {
+		return errors.New("bmaexecutor: register capabilities before Attach")
+	}
+	for method := range capability.Methods {
+		if _, exists := c.methods[method]; exists {
+			return fmt.Errorf("bmaexecutor: method %s is already registered", method)
+		}
+		switch method {
+		case MethodSessionAssign, MethodSessionStop, MethodToolCall, MethodToolCancel, MethodExecutorDrain:
+			return fmt.Errorf("bmaexecutor: method %s is served by the core", method)
+		}
+	}
+	for method, handler := range capability.Methods {
+		c.methods[method] = registeredMethod{handler: handler, sessionScoped: capability.SessionScoped}
+	}
+	c.capabilities = append(c.capabilities, capability)
+	return nil
+}
+
+// Capabilities is what an attached Client should advertise.
+func (c *Core) Capabilities() Capabilities {
+	capabilities := Capabilities{
+		Shell: &ShellCapability{Enabled: true},
+		Files: &FilesCapability{Enabled: true, ReadRoots: []string{c.opts.WorkRoot}, WriteRoots: []string{c.opts.WorkRoot}},
+		MCP:   &MCPCapability{Stdio: true, SecretEnv: true, MaxServers: c.opts.MaxMCPServersPerSession},
+	}
+	capabilities.ComputerUse = c.opts.ComputerUse != nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, capability := range c.capabilities {
+		if capability.Advertise != nil {
+			capability.Advertise(&capabilities)
+		}
+	}
+	return capabilities
+}
+
+// Attach serves session.assign, session.stop, tool.call and every registered
+// capability method for one brain on client. Call it before client.Start.
+// brain names the harness ("cloud", "local", ...) and must be unique per core.
+func (c *Core) Attach(brain string, client *Client) error {
+	if !safeName.MatchString(brain) {
+		return fmt.Errorf("bmaexecutor: invalid brain name %q", brain)
+	}
+	c.mu.Lock()
+	if _, exists := c.brains[brain]; exists {
+		c.mu.Unlock()
+		return fmt.Errorf("bmaexecutor: brain %q is already attached", brain)
+	}
+	c.brains[brain] = client
+	methods := make(map[string]registeredMethod, len(c.methods))
+	for method, registered := range c.methods {
+		methods[method] = registered
+	}
+	c.mu.Unlock()
+	client.OnSessionAssign(func(ctx context.Context, params SessionAssignParams) (SessionAssignResult, error) {
+		return c.assign(brain, client, params)
+	})
+	client.OnSessionStop(func(ctx context.Context, params SessionStopParams) (SessionStopResult, error) {
+		if !c.end(coreKey{brain, params.SessionID}, "stopped") {
+			return SessionStopResult{}, &RPCError{Code: CodeSessionNotActive, Message: "session is not active"}
+		}
+		return SessionStopResult{Stopped: true}, nil
+	})
+	client.OnToolCallAccept(func(params ToolCallParams) error {
+		return c.acceptToolCall(brain, params)
+	})
+	// One handler per tool the core implements; the client advertises
+	// shell and files from them.
+	run := func(ctx context.Context, tool ToolContext) ToolOutput {
+		result := c.toolCall(ctx, brain, tool.params)
+		out := ToolOutput{Content: result.Content, IsError: result.IsError, Artifacts: result.Artifacts}
+		if result.Outcome != ToolOutcomeSucceeded {
+			out.Outcome = result.Outcome
+		}
+		return out
+	}
+	client.Tools.Bash.Handle(func(ctx context.Context, _ BashInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	client.Tools.Read.Handle(func(ctx context.Context, _ ReadInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	client.Tools.Write.Handle(func(ctx context.Context, _ WriteInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	client.Tools.Edit.Handle(func(ctx context.Context, _ EditInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	client.Tools.Glob.Handle(func(ctx context.Context, _ GlobInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	client.Tools.Grep.Handle(func(ctx context.Context, _ GrepInput, tool ToolContext) (ToolOutput, error) {
+		return run(ctx, tool), nil
+	})
+	if c.opts.ComputerUse != nil {
+		computer := func(ctx context.Context, params ToolCallParams, _ func(string)) (ToolResultParams, error) {
+			return c.toolCall(ctx, brain, params), nil
+		}
+		client.setToolHandler(ToolNameComputerObserve, computer)
+		client.setToolHandler(ToolNameComputerAction, computer)
+	}
+	client.afterToolResult(func(params ToolCallParams) {
+		session := c.session(coreKey{brain, params.SessionID})
+		if session != nil && c.opts.EndAfterToolCall != nil && c.opts.EndAfterToolCall(session.Assignment()) {
+			c.end(session.key, "completed")
+		}
+	})
+	client.onSessionsLost(func(ids []string) {
+		for _, id := range ids {
+			if c.stop(coreKey{brain, id}) {
+				c.log(LogInfo, "session "+id+" stopped: executor lease expired", nil)
+			}
+		}
+	})
+	for method, registered := range methods {
+		registered := registered
+		method := method
+		client.onRequest(method, func(ctx context.Context, params json.RawMessage) (any, error) {
+			return c.serve(ctx, brain, client, method, registered, params)
+		})
+	}
+	return nil
+}
+
+func (c *Core) serve(ctx context.Context, brain string, client *Client, method string, registered registeredMethod, params json.RawMessage) (any, error) {
+	request := Request{Brain: brain, Method: method, ID: RequestID(ctx), Params: params, Client: client}
+	if registered.sessionScoped {
+		var scope struct {
+			SessionID string `json:"session_id"`
+		}
+		if len(params) == 0 || json.Unmarshal(params, &scope) != nil {
+			return nil, &RPCError{Code: CodeInvalidParams, Message: "invalid params"}
+		}
+		session := c.session(coreKey{brain, scope.SessionID})
+		if session == nil || !session.enter() {
+			return nil, &RPCError{Code: CodeSessionNotActive, Message: "session is not active"}
+		}
+		defer session.wg.Done()
+		request.Session = session
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		defer context.AfterFunc(session.ctx, cancel)()
+	}
+	return registered.handler(ctx, request)
+}
+
+// Close stops every session of every brain without reporting session.ended.
+func (c *Core) Close() {
+	c.mu.Lock()
+	c.closed = true
+	keys := make([]coreKey, 0, len(c.sessions))
+	for key := range c.sessions {
+		keys = append(keys, key)
+	}
+	c.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, key := range keys {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.stop(key)
+		}()
+	}
+	wg.Wait()
+	c.local.background.killAll()
+}
+
+func busy(message string) error {
+	return &RPCError{Code: CodeExecutorBusy, Message: message, Data: &JSONRPCErrorData{Retryable: true}}
+}
+
+func (c *Core) workspace(brain, sessionID string) string {
+	if c.opts.Workspace != nil {
+		return c.opts.Workspace(brain, sessionID)
+	}
+	name := sessionID
+	if !safeName.MatchString(name) {
+		name = hex.EncodeToString([]byte(sessionID))
+	}
+	return filepath.Join(c.opts.WorkRoot, brain, name)
+}
+
+func (c *Core) assign(brain string, client *Client, params SessionAssignParams) (SessionAssignResult, error) {
+	if params.SessionID == "" || params.Lease.Token == "" {
+		return SessionAssignResult{}, &RPCError{Code: CodeInvalidParams, Message: "session_id and lease.token are required"}
+	}
+	if len(params.MCPServers) > c.opts.MaxMCPServersPerSession {
+		return SessionAssignResult{}, &RPCError{Code: CodeInvalidParams, Message: "too many mcp_servers"}
+	}
+	for _, server := range params.MCPServers {
+		if err := c.checkMCPEnv(server); err != nil {
+			return SessionAssignResult{}, &RPCError{Code: CodeInvalidParams, Message: err.Error()}
+		}
+	}
+	key := coreKey{brain, params.SessionID}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return SessionAssignResult{Accepted: false, SessionID: params.SessionID}, nil
+	}
+	if existing, exists := c.sessions[key]; exists {
+		// A replayed assign (for example after reconnect) is idempotent; its
+		// metadata replaces the session's, as the newest assign's.
+		c.mu.Unlock()
+		if err := c.onAssign(existing, params); err != nil {
+			return SessionAssignResult{}, err
+		}
+		existing.mu.Lock()
+		existing.params.Metadata = maps.Clone(params.Metadata)
+		existing.mu.Unlock()
+		return SessionAssignResult{Accepted: true, SessionID: params.SessionID}, nil
+	}
+	perBrain := 0
+	for existing := range c.sessions {
+		if existing.brain == brain {
+			perBrain++
+		}
+	}
+	switch {
+	case len(c.sessions) >= c.opts.MaxSessions:
+		c.mu.Unlock()
+		return SessionAssignResult{}, busy("executor is at its session capacity")
+	case perBrain >= c.opts.MaxSessionsPerBrain:
+		c.mu.Unlock()
+		return SessionAssignResult{}, busy("this harness is at its session capacity on the executor")
+	}
+	// Sessions outlive one connection: their context is not the request's.
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &CoreSession{
+		key: key, workspace: c.workspace(brain, params.SessionID), workRoot: c.opts.WorkRoot, client: client, params: params,
+		ctx: ctx, cancel: cancel, values: map[any]any{}, outside: c.opts.OutsideFiles,
+	}
+	c.sessions[key] = session
+	c.mu.Unlock()
+
+	if err := c.onAssign(session, params); err != nil {
+		c.stop(key)
+		return SessionAssignResult{}, err
+	}
+	if err := c.createWorkspace(session.workspace); err != nil {
+		c.stop(key)
+		return SessionAssignResult{}, fmt.Errorf("create workspace: %w", err)
+	}
+	go c.prepare(client, session, params)
+	return SessionAssignResult{Accepted: true, SessionID: params.SessionID}, nil
+}
+
+// onAssign runs CoreOptions.OnAssign; its error is the assign's invalid params.
+func (c *Core) onAssign(session *CoreSession, params SessionAssignParams) error {
+	if c.opts.OnAssign == nil {
+		return nil
+	}
+	if err := c.opts.OnAssign(session, params); err != nil {
+		return &RPCError{Code: CodeInvalidParams, Message: err.Error()}
+	}
+	return nil
+}
+
+// createWorkspace creates a missing session workspace, owned by the RunAs
+// identity when set. An existing directory is left as it is.
+func (c *Core) createWorkspace(dir string) error {
+	if _, err := os.Stat(dir); err == nil {
+		return nil
+	}
+	// Every directory created here is the RunAs identity's, the missing
+	// parents too (WorkRoot/<brain> below a session workspace): a parent the
+	// executor created for itself would keep the workload user out of the
+	// workspace, and every process of the session would fail to chdir.
+	var missing []string
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Lstat(d); err == nil {
+			break
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		missing = append(missing, d)
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+	for _, d := range slices.Backward(missing) {
+		if err := os.Mkdir(d, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		if c.opts.RunAs != nil {
+			if err := os.Lchown(d, int(c.opts.RunAs.UID), int(c.opts.RunAs.GID)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// mcpSecretPrefix marks an env value that references a platform secret. The
+// executor has no store to resolve one from: the server resolves references
+// into transport.secret_env (capabilities.mcp.secret_env). A reference left in
+// env is refused rather than given to the server as its credential.
+const mcpSecretPrefix = "secret:"
+
+// checkMCPEnv rejects an environment-origin server whose env or secret_env
+// the executor will not pass: a secret: reference, a loader variable, a
+// DenyEnv name, a secret_env name that shadows env, or secret_env on a
+// non-stdio server. Errors name the variable, never its value.
+func (c *Core) checkMCPEnv(server MCPServerConfig) error {
+	if server.ConnectionOrigin != MCPConnectionOriginEnvironment {
+		return nil
+	}
+	for name, value := range server.Transport.Env {
+		switch {
+		case strings.HasPrefix(value, mcpSecretPrefix):
+			return fmt.Errorf("mcp server %q: env %s is a secret: reference, which this executor cannot resolve", server.ServerKey, name)
+		case deniedEnv[strings.ToUpper(name)] || c.opts.DenyEnv(name):
+			return fmt.Errorf("mcp server %q: env %s is not allowed", server.ServerKey, name)
+		}
+	}
+	if len(server.Transport.SecretEnv) > 0 && server.Transport.Type != MCPTransportTypeStdio {
+		return fmt.Errorf("mcp server %q: secret_env is only supported for stdio servers", server.ServerKey)
+	}
+	for name := range server.Transport.SecretEnv {
+		_, shadows := server.Transport.Env[name]
+		switch {
+		case shadows:
+			return fmt.Errorf("mcp server %q: secret_env %s is also set in env", server.ServerKey, name)
+		case name == "" || strings.ContainsAny(name, "=\x00"):
+			return fmt.Errorf("mcp server %q: secret_env has an invalid name", server.ServerKey)
+		case deniedEnv[strings.ToUpper(name)] || c.opts.DenyEnv(name):
+			return fmt.Errorf("mcp server %q: secret_env %s is not allowed", server.ServerKey, name)
+		}
+	}
+	return nil
+}
+
+// prepare starts the session's environment-origin stdio MCP servers, waits
+// for each first attempt, then reports session.ready.
+func (c *Core) prepare(client *Client, session *CoreSession, params SessionAssignParams) {
+	var first sync.WaitGroup
+	for _, server := range params.MCPServers {
+		if server.ConnectionOrigin != MCPConnectionOriginEnvironment {
+			continue // the harness connects service-origin servers itself
+		}
+		if server.Transport.Type != MCPTransportTypeStdio || server.Transport.Command == "" {
+			c.status(client, session, SessionStatusError, "mcp_unavailable: "+server.ServerKey+": only stdio is supported")
+			continue
+		}
+		if !session.enter() {
+			return
+		}
+		first.Add(1)
+		go func() {
+			defer session.wg.Done()
+			c.superviseMCP(client, session, server, first.Done)
+		}()
+	}
+	first.Wait()
+	if session.ctx.Err() != nil {
+		return
+	}
+	if _, err := client.SessionReady(session.ctx, SessionReadyParams{
+		SessionID: params.SessionID, WorkID: params.WorkID, LeaseToken: params.Lease.Token,
+	}); err != nil {
+		c.log(LogWarn, "session.ready for "+params.SessionID+" was not accepted", err)
+	}
+}
+
+func (c *Core) status(client *Client, session *CoreSession, status string, detail string) {
+	_ = client.notify(session.ctx, MethodSessionStatus, SessionStatusParams{SessionID: session.key.session, Status: status, Detail: detail})
+}
+
+// end stops the session and reports session.ended with reason. It reports
+// whether the session existed.
+func (c *Core) end(key coreKey, reason string) bool {
+	session := c.session(key)
+	if session == nil {
+		return false
+	}
+	go func() {
+		if !c.stop(key) {
+			return
+		}
+		if _, err := session.client.SessionEnded(context.Background(), SessionEndedParams{SessionID: key.session, Reason: reason}); err != nil {
+			c.log(LogWarn, "session.ended for "+key.session+" was not accepted", err)
+		}
+	}()
+	return true
+}
+
+// stop cancels the session, runs every capability's OnSessionEnd (killing
+// its processes) and waits for in-flight work. It reports whether this call
+// removed the session.
+func (c *Core) stop(key coreKey) bool {
+	c.mu.Lock()
+	session := c.sessions[key]
+	delete(c.sessions, key)
+	capabilities := append([]Capability(nil), c.capabilities...)
+	c.mu.Unlock()
+	if session == nil {
+		return false
+	}
+	c.frames.forget(key)
+	session.mu.Lock()
+	session.stopped = true
+	session.mu.Unlock()
+	session.cancel()
+	for _, capability := range capabilities {
+		if capability.OnSessionEnd != nil {
+			capability.OnSessionEnd(session)
+		}
+	}
+	session.wg.Wait()
+	return true
+}
+
+func (c *Core) session(key coreKey) *CoreSession {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sessions[key]
+}
+
+func (c *Core) log(level LogLevel, message string, err error) {
+	if c.opts.OnLog != nil {
+		c.opts.OnLog(LogEvent{Level: level, Message: message, Err: err})
+	}
+}
+
+// --- tools ---
+
+var coreTools = map[string]bool{
+	ToolNameBash: true, ToolNameRead: true, ToolNameWrite: true, ToolNameEdit: true, ToolNameGlob: true, ToolNameGrep: true,
+}
+
+// acceptToolCall rejects a tool.call before it is acknowledged: an unknown
+// session is session_not_active and an unsupported tool capability_unavailable.
+func (c *Core) acceptToolCall(brain string, params ToolCallParams) error {
+	if c.session(coreKey{brain, params.SessionID}) == nil {
+		return &RPCError{Code: CodeSessionNotActive, Message: "session is not active"}
+	}
+	if !coreTools[params.Tool] && !c.hasComputerTool(params.Tool) {
+		return &RPCError{Code: CodeCapabilityUnavailable, Message: "capability_unavailable",
+			Data: &JSONRPCErrorData{Capability: "tool:" + params.Tool}}
+	}
+	return nil
+}
+
+// hasComputerTool reports whether tool is a computer_* tool this core serves.
+func (c *Core) hasComputerTool(tool string) bool {
+	return c.opts.ComputerUse != nil && (tool == ToolNameComputerObserve || tool == ToolNameComputerAction)
+}
+
+func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams) ToolResultParams {
+	session := c.session(coreKey{brain, params.SessionID})
+	if session == nil {
+		return failedToolResult(params, "session_not_active: the session is not assigned to this harness")
+	}
+	if !session.enter() {
+		return failedToolResult(params, "session_not_active: the session is stopping")
+	}
+	defer session.wg.Done()
+	// session.stop cancels the tool as well as tool.cancel and the deadline.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopWatch := context.AfterFunc(session.ctx, cancel)
+	defer stopWatch()
+
+	var input ToolInput
+	if len(params.Input) > 0 {
+		if err := json.Unmarshal(params.Input, &input); err != nil {
+			return failedToolResult(params, "invalid tool input: "+err.Error())
+		}
+	}
+	started := time.Now()
+	var result ToolResultParams
+	var err error
+	switch params.Tool {
+	case ToolNameBash:
+		result = c.bash(ctx, session, params, input)
+	case ToolNameRead, ToolNameWrite, ToolNameEdit, ToolNameGlob, ToolNameGrep:
+		if err = c.checkFileAccess(ctx, session, sessionProcessContext(session).AgentSessionID, params.ToolCallID, params.Tool, input); err != nil {
+			err = refusalError(err)
+			break
+		}
+		agent := sessionProcessContext(session).AgentSessionID
+		if brain == acpBrain {
+			agent = params.SessionID // a LocalToolRoute session is its own agent session
+		}
+		commit := c.writeCommit(ctx, session, agent, params.ToolCallID, params.Tool, input)
+		result, err = c.fileTool(session, params.Tool, input, commit)
+	case ToolNameComputerObserve, ToolNameComputerAction:
+		if c.opts.ComputerUse == nil {
+			err = fmt.Errorf("capability_unavailable: tool %q is not supported", params.Tool)
+			break
+		}
+		result, err = c.computerTool(ctx, coreKey{brain, params.SessionID}, params)
+	default:
+		err = fmt.Errorf("capability_unavailable: tool %q is not supported", params.Tool)
+	}
+	if err != nil {
+		result = failedToolResult(params, err.Error())
+	}
+	result.DurationMS = time.Since(started).Milliseconds()
+	return result
+}
+
+func (c *Core) fileTool(session *CoreSession, tool string, input ToolInput, commit fileCommit) (ToolResultParams, error) {
+	switch tool {
+	case ToolNameRead:
+		return c.read(session, input)
+	case ToolNameWrite:
+		return c.write(session, input, commit)
+	case ToolNameEdit:
+		return c.edit(session, input, commit)
+	case ToolNameGlob:
+		return c.glob(session, input)
+	default:
+		return c.grep(session, input)
+	}
+}
+
+func textResult(isError bool, texts ...string) ToolResultParams {
+	result := ToolResultParams{Outcome: ToolOutcomeSucceeded, IsError: isError}
+	for _, text := range texts {
+		result.Content = append(result.Content, ContentBlock{Type: ContentBlockTypeText, Text: text})
+	}
+	return result
+}
+
+// resolve confines path to the session workspace.
+func (s *CoreSession) resolve(path string) (string, error) {
+	if path == "" {
+		return s.workspace, nil
+	}
+	resolved := path
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(s.workspace, resolved)
+	}
+	resolved = filepath.Clean(resolved)
+	rel, err := filepath.Rel(s.workspace, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q is outside the session workspace", path)
+	}
+	return resolved, nil
+}
+
+// ResolveCwd returns the real directory for a working directory request: a
+// relative cwd is under the workspace, an absolute one must resolve (through
+// symlinks) under it. An absolute cwd that is exactly the executor work root
+// (what a machine's configured cwd is, for example C:\bma\work) is the
+// session's workspace, since the work root holds every session's workspace
+// and is no place to run a command.
+func (s *CoreSession) ResolveCwd(cwd string) (string, error) {
+	if cwd != "" && filepath.IsAbs(cwd) && s.isWorkRoot(cwd) {
+		cwd = ""
+	}
+	rootReal, err := filepath.EvalSymlinks(s.workspace)
+	if err != nil {
+		return "", fmt.Errorf("work root: %w", err)
+	}
+	target := rootReal
+	if cwd != "" {
+		if filepath.IsAbs(cwd) {
+			target = filepath.Clean(cwd)
+		} else {
+			target = filepath.Join(rootReal, cwd)
+		}
+	}
+	targetReal, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return "", fmt.Errorf("cwd: %w", err)
+	}
+	rel, err := filepath.Rel(rootReal, targetReal)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", errors.New("cwd must be under the executor work root")
+	}
+	return targetReal, nil
+}
+
+// isWorkRoot reports whether the absolute path names the work root itself,
+// compared on real paths (symlinks, 8.3 short names and drive-letter or file
+// name case resolve alike on Windows).
+func (s *CoreSession) isWorkRoot(path string) bool {
+	if s.workRoot == "" {
+		return false
+	}
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	root, err := filepath.EvalSymlinks(s.workRoot)
+	if err != nil {
+		return false
+	}
+	targetInfo, err := os.Stat(target)
+	if err != nil {
+		return false
+	}
+	rootInfo, err := os.Stat(root)
+	return err == nil && os.SameFile(targetInfo, rootInfo)
+}
+
+// Env builds a bash or process environment: baseEnv from the executor, the
+// request env (bounded, loader and DenyEnv variables rejected), then
+// CoreOptions.Env.
+func (c *Core) Env(explicit map[string]string) ([]string, error) {
+	if len(explicit) > maxEnvEntries {
+		return nil, fmt.Errorf("env exceeds %d entries", maxEnvEntries)
+	}
+	total := 0
+	values := map[string]string{}
+	for _, key := range baseEnv {
+		if value, ok := os.LookupEnv(key); ok && !c.opts.DenyEnv(key) {
+			setEnvValue(values, key, value, envCaseInsensitive)
+		}
+	}
+	for key, value := range explicit {
+		if key == "" || strings.ContainsAny(key, "=\x00") || strings.Contains(value, "\x00") {
+			return nil, fmt.Errorf("env key %q is invalid", key)
+		}
+		if deniedEnv[strings.ToUpper(key)] || c.opts.DenyEnv(key) {
+			return nil, fmt.Errorf("env %s is not allowed", key)
+		}
+		total += len(key) + len(value)
+		setEnvValue(values, key, value, envCaseInsensitive)
+	}
+	if total > maxEnvTotalBytes {
+		return nil, fmt.Errorf("env exceeds %d bytes", maxEnvTotalBytes)
+	}
+	for key, value := range c.opts.Env {
+		setEnvValue(values, key, value, envCaseInsensitive)
+	}
+	if runAs := c.opts.RunAs; runAs != nil {
+		setOrDrop(values, "HOME", runAs.Home)
+		setOrDrop(values, "USER", runAs.User)
+	}
+	env := make([]string, 0, len(values))
+	for key, value := range values {
+		env = append(env, key+"="+value)
+	}
+	sort.Strings(env)
+	return env, nil
+}
+
+func setOrDrop(values map[string]string, key, value string) {
+	if value == "" {
+		delete(values, key)
+		return
+	}
+	values[key] = value
+}
+
+type cappedBuffer struct {
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if room := b.limit - b.buf.Len(); room > 0 {
+		if len(p) > room {
+			b.buf.Write(p[:room])
+			b.truncated = true
+		} else {
+			b.buf.Write(p)
+		}
+	} else if len(p) > 0 {
+		b.truncated = true
+	}
+	return len(p), nil
+}
+
+func (b *cappedBuffer) String() string {
+	if b.truncated {
+		return b.buf.String() + "\n[truncated]"
+	}
+	return b.buf.String()
+}
+
+type shellExecution struct {
+	ExitCode  int    `json:"exit_code"`
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	Truncated bool   `json:"truncated"`
+}
+
+// bash runs one command with a login shell in its own process group. A
+// non-zero exit is a succeeded tool call whose content reports exit_code.
+func (c *Core) bash(ctx context.Context, session *CoreSession, params ToolCallParams, input ToolInput) ToolResultParams {
+	if input.Command == "" {
+		return failedToolResult(params, "bash requires command")
+	}
+	if input.TimeoutMS > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(input.TimeoutMS)*time.Millisecond)
+		defer cancel()
+	} else if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.opts.BashTimeout)
+		defer cancel()
+	}
+	launch, err := c.launchTool(ctx, session, sessionProcessContext(session), params.ToolCallID, input.Command, input.Cwd, input.Env)
+	if err != nil {
+		if code, detail, refused := launchRefusal(err); refused {
+			return failedToolResult(params, code+": "+detail)
+		}
+		return failedToolResult(params, err.Error())
+	}
+	execution, err := c.runShell(ctx, launch)
+	switch {
+	case errors.Is(ctx.Err(), context.Canceled):
+		return ToolResultParams{Outcome: ToolOutcomeCanceled, IsError: true,
+			Content: []ContentBlock{{Type: ContentBlockTypeText, Text: "tool was canceled"}}}
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return failedToolResult(params, "tool timed out")
+	case err != nil:
+		return failedToolResult(params, err.Error())
+	}
+	return c.bashResult(ctx, session, params, execution)
+}
+
+// toolLaunch is how a bash tool's command starts: in dir with argv and env,
+// the CoreOptions.Launch hook's changes applied.
+type toolLaunch struct {
+	dir       string
+	argv, env []string
+}
+
+// launchError is a Launch hook's refusal of a bash tool command (an
+// *RPCError), as opposed to a bad cwd or env of the call.
+type launchError struct{ err *RPCError }
+
+func (e *launchError) Error() string { return e.err.Error() }
+func (e *launchError) Unwrap() error { return e.err }
+
+// launchRefusal reports whether err is a Launch hook's refusal, with the
+// code (data.reason, else spawn_failed) and detail a tool result carries.
+func launchRefusal(err error) (code, detail string, ok bool) {
+	var refusal *launchError
+	if !errors.As(err, &refusal) {
+		return "", "", false
+	}
+	code = ReasonSpawnFailed
+	if data := refusal.err.Data; data != nil && data.Reason != "" {
+		code = data.Reason
+	}
+	return code, refusal.err.Message, true
+}
+
+// sessionProcessContext is the ProcessContext of a bash tool call of a
+// harness session: its id, the session.assign metadata and client.
+func sessionProcessContext(session *CoreSession) ProcessContext {
+	metadata := session.Assignment().Metadata
+	return ProcessContext{SessionID: session.ID(), AgentSessionID: metadata[MetadataAgentSessionID],
+		Metadata: maps.Clone(metadata), Client: session.client}
+}
+
+// launchTool prepares the command of a bash tool call: the shell argv of
+// command, the environment (Env over explicit) and cwd resolved in the
+// session workspace, then CoreOptions.Launch (when set) as process.start runs
+// ProcessOptions.Launch: it may change dir, argv and env, or refuse (a
+// *launchError). A bad cwd or env is a plain error.
+func (c *Core) launchTool(ctx context.Context, session *CoreSession, process ProcessContext, callID, command, cwd string,
+	explicit map[string]string) (toolLaunch, error) {
+	launch := toolLaunch{argv: shellArgv(command)}
+	var err error
+	if c.opts.Launch == nil {
+		if launch.dir, err = session.ResolveCwd(cwd); err != nil {
+			return toolLaunch{}, err
+		}
+		launch.env, err = c.Env(explicit)
+		return launch, err
+	}
+	if launch.env, err = c.Env(explicit); err != nil {
+		return toolLaunch{}, err
+	}
+	env := launch.env
+	defaultCwd, err := session.ResolveCwd("")
+	if err != nil {
+		return toolLaunch{}, err
+	}
+	spec, err := runLaunch(ctx, c.opts.Launch, LaunchRequest{
+		ProcessContext: process, Tool: ToolNameBash, ToolCallID: callID,
+		Argv: slices.Clone(launch.argv), Cwd: cwd, DefaultCwd: defaultCwd, Env: slices.Clone(env),
+	})
+	if err != nil {
+		return toolLaunch{}, &launchError{err.(*RPCError)}
+	}
+	if len(spec.Argv) > 0 {
+		launch.argv = spec.Argv
+	}
+	if spec.Env != nil {
+		launch.env = spec.Env
+	}
+	switch {
+	case spec.Dir != "" && !filepath.IsAbs(spec.Dir):
+		return toolLaunch{}, &launchError{spawnFailed(fmt.Errorf("launch: dir %q is not absolute", spec.Dir))}
+	case spec.Dir != "":
+		launch.dir = spec.Dir
+	default:
+		launch.dir, err = session.ResolveCwd(cwd)
+	}
+	return launch, err
+}
+
+func (c *Core) runShell(ctx context.Context, launch toolLaunch) (shellExecution, error) {
+	cmd := toolCommand(ctx, launch.argv)
+	setCredential(cmd, c.opts.RunAs)
+	cmd.Dir = launch.dir
+	cmd.Env = launch.env
+	stdout := &cappedBuffer{limit: c.opts.MaxOutputBytes}
+	stderr := &cappedBuffer{limit: c.opts.MaxOutputBytes}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	runErr := runCommand(cmd)
+	execution := shellExecution{
+		Stdout: stdout.buf.String(), Stderr: stderr.buf.String(), Truncated: stdout.truncated || stderr.truncated,
+	}
+	var exitErr *exec.ExitError
+	switch {
+	case runErr == nil:
+	case ctx.Err() != nil:
+		return execution, ctx.Err()
+	case errors.As(runErr, &exitErr):
+		execution.ExitCode = exitErr.ExitCode()
+	default:
+		return execution, fmt.Errorf("spawn bash: %w", runErr)
+	}
+	return execution, nil
+}
+
+// toolCommand runs argv in its own process group (tree on Windows) that ends
+// with ctx.
+func toolCommand(ctx context.Context, argv []string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	setCommandLine(cmd)
+	setProcessGroup(cmd)
+	return cmd
+}
+
+// runCommand runs cmd to completion in its own process tree. What the
+// command left running is not ended, as a POSIX process group's orphans are
+// not.
+func runCommand(cmd *exec.Cmd) error {
+	tree, err := startCommand(cmd)
+	if err != nil {
+		return err
+	}
+	defer tree.release()
+	return cmd.Wait()
+}
+
+// bashResult returns stdout, stderr and exit_code blocks inline. When they do
+// not fit, the full execution JSON is uploaded as an artifact first and the
+// result carries a bounded preview plus the artifact reference (v1.1
+// §6.5/§6.7); without an artifact store the output is truncated.
+func (c *Core) bashResult(ctx context.Context, session *CoreSession, params ToolCallParams, execution shellExecution) ToolResultParams {
+	content := make([]ContentBlock, 0, 3)
+	if execution.Stdout != "" {
+		content = append(content, ContentBlock{Type: ContentBlockTypeText, Text: execution.Stdout})
+	}
+	if execution.Stderr != "" {
+		content = append(content, ContentBlock{Type: ContentBlockTypeText, Text: execution.Stderr})
+	}
+	content = append(content, ContentBlock{Type: ContentBlockTypeText, Text: fmt.Sprintf("exit_code: %d", execution.ExitCode)})
+	size := 0
+	for _, block := range content {
+		size += len(block.Text)
+	}
+	inline := c.opts.InlineResultBytes
+	if size <= inline {
+		return ToolResultParams{Outcome: ToolOutcomeSucceeded, Content: content}
+	}
+	return ToolResultParams{Outcome: ToolOutcomeSucceeded, Content: []ContentBlock{
+		{Type: ContentBlockTypeText, Text: truncate(execution.Stdout, inline/2)},
+		{Type: ContentBlockTypeText, Text: truncate(execution.Stderr, inline/4)},
+		{Type: ContentBlockTypeText, Text: fmt.Sprintf("exit_code: %d (output truncated to fit the result; %d bytes total)",
+			execution.ExitCode, len(execution.Stdout)+len(execution.Stderr))},
+	}}
+}
+
+func truncate(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit]
+}
+
+// --- stdio MCP supervisor ---
+
+// superviseMCP runs one stdio MCP server per (brain, session, server_key)
+// and bridges it to an MCP channel opened by client: each channel frame is
+// one line on the server's stdin, each stdout line one channel frame. When
+// either side ends, both are torn down and restarted with backoff, so every
+// channel talks to a fresh server. Retries continue until the session ends,
+// with capped, jittered backoff (mcpRetryDelay) that restarts once a channel
+// stayed open for coreMCPHealthyRun; after coreMCPUnavailableAfter
+// consecutive failures the server is reported as mcp_unavailable once per
+// outage. firstDone is called after the first attempt.
+func (c *Core) superviseMCP(client *Client, session *CoreSession, server MCPServerConfig, firstDone func()) {
+	var once sync.Once
+	defer once.Do(firstDone)
+	failures := 0
+	for session.ctx.Err() == nil {
+		var opened time.Time
+		err := c.runMCPOnce(client, session, server, func() { opened = time.Now(); once.Do(firstDone) })
+		once.Do(firstDone)
+		if session.ctx.Err() != nil {
+			return
+		}
+		if !opened.IsZero() && time.Since(opened) >= coreMCPHealthyRun {
+			failures = 0
+		}
+		failures++
+		delay := mcpRetryDelay(failures)
+		c.log(LogWarn, fmt.Sprintf("mcp server %s ended (failure %d, retrying in %s)", server.ServerKey, failures, delay.Round(time.Millisecond)), err)
+		if failures == coreMCPUnavailableAfter {
+			c.status(client, session, SessionStatusError, "mcp_unavailable: "+server.ServerKey)
+		}
+		select {
+		case <-session.ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+	}
+}
+
+// The MCP supervisor's retry backoff (variables so tests can shorten them).
+var (
+	coreMCPRetryBase = 200 * time.Millisecond
+	coreMCPRetryMax  = 30 * time.Second
+)
+
+// mcpRetryDelay is the wait before the next attempt after failures
+// consecutive failures: exponential from coreMCPRetryBase, capped at
+// coreMCPRetryMax, with jitter in [d/2, d] so executors that lost the same
+// server do not redial in lockstep.
+func mcpRetryDelay(failures int) time.Duration {
+	delay := coreMCPRetryMax
+	if shift := failures - 1; shift < 30 && coreMCPRetryBase<<shift < coreMCPRetryMax {
+		delay = coreMCPRetryBase << shift
+	}
+	return delay/2 + rand.N(delay/2+1)
+}
+
+// envValue reads name from an env map; Windows names are case-insensitive.
+func envValue(values map[string]string, name string) string {
+	if runtime.GOOS != "windows" {
+		return values[name]
+	}
+	for key, value := range values {
+		if strings.EqualFold(key, name) {
+			return value
+		}
+	}
+	return ""
+}
+
+// resolveMCPCommand finds the executable for a stdio MCP server. exec.LookPath
+// would search the executor's own PATH, which can differ from the PATH the
+// server is started with, so a bare name is searched on searchPath instead.
+// An absolute path is used as given; any other path with a separator is
+// refused rather than resolved against the executor's working directory.
+func resolveMCPCommand(command, searchPath string) (string, error) {
+	if filepath.IsAbs(command) {
+		return exec.LookPath(command)
+	}
+	if strings.ContainsAny(command, `/\`) {
+		return "", fmt.Errorf("mcp command %q: use an absolute path or a bare command name", command)
+	}
+	exts := []string{""}
+	if runtime.GOOS == "windows" {
+		exts = filepath.SplitList(os.Getenv("PATHEXT"))
+		if len(exts) == 0 {
+			exts = []string{".COM", ".EXE", ".BAT", ".CMD"}
+		}
+		if filepath.Ext(command) != "" {
+			exts = append([]string{""}, exts...)
+		}
+	}
+	for _, dir := range filepath.SplitList(searchPath) {
+		if !filepath.IsAbs(dir) {
+			continue // "" or relative entries would mean the working directory
+		}
+		for _, ext := range exts {
+			// LookPath with a separator never consults PATH; it only checks
+			// that the file is executable.
+			if found, err := exec.LookPath(filepath.Join(dir, command+ext)); err == nil {
+				return found, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("mcp command %q not found on the server PATH", command)
+}
+
+func (c *Core) runMCPOnce(client *Client, session *CoreSession, server MCPServerConfig, opened func()) error {
+	transport := server.Transport
+	// v1 §8.1: the host environment is not inherited beyond mcpBaseEnv
+	// (minus DenyEnv names, and functions as the MCP SDKs skip them); the
+	// configured env overlays it. session.assign already rejected denied
+	// names and secret: values. cmd.Env is never nil, which would inherit all.
+	values := map[string]string{}
+	for _, name := range mcpBaseEnv() {
+		if value, ok := os.LookupEnv(name); ok && !strings.HasPrefix(value, "()") && !c.opts.DenyEnv(name) {
+			values[name] = value
+		}
+	}
+	// Under RunAs the server's identity variables are the workload's, not
+	// the executor's (HOME stays uninherited, as without RunAs).
+	if runAs := c.opts.RunAs; runAs != nil {
+		setOrDrop(values, "USER", runAs.User)
+		setOrDrop(values, "LOGNAME", runAs.User)
+	}
+	for name, value := range transport.Env {
+		values[name] = value
+	}
+	// Resolved secrets live only in this server's environment (and the
+	// session's in-memory params, dropped when the session ends).
+	for name, value := range transport.SecretEnv {
+		values[name] = value
+	}
+	// A bare command name is looked up on the PATH the server will run with,
+	// not the executor's own.
+	command, err := resolveMCPCommand(transport.Command, envValue(values, "PATH"))
+	if err != nil {
+		return err
+	}
+	if transport.CommandSHA256 != "" {
+		if err := verifySHA256(command, transport.CommandSHA256); err != nil {
+			return err
+		}
+	}
+	// The harness chose the command, so an absolute cwd is honored; a
+	// relative one is inside the session workspace.
+	dir := session.workspace
+	if transport.Cwd != "" {
+		dir = transport.Cwd
+		if !filepath.IsAbs(dir) {
+			if dir, err = session.resolve(transport.Cwd); err != nil {
+				return err
+			}
+		}
+	}
+	ctx, cancel := context.WithCancel(session.ctx)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, command, transport.Args...)
+	setProcessGroup(cmd)
+	setCredential(cmd, c.opts.RunAs)
+	cmd.Dir = dir
+	cmd.Env = make([]string, 0, len(values))
+	for name, value := range values {
+		cmd.Env = append(cmd.Env, name+"="+value)
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	stderr := &cappedBuffer{limit: 8 * 1024}
+	cmd.Stderr = stderr
+	tree, err := startCommand(cmd)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		cancel()
+		_ = cmd.Wait()
+		tree.close()
+		if stderr.buf.Len() > 0 {
+			c.log(LogDebug, "mcp server "+server.ServerKey+" stderr: "+stderr.String(), nil)
+		}
+	}()
+
+	channel, err := client.OpenMCPChannel(ctx, session.key.session, server.ServerKey)
+	if err != nil {
+		return err
+	}
+	defer channel.Close()
+	opened()
+
+	errs := make(chan error, 2)
+	go func() {
+		for {
+			frame, err := channel.Read(ctx)
+			if err != nil {
+				errs <- fmt.Errorf("mcp channel: %w", err)
+				return
+			}
+			if _, err := stdin.Write(append(bytes.TrimRight(frame, "\r\n"), '\n')); err != nil {
+				errs <- fmt.Errorf("mcp stdin: %w", err)
+				return
+			}
+		}
+	}()
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 64*1024), maxFrameBytes)
+		for scanner.Scan() {
+			line := bytes.TrimSpace(scanner.Bytes())
+			if len(line) == 0 {
+				continue
+			}
+			if err := channel.Write(ctx, line); err != nil {
+				errs <- fmt.Errorf("mcp channel: %w", err)
+				return
+			}
+		}
+		errs <- fmt.Errorf("mcp server exited: %v", scanner.Err())
+	}()
+	select {
+	case err := <-errs:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func verifySHA256(path, want string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return err
+	}
+	if got := hex.EncodeToString(hash.Sum(nil)); !strings.EqualFold(got, strings.TrimPrefix(want, "sha256:")) {
+		return fmt.Errorf("mcp command %s sha256 mismatch", path)
+	}
+	return nil
+}

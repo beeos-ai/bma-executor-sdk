@@ -1,0 +1,470 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.bma.beeos.ai/schemas/tool.json",
+  "title": "BMA executor tool types",
+  "description": "Tool dispatch, results, cancellation, and artifact references.",
+  "$defs": {
+    "ToolName": {
+      "type": "string",
+      "description": "Built-in tool names. bmad serves bash only and answers -32012 for the rest.",
+      "enum": [
+        "bash",
+        "read",
+        "write",
+        "edit",
+        "glob",
+        "grep",
+        "list_files",
+        "computer_observe",
+        "computer_action"
+      ]
+    },
+    "ComputerAction": {
+      "type": "string",
+      "description": "Input actions accepted by the computer_action tool. mouse_move, hold_key, wait and batch are contract 1.17.0 (additive); clipboard_read and clipboard_write are contract 1.24.0 (additive).",
+      "enum": [
+        "click",
+        "type",
+        "key",
+        "scroll",
+        "drag",
+        "mouse_move",
+        "hold_key",
+        "wait",
+        "batch",
+        "clipboard_read",
+        "clipboard_write"
+      ]
+    },
+    "PermissionMode": {
+      "type": "string",
+      "description": "Tool permission mode; always_ask means the harness already resolved approval.",
+      "enum": [
+        "always_allow",
+        "always_ask"
+      ]
+    },
+    "ToolPermission": {
+      "type": "object",
+      "description": "Tool permission resolved by the harness.",
+      "properties": {
+        "mode": {
+          "$ref": "tool.json#/$defs/PermissionMode"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "additionalProperties": true
+    },
+    "ToolInput": {
+      "type": "object",
+      "description": "Superset of every built-in tool input, decoded by executors that read input generically. tool.call selects the exact per-tool schema through x-bma-params-discriminator; unknown members are ignored.",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "timeout_ms": {
+          "type": "integer"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "path": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "content": {
+          "type": "string"
+        },
+        "old_string": {
+          "type": "string"
+        },
+        "new_string": {
+          "type": "string"
+        },
+        "pattern": {
+          "type": "string"
+        },
+        "glob": {
+          "type": "string"
+        },
+        "display": {
+          "type": "string"
+        },
+        "action": {
+          "$ref": "tool.json#/$defs/ComputerAction"
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "BashInput": {
+      "type": "object",
+      "description": "bash input: run command with a login shell.",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Shell command line."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Working directory, relative to the session workspace."
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "description": "Per-call timeout; the executor default applies when absent."
+        },
+        "env": {
+          "type": "object",
+          "description": "Extra environment variables.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "additionalProperties": true
+    },
+    "ReadInput": {
+      "type": "object",
+      "description": "read input: return lines of a text file.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File path, relative to the session workspace."
+        },
+        "offset": {
+          "type": "integer",
+          "description": "First line to return, 1-based."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of lines."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": true
+    },
+    "WriteInput": {
+      "type": "object",
+      "description": "write input: create or replace a file.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File path, relative to the session workspace."
+        },
+        "content": {
+          "type": "string",
+          "description": "Full file content."
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "additionalProperties": true
+    },
+    "EditInput": {
+      "type": "object",
+      "description": "edit input: replace the single occurrence of old_string.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File path, relative to the session workspace."
+        },
+        "old_string": {
+          "type": "string",
+          "description": "Text that must occur exactly once."
+        },
+        "new_string": {
+          "type": "string",
+          "description": "Replacement text."
+        }
+      },
+      "required": [
+        "path",
+        "old_string",
+        "new_string"
+      ],
+      "additionalProperties": true
+    },
+    "GlobInput": {
+      "type": "object",
+      "description": "glob input: list paths matching pattern.",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Glob pattern."
+        },
+        "path": {
+          "type": "string",
+          "description": "Base directory, relative to the session workspace."
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "additionalProperties": true
+    },
+    "GrepInput": {
+      "type": "object",
+      "description": "grep input: search file lines with a regular expression.",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Regular expression."
+        },
+        "path": {
+          "type": "string",
+          "description": "Directory to search, relative to the session workspace."
+        },
+        "glob": {
+          "type": "string",
+          "description": "File name filter."
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "additionalProperties": true
+    },
+    "ListFilesInput": {
+      "type": "object",
+      "description": "list_files input.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Directory, relative to the session workspace."
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "ComputerObserveInput": {
+      "type": "object",
+      "description": "computer_observe input. The result is a screenshot (an image content block) with the list of the screen's windows as text. pid and window_id (both or neither, contract 1.8.0) observe one window of that list. region (contract 1.17.0) zooms: the result is that part of the screenshot at full screen resolution.",
+      "properties": {
+        "display": {
+          "type": "string",
+          "description": "Display to observe."
+        },
+        "pid": {
+          "type": "integer",
+          "description": "Contract 1.8.0. Process id of the window to observe (with window_id)."
+        },
+        "window_id": {
+          "type": "integer",
+          "description": "Additive. Window id from the window list (with pid)."
+        },
+        "region": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "description": "Contract 1.17.0. [x0, y0, x1, y1]: the top-left and bottom-right corners, in pixels of the last screenshot of the same target, of the area to return at full resolution (zoom). Coordinates of later actions stay those of the full screenshot."
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "ComputerActionInput": {
+      "type": "object",
+      "description": "computer_action input, after Anthropic's computer-use tool over the ComputerAction enum. Coordinates are pixels of the last computer_observe screenshot (window-local with pid and window_id). The members after display are contract 1.8.0 (additive). duration and actions are contract 1.17.0: action batch with actions runs those steps in order, stops at the first failure and ends with a screenshot of the last step's target (the screen, or its window).",
+      "properties": {
+        "action": {
+          "$ref": "tool.json#/$defs/ComputerAction"
+        },
+        "display": {
+          "type": "string",
+          "description": "Display to act on."
+        },
+        "coordinate": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[x, y] for click, scroll and the end of drag."
+        },
+        "start_coordinate": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[x, y] where drag starts."
+        },
+        "text": {
+          "type": "string",
+          "description": "Text to type (any language), or a key or chord such as Return or ctrl+s; for clipboard_write the text to put on the clipboard."
+        },
+        "button": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right",
+            "middle"
+          ]
+        },
+        "click_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "scroll_direction": {
+          "type": "string",
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ]
+        },
+        "scroll_amount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "pid": {
+          "type": "integer",
+          "description": "Process id of the target window (with window_id)."
+        },
+        "window_id": {
+          "type": "integer",
+          "description": "Target window id (with pid); input then goes to that window in the background."
+        },
+        "duration": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 10,
+          "description": "Contract 1.17.0. Seconds to hold the keys (hold_key) or to wait (wait)."
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "tool.json#/$defs/ComputerActionInput"
+          },
+          "minItems": 1,
+          "maxItems": 20,
+          "description": "Contract 1.17.0. The steps of action batch (each a computer_action input other than batch), run in order; the first failure stops the batch and the rest are not executed. The result reports every step and ends with a screenshot of the last step's target."
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": true
+    },
+    "ContentBlockType": {
+      "type": "string",
+      "description": "Tool result content block type.",
+      "enum": [
+        "text",
+        "image",
+        "resource",
+        "artifact"
+      ]
+    },
+    "ContentBlock": {
+      "type": "object",
+      "description": "Tool result content block. An artifact block carries artifact_id and mime_type instead of text (v1.1 §6.5).",
+      "properties": {
+        "type": {
+          "$ref": "tool.json#/$defs/ContentBlockType"
+        },
+        "text": {
+          "type": "string"
+        },
+        "data": {
+          "type": "string"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "artifact_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "ArtifactRef": {
+      "type": "object",
+      "description": "Artifact reference returned by POST /v1/environments/{environment_id}/artifacts (legacy alias POST /v1/executors/artifacts) and listed in tool.result artifacts (v1.1 §6.5).",
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "digest": {
+          "type": "string",
+          "description": "sha256:<hex> of the content."
+        },
+        "created_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "mime_type",
+        "size_bytes",
+        "digest"
+      ],
+      "additionalProperties": true
+    },
+    "ToolOutcome": {
+      "type": "string",
+      "description": "Tool outcome.",
+      "enum": [
+        "succeeded",
+        "failed",
+        "canceled"
+      ]
+    },
+    "ToolCancelResult": {
+      "type": "object",
+      "description": "tool.cancel result.",
+      "properties": {
+        "canceled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "canceled"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

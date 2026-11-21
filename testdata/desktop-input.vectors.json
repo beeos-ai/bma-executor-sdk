@@ -1,0 +1,901 @@
+{
+  "description": "Signed desktop input (contracts/bma/desktop-relay.md §5b). Public deterministic test key only; never a production credential.",
+  "test_seed_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+  "public_key_b64url": "IVL40Zt5HSRFMkLhXy6rbLfP-ntqXtMAl5YOBpiB2xI",
+  "control": {
+    "epoch": 42,
+    "lease_id": "lease-1",
+    "identity": "viewer_one"
+  },
+  "heartbeat": {
+    "message": {
+      "id": "h1",
+      "heartbeat": true,
+      "epoch": 42,
+      "lease_id": "lease-1"
+    },
+    "sender_identity": "viewer_one",
+    "ack": {
+      "ok": true
+    }
+  },
+  "vectors": [
+    {
+      "name": "pointer_left_down",
+      "sender_identity": "viewer_one",
+      "packet": {
+        "grant": {
+          "epoch": "42",
+          "generation": 1,
+          "lease_id": "lease-1",
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "expires_at": 2000000000000
+        },
+        "sequence": 1,
+        "input": {
+          "type": "pointer",
+          "x": 123,
+          "y": 87,
+          "buttons": 1
+        },
+        "signature": "rsyhD0Cz1eRIukOMXpW6Ic_wEo5x936hHZloDLmYWGObcy-4MWIeTnqVC-T7IBgqi4IOy3whmgViSaTKjF7iAg"
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343200000000000000076c656173652d31000000000000000a7669657765725f6f6e650000000000000001000001d1a94a20002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12000000000000000101007b005701",
+      "ack": {
+        "ok": true
+      }
+    },
+    {
+      "name": "pointer_wheel_up",
+      "sender_identity": "viewer_one",
+      "packet": {
+        "grant": {
+          "epoch": "42",
+          "generation": 1,
+          "lease_id": "lease-1",
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "expires_at": 2000000000000
+        },
+        "sequence": 2,
+        "input": {
+          "type": "pointer",
+          "x": 123,
+          "y": 87,
+          "buttons": 8
+        },
+        "signature": "fF8r42RMMy6sXFFDS-KBmxewKPE3BTQk8F1mKFeb0fjQUxIQTleIJuxpZXVD1p1T9jfnrOGPqHFncTMZsQA8Bg"
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343200000000000000076c656173652d31000000000000000a7669657765725f6f6e650000000000000001000001d1a94a20002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12000000000000000201007b005708",
+      "ack": {
+        "ok": true
+      }
+    },
+    {
+      "name": "key_shift_down",
+      "sender_identity": "viewer_one",
+      "packet": {
+        "grant": {
+          "epoch": "42",
+          "generation": 1,
+          "lease_id": "lease-1",
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "expires_at": 2000000000000
+        },
+        "sequence": 3,
+        "input": {
+          "type": "key",
+          "keysym": 65505,
+          "down": true
+        },
+        "signature": "fBMQtznUWRZWP0VMb8PjA1hUCbZwpdTuuKFBxFeyNUwWlgT1acoBAumoHOxFV9IVvDGnyC4SYpz3_UBZUF5EDQ"
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343200000000000000076c656173652d31000000000000000a7669657765725f6f6e650000000000000001000001d1a94a20002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db120000000000000003020000ffe101",
+      "ack": {
+        "ok": true
+      }
+    },
+    {
+      "name": "key_a_up",
+      "sender_identity": "viewer_one",
+      "packet": {
+        "grant": {
+          "epoch": "42",
+          "generation": 1,
+          "lease_id": "lease-1",
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "expires_at": 2000000000000
+        },
+        "sequence": 4,
+        "input": {
+          "type": "key",
+          "keysym": 97,
+          "down": false
+        },
+        "signature": "bwfT9JM3Q9iYSwXQGL9SozdAclVheAL8lS-UwxaNL_rwdQ0IjqMk_o4lZlz0kubjH_sAi_I9yEylky1F5T4wAg"
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343200000000000000076c656173652d31000000000000000a7669657765725f6f6e650000000000000001000001d1a94a20002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db120000000000000004020000006100",
+      "ack": {
+        "ok": true
+      }
+    },
+    {
+      "name": "release_all",
+      "sender_identity": "viewer_one",
+      "packet": {
+        "grant": {
+          "epoch": "42",
+          "generation": 1,
+          "lease_id": "lease-1",
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "expires_at": 2000000000000
+        },
+        "sequence": 5,
+        "input": {
+          "type": "release_all"
+        },
+        "signature": "bs0WclQsMb5tZzs24pUUdh7sFHdYy7TW26XDUdCYVeqq8z73C_pJMD0c4LBb8_UN7WX_YFoS6CjFI8wsim_BBQ"
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343200000000000000076c656173652d31000000000000000a7669657765725f6f6e650000000000000001000001d1a94a20002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12000000000000000503",
+      "ack": {
+        "ok": true
+      }
+    },
+    {
+      "name": "resize",
+      "sender_identity": "viewer_one",
+      "packet": {
+        "grant": {
+          "epoch": "42",
+          "generation": 1,
+          "lease_id": "lease-1",
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "expires_at": 2000000000000
+        },
+        "sequence": 6,
+        "input": {
+          "type": "resize",
+          "width": 2880,
+          "height": 1800
+        },
+        "signature": "yZUBinfRGmxsqxdc5A1d8LnWOfksu_gOJkmF8Z6fLztAEcdzSJveqQzvb6ZSng9ja6i8JpKyYuW2JX3xf-PrBQ"
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343200000000000000076c656173652d31000000000000000a7669657765725f6f6e650000000000000001000001d1a94a20002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db120000000000000006040b400708",
+      "ack": {
+        "ok": true
+      },
+      "ack_fixed_display": {
+        "ok": false,
+        "code": "resize_unsupported"
+      }
+    },
+    {
+      "name": "text_ascii",
+      "sender_identity": "viewer_one",
+      "packet": {
+        "grant": {
+          "epoch": "42",
+          "generation": 1,
+          "lease_id": "lease-1",
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "expires_at": 2000000000000
+        },
+        "sequence": 7,
+        "input": {
+          "type": "text",
+          "text": "hello, world"
+        },
+        "signature": "fs020Ct0I8dBa1IArAzcfsiDN1DRI1e_fmDW5ki9QSQfwBpu33YmDaZuGEHMCUuoLZvyx4G8l3SLBiPFi0cyCg"
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343200000000000000076c656173652d31000000000000000a7669657765725f6f6e650000000000000001000001d1a94a20002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12000000000000000705000c68656c6c6f2c20776f726c64",
+      "ack": {
+        "ok": true
+      }
+    },
+    {
+      "name": "text_cjk",
+      "sender_identity": "viewer_one",
+      "packet": {
+        "grant": {
+          "epoch": "42",
+          "generation": 1,
+          "lease_id": "lease-1",
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "expires_at": 2000000000000
+        },
+        "sequence": 8,
+        "input": {
+          "type": "text",
+          "text": "中文输入测试"
+        },
+        "signature": "Dqlqfu3w5KD3bGZOoLw6P1VuGZzrSOSbyW1ibhU7uHv7UtqiImCKltkHZJq0dCSsCxcnXii0sRMQqY6ZefOUBQ"
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343200000000000000076c656173652d31000000000000000a7669657765725f6f6e650000000000000001000001d1a94a20002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db120000000000000008050012e4b8ade69687e8be93e585a5e6b58be8af95",
+      "ack": {
+        "ok": true
+      }
+    },
+    {
+      "name": "text_mixed_newline",
+      "sender_identity": "viewer_one",
+      "packet": {
+        "grant": {
+          "epoch": "42",
+          "generation": 1,
+          "lease_id": "lease-1",
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "expires_at": 2000000000000
+        },
+        "sequence": 9,
+        "input": {
+          "type": "text",
+          "text": "Tab\there\r\n😀é"
+        },
+        "signature": "OsA6C_5AgTz3dGiwdMDA0ikjOMEUs5KmpFfAp_4dTlhYSQzRtHB5VQUsxdJxSp6WDxcQjKfa_Jk1FIvX4Wi-DA"
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343200000000000000076c656173652d31000000000000000a7669657765725f6f6e650000000000000001000001d1a94a20002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12000000000000000905001054616209686572650d0af09f9880c3a9",
+      "ack": {
+        "ok": true
+      }
+    },
+    {
+      "name": "expired",
+      "sender_identity": "viewer_one",
+      "packet": {
+        "grant": {
+          "epoch": "42",
+          "generation": 1,
+          "lease_id": "lease-1",
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "expires_at": 1700000000000
+        },
+        "sequence": 10,
+        "input": {
+          "type": "key",
+          "keysym": 97,
+          "down": true
+        },
+        "signature": "n3s6svAyAPmpY8yvL_9y419jon7XPwuCTDEOyEZPyW3F-rFUQbI-FsWX8LKTP-E0--pCPEu7Kv43IxEH8d1pCw"
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343200000000000000076c656173652d31000000000000000a7669657765725f6f6e6500000000000000010000018bcfe568002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12000000000000000a020000006101",
+      "expired": true,
+      "ack": {
+        "ok": false
+      }
+    },
+    {
+      "name": "wrong_epoch",
+      "sender_identity": "viewer_one",
+      "packet": {
+        "grant": {
+          "epoch": "41",
+          "generation": 1,
+          "lease_id": "lease-1",
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "expires_at": 2000000000000
+        },
+        "sequence": 11,
+        "input": {
+          "type": "key",
+          "keysym": 97,
+          "down": true
+        },
+        "signature": "VrU7AkJhv8msWcKCXsCCeaHAzXIvDs0-UqtsdS-xx0cEzuQNVT-Pe_NRY4UAbvYMP4mM8g1YDcbta_5M1K1cAg"
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343100000000000000076c656173652d31000000000000000a7669657765725f6f6e650000000000000001000001d1a94a20002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12000000000000000b020000006101",
+      "ack": {
+        "ok": false
+      }
+    },
+    {
+      "name": "wrong_lease",
+      "sender_identity": "viewer_one",
+      "packet": {
+        "grant": {
+          "epoch": "42",
+          "generation": 1,
+          "lease_id": "lease-0",
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "expires_at": 2000000000000
+        },
+        "sequence": 12,
+        "input": {
+          "type": "key",
+          "keysym": 97,
+          "down": true
+        },
+        "signature": "Ty6hfHo536kkW_aXAHvoe71ea8Q50hDTGoVdo3uXcpUvM2TXb8zluwTIBHSwDuibRibNNjMg8DZ5mPMJGVy5Cg"
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343200000000000000076c656173652d30000000000000000a7669657765725f6f6e650000000000000001000001d1a94a20002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12000000000000000c020000006101",
+      "ack": {
+        "ok": false
+      }
+    },
+    {
+      "name": "wrong_identity",
+      "sender_identity": "viewer_two",
+      "packet": {
+        "grant": {
+          "epoch": "42",
+          "generation": 1,
+          "lease_id": "lease-1",
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "expires_at": 2000000000000
+        },
+        "sequence": 13,
+        "input": {
+          "type": "key",
+          "keysym": 97,
+          "down": true
+        },
+        "signature": "99--ZZ5Uea37vwX7LxMmCiOx6JkwjRwTsLPlMJ3S0A8vqAtzA6O9ForMtt7LNTZlOyhWgCBaSmB-2U0o6MpeAw"
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343200000000000000076c656173652d31000000000000000a7669657765725f6f6e650000000000000001000001d1a94a20002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12000000000000000d020000006101",
+      "ack": {
+        "ok": false
+      }
+    },
+    {
+      "name": "text_control_character",
+      "sender_identity": "viewer_one",
+      "packet": {
+        "grant": {
+          "epoch": "42",
+          "generation": 1,
+          "lease_id": "lease-1",
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "expires_at": 2000000000000
+        },
+        "sequence": 14,
+        "input": {
+          "type": "text",
+          "text": "a\u0007b"
+        },
+        "signature": "ic1C-SA7VQS4uPR9Z9pDwCWANacl8zBpHXqWlOcV57Hk_RXerfJo4EmgemPu9k0rDVfEMSVHfPAL24-qwddjDw"
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343200000000000000076c656173652d31000000000000000a7669657765725f6f6e650000000000000001000001d1a94a20002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12000000000000000e050003610762",
+      "invalid_event": true,
+      "ack": {
+        "ok": false
+      }
+    },
+    {
+      "ack": {
+        "ok": true
+      },
+      "ack_fixed_display": {
+        "code": "resize_unsupported",
+        "ok": false
+      },
+      "canonical_hex": "6265656f732e6465736b746f702e696e7075742e7631000000000000000002343200000000000000076c656173652d31000000000000000a7669657765725f6f6e650000000000000001000001d1a94a20002152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12000000000000000f060b40070800c8",
+      "name": "resize_scaled",
+      "packet": {
+        "grant": {
+          "epoch": "42",
+          "expires_at": 2000000000000,
+          "generation": 1,
+          "holder": "viewer_one",
+          "input_key": [
+            33,
+            82,
+            248,
+            209,
+            155,
+            121,
+            29,
+            36,
+            69,
+            50,
+            66,
+            225,
+            95,
+            46,
+            171,
+            108,
+            183,
+            207,
+            250,
+            123,
+            106,
+            94,
+            211,
+            0,
+            151,
+            150,
+            14,
+            6,
+            152,
+            129,
+            219,
+            18
+          ],
+          "lease_id": "lease-1"
+        },
+        "input": {
+          "height": 1800,
+          "scale": 200,
+          "type": "resize",
+          "width": 2880
+        },
+        "sequence": 15,
+        "signature": "0oFaQfSP8AE6pkeOzWDGAdA2xyU_9zP6LK2uEkij1JQxcXG7Vul8OojaObMnd7tolNH7JkajYK9N2HGCcL6yDg"
+      },
+      "sender_identity": "viewer_one"
+    }
+  ]
+}

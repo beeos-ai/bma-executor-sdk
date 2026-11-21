@@ -1,0 +1,2034 @@
+{
+  "protocol": "bma.executor.v1.1",
+  "messages": [
+    {
+      "name": "executor.register request",
+      "method": "executor.register",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_1",
+        "method": "executor.register",
+        "params": {
+          "protocol": "bma.executor.v1.1",
+          "environment_id": "",
+          "executor": {
+            "name": "bmad",
+            "os": "linux",
+            "arch": "amd64",
+            "version": "0.9.0"
+          },
+          "capabilities": {
+            "shell": {
+              "enabled": true
+            },
+            "process": {
+              "enabled": true,
+              "max_processes": 64,
+              "buffer_bytes": 1048576,
+              "pty": true,
+              "file_transfer": true,
+              "git_credentials": true
+            },
+            "terminal": {
+              "enabled": true,
+              "kinds": [
+                "human",
+                "agent"
+              ],
+              "max_sessions": 8
+            },
+            "display": {
+              "rfb": false
+            },
+            "skills": {
+              "install": true
+            },
+            "workspace": {
+              "backup": true
+            },
+            "fs": {
+              "fuse": true,
+              "views": [
+                "uploads"
+              ]
+            }
+          },
+          "resume": {
+            "executor_id": "exec_6f0c",
+            "last_connection_id": "conn_01JABC",
+            "active_sessions": [
+              "sess_01JABC"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "executor.register result",
+      "method": "executor.register",
+      "kind": "result",
+      "result": {
+        "executor_id": "exec_6f0c",
+        "connection_id": "conn_01JABD",
+        "server_time": "2026-10-31T12:00:00Z",
+        "heartbeat_interval_ms": 15000,
+        "lease_ttl_ms": 60000,
+        "max_control_frame_bytes": 65536,
+        "max_mcp_frame_bytes": 1048576,
+        "drain": false,
+        "protocol": "bma.executor.v1.1",
+        "limits": {
+          "max_inflight_requests": 8,
+          "max_concurrent_process_reads": 4,
+          "max_process_read_bytes": 32768,
+          "max_process_write_bytes": 32768,
+          "max_processes_per_session": 64,
+          "max_artifact_bytes": 16777216
+        }
+      }
+    },
+    {
+      "name": "executor.register v1 request",
+      "method": "executor.register",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_v1",
+        "method": "executor.register",
+        "params": {
+          "protocol": "bma.executor.v1",
+          "environment_id": "env_01JABC",
+          "executor": {
+            "name": "macbook-pro",
+            "os": "darwin",
+            "arch": "arm64",
+            "version": "0.1.0"
+          },
+          "capabilities": {
+            "shell": {
+              "enabled": true
+            },
+            "files": {
+              "enabled": true,
+              "read_roots": [
+                "/workspace"
+              ],
+              "write_roots": [
+                "/workspace"
+              ]
+            },
+            "mcp": {
+              "stdio": true,
+              "http": true,
+              "max_servers": 4
+            },
+            "chrome": true,
+            "computer_use": true,
+            "display": false,
+            "artifacts": {
+              "upload": true,
+              "max_bytes": 16777216
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "executor.register request (session files root)",
+      "method": "executor.register",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_1",
+        "method": "executor.register",
+        "params": {
+          "protocol": "bma.executor.v1.1",
+          "environment_id": "",
+          "executor": {
+            "name": "desktop-agent",
+            "os": "darwin",
+            "arch": "arm64",
+            "version": "1.2.0"
+          },
+          "capabilities": {
+            "shell": {
+              "enabled": true
+            },
+            "process": {
+              "enabled": true,
+              "file_transfer": true
+            },
+            "session_files": {
+              "root": "/Users/alice/Library/Application Support/Agent/sessions"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "executor.register request (skills by copy)",
+      "method": "executor.register",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_1",
+        "method": "executor.register",
+        "params": {
+          "protocol": "bma.executor.v1.1",
+          "environment_id": "",
+          "executor": {
+            "name": "desktop-agent",
+            "os": "darwin",
+            "arch": "arm64",
+            "version": "1.3.0"
+          },
+          "capabilities": {
+            "shell": {
+              "enabled": true
+            },
+            "process": {
+              "enabled": true,
+              "file_transfer": true
+            },
+            "session_files": {
+              "root": "/Users/alice/Library/Application Support/Agent/sessions"
+            },
+            "fs": {
+              "fuse": false,
+              "copy_views": [
+                "skills"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "executor.heartbeat request",
+      "method": "executor.heartbeat",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_2",
+        "method": "executor.heartbeat",
+        "params": {
+          "connection_id": "conn_01JABD",
+          "active_sessions": [
+            "sess_01JABC"
+          ]
+        }
+      }
+    },
+    {
+      "name": "executor.heartbeat result",
+      "method": "executor.heartbeat",
+      "kind": "result",
+      "result": {
+        "server_time": "2026-10-31T12:00:15Z",
+        "lease_ttl_ms": 60000,
+        "drain": false
+      }
+    },
+    {
+      "name": "executor.token.refresh request",
+      "method": "executor.token.refresh",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_token_refresh",
+        "method": "executor.token.refresh",
+        "params": {
+          "token": "eyJhbGciOiJIUzI1NiJ9.e30.c2lnbmF0dXJl"
+        }
+      }
+    },
+    {
+      "name": "executor.token.refresh result",
+      "method": "executor.token.refresh",
+      "kind": "result",
+      "result": {
+        "expires_at": "2026-10-31T12:05:00Z"
+      }
+    },
+    {
+      "name": "executor.capabilities.update notification",
+      "method": "executor.capabilities.update",
+      "kind": "notification",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "executor.capabilities.update",
+        "params": {
+          "capabilities": {
+            "shell": {
+              "enabled": true
+            },
+            "process": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "executor.capabilities.update notification (hosted agent)",
+      "method": "executor.capabilities.update",
+      "kind": "notification",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "executor.capabilities.update",
+        "params": {
+          "capabilities": {
+            "agent": {
+              "enabled": true,
+              "max_sessions": 8,
+              "custom_tools": true,
+              "harness": {
+                "id": "dsh",
+                "version": "0.2.1-rc.5",
+                "protocol": "acp/1",
+                "agent_name": "deepseek-harness-acp",
+                "agent_version": "0.0.1",
+                "streaming": "committed",
+                "session_resume": true,
+                "permission_relay": "escalation_only",
+                "usage": "context_only"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "executor.drain request",
+      "method": "executor.drain",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_3",
+        "method": "executor.drain",
+        "params": {
+          "reason": "deploy",
+          "deadline_ms": 30000
+        }
+      }
+    },
+    {
+      "name": "executor.drain result",
+      "method": "executor.drain",
+      "kind": "result",
+      "result": {
+        "accepted": true,
+        "active_sessions": [
+          "sess_01JABC"
+        ]
+      }
+    },
+    {
+      "name": "executor.close notification",
+      "method": "executor.close",
+      "kind": "notification",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "executor.close",
+        "params": {
+          "reason": "shutdown"
+        }
+      }
+    },
+    {
+      "name": "session.assign request",
+      "method": "session.assign",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_4",
+        "method": "session.assign",
+        "params": {
+          "session_id": "sess_01JABC",
+          "work_id": "work_01JABC",
+          "agent_id": "agent_01JABC",
+          "environment_id": "",
+          "lease": {
+            "token": "lease_01JABC",
+            "fencing_token": 7
+          },
+          "metadata": {
+            "source": "harness"
+          }
+        }
+      }
+    },
+    {
+      "name": "session.assign result",
+      "method": "session.assign",
+      "kind": "result",
+      "result": {
+        "accepted": true,
+        "session_id": "sess_01JABC"
+      }
+    },
+    {
+      "name": "session.ready request",
+      "method": "session.ready",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_5",
+        "method": "session.ready",
+        "params": {
+          "session_id": "sess_01JABC",
+          "work_id": "work_01JABC",
+          "lease_token": "lease_01JABC"
+        }
+      }
+    },
+    {
+      "name": "session.ready result",
+      "method": "session.ready",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "session.event request",
+      "method": "session.event",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_6",
+        "method": "session.event",
+        "params": {
+          "session_id": "sess_01JABC",
+          "event": {
+            "type": "agent.tool_result",
+            "tool_use_id": "toolu_01",
+            "content": [
+              {
+                "type": "text",
+                "text": "ok"
+              }
+            ],
+            "is_error": false
+          }
+        }
+      }
+    },
+    {
+      "name": "session.event result",
+      "method": "session.event",
+      "kind": "result",
+      "result": {
+        "accepted": true,
+        "event_id": "evt_01JABC"
+      }
+    },
+    {
+      "name": "session.status notification",
+      "method": "session.status",
+      "kind": "notification",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "session.status",
+        "params": {
+          "session_id": "sess_01JABC",
+          "status": "running",
+          "detail": "tool_running"
+        }
+      }
+    },
+    {
+      "name": "session.stop request",
+      "method": "session.stop",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_7",
+        "method": "session.stop",
+        "params": {
+          "session_id": "sess_01JABC",
+          "reason": "user_stop"
+        }
+      }
+    },
+    {
+      "name": "session.stop result",
+      "method": "session.stop",
+      "kind": "result",
+      "result": {
+        "stopped": true
+      }
+    },
+    {
+      "name": "session.ended request",
+      "method": "session.ended",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_8",
+        "method": "session.ended",
+        "params": {
+          "session_id": "sess_01JABC",
+          "reason": "stopped"
+        }
+      }
+    },
+    {
+      "name": "session.ended result",
+      "method": "session.ended",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "tool.call request",
+      "method": "tool.call",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_9",
+        "method": "tool.call",
+        "params": {
+          "session_id": "sess_01JABC",
+          "tool_call_id": "call_01",
+          "tool": "bash",
+          "input": {
+            "command": "echo hi",
+            "timeout_ms": 30000
+          },
+          "deadline_ms": 60000
+        }
+      }
+    },
+    {
+      "name": "tool.call result",
+      "method": "tool.call",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "tool.result request",
+      "method": "tool.result",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_10",
+        "method": "tool.result",
+        "params": {
+          "session_id": "sess_01JABC",
+          "tool_call_id": "call_01",
+          "outcome": "succeeded",
+          "is_error": false,
+          "content": [
+            {
+              "type": "text",
+              "text": "hi\n"
+            },
+            {
+              "type": "artifact",
+              "artifact_id": "art_01JABC",
+              "mime_type": "text/plain"
+            }
+          ],
+          "duration_ms": 12,
+          "artifacts": [
+            {
+              "artifact_id": "art_01JABC",
+              "name": "stdout.txt",
+              "mime_type": "text/plain",
+              "size_bytes": 70000,
+              "digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+              "created_at": "2026-10-31T12:00:01Z"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "tool.result result",
+      "method": "tool.result",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "tool.cancel request",
+      "method": "tool.cancel",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_11",
+        "method": "tool.cancel",
+        "params": {
+          "session_id": "sess_01JABC",
+          "tool_call_id": "call_01",
+          "reason": "user_interrupt"
+        }
+      }
+    },
+    {
+      "name": "tool.cancel result",
+      "method": "tool.cancel",
+      "kind": "result",
+      "result": {
+        "canceled": true
+      }
+    },
+    {
+      "name": "tool.progress notification",
+      "method": "tool.progress",
+      "kind": "notification",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "tool.progress",
+        "params": {
+          "session_id": "sess_01JABC",
+          "tool_call_id": "call_01",
+          "message": "running"
+        }
+      }
+    },
+    {
+      "name": "process.start request",
+      "method": "process.start",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_12",
+        "method": "process.start",
+        "params": {
+          "session_id": "sess_01JABC",
+          "process_id": "proc_01JABC",
+          "argv": [
+            "sh",
+            "-c",
+            "printf hi; sleep 2"
+          ],
+          "env": {
+            "CI": "1"
+          },
+          "stdin": "open",
+          "stderr": "merge",
+          "wait_ms": 100,
+          "timeout_ms": 600000,
+          "metadata": {
+            "agent_session_id": "sesn_01"
+          },
+          "io_mode": "pty"
+        }
+      }
+    },
+    {
+      "name": "process.start result",
+      "method": "process.start",
+      "kind": "result",
+      "result": {
+        "process_id": "proc_01JABC",
+        "state": "running",
+        "pid": 4242,
+        "started_at": "2026-10-31T12:00:00Z",
+        "cursors": {
+          "stdout": 0,
+          "stderr": 0
+        },
+        "exit_code": null,
+        "exit_signal": null
+      }
+    },
+    {
+      "name": "process.start git credentials request",
+      "method": "process.start",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_git",
+        "method": "process.start",
+        "params": {
+          "session_id": "sess_01JABC",
+          "process_id": "proc_git",
+          "argv": [
+            "git",
+            "fetch"
+          ],
+          "cwd": "repo",
+          "git_credentials": true,
+          "metadata": {
+            "agent_session_id": "sesn_01",
+            "tool_call_id": "call_01"
+          }
+        }
+      }
+    },
+    {
+      "name": "process.start file transfer request",
+      "method": "process.start",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_ft",
+        "method": "process.start",
+        "params": {
+          "session_id": "sess_01JABC",
+          "process_id": "proc_ft",
+          "argv": [],
+          "file_transfer": {
+            "direction": "upload",
+            "local_path": "/workspace/report.pdf"
+          },
+          "metadata": {
+            "agent_session_id": "sesn_01",
+            "tool_call_id": "call_01"
+          }
+        }
+      }
+    },
+    {
+      "name": "process.start package install request",
+      "method": "process.start",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_pkg",
+        "method": "process.start",
+        "params": {
+          "session_id": "sess_01JABC",
+          "process_id": "proc_pkg",
+          "argv": [],
+          "stderr": "merge",
+          "timeout_ms": 900000,
+          "package_install": {
+            "manager": "apt",
+            "packages": [
+              "jq",
+              "libssl3"
+            ]
+          },
+          "metadata": {
+            "agent_session_id": "sesn_01",
+            "tool_call_id": "call_01"
+          }
+        }
+      }
+    },
+    {
+      "name": "process.start platform-initiated request",
+      "method": "process.start",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_platform",
+        "method": "process.start",
+        "params": {
+          "session_id": "sess_01JABC",
+          "process_id": "proc_desktop",
+          "argv": [
+            "sh",
+            "-c",
+            "exec desktop-agent"
+          ],
+          "env": {
+            "CI": "1"
+          },
+          "stdin": "open",
+          "stderr": "merge",
+          "wait_ms": 100,
+          "timeout_ms": 600000,
+          "metadata": {
+            "initiator": "platform"
+          }
+        }
+      }
+    },
+    {
+      "name": "process.start file transfer result",
+      "method": "process.start",
+      "kind": "result",
+      "result": {
+        "process_id": "proc_ft",
+        "state": "exited",
+        "started_at": "2026-10-31T12:00:00Z",
+        "cursors": {
+          "stdout": 0,
+          "stderr": 0
+        },
+        "exit_code": 0,
+        "exit_signal": null,
+        "ended_at": "2026-10-31T12:00:02Z",
+        "file_transfer": {
+          "path": "report.pdf",
+          "digest": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+        }
+      }
+    },
+    {
+      "name": "process.read request",
+      "method": "process.read",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_13",
+        "method": "process.read",
+        "params": {
+          "session_id": "sess_01JABC",
+          "process_id": "proc_01JABC",
+          "stream": "stdout",
+          "cursor": 0,
+          "max_bytes": 32768,
+          "wait_ms": 5000
+        }
+      }
+    },
+    {
+      "name": "process.read result",
+      "method": "process.read",
+      "kind": "result",
+      "result": {
+        "process_id": "proc_01JABC",
+        "stream": "stdout",
+        "data": "aGkK",
+        "from_cursor": 0,
+        "next_cursor": 3,
+        "earliest_cursor": 0,
+        "gap": false,
+        "truncated": false,
+        "eof": true,
+        "state": "exited",
+        "ended_at": "2026-10-31T12:00:03Z",
+        "exit_code": 0,
+        "exit_signal": null
+      }
+    },
+    {
+      "name": "process.write request",
+      "method": "process.write",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_14",
+        "method": "process.write",
+        "params": {
+          "session_id": "sess_01JABC",
+          "process_id": "proc_01JABC",
+          "data": "eWVzCg=="
+        }
+      }
+    },
+    {
+      "name": "process.write result",
+      "method": "process.write",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "process.interrupt request",
+      "method": "process.interrupt",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_15",
+        "method": "process.interrupt",
+        "params": {
+          "session_id": "sess_01JABC",
+          "process_id": "proc_01JABC"
+        }
+      }
+    },
+    {
+      "name": "process.interrupt result",
+      "method": "process.interrupt",
+      "kind": "result",
+      "result": {
+        "process_id": "proc_01JABC",
+        "state": "running",
+        "pid": 4242,
+        "started_at": "2026-10-31T12:00:00Z",
+        "cursors": {
+          "stdout": 0,
+          "stderr": 0
+        },
+        "exit_code": null,
+        "exit_signal": null,
+        "accepted": true
+      }
+    },
+    {
+      "name": "process.terminate request",
+      "method": "process.terminate",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_16",
+        "method": "process.terminate",
+        "params": {
+          "session_id": "sess_01JABC",
+          "process_id": "proc_01JABC",
+          "grace_ms": 2000
+        }
+      }
+    },
+    {
+      "name": "process.terminate result",
+      "method": "process.terminate",
+      "kind": "result",
+      "result": {
+        "process_id": "proc_01JABC",
+        "state": "killed",
+        "pid": 4242,
+        "started_at": "2026-10-31T12:00:00Z",
+        "cursors": {
+          "stdout": 0,
+          "stderr": 0
+        },
+        "exit_code": null,
+        "exit_signal": "SIGTERM",
+        "ended_at": "2026-10-31T12:00:04Z",
+        "accepted": true
+      }
+    },
+    {
+      "name": "process.list request",
+      "method": "process.list",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_17",
+        "method": "process.list",
+        "params": {
+          "session_id": "sess_01JABC"
+        }
+      }
+    },
+    {
+      "name": "process.list result",
+      "method": "process.list",
+      "kind": "result",
+      "result": {
+        "processes": [
+          {
+            "process_id": "proc_01JABC",
+            "state": "failed",
+            "pid": 4242,
+            "started_at": "2026-10-31T12:00:00Z",
+            "cursors": {
+              "stdout": 0,
+              "stderr": 0
+            },
+            "exit_code": null,
+            "exit_signal": "SIGKILL",
+            "reason": "timeout",
+            "ended_at": "2026-10-31T12:10:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "process.status notification",
+      "method": "process.status",
+      "kind": "notification",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "process.status",
+        "params": {
+          "session_id": "sess_01JABC",
+          "process_id": "proc_01JABC",
+          "state": "exited",
+          "exit_code": 0,
+          "ended_at": "2026-10-31T12:00:03Z",
+          "observed_at": "2026-10-31T12:00:03Z"
+        }
+      }
+    },
+    {
+      "name": "terminal.open request",
+      "method": "terminal.open",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_18",
+        "method": "terminal.open",
+        "params": {
+          "terminal_id": "term_01",
+          "kind": "human",
+          "shell": "bash",
+          "cwd": "/workspace",
+          "env": {
+            "TERM": "xterm-256color"
+          },
+          "rows": 24,
+          "cols": 80
+        }
+      }
+    },
+    {
+      "name": "terminal.open result",
+      "method": "terminal.open",
+      "kind": "result",
+      "result": {
+        "terminal_id": "term_01",
+        "epoch": 1,
+        "pid": 5151,
+        "rows": 24,
+        "cols": 80,
+        "earliest_seq": 0,
+        "latest_seq": 0,
+        "created_at": "2026-10-31T12:00:00Z"
+      }
+    },
+    {
+      "name": "terminal.attach request",
+      "method": "terminal.attach",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_19",
+        "method": "terminal.attach",
+        "params": {
+          "terminal_id": "term_01",
+          "epoch": 1,
+          "stream_id": "strm_01",
+          "can_write": true,
+          "from_seq": 0,
+          "ack_seq": 0,
+          "host": {
+            "url": "wss://api.bma.beeos.ai/daemon/terminals/term_01/host",
+            "ticket": "tkt_example"
+          }
+        }
+      }
+    },
+    {
+      "name": "terminal.attach result",
+      "method": "terminal.attach",
+      "kind": "result",
+      "result": {
+        "accepted": true,
+        "writer_epoch": 1
+      }
+    },
+    {
+      "name": "terminal.close request",
+      "method": "terminal.close",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_20",
+        "method": "terminal.close",
+        "params": {
+          "terminal_id": "term_01",
+          "reason": "user_closed"
+        }
+      }
+    },
+    {
+      "name": "terminal.close result",
+      "method": "terminal.close",
+      "kind": "result",
+      "result": {
+        "closed": true,
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "desktop.attach request",
+      "method": "desktop.attach",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_60",
+        "method": "desktop.attach",
+        "params": {
+          "session_id": "dsn_01",
+          "machine_id": "mch_01",
+          "relay_url": "wss://api.example.com/internal/desktop-relay/ticket",
+          "ticket": "eyJtYWNoaW5lX2lkIjoibWNoXzAxIn0.c2ln",
+          "width": 1920,
+          "height": 1080,
+          "wallpaper": {
+            "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "ext": "png",
+            "size": 204800
+          }
+        }
+      }
+    },
+    {
+      "name": "desktop.attach result",
+      "method": "desktop.attach",
+      "kind": "result",
+      "result": {
+        "accepted": true,
+        "wallpaper": "need"
+      }
+    },
+    {
+      "name": "desktop.wallpaper request",
+      "method": "desktop.wallpaper",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_61",
+        "method": "desktop.wallpaper",
+        "params": {
+          "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+          "ext": "png",
+          "offset": 0,
+          "data": "iVBORw0KGgo=",
+          "done": false
+        }
+      }
+    },
+    {
+      "name": "desktop.wallpaper result",
+      "method": "desktop.wallpaper",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "skill.install request",
+      "method": "skill.install",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_21",
+        "method": "skill.install",
+        "params": {
+          "machine_id": "mach_01",
+          "skill_id": "skill_01",
+          "revision_id": "rev_01",
+          "digest": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+          "download_token": "dl_example",
+          "download_expires_at": 1793448000
+        }
+      }
+    },
+    {
+      "name": "skill.install result",
+      "method": "skill.install",
+      "kind": "result",
+      "result": {
+        "state": "ready"
+      }
+    },
+    {
+      "name": "workspace.backup request",
+      "method": "workspace.backup",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_22",
+        "method": "workspace.backup",
+        "params": {
+          "backup_id": "mbk_aaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "paths": [
+            "/home/user"
+          ],
+          "exclude": [
+            "/home/user/.cache"
+          ],
+          "skip_if_fingerprint": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+        }
+      }
+    },
+    {
+      "name": "workspace.backup result",
+      "method": "workspace.backup",
+      "kind": "result",
+      "result": {
+        "state": "uploaded",
+        "fingerprint": "sha256:fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9",
+        "digest": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+        "size_bytes": 1048576,
+        "entries": 42
+      }
+    },
+    {
+      "name": "fs.mount request",
+      "method": "fs.mount",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_fs_mount",
+        "method": "fs.mount",
+        "params": {
+          "session_id": "sesn_01JFS",
+          "service_url": "https://executor.example.com/v1/machines/mach_01/fs",
+          "mounts": [
+            {
+              "view": "uploads",
+              "path": "/mnt/session/sesn_01JFS/uploads",
+              "readonly": true,
+              "token": "bma_cap_v1.example.example"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fs.mount result",
+      "method": "fs.mount",
+      "kind": "result",
+      "result": {
+        "state": "mounted"
+      }
+    },
+    {
+      "name": "fs.unmount request",
+      "method": "fs.unmount",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_fs_unmount",
+        "method": "fs.unmount",
+        "params": {
+          "session_id": "sesn_01JFS",
+          "flush": true
+        }
+      }
+    },
+    {
+      "name": "fs.unmount result",
+      "method": "fs.unmount",
+      "kind": "result",
+      "result": {
+        "state": "unmounted",
+        "pending_bytes": 0
+      }
+    },
+    {
+      "name": "session_files.flush request",
+      "method": "session_files.flush",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_session_files_flush",
+        "method": "session_files.flush",
+        "params": {}
+      }
+    },
+    {
+      "name": "session_files.flush result",
+      "method": "session_files.flush",
+      "kind": "result",
+      "result": {
+        "state": "flushed",
+        "uploaded": 2
+      }
+    },
+    {
+      "name": "turn.start request",
+      "method": "turn.start",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_turn_start",
+        "method": "turn.start",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "input_id": "ain_01JAGENT",
+          "input": [
+            {
+              "type": "text",
+              "text": "Fix the failing test in pkg/foo"
+            },
+            {
+              "type": "file",
+              "file_id": "file_01JAGENT",
+              "name": "log.txt",
+              "mime_type": "text/plain",
+              "size_bytes": 2048
+            }
+          ],
+          "executor_session_ref": "local_conv_42",
+          "config": {
+            "model": "claude-opus-4-5",
+            "thinking_level": "medium",
+            "permission_mode": "default",
+            "cwd": "/Users/me/src/foo"
+          },
+          "deadline_ms": 3600000
+        }
+      }
+    },
+    {
+      "name": "turn.start result",
+      "method": "turn.start",
+      "kind": "result",
+      "result": {
+        "accepted": true,
+        "turn_id": "turn_01JAGENT",
+        "executor_session_ref": "local_conv_42",
+        "resumed": true,
+        "effective": {
+          "model": "claude-opus-4-5",
+          "thinking_level": "medium",
+          "permission_mode": "default",
+          "cwd": "/Users/me/src/foo"
+        }
+      }
+    },
+    {
+      "name": "turn.start request (brain and hands apart)",
+      "method": "turn.start",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_turn_start_apart",
+        "method": "turn.start",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "input_id": "ain_01JAGENT",
+          "input": [
+            {
+              "type": "text",
+              "text": "Run uname -a on the other machine and save it to a file"
+            }
+          ],
+          "config": {
+            "model": "claude-opus-4-5",
+            "permission_mode": "default",
+            "cwd": "/home/work/project",
+            "harness": "claude-code",
+            "environment_info": {
+              "os": "linux",
+              "arch": "amd64",
+              "shell": "bash",
+              "cwd": "/home/work/project",
+              "session_files_root": "/mnt/session"
+            }
+          },
+          "deadline_ms": 3600000,
+          "metadata": {
+            "tools_mcp_url": "https://executor.example.com/v1/machines/mch_brain/mcp",
+            "tools_mcp_token": "bma_cap_v1.example-payload.example-mac",
+            "tools_mcp_token_expires_at": "2026-11-10T15:23:50Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "tools_token.refresh request",
+      "method": "tools_token.refresh",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_tools_token_refresh",
+        "method": "tools_token.refresh",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT"
+        }
+      }
+    },
+    {
+      "name": "tools_token.refresh result",
+      "method": "tools_token.refresh",
+      "kind": "result",
+      "result": {
+        "tools_mcp_token": "bma_cap_v1.example-payload.example-mac",
+        "tools_mcp_url": "https://executor.example.com/v1/machines/mch_brain/mcp",
+        "expires_at": "2026-11-10T16:23:50Z"
+      }
+    },
+    {
+      "name": "working_log.read request",
+      "method": "working_log.read",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_working_log_read",
+        "method": "working_log.read",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "after": 12,
+          "limit": 500
+        }
+      }
+    },
+    {
+      "name": "working_log.read result",
+      "method": "working_log.read",
+      "kind": "result",
+      "result": {
+        "entries": [
+          {
+            "sequence": 1,
+            "id": "evt_in_01",
+            "type": "user.message",
+            "key": "turn_01JAGENT/in/inp_01",
+            "occurred_at": "2026-11-15T01:00:00Z",
+            "payload": {
+              "type": "user.message",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "hello"
+                }
+              ]
+            }
+          }
+        ],
+        "has_more": false,
+        "acked_sequence": 0
+      }
+    },
+    {
+      "name": "working_log.append request",
+      "method": "working_log.append",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_working_log_append",
+        "method": "working_log.append",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "entries": [
+            {
+              "id": "evt_msg_01",
+              "type": "agent.message",
+              "key": "turn_01JAGENT/1/msg/0",
+              "occurred_at": "2026-11-15T01:00:01Z",
+              "payload": {
+                "type": "agent.message",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "hi"
+                  }
+                ]
+              }
+            }
+          ],
+          "acked_sequence": 1
+        }
+      }
+    },
+    {
+      "name": "working_log.append result",
+      "method": "working_log.append",
+      "kind": "result",
+      "result": {
+        "last_sequence": 2
+      }
+    },
+    {
+      "name": "session.history request",
+      "method": "session.history",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_session_history",
+        "method": "session.history",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "after": 4,
+          "limit": 500
+        }
+      }
+    },
+    {
+      "name": "session.history result",
+      "method": "session.history",
+      "kind": "result",
+      "result": {
+        "events": [
+          {
+            "bma_sequence": 1,
+            "id": "sevt_01JUSER",
+            "type": "user.message",
+            "payload": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "My codename is HERON."
+                }
+              ]
+            }
+          },
+          {
+            "bma_sequence": 3,
+            "id": "sevt_01JTOOL",
+            "type": "agent.tool_use",
+            "payload": {
+              "name": "bash",
+              "input": {
+                "command": "date"
+              }
+            }
+          },
+          {
+            "bma_sequence": 4,
+            "id": "sevt_01JRESULT",
+            "type": "agent.tool_result",
+            "payload": {
+              "tool_use_id": "sevt_01JTOOL",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Sun Nov 15"
+                }
+              ],
+              "is_error": false
+            }
+          },
+          {
+            "bma_sequence": 5,
+            "id": "sevt_01JREPLY",
+            "type": "agent.message",
+            "payload": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Noted."
+                }
+              ]
+            }
+          }
+        ],
+        "has_more": false
+      }
+    },
+    {
+      "name": "executor.register request (labels, remote brain)",
+      "method": "executor.register",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_1",
+        "method": "executor.register",
+        "params": {
+          "protocol": "bma.executor.v1.1",
+          "environment_id": "",
+          "executor": {
+            "name": "bmad",
+            "os": "linux",
+            "arch": "amd64",
+            "version": "1.4.0",
+            "labels": [
+              "team-a",
+              "gpu"
+            ]
+          },
+          "capabilities": {
+            "shell": {
+              "enabled": true
+            },
+            "process": {
+              "enabled": true
+            },
+            "remote_brain": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "turn.input request",
+      "method": "turn.input",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_turn_input",
+        "method": "turn.input",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "input_id": "ain_01JAGENT2",
+          "input": [
+            {
+              "type": "text",
+              "text": "Also run go vet"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "turn.input result",
+      "method": "turn.input",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "turn.cancel request",
+      "method": "turn.cancel",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_turn_cancel",
+        "method": "turn.cancel",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "reason": "user_interrupt"
+        }
+      }
+    },
+    {
+      "name": "turn.cancel result",
+      "method": "turn.cancel",
+      "kind": "result",
+      "result": {
+        "canceled": true
+      }
+    },
+    {
+      "name": "session.close request",
+      "method": "session.close",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_session_close",
+        "method": "session.close",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "reason": "archived"
+        }
+      }
+    },
+    {
+      "name": "session.close result",
+      "method": "session.close",
+      "kind": "result",
+      "result": {
+        "closed": true
+      }
+    },
+    {
+      "name": "session.event_delta notification",
+      "method": "session.event_delta",
+      "kind": "notification",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "session.event_delta",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "event_id": "evt_0003",
+          "event_type": "agent.message",
+          "index": 0,
+          "text": "Running the tests"
+        }
+      }
+    },
+    {
+      "name": "interaction.request request",
+      "method": "interaction.request",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_interaction_request",
+        "method": "interaction.request",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "interaction_id": "int_0001",
+          "kind": "permission",
+          "tool_use_id": "evt_0004",
+          "tool_name": "bash",
+          "tool_input": {
+            "command": "go test ./pkg/foo"
+          },
+          "scopes": [
+            "once",
+            "session"
+          ],
+          "expires_at": "2026-10-31T16:10:00Z"
+        }
+      }
+    },
+    {
+      "name": "interaction.request result",
+      "method": "interaction.request",
+      "kind": "result",
+      "result": {
+        "accepted": true,
+        "platform_interaction_id": "aint_01JAGENT"
+      }
+    },
+    {
+      "name": "interaction.response request",
+      "method": "interaction.response",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_interaction_response",
+        "method": "interaction.response",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "interaction_id": "int_0001",
+          "outcome": "allow",
+          "scope": "once",
+          "responder": {
+            "actor_id": "usr_01JAGENT",
+            "surface": "mobile"
+          }
+        }
+      }
+    },
+    {
+      "name": "interaction.response result",
+      "method": "interaction.response",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "agent.custom_tool_result request",
+      "method": "agent.custom_tool_result",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_custom_tool_result",
+        "method": "agent.custom_tool_result",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "tool_use_id": "evt_0005",
+          "content": [
+            {
+              "type": "text",
+              "text": "72F and sunny"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "agent.custom_tool_result result",
+      "method": "agent.custom_tool_result",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "interaction.cancel request",
+      "method": "interaction.cancel",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_interaction_cancel",
+        "method": "interaction.cancel",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "interaction_id": "int_0002",
+          "reason": "resolved_locally"
+        }
+      }
+    },
+    {
+      "name": "interaction.cancel result",
+      "method": "interaction.cancel",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "model_token.refresh request",
+      "method": "model_token.refresh",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_model_token_refresh",
+        "method": "model_token.refresh",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT"
+        }
+      }
+    },
+    {
+      "name": "model_token.refresh result",
+      "method": "model_token.refresh",
+      "kind": "result",
+      "result": {
+        "model_token": "bma_cap_v1.example-payload.example-mac",
+        "model_base_url": "https://executor.example.com/v1/machines/mch_example/proxy/v1",
+        "expires_at": "2026-11-08T15:23:50Z"
+      }
+    },
+    {
+      "name": "session.event agent request",
+      "method": "session.event",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_session_event_agent",
+        "method": "session.event",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "event_id": "evt_0004",
+          "sequence": 4,
+          "event": {
+            "type": "agent.tool_use",
+            "name": "bash",
+            "input": {
+              "command": "go test ./pkg/foo"
+            },
+            "evaluated_permission": {
+              "type": "ask"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "session.event agent custom tool use request",
+      "method": "session.event",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_session_event_custom",
+        "method": "session.event",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "event_id": "evt_0005",
+          "sequence": 5,
+          "event": {
+            "type": "agent.custom_tool_use",
+            "name": "get_weather",
+            "input": {
+              "city": "Paris"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "session.event agent idle request",
+      "method": "session.event",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_session_event_idle",
+        "method": "session.event",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "event_id": "evt_0009",
+          "sequence": 9,
+          "event": {
+            "type": "session.status_idle",
+            "stop_reason": {
+              "type": "end_turn"
+            },
+            "turn_outcome": "completed"
+          }
+        }
+      }
+    },
+    {
+      "name": "session.event agent typed error request",
+      "method": "session.event",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_session_event_error",
+        "method": "session.event",
+        "params": {
+          "session_id": "sesn_01JAGENT",
+          "turn_id": "turn_01JAGENT",
+          "event_id": "evt_0008",
+          "sequence": 8,
+          "event": {
+            "type": "session.error",
+            "error": {
+              "type": "output_limit_reached",
+              "message": "the model reply was cut at its output limit (8192 tokens); ask for a shorter answer, or to continue"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "session.event agent result",
+      "method": "session.event",
+      "kind": "result",
+      "result": {
+        "accepted": true,
+        "event_id": "evt_0004",
+        "acked_sequence": 4
+      }
+    },
+    {
+      "name": "turn.start selected skills request",
+      "method": "turn.start",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_selected_skills",
+        "method": "turn.start",
+        "params": {
+          "session_id": "sesn_selected_skills",
+          "turn_id": "turn_selected_skills",
+          "input_id": "in_selected_skill",
+          "input": [
+            {
+              "type": "text",
+              "text": "Review this"
+            }
+          ],
+          "config": {
+            "model": "model-selected",
+            "input_skills": [
+              {
+                "skill_id": "skl_review",
+                "revision_id": "skr_fixed",
+                "name": "Review",
+                "body": "# Exact skill\n",
+                "body_sha256": "f35eb9921d4fe1ae3ee838d9c839974815700152b78d32fb904b0c5824cb2596"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "turn.start selected skills result",
+      "method": "turn.start",
+      "kind": "result",
+      "result": {
+        "accepted": true,
+        "turn_id": "turn_selected_skills",
+        "executor_session_ref": "sesn_selected_skills",
+        "effective": {
+          "model": "model-selected",
+          "input_skill_receipt": {
+            "input_id": "in_selected_skill",
+            "skills": [
+              {
+                "skill_id": "skl_review",
+                "revision_id": "skr_fixed",
+                "body_sha256": "f35eb9921d4fe1ae3ee838d9c839974815700152b78d32fb904b0c5824cb2596"
+              }
+            ]
+          }
+        },
+        "resumed": false
+      }
+    },
+    {
+      "name": "screen.start request",
+      "method": "screen.start",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_screen_start",
+        "method": "screen.start",
+        "params": {
+          "session_id": "dsn_phone",
+          "relay_url": "wss://relay.example.test/internal/realtime/desktop-relay",
+          "relay_ticket": "fixture-ticket"
+        }
+      }
+    },
+    {
+      "name": "screen.start result",
+      "method": "screen.start",
+      "kind": "result",
+      "result": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "screen.stop request",
+      "method": "screen.stop",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_screen_stop",
+        "method": "screen.stop",
+        "params": {
+          "session_id": "dsn_phone"
+        }
+      }
+    },
+    {
+      "name": "screen.stop result",
+      "method": "screen.stop",
+      "kind": "result",
+      "result": {
+        "stopped": true
+      }
+    },
+    {
+      "name": "session.compact request",
+      "method": "session.compact",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_context_compact",
+        "method": "session.compact",
+        "params": {
+          "session_id": "sesn_example",
+          "operation_id": "context_example",
+          "expected_context_version": 0,
+          "expected_last_input_id": "in_example",
+          "model": "model-1",
+          "deadline_ms": 120000,
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "name": "session.compact result",
+      "method": "session.compact",
+      "kind": "result",
+      "result": {
+        "session_id": "sesn_example",
+        "operation_id": "context_example",
+        "previous_context_version": 0,
+        "context_version": 1,
+        "summary": "Retain the agreed decision and file references.",
+        "summary_sha256": "5b863d4dd129386aca15b411ba3c7c4d5e2780b9a61385c496d03c0b57fda3cd",
+        "source_event_count": 30
+      }
+    },
+    {
+      "name": "session.compact_cancel request",
+      "method": "session.compact_cancel",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_context_cancel",
+        "method": "session.compact_cancel",
+        "params": {
+          "session_id": "sesn_example",
+          "operation_id": "context_example",
+          "expected_context_version": 0,
+          "expected_last_input_id": "in_context_source",
+          "model": "deepseek-v4-flash"
+        }
+      }
+    },
+    {
+      "name": "session.compact_cancel result",
+      "method": "session.compact_cancel",
+      "kind": "result",
+      "result": {
+        "session_id": "sesn_example",
+        "operation_id": "context_example",
+        "canceled": true,
+        "settled": true
+      }
+    }
+  ]
+}

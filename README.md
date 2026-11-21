@@ -1,0 +1,378 @@
+# bma-executor-sdk
+
+Connect your machine (hands) or your own agent (brain) to BMA — the executor, harness and agent ends of the `bma.executor` protocol.
+
+[`bma-sdk`](https://github.com/beeos-ai/bma-sdk) drives and uses agents (REST / façade client); `bma-executor-sdk` connects hands or brains to BMA.
+
+Go, TypeScript and Python SDKs for the BMA (BeeOS Managed Agents) Executor
+Protocol `bma.executor.v1.1`, with protocol types generated from the contract in
+[`contracts/bma/executor`](contracts/bma/executor) and handwritten runtimes.
+bmad is built on the Go SDK, and the BMA server speaks the same contract.
+
+> Moved from [`beeos-ai/bma-sdks`](https://github.com/beeos-ai/bma-sdks) (archived) in 0.4.9.
+> The Go import path changed from `github.com/beeos-ai/bma-sdks/executor` to
+> `github.com/beeos-ai/bma-executor-sdk`; the npm and PyPI package names are unchanged.
+
+| Language | Package | Install |
+| --- | --- | --- |
+| Go | [![Go Reference](https://pkg.go.dev/badge/github.com/beeos-ai/bma-executor-sdk.svg)](https://pkg.go.dev/github.com/beeos-ai/bma-executor-sdk) `github.com/beeos-ai/bma-executor-sdk` (package `bmaexecutor`, this directory) | `go get github.com/beeos-ai/bma-executor-sdk@v1.0.2` |
+| TypeScript | [![npm](https://img.shields.io/npm/v/@beeos-ai/bma-executor-sdk.svg)](https://www.npmjs.com/package/@beeos-ai/bma-executor-sdk) [`@beeos-ai/bma-executor-sdk`](typescript) | `npm install @beeos-ai/bma-executor-sdk@1.0.2` |
+| Python | [![PyPI](https://img.shields.io/pypi/v/bma-executor-sdk.svg)](https://pypi.org/project/bma-executor-sdk/) [`bma-executor-sdk`](python) (`bma_executor_sdk`) | `pip install bma-executor-sdk==1.0.2` |
+
+| | |
+| --- | --- |
+| Version | 1.0.0 (tag `v1.0.0`, all three languages), see [CHANGELOG](CHANGELOG.md) |
+| Protocol | `bma.executor.v1.1` (the harness also accepts `v1`; contract 1.1.0, [`lock.json`](contracts/bma/executor/lock.json)) |
+| Runtimes | Go 1.24+, Node.js 20+ (ESM), Python 3.10+ |
+| Integration guide | [docs/executor](docs/executor/README.md) ([中文](docs/executor/README.zh-CN.md)) |
+
+| I want to | Start here |
+| --- | --- |
+| Understand roles, deployment shapes and what is available | [Overview](docs/executor/README.md) ([中文](docs/executor/README.zh-CN.md)) |
+| Write an executor (a "hand" the BMA cloud or a local brain drives) | [Quick start](docs/executor/quickstart.md) ([中文](docs/executor/quickstart.zh-CN.md)), then the [protocol reference](docs/executor/protocol-reference.md) ([中文](docs/executor/protocol-reference.zh-CN.md)) |
+| Drive an executor (be the harness / local brain) | [Local connection and auth](docs/executor/local-connection.md) ([中文](docs/executor/local-connection.zh-CN.md)) and `Harness` below and in the [TypeScript](typescript/README.md) and [Python](python/README.md) READMEs |
+| Connect a full local agent (turns in, agent events out) | [Agent capability](docs/executor/agent-capability.md) ([中文](docs/executor/agent-capability.zh-CN.md)) |
+
+The rest of this README is the Go module; see [`typescript/README.md`](typescript/README.md) and [`python/README.md`](python/README.md) for the other languages.
+
+## Connect your computer (`bma`)
+
+```sh
+curl -fsSL https://beeos.ai/bma/install.sh | sh    # or: brew install beeos-ai/tap/bma
+bma up                                            # add --api <console origin> for another deployment
+```
+
+`bma up` prints a short code and opens the console, where you approve this
+computer and choose its workspace, name and labels (no token is copied). It
+asks which harnesses to use (`bma harness list`), downloads their pinned
+releases into `~/.bma/harnesses/<id>/<version>/`, verifies them, checks that
+you are signed in to each with your own account (offering its sign-in), and
+installs a user service that keeps this computer connected: a LaunchAgent on
+macOS (it runs while you are logged in; turn on automatic login for an
+unattended Mac), a systemd user unit on Linux. Run it again at any time; it
+only does what is missing.
+
+| Command | |
+|---|---|
+| `bma status [--json]` | connection, service, harness logins, labels |
+| `bma harness list \| add <id> \| login <id>` | the harnesses this computer runs |
+| `bma disconnect` | stop the service and remove this computer from BMA |
+| `bma upgrade [--check]` | replace `bma` with the latest release (sha256 checked against its manifest) and restart the service |
+| `bma uninstall [--yes]` | disconnect, remove the service, `~/.bma`, the CLI profiles and `bma` itself |
+| `bma run` | the executor in the foreground (the service runs this) |
+
+Your harness credentials stay on this computer and are never sent to BMA.
+Other machines' brains may use this computer as their hands only if you pass
+`--remote-brain` (or answer yes in `bma up`).
+
+## The BMA command line (`bma`)
+
+The same binary is the command line of the public BMA API (ADR-0102 of
+beeos-managed-agents). Every API operation is one command, generated from the
+public OpenAPI document (`contracts/bma-api/bma.openapi.yaml`) by
+`tools/cligen`; requests go through `github.com/beeos-ai/bma-sdk/v3`.
+
+```sh
+bma login                                   # approve in the dashboard; or: bma login --with-token < key
+bma machines list                           # a table on a terminal, JSON otherwise
+bma machines get mch_123 --query .status    # --json, --format json|jsonl|yaml|table, --query <jq>
+bma sessions send sesn_123 "hello" --wait   # send a message, print the agent's reply
+bma sessions events stream sesn_123         # follow events; resumes with Last-Event-ID
+bma files upload ./report.pdf
+bma skills push ./my-skill                  # a new skill, or --skill <id> for a new version
+bma completion zsh > "${fpath[1]}/_bma"
+```
+
+Credentials: `--api-key` > `BMA_API_KEY` > the profile's credential (login
+keychain on macOS, else `~/.config/bma/credentials.json`, 0600). Profiles
+live in `~/.config/bma/config.yaml` (`bma profiles list|use|set|delete`,
+`--profile`, `BMA_PROFILE`; `BMA_BASE_URL` and `BMA_WORKSPACE_ID` override one
+setting). Exit codes: 0 success, 1 failure, 2 usage, 3 not authenticated or
+permitted, 4 not found, 5 conflict, 6 rate limited/server/network, 130
+interrupted. `bma docs <dir>` writes the full command reference as Markdown.
+
+Regenerate the commands after refreshing the document:
+`go run ./tools/cligen -spec contracts/bma-api/bma.openapi.yaml -out cmd/bma/api_gen.go`
+(the tests fail while `api_gen.go` is stale or an operation has no command).
+
+## Executor quick start
+
+An executor registers with BMA (or a local harness) and answers tool calls:
+
+```go
+package main
+
+import (
+	"context"
+	"errors"
+	"log"
+	"os"
+	"os/exec"
+
+	bmaexecutor "github.com/beeos-ai/bma-executor-sdk"
+)
+
+func main() {
+	client, err := bmaexecutor.NewClient(bmaexecutor.Options{
+		BaseURL:        os.Getenv("BMA_BASE_URL"),
+		EnvironmentKey: os.Getenv("BMA_ENVIRONMENT_KEY"),
+		EnvironmentID:  os.Getenv("BMA_ENVIRONMENT_ID"),
+		Executor:       bmaexecutor.ExecutorInfo{Name: "my-executor", OS: "linux", Arch: "arm64", Version: "0.1.0"},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	// One typed slot per built-in tool; only registered tools are advertised.
+	client.Tools.Bash.Handle(func(ctx context.Context, in bmaexecutor.BashInput, tool bmaexecutor.ToolContext) (bmaexecutor.ToolOutput, error) {
+		out, err := exec.CommandContext(ctx, "bash", "-lc", in.Command).Output()
+		code := 0
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			code = exitErr.ExitCode()
+		} else if err != nil {
+			return bmaexecutor.ToolOutput{}, err // outcome failed
+		}
+		return bmaexecutor.BashResult{Stdout: string(out), ExitCode: code}.Output(), nil
+	})
+	if _, err := client.Start(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+	select {}
+}
+```
+
+Set `Options.BaseURL` to your BMA deployment: the default `DefaultBaseURL` is `https://executor.beeos.ai` (staging `https://executor.staging.beeos.ai`); a base URL on the retired bma API hosts is moved to the executor host; the SDK posts an environment key to `{BaseURL}/v1/environments/{EnvironmentID}/token` and a machine daemon token to `{BaseURL}/v1/machines/{MachineID}/token` (the channel URL comes back in the token response as `ws_url`), uploads artifacts to `{BaseURL}/v1/environments/{EnvironmentID}/artifacts`, and drops a trailing `/api/v1` (the 0.x bma-sdk API-root form) instead of nesting the paths. The SDK does not read `BMA_BASE_URL` itself; the example passes it through. A `TokenSource` (for example `StaticToken`) carries its own channel URL.
+
+A machine-scoped executor sets `Options.MachineID` (empty reads `BMA_MACHINE_ID`; `EnvironmentID` and `MachineID` are alternatives) with the machine daemon token in `EnvironmentKey`, or uses a machine token through `Options.TokenSource`. Without a machine id the client falls back to the legacy `/v1/executors/token` alias. Go clients negotiate `bma.executor.v1.1` by default (`Options.Protocol`).
+
+#### A machine-scoped executor must declare `process` or `agent`
+
+The platform binds a machine-scoped connection as the machine's runtime, and **refuses the registration of an executor that advertises neither the `process` nor the `agent` capability**: it answers `executor.register`, then closes with `4002` "runtime registration refused". The default `Options.Capabilities` (shell and files only) is such an executor. Declare `process` (and serve `process.*`) or `agent` (`ServeAgent`), and give `Executor.Version` as `MAJOR.MINOR.PATCH`:
+
+```go
+core, _ := bmaexecutor.NewCore(bmaexecutor.CoreOptions{WorkRoot: dir})
+_ = core.Register(bmaexecutor.NewProcessCapability(core, bmaexecutor.ProcessOptions{})) // advertises process.enabled
+client, _ := bmaexecutor.NewClient(bmaexecutor.Options{
+	TokenSource:  bmaexecutor.StaticToken(wsURL, machineToken), // or a token source that exchanges the machine token
+	Executor:     bmaexecutor.ExecutorInfo{Name: "my-machine", OS: "linux", Arch: "arm64", Version: "1.0.0"},
+	Capabilities: core.Capabilities(),
+})
+_ = core.Attach("cloud", client)
+_, _ = client.Start(ctx)
+if err := client.WaitReady(ctx); err != nil { // registered and still open one heartbeat later
+	log.Fatal(err)
+}
+```
+
+The SDK treats this as a configuration error: after 3 registrations in a row refused right after `executor.register` (close `4002` "runtime registration refused", or an `executor.register` error `capability_unavailable` / `invalid_params`), the client ends and `Done` closes with `Err()` wrapping `ErrRegistrationRefused`; other `4002` closes (for example "daemon runtime ended") reconnect as before. `State()` is `ready` as soon as `executor.register` returns, which a refused registration also does; `WaitReady(ctx)` returns only after the registration stayed open for one heartbeat interval, or with the error of a client that ended.
+
+Executor types follow one mapping: required members are values, optional members are values with `omitempty` (named structs and nullable members are pointers), enums are untyped constants (`Code*` error codes on `RPCError.Code`), and opaque payloads such as `ToolCallParams.Input` stay `json.RawMessage`. Tool handlers receive the decoded per-tool input (`BashInput`, `ReadInput`, ...) through `client.Tools.<Name>.Handle`; return `TextOutput`, `BashResult{...}.Output()` (rendered like `Core`: stdout, stderr, `exit_code: N`) or a `ToolOutput`, `NewToolError(text)` for a tool-level error the model sees (`is_error: true`), any other error for `outcome: "failed"`. The harness calls them as `session.Tools.Bash.Call(ctx, BashInput{Command: "ls"}, CallToolOptions{})`. Other protocol methods are typed too: `Requests.ProcessStart.Handle(client, fn)`, `Calls.SessionEvent.Call(ctx, client, params)`, `Notifications.ToolProgress.Notify(ctx, client, params)` (tables generated from the contract by `tools/gen_methods.py`).
+
+### Lifecycle, cancellation, and results
+
+- `tool.cancel` from the harness cancels the `context.Context` passed to the tool handler. The client responds `{"canceled":true}` and reports the result with `outcome: "canceled"`; handlers must stop their process group when the context is done.
+- A repeated `tool.call` with the same `tool_call_id` is acknowledged but not executed twice.
+- Call `SessionReady` after workspace and MCP setup, and `SessionEnded` after every child process and MCP server has stopped. The SDK does not infer these transitions because only the adapter knows when setup and cleanup finished.
+- `tool.result` is retried with exponential backoff on `-32009` (`executor_busy`), `-32004` (`timeout`), or `data.retryable: true`. Results are idempotent by `tool_call_id`. When every attempt fails, `OnToolResultLost` is called with the original result so the adapter can persist and replay it; the client never drops a result silently.
+- Large output is reported as artifact references, not base64 in `tool.result`: `NewArtifactRef` and `NewArtifactContentBlock` build the blocks for an artifact your own store holds; the SDK has no upload call, and `Core` truncates bash output over `InlineResultBytes`.
+- `OpenMCPChannel` opens the MCP channel for a session and server key and exchanges raw MCP JSON-RPC frames over whatever transport the control channel uses.
+- Session handler errors that are an `*RPCError` keep their code and data on the wire (for example retryable `executor_busy`).
+
+## Execution core: one hand, any brain
+
+`Core` is the executor's execution core, independent of who drives it. `core.Attach(brain, client)` installs the session and tool handlers on a `Client`; attach one `Client` per harness, so one executor process serves the BMA cloud and a local harness at the same time:
+
+```go
+core, _ := bmaexecutor.NewCore(bmaexecutor.CoreOptions{WorkRoot: dir, MaxSessions: 8, MaxSessionsPerBrain: 4})
+_ = core.Register(bmaexecutor.NewProcessCapability(core, bmaexecutor.ProcessOptions{}))
+cloud, _ := bmaexecutor.NewClient(bmaexecutor.Options{EnvironmentKey: key, EnvironmentID: env, Executor: info, Capabilities: core.Capabilities()})
+local, _ := bmaexecutor.NewClient(bmaexecutor.Options{EnvironmentID: "local", Executor: info, Capabilities: core.Capabilities(),
+	TokenSource: bmaexecutor.StaticToken("ws://127.0.0.1:7777", localToken)})
+_ = core.Attach("cloud", cloud)
+_ = core.Attach("local", local)
+```
+
+- **Tools**: `bash` (login shell in its own process group; env limited to PATH/HOME/USER/LANG/TMPDIR plus request env and `CoreOptions.Env`; `tool.cancel`, the deadline, `timeout_ms` and `session.stop` kill the whole group; a non-zero exit is a succeeded call reporting `exit_code`; `CoreOptions.Launch`, the same hook type as `ProcessOptions.Launch`, may wrap or refuse each bash command, also those of `LocalToolRoute` and `ACPAgent`) and `read`/`write`/`edit`/`glob`/`grep`, confined to the session workspace `WorkRoot/<brain>/<session>` (override with `CoreOptions.Workspace`) through an `os.Root`: `..`, absolute paths outside it and symbolic links leading out of it are refused, also when swapped in after a check; `CoreOptions.FileAccess` lets the host refuse a file tool call (read-only session, protected path, revoked grant) with a reason before it runs. Other tools return `capability_unavailable`.
+- **Capabilities**: `core.Register(cap)` before `Attach` adds methods behind capability bits; `core.Capabilities()` advertises them. `NewProcessCapability(core, ProcessOptions{...})` serves `process.*` (PTY where supported; `FileTransfer` and `GitCredentials` hooks enable those `process.start` fields; `Launch` chooses the directory, wraps argv in a sandbox or refuses a command process or package install with a `data.reason`; `SessionFiles` syncs per-session files under a declared `session_files.root`, see [session context](docs/executor/session-context.md)); `NewSkillInstallCapability(installer)` serves `skill.install`; implement `Capability` for your own methods (for example `terminal.*`). A `SessionScoped` capability gets the brain's `*CoreSession` and `OnSessionEnd` runs before `session.ended`.
+- **Private environment**: `CoreOptions.DenyEnv` names executor-private variables (for example machine tokens) that no bash tool, process, terminal or stdio MCP server inherits and no request may set.
+- **stdio MCP**: every `session.assign.mcp_servers[]` entry with `connection_origin: environment` starts one process per (brain, session, `server_key`), verifies `command_sha256` when given, runs the command without a shell with only its configured `transport.env` plus `transport.secret_env` (server-resolved secret values, advertised as `capabilities.mcp.secret_env`, injected into that process only; nothing is inherited from the executor; a `secret:` value left in env, a loader variable or a `DenyEnv` name fails `session.assign` with `invalid_params`), and bridges stdin/stdout lines to that server's MCP channel. If either side ends both are restarted, until the session ends, with jittered exponential backoff capped at 30s (reset once a channel stays open for 1s); after 5 consecutive failures the core sends `session.status` `error` / `mcp_unavailable: <key>` once per outage and keeps retrying.
+- **Isolation**: sessions are keyed by (brain, `session_id`); a `tool.call` reaches only sessions its own brain assigned; MCP channels and workspaces are per brain and session. Bash is not a sandbox: every brain runs as the executor's OS user, so only attach brains you trust with this machine (or confine bash with `CoreOptions.Launch`).
+- **Capacity**: `MaxSessions` (default 16) across brains and `MaxSessionsPerBrain` (default `MaxSessions`) per brain. A full core answers `session.assign` with `executor_busy` (`-32009`, `retryable: true`).
+
+## Harness quick start
+
+`Harness` is the harness ("brain") end: an `http.Handler` that accepts executor control and MCP channels, plus the API that drives them. It speaks the same protocol as the BMA service, so an executor cannot tell them apart.
+
+```go
+harness := bmaexecutor.NewHarness(bmaexecutor.HarnessOptions{
+	Authenticate: authenticate, // func(*http.Request) (bmaexecutor.Principal, error); nil only on loopback
+})
+go http.Serve(listener, harness)
+
+executor, _ := harness.WaitExecutor(ctx)
+session, _ := executor.AssignSession(ctx, bmaexecutor.SessionAssignParams{SessionID: "sess_1"})
+_ = session.Ready(ctx)
+result, _ := session.CallTool(ctx, bmaexecutor.ToolCallParams{
+	Tool: bmaexecutor.ToolNameBash, Input: bmaexecutor.NewToolInput(bmaexecutor.ToolInput{Command: "ls"}),
+})
+mcp, _ := session.MCP(ctx, "echo") // raw MCP JSON-RPC: Write/Read
+_ = session.Stop(ctx, "done")
+```
+
+- `Authenticate` sees every upgrade (control and MCP). A returned `Principal.ExecutorID` pins the identity: `resume.executor_id` must match and only that executor may open MCP channels for its sessions.
+- `CallTool` is idempotent by `tool_call_id` (generated when empty): a repeat joins the in-flight call or returns the recorded result. Canceling its context stops waiting only; `CancelTool` sends `tool.cancel`.
+- Resume: a disconnected executor keeps its sessions and pending calls for `LeaseTTL` (default 60s). A newer connection replaces the old one with close code 4004. Lease expiry, `executor.close` or a dropped session fails pending calls with `ErrToolOutcomeUnknown`: the tool may or may not have run.
+- Pending calls live in harness memory; there is no durable result store.
+
+## Local socket and in-process transports
+
+`Options.Dial` defaults to WebSocket on `ws://`, `wss://`, `unix:///path.sock` or `npipe:////./pipe/<name>` (Windows; `ListenNamedPipe`, `NamedPipeListener`, `NamedPipeDialer`).
+
+| Shape | Executor | Harness |
+| --- | --- | --- |
+| Executor dials a local harness | `StaticToken("ws://127.0.0.1:port", token)` or `StaticToken("unix:///path.sock", token)` (`UnixSocketDialer(path)`) or `StaticToken("npipe:////./pipe/<name>", token)` (`NamedPipeDialer(name)`) | `http.Serve(listener, harness)` on a TCP or `unix` listener |
+| Harness dials the executor (executor listens) | `dial, closeFn, _ := ListenUnixSocket(path, token)` → `Options.Dial: dial` (0700 directory, 0600 socket, bearer token) | `harness.DialExecutor(ctx, path, token)`; the harness also dials the sessions' MCP channels |
+| Same process | `Options.Dial: InProcessDialer(harness, principal)` | `Harness.ServeConn` (used by `InProcessDialer`) |
+
+Details and authentication rules: [local connection](docs/executor/local-connection.md).
+
+## Agent executors
+
+An executor that runs its own model loop and tools (for example a desktop app) serves the `agent` capability: the platform sends natural-language turns, the executor streams Anthropic Managed Agents events back.
+
+```go
+client.ServeAgent(myAgent, bmaexecutor.AgentCapability{
+	Models:          []bmaexecutor.AgentModel{{ID: "my-model", ThinkingLevels: []string{"low", "high"}}},
+	PermissionModes: []string{"default", "accept_edits"},
+})
+```
+
+`myAgent` implements `AgentHandler`: `OpenTurn` reports the effective configuration, `RunTurn` does the work with `turn.Emit` (durable events), `turn.Delta` (streaming previews), `turn.Inputs()` (`turn.input`) and `turn.RequestInteraction` (approvals and questions), and `CloseSession` releases the local conversation. The SDK assigns event ids and sequences, resends unacknowledged events after a reconnect, and frames every turn with `session.status_running` and a final `session.status_idle` whose `turn_outcome` is `completed`, `canceled` or `failed`.
+
+The harness side is `HarnessOptions.Agent` (`AgentPlatform`) plus `Executor.StartTurn`, `SendTurnInput`, `CancelTurn`, `CloseAgentSession` and `RespondInteraction`. The BMA platform side is in preview: the binding of an agent to the machine is made by the BMA team (the public `/v1` API has no route for it yet); its sessions accept text input only. See [agent capability](docs/executor/agent-capability.md#7-platform-preview).
+
+### Writing your own brain or hands (Go, ADR-0029)
+
+A third-party **brain** implements `AgentHandler` and depends on this SDK and the contract only; a third-party **hands** is a `Core` (or your own tool handlers) behind a `Client`. Minimal, runnable skeletons: [`examples/third-party-brain`](examples/third-party-brain/main.go) and [`examples/third-party-hand`](examples/third-party-hand/main.go), each with tests that run it against the SDK's `Harness` and against the tool route conformance suite.
+
+The brain's tools go through `AgentTurn.Tools()`:
+
+```go
+func (b myBrain) RunTurn(ctx context.Context, turn *bmaexecutor.AgentTurn) error {
+	tools := turn.Tools() // nil: the hands are this machine - run your tools yourself
+	if tools == nil { /* local */ }
+	id := turn.ApprovalID(callID) // deterministic across reconnects and restarts
+	answer, _ := turn.RequestInteraction(ctx, bmaexecutor.InteractionRequestParams{InteractionID: id, /* ... */})
+	res := tools.Call(ctx, bmaexecutor.RouteCall{ID: callID, Name: "bash", Input: input, ApprovalID: answer.InteractionID})
+	// res.Outcome: RouteOutcomeExecuted | RouteOutcomeNotForwarded | RouteOutcomeUnknown
+	return nil
+}
+```
+
+Declare `AgentCapability.PlatformCredentials: []string{bmaexecutor.PlatformCredentialBrainTools}` so the platform may give this machine a session whose hands are elsewhere. With the platform's tools endpoint in `turn.start` metadata, `Tools()` is a `PlatformToolRoute` (every call goes through the platform's tool gateway; the token stays in memory and is refreshed with `tools_token.refresh`); a half credential gives a route that refuses every call (`tools_unavailable`), never a local run. `NewPlatformToolRoute` builds the same route from a credential you manage yourself. Every call needs a unique `RouteCall.ID`: it is the idempotency identity, so a call asked again after a restart is answered with the first result (`Replayed`) instead of running twice, and an outcome of `unknown` means it may have run.
+
+A hands' owner chooses what may use the machine: `Options.Labels` (placement filters, never an authorization) and `Options.RemoteBrain` (off by default; the platform cannot enable it).
+
+`LocalToolRoute` is the same route for the case where the hands are this machine (`Tools()` is nil there): `NewLocalToolRoute(LocalToolRouteOptions{Core, StateDir, SessionID, TurnID, Workspace, ...})` runs the six tools in a `Core` behind the executor's own gate, which is what the platform's gateway does for a remote machine: a call after its turn ended is `stale_turn`, `deny` is `permission_denied`, an `ask` tool needs the user's `allow` for this very call (record it with `RecordApproval` after `RequestInteraction`; without one `approval_required`, for another tool, input or approval id `approval_invalid`), and a call id runs at most once, across executor restarts too (state under `StateDir`; a call whose result was lost with the process answers `outcome_unknown`). `ACPAgent` uses this route for its own local turns; `ACPAgentOptions.ToolPolicy` is the host's ceiling on tool permissions (`deny` over `ask` over `allow`) that the platform's `tool_policy` and the mode can only tighten.
+
+#### Testing a route: the conformance suite
+
+Package [`conformance`](conformance) holds the tool route conformance suite (cases T1–T11, ADR-0029 §5). One set of cases, run against every route, so that a brain cannot tell which one its calls took. Run it in the tests of your own brain or hands:
+
+```go
+import "github.com/beeos-ai/bma-executor-sdk/conformance"
+
+func TestMyHandsConformToTheGateway(t *testing.T) {
+	conformance.RunToolRouteConformance(t, conformance.PlatformFactory(func(t *testing.T, turn context.Context) (gatewaystub.Hands, string) {
+		// your hands: run a call that passed the gateway, in the returned directory
+	}))
+}
+```
+
+`RunToolRouteConformance(t, factory)` takes a `Factory` that builds a `Rig` (your route and the levers the cases pull: the user's approval, a restart, a newer epoch, a cancel, offline hands). `conformance.PlatformFactory` builds the SDK's `PlatformToolRoute` against [`conformance/gatewaystub`](conformance/gatewaystub), a contract double of the platform's tool gateway (token and epoch, policy, one-time approval, idempotency, three outcomes, background bash), with hands you choose (`conformance.CoreHands` runs the calls in a `Core`: [`examples/third-party-hand`](examples/third-party-hand/conformance_test.go)). [`examples/third-party-brain`](examples/third-party-brain/conformance_test.go) runs the route a brain gets from `AgentTurn.Tools()`. The SDK runs it against its own two routes in `toolroute_conformance_test.go`. The packages import package `testing` and are for tests only: production code must not import them (`arch_test.go` checks the SDK's own), and they are not built on Windows (the cases start POSIX commands).
+
+### Brain and hands on different machines, and Claude Code (Go)
+
+**Brain host and adapters.** `BrainHost` (Go) is the one implementation of the platform semantics of a local brain: turns and their single terminal state, deterministic approval ids and platform interactions, tool policy, the tool route, host tools and custom tools, CMA events, stop codes, user images, the resume ledger and resident sessions. A `BrainAdapter` only drives one kind of brain process (start and self-check, open / resume / suspend / close a conversation, hand it an input, report what it does through a `BrainSink`); what differs between brains is stated by its `BrainCapabilities` (model credentials, model choice and thinking levels, images, host tools, custom tools, input skills), and the host never asks which brain it hosts (a test fails when the host's source names one). `NewBrainHost(ctx, adapter, opts)` hosts any adapter; `NewACPAgent` is a `BrainHost` with the adapter of `ACPAgentOptions.Profile`, and `ACPAgent` is the same type.
+
+**Claude Code** (`ACPAgentOptions.Profile: bmaexecutor.ACPProfileClaudeCode`, or `NewClaudeCLIAdapter`) drives the official `claude` binary directly, unmodified, over its stream-json input/output and control protocol: one `claude -p` process per conversation with `--tools ""` (no built-in tool), the platform tools and the turn's tools (host tools, custom tools, `ask_user_question`) on a loopback MCP server (`--mcp-config`, `--strict-mcp-config`), `--setting-sources ""`, `--permission-mode default`, the platform's complete system prompt (`--system-prompt`), and every permission request (`can_use_tool`) answered by the host. The conversation id is a UUID v5 of the platform session id (`--session-id`, `--resume` after a restart; an unknown one is not created anew). The binary must be a pinned release, checked by `claude --version` and its sha256 (`claudeCLIPins`; `ClaudeCLIOptions.Executable` when `Command` is the owner's launcher of it); the system init message must list exactly the injected tools in the mode `default`. It uses only the node owner's own Claude credentials (their Claude Code login under HOME, or `ANTHROPIC_API_KEY` / a third-party provider's variables in `ACPAgentOptions.Env`); they never pass through BMA: no model proxy, no `harness_model` (`model_credentials: owner`). The models and effort levels are the ones the CLI reports at `initialize` (`AgentHarnessCapability.models`); a turn's `model` and `thinking_level` are checked against them and passed unchanged (`--model`, `CLAUDE_CODE_EFFORT_LEVEL`). User images go to the model as image blocks; `turn.cancel` is a control `interrupt`. Its stops follow the contract as for every brain (`output_limit_reached` without automatic continuation, `model_stream_idle` after a 90 s stall, no retry of a refused request, `context_too_large`). Tests use the pinned binary (`tools/fetch_claude_cli.sh`, checked against Anthropic's release manifest). See `examples/local-dsh -profile claude-code`.
+
+**Codex** (`ACPAgentOptions.Profile: bmaexecutor.ACPProfileCodex`, or `NewCodexAppServerAdapter`) drives the official `codex` binary, unmodified, through its app server (`codex app-server`, JSON-RPC over stdio): one app server per conversation, a codex thread per platform session (`thread/start`, `thread/resume` after a restart; an unknown one is not created anew; `executor_session_ref` is the platform session id). The platform tools and the turn's tools are the thread's dynamic tools (codex fixes them when the thread starts: a later turn may offer fewer, never another), and every call comes to the host as `item/tool/call`, approved and run by it. `ACPAgentOptions.Env` must set `CODEX_HOME` to the BMA Codex home, a home of its own that holds nothing but the owner's login (`CODEX_HOME=<home> codex login`): a `config.toml`, `AGENTS.md` or `hooks.json` there is refused, since such a file adds MCP servers, hooks or instructions no command-line setting can take away. Every built-in tool (shell, apply_patch, web search, view image, sub-agents, apps, plugins, skills, hooks, memories) and injected instruction is turned off on the command line, and codex runs with its model catalog with each model's tool mode, apply_patch and extra tools cleared, so the model is offered exactly the host's tools, called directly; an item of a built-in tool or another server request ends the turn with `agent_protocol_error`. A project's `AGENTS.md` in the working directory is read as project instructions. `Command` is the pinned binary (`codexPins`, checked by `codex --version` and its sha256), optionally followed by `-c` settings of the owner's model provider (`model_provider=…`, `model_providers.…`). It uses only the owner's own credentials (`model_credentials: owner`); the models and reasoning efforts are those `model/list` reports, and a turn's `model` and `thinking_level` are passed unchanged (a turn without a level runs at the model's default). User images go to the model as input images; `turn.cancel` is `turn/interrupt`. Its stops follow the contract (`output_limit_reached`, `model_stream_idle` with one retry of a stream that stalled before any content, `agent_auth_required` at the first refused credential, `context_too_large` after one compaction). Tests use the pinned binary (`tools/fetch_codex_cli.sh`, checked against the digest GitHub publishes for the release asset). See `examples/local-dsh -profile codex`.
+
+`ACPAgent` (Go) hosts an ACP agent process as the brain of a session. Its tool calls go through one seam, the tool route:
+
+- **Hands on this machine** (no `tools_mcp_*` in `turn.start` metadata): the call runs in this executor's `Core`, after the executor's own re-check (policy, approval, turn) and at most once.
+- **Hands on another machine** (`turn.start` metadata carries `tools_mcp_url` and `tools_mcp_token`, contract 1.4.0, handed only to an executor that declared `ACPAgentOptions.PlatformTools`): every call goes to the platform's tool gateway, which re-checks and runs it on the session's hands machine. The turn never falls back to this machine. The token lives in memory only, is replaced with `tools_token.refresh` before it expires (a failed refresh is logged and retried with backoff), and a refused token (an older epoch, expired) answers `not_forwarded` / `stale_turn`.
+
+Both routes behave the same (the conformance suite, package [`conformance`](conformance), runs T1–T11 against each). In particular `bash`: `timeout` is how long the call waits (default 120 s, at most 600 s, and at most 55 s per call); a command that outlives the wait keeps running and the call returns its pid and the file its output goes to (`on_timeout: "kill"` stops it instead). It ends when it exits, after 1 h, when its turn is canceled or runs out of time, or when the session closes.
+
+`Options.Labels` and `Options.RemoteBrain` are the machine owner's local configuration (`ExecutorInfo.labels`, `Capabilities.remote_brain`). Labels only narrow where the platform may place sessions; `RemoteBrain` is off unless the owner turns it on here — it lets a brain on another machine use this one as its hands, and the platform has no way to switch it on.
+
+**User images.** An image the user attached arrives as a `file` block (`file_id`, `mime_type`, `size_bytes`); `ACPAgent` downloads it and passes it to the agent as an ACP `image` content block when the agent's `initialize` declared `promptCapabilities.image` (bma-dsh-acp >= 0.2.2). It fetches the bytes with `ACPAgentOptions.InputFiles`, or, with `PlatformTools`, from the turn's tools endpoint (`<tools_mcp_url without /mcp>/files/<file_id>/content`, `tools_mcp_token`); `file_inputs` / `image_inputs` are declared only when both the agent and a file source exist. Limits are the Anthropic API's (png, jpeg, gif, webp; 5 MB; 8000 px longest side; 100 images per input; the bytes must be the declared type). An image that cannot be passed on ends the turn with a `session.error` instead of being dropped.
+
+**Model requests by session.** With the DSH profile the agent's model requests go through a loopback proxy to the host's own endpoint (`ACPAgentOptions.Upstream`), which adds the host's credential (`Upstream.Header`). Set `Upstream.SessionHeader` to a header name and every forwarded request also carries the platform session id of its turn (turn.start `session_id`) under that name, so the endpoint can account the request to its session. The agent cannot set the value, and requests to the platform's own model endpoint (`model_base_url`) never carry it.
+
+**Slots and resident sessions.** `ACPAgentOptions.MaxSessions` (default 8, declared as `max_sessions`) bounds the turns running at once; an idle session holds no slot. `ACPAgentOptions.MaxResidentSessions` (default 75 % of the Core's `MaxSessions`, at least `MaxSessions`) bounds the sessions whose agent session and Core session are held. Past it the least recently used idle session (not one with a bash command left running) is released with ACP `session/close` (the agent keeps its conversation, bma-dsh-acp its JSONL) and loaded again with `session/load` by its next turn; the platform keeps the session and its event numbering. A custom `AgentHandler` can do the same by implementing `AgentSessionSuspender`.
+
+TypeScript and Python have no equivalent: they have no ACP host and no execution core, and no `model_token.refresh` client either; the generated types carry the 1.4.0 members (`executor.labels`, `capabilities.remote_brain`, `tools_token.refresh`) for code that sets or calls them by hand.
+
+## Examples
+
+Run from the repository root:
+
+| Example | What it shows | Run |
+| --- | --- | --- |
+| [`examples/local-brain`](examples/local-brain/main.go) | a local harness with a scripted "model" drives `Core` over loopback: bash, then the stdio [`echo-mcp`](examples/echo-mcp/main.go) server through the MCP channel | `go run ./examples/local-brain` |
+| [`examples/cloud-hand`](examples/cloud-hand/main.go) | the same `Core` as a hand for the BMA cloud harness | `BMA_BASE_URL=... BMA_ENVIRONMENT_ID=... BMA_ENVIRONMENT_KEY=... go run ./examples/cloud-hand -work-root ~/bma-work` |
+| [`examples/agentexecutor`](examples/agentexecutor/main.go) | the agent capability against a simulated platform, including a dropped connection | `go run ./examples/agentexecutor` |
+| [`examples/third-party-brain`](examples/third-party-brain/main.go) | the smallest brain: declares `brain_tools`, asks approval under `AgentTurn.ApprovalID`, sends the call through `AgentTurn.Tools()` to the platform's tool gateway | `BMA_MACHINE_TOKEN=... go run ./examples/third-party-brain -base-url ... -machine-id mch_...` |
+| [`examples/third-party-hand`](examples/third-party-hand/main.go) | the smallest hands: `Core` with the process capability, `Options.Labels`, `Options.RemoteBrain` | `BMA_MACHINE_TOKEN=... go run ./examples/third-party-hand -base-url ... -machine-id mch_... -labels team-a -remote-brain` |
+| [`examples/sandboxed-folder`](examples/sandboxed-folder/main.go) | a machine executor whose `Launch` hook reads the session context, checks the owner, picks the local folder for a metadata reference and wraps the command in macOS `sandbox-exec` | `BMA_BASE_URL=... BMA_MACHINE_TOKEN=... go run ./examples/sandboxed-folder -owner u_42 -folder ws_7=$HOME/projects/site` |
+
+## Tests
+
+```sh
+go vet ./... && go test -race ./...
+```
+
+The tests cover the conformance examples in [`contracts/bma/executor/examples`](contracts/bma/executor/examples), executor ↔ harness over every transport with reconnect and lease, `Core`, capabilities and the agent capability. The TypeScript and Python packages run interop suites against the Go peers in [`internal/interop`](internal/interop).
+
+## Development
+
+The executor contract snapshot and the generated types (`generated.go`,
+`typescript/src/generated/executor.ts`, `python/src/bma_executor_sdk/generated.py`)
+are generated in the BMA repository: `make contract-sdk SDK_DIR=<this checkout>`.
+`tools/check_contract.py` verifies them against `contracts/bma/executor/lock.json`;
+`--source <beeos-managed-agents checkout>` also compares the snapshot with BMA.
+
+```sh
+python3 tools/check_contract.py [--source ../beeos-managed-agents]
+go vet ./... && go test -race ./...
+(cd python && uv sync && uv run pytest -q)                        # interop tests need Go
+(cd typescript && npm ci && npm run build && npm test)            # Go + Python interop
+```
+
+## Release
+
+One tag `v<version>` releases all three languages at the same version: it must
+be on `main` and match `typescript/package.json` and `python/pyproject.toml`.
+[`release.yaml`](.github/workflows/release.yaml) first runs
+[`ci.yaml`](.github/workflows/ci.yaml), then publishes.
+
+| Channel | Publishes | Credentials |
+| --- | --- | --- |
+| Go | nothing; the module comes from the tag | none |
+| npm | `@beeos-ai/bma-executor-sdk` with provenance | secret `NPM_TOKEN` in the `releases` environment |
+| PyPI | `bma-executor-sdk` | a PyPI Trusted Publisher on `bma-executor-sdk`: owner `beeos-ai`, repository `bma-executor-sdk`, workflow `release.yaml`, environment `releases` |
+
+## License
+
+Apache License 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+
+### Input-scoped selected skills (executor contract 1.5.0)
+
+An agent opts in with `input_skills: true` only after implementing exact skill-byte installation and input-bound receipts. A request then carries `config.input_skills`; the handler returns `effective.input_skill_receipt` identifying the opening input and every applied skill ID, frozen revision and SKILL.md byte hash. Installing the selection must not change the next input's default context. The platform must validate current grants and frozen versions before dispatch, then compare and persist the returned receipt.
+
+Without the capability, all three SDK runtimes reject a valid selection before invoking the handler. Malformed or empty selections and caller-supplied effective receipts (including JSON null) are invalid parameters. These checks establish transport behavior; they do not load skills or validate product authorization for a host.
+
+Before scheduling work, each SDK compares the applied receipt with the opening input and ordered selected revisions/hashes; a missing or mismatched receipt prevents execution. Cached turn-start replays undergo the same check. Another input cannot join a selected-skill turn, while replay of the opening input is still acknowledged. Refused preparation also settles the turn completion signal, allowing concurrent session closure to finish.

@@ -1,0 +1,227 @@
+name: Release
+
+# One tag vX.Y.Z releases all three SDKs at the same version: the Go module
+# comes from the tag itself, npm and PyPI are published below.
+# Versions never carry a pre-release suffix (beeos-versioning): only plain
+# vX.Y.Z tags trigger a release, and check_versions.sh rejects anything else
+# (including the workflow_dispatch tag input).
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  # Re-release an existing tag with the workflow from the current main (a
+  # rerun would reuse the old commit's workflow). Never moves the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish, e.g. v1.3.1, plain vX.Y.Z only
+        required: true
+        type: string
+      publish:
+        description: Which registry to publish to
+        type: choice
+        options: [all, npm, pypi]
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: CI
+    uses: ./.github/workflows/ci.yaml
+
+  verify:
+    name: Verify the tag is on main and matches every package version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Verify release tag is on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor HEAD origin/main
+
+      - name: Verify the tag matches every package version
+        run: ./tools/check_versions.sh "${{ inputs.tag || github.ref_name }}"
+
+      # The contract snapshot must come from a merged BMA commit and
+      # regenerate exactly there (tools/check_contract.py --regenerate).
+      # beeos-managed-agents is private, so this needs the
+      # BMA_CONTRACT_READ_TOKEN secret (contents: read on that repository).
+      # With the token the check must pass. Without it the release goes on
+      # with a warning: whoever tags runs the check locally against a BMA
+      # checkout and records the result in the release pull request.
+      # SWITCH: once BMA_CONTRACT_READ_TOKEN is set, change
+      # CONTRACT_GATE_WITHOUT_TOKEN to "fail" so a missing token stops the
+      # release (fail closed).
+      - name: BMA read token
+        id: bma-token
+        env:
+          BMA_CONTRACT_READ_TOKEN: ${{ secrets.BMA_CONTRACT_READ_TOKEN }}
+          CONTRACT_GATE_WITHOUT_TOKEN: warn
+        run: |
+          if [ -n "$BMA_CONTRACT_READ_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "present=false" >> "$GITHUB_OUTPUT"
+          message="BMA_CONTRACT_READ_TOKEN is not set: the contract snapshot was NOT checked against beeos-ai/beeos-managed-agents main (tools/check_contract.py --regenerate). Run it locally against a BMA checkout and record the result in the release PR; set the secret (contents: read on that repository)."
+          if [ "$CONTRACT_GATE_WITHOUT_TOKEN" = "fail" ]; then
+            echo "::error::$message"
+            exit 1
+          fi
+          echo "::warning::$message"
+          echo "### Contract snapshot NOT checked against BMA main" >> "$GITHUB_STEP_SUMMARY"
+          echo "$message" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check out BMA
+        if: steps.bma-token.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: beeos-ai/beeos-managed-agents
+          token: ${{ secrets.BMA_CONTRACT_READ_TOKEN }}
+          path: .bma
+          fetch-depth: 0
+
+      - name: Set up Node
+        if: steps.bma-token.outputs.present == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .bma/.node-version
+
+      - name: Contract snapshot is regenerated from BMA main
+        if: steps.bma-token.outputs.present == 'true'
+        run: python3 tools/check_contract.py --source .bma --ref origin/main --regenerate
+
+  npm:
+    if: github.event_name == 'push' || inputs.publish == 'all' || inputs.publish == 'npm'
+    name: Publish @beeos-ai/bma-executor-sdk to npm
+    needs: [checks, verify]
+    runs-on: ubuntu-latest
+    environment:
+      name: releases
+      url: https://www.npmjs.com/package/@beeos-ai/bma-executor-sdk
+    permissions:
+      contents: read
+      # The OIDC token signs the provenance statement; authentication to the
+      # registry uses the NPM_TOKEN secret of the releases environment.
+      id-token: write
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
+
+  pypi:
+    if: github.event_name == 'push' || inputs.publish == 'all' || inputs.publish == 'pypi'
+    name: Publish bma-executor-sdk to PyPI
+    needs: [checks, verify]
+    runs-on: ubuntu-latest
+    environment:
+      name: releases
+      url: https://pypi.org/project/bma-executor-sdk/
+    permissions:
+      contents: read
+      # PyPI Trusted Publishing exchanges this job's OIDC token for an upload
+      # token, so the release never needs a long-lived PyPI API token.
+      id-token: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      - name: Build sdist and wheel
+        working-directory: python
+        run: uv build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: python/dist/
+
+  bma:
+    # The bma command (cmd/bma): per-platform archives, the manifest and
+    # install.sh as assets of the GitHub release of the tag (install.sh and
+    # https://beeos.ai/bma/install.sh read them), and the Homebrew formula
+    # pushed to beeos-ai/homebrew-tap (deploy key of that repository).
+    if: github.event_name == 'push' || inputs.publish == 'all'
+    name: Publish bma (GitHub release, Homebrew tap)
+    needs: [checks, verify]
+    runs-on: ubuntu-latest
+    environment:
+      name: releases
+      url: https://github.com/beeos-ai/bma-executor-sdk/releases
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
+          cache-dependency-path: go.sum
+
+      - name: Build the assets
+        run: ./tools/package_bma.sh "${TAG#v}" dist
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "$TAG" --notes "See CHANGELOG.md. Install bma: curl -fsSL https://beeos.ai/bma/install.sh | sh"
+          fi
+
+      - name: Update the Homebrew tap
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/tap && chmod 600 ~/.ssh/tap
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone --depth 1 git@github.com:beeos-ai/homebrew-tap.git tap
+          mkdir -p tap/Formula && cp dist/bma.rb tap/Formula/bma.rb
+          cd tap
+          git config user.name "bma-executor-sdk release"
+          git config user.email "release@beeos.ai"
+          git add Formula/bma.rb
+          git diff --cached --quiet || { git commit -m "bma ${TAG#v}" && git push origin HEAD; }

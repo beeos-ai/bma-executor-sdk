@@ -1,0 +1,316 @@
+package bmaexecutor
+
+import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type resizeNative struct {
+	controlNative
+	resize func(context.Context, uint16, uint16) error
+	scales []uint16
+}
+
+func (n *resizeNative) Resize(ctx context.Context, w, h, scale uint16) error {
+	n.mu.Lock()
+	n.scales = append(n.scales, scale)
+	n.mu.Unlock()
+	return n.resize(ctx, w, h)
+}
+
+// This encoder follows the published bytes independently of the SDK parser.
+func signedResize(t *testing.T, private ed25519.PrivateKey, expires time.Time, sequence uint64, w, h uint16) []byte {
+	t.Helper()
+	return signedScaledResize(t, private, expires, sequence, w, h, 0)
+}
+
+// signedScaledResize signs tag 6 (dimensions and scale) when scale is set, tag 4 otherwise.
+func signedScaledResize(t *testing.T, private ed25519.PrivateKey, expires time.Time, sequence uint64, w, h, scale uint16) []byte {
+	t.Helper()
+	public := private.Public().(ed25519.PublicKey)
+	var payload bytes.Buffer
+	payload.WriteString("beeos.desktop.input.v1\x00")
+	put := func(v any) {
+		if err := binary.Write(&payload, binary.BigEndian, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, s := range []string{"1", "lease", "viewer"} {
+		put(uint64(len(s)))
+		payload.WriteString(s)
+	}
+	put(uint64(1))
+	put(uint64(expires.UnixMilli()))
+	payload.Write(public)
+	put(sequence)
+	input := map[string]any{"type": "resize", "width": w, "height": h}
+	if scale == 0 {
+		put(uint8(4))
+		put(w)
+		put(h)
+	} else {
+		put(uint8(6))
+		put(w)
+		put(h)
+		put(scale)
+		input["scale"] = scale
+	}
+	key := make([]int, len(public))
+	for i, b := range public {
+		key[i] = int(b)
+	}
+	packet := map[string]any{"grant": map[string]any{"epoch": "1", "generation": 1, "lease_id": "lease",
+		"holder": "viewer", "input_key": key, "expires_at": expires.UnixMilli()}, "sequence": sequence,
+		"input":     input,
+		"signature": base64.RawURLEncoding.EncodeToString(ed25519.Sign(private, payload.Bytes()))}
+	raw, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func resizeGrant(t *testing.T, native NativeDesktopInput, until time.Time) (*DesktopControlGate, ed25519.PrivateKey) {
+	t.Helper()
+	private := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x42}, ed25519.SeedSize))
+	g := NewDesktopControlGate(&controlBackend{}, native)
+	if err := g.grant(t.Context(), 1, "lease", "viewer", until, private.Public().(ed25519.PublicKey), "capture"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(g.Close)
+	return g, private
+}
+
+func TestSignedResizeBindsDimensionsAndUsesExistingInputGate(t *testing.T) {
+	var calls atomic.Int32
+	n := &resizeNative{resize: func(_ context.Context, w, h uint16) error {
+		if w != 1280 || h != 720 {
+			return errors.New("wrong dimensions")
+		}
+		calls.Add(1)
+		return nil
+	}}
+	until := time.Now().Add(20 * time.Second)
+	g, private := resizeGrant(t, n, until)
+	raw := signedResize(t, private, until, 1, 1280, 720)
+	if err := g.SignedInput(t.Context(), "intruder", raw, 1920, 1080); err == nil {
+		t.Fatal("foreign participant resized")
+	}
+	for _, dimension := range []string{"width", "height"} {
+		var packet map[string]any
+		_ = json.Unmarshal(raw, &packet)
+		packet["input"].(map[string]any)[dimension] = 1000
+		tampered, _ := json.Marshal(packet)
+		if err := g.SignedInput(t.Context(), "viewer", tampered, 1920, 1080); err == nil {
+			t.Fatal("unsigned dimension accepted")
+		}
+	}
+	if calls.Load() != 0 {
+		t.Fatal("invalid input reached native resize")
+	}
+	if err := g.SignedInput(t.Context(), "viewer", raw, 1920, 1080); err != nil {
+		t.Fatal("signed resize rejected:", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatal("resize was not applied exactly once")
+	}
+	if err := g.SignedInput(t.Context(), "viewer", raw, 1920, 1080); err == nil {
+		t.Fatal("resize replay accepted")
+	}
+	if _, err := g.Action(t.Context(), ComputerActionRequest{SessionID: "agent"}); !errors.Is(err, ErrDesktopObservation) {
+		t.Fatal("resize gave agent input authority:", err)
+	}
+	if err := g.HumanInput(t.Context(), 1, "lease", "viewer", 2, DesktopInputEvent{Type: "key", Keysym: 65, Down: true}); err != nil {
+		t.Fatal("resize replaced the keyboard gate:", err)
+	}
+}
+
+func TestSignedResizeUnsupportedPreservesLeaseButFailureBlocks(t *testing.T) {
+	until := time.Now().Add(20 * time.Second)
+	n := &controlNative{}
+	g, private := resizeGrant(t, n, until)
+	err := g.SignedInput(t.Context(), "viewer", signedResize(t, private, until, 1, 640, 480), 1920, 1080)
+	if err == nil || err.Error() != "desktop_resize_unsupported" {
+		t.Fatalf("unsupported resize: %v", err)
+	}
+	if err := g.HumanInput(t.Context(), 1, "lease", "viewer", 2, DesktopInputEvent{Type: "key", Keysym: 65, Down: true}); err != nil {
+		t.Fatal("unsupported resize disabled keyboard:", err)
+	}
+	failing := &resizeNative{resize: func(context.Context, uint16, uint16) error { return errors.New("native resize failed") }}
+	blocked, private := resizeGrant(t, failing, until)
+	err = blocked.SignedInput(t.Context(), "viewer", signedResize(t, private, until, 1, 640, 480), 1920, 1080)
+	if !errors.Is(err, ErrDesktopInputUnknown) {
+		t.Fatalf("actual failure was hidden as unsupported: %v", err)
+	}
+	if err := blocked.Grant(t.Context(), 2, "new", "other", until); !errors.Is(err, ErrDesktopRecoveryRequired) {
+		t.Fatal("failed resize allowed new owner:", err)
+	}
+}
+
+func TestResizeReleaseCancelsAndWaitsForNativeExit(t *testing.T) {
+	entered, cancelled, finish := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	n := &resizeNative{resize: func(ctx context.Context, _, _ uint16) error {
+		close(entered)
+		<-ctx.Done()
+		close(cancelled)
+		<-finish
+		return ctx.Err()
+	}}
+	until := time.Now().Add(20 * time.Second)
+	g, private := resizeGrant(t, n, until)
+	finished := false
+	t.Cleanup(func() {
+		if !finished {
+			close(finish)
+		}
+	})
+	input := make(chan error, 1)
+	go func() {
+		input <- g.SignedInput(t.Context(), "viewer", signedResize(t, private, until, 1, 640, 480), 1920, 1080)
+	}()
+	select {
+	case <-entered:
+	case err := <-input:
+		t.Fatalf("resize did not enter native operation: %v", err)
+	}
+	released := make(chan error, 1)
+	go func() { released <- g.Release(t.Context(), 1, "lease", false) }()
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("release did not cancel native resize")
+	}
+	select {
+	case err := <-released:
+		t.Fatalf("release completed before native exit: %v", err)
+	default:
+	}
+	if err := g.Grant(t.Context(), 2, "new", "other", until); err == nil {
+		t.Fatal("new owner crossed unfinished resize")
+	}
+	close(finish)
+	finished = true
+	if err := <-released; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-input; !errors.Is(err, ErrDesktopInputUnknown) {
+		t.Fatal("cancelled resize reported success:", err)
+	}
+}
+
+func TestResizeLeaseExpiryCancelsNativeOperation(t *testing.T) {
+	entered := make(chan struct{})
+	n := &resizeNative{resize: func(ctx context.Context, _, _ uint16) error { close(entered); <-ctx.Done(); return ctx.Err() }}
+	until := time.Now().Add(200 * time.Millisecond)
+	g, private := resizeGrant(t, n, until)
+	input := make(chan error, 1)
+	go func() {
+		input <- g.SignedInput(t.Context(), "viewer", signedResize(t, private, until, 1, 640, 480), 1920, 1080)
+	}()
+	select {
+	case <-entered:
+	case err := <-input:
+		t.Fatalf("resize did not enter native operation: %v", err)
+	}
+	select {
+	case err := <-input:
+		if !errors.Is(err, ErrDesktopInputUnknown) {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("native resize survived lease expiry")
+	}
+}
+
+type restoreNative struct {
+	resizeNative
+	restores atomic.Int32
+}
+
+func (n *restoreNative) RestoreDesktop(context.Context) error { n.restores.Add(1); return nil }
+
+// The size a holder fitted is undone when its lease ends (release, expiry,
+// close), never when control is granted.
+func TestDesktopRestoreRunsWhenTheHumanLeaseEnds(t *testing.T) {
+	n := &restoreNative{resizeNative: resizeNative{resize: func(context.Context, uint16, uint16) error { return nil }}}
+	until := time.Now().Add(20 * time.Second)
+	g, private := resizeGrant(t, n, until)
+	if got := n.restores.Load(); got != 0 {
+		t.Fatalf("grant restored the desktop %d times", got)
+	}
+	if err := g.SignedInput(t.Context(), "viewer", signedResize(t, private, until, 1, 1280, 720), 1920, 1080); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Release(t.Context(), 1, "lease", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := n.restores.Load(); got != 1 {
+		t.Fatalf("release restored the desktop %d times, want 1", got)
+	}
+
+	expiring := &restoreNative{resizeNative: resizeNative{resize: func(context.Context, uint16, uint16) error { return nil }}}
+	g, _ = resizeGrant(t, expiring, time.Now().Add(300*time.Millisecond))
+	deadline := time.Now().Add(5 * time.Second)
+	for expiring.restores.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := expiring.restores.Load(); got != 1 {
+		t.Fatalf("lease expiry restored the desktop %d times, want 1", got)
+	}
+	g.Close()
+}
+
+func TestDesktopRestoreFailureDoesNotChangeTheRelease(t *testing.T) {
+	n := &failingRestoreNative{}
+	g, _ := resizeGrant(t, n, time.Now().Add(20*time.Second))
+	if err := g.Release(t.Context(), 1, "lease", false); err != nil {
+		t.Fatal("restore failure changed the release:", err)
+	}
+}
+
+type failingRestoreNative struct{ controlNative }
+
+func (*failingRestoreNative) RestoreDesktop(context.Context) error {
+	return errors.New("xrandr failed")
+}
+
+func TestSignedResizeBindsScale(t *testing.T) {
+	n := &resizeNative{resize: func(context.Context, uint16, uint16) error { return nil }}
+	until := time.Now().Add(20 * time.Second)
+	g, private := resizeGrant(t, n, until)
+	raw := signedScaledResize(t, private, until, 1, 2560, 1600, 200)
+	var packet map[string]any
+	_ = json.Unmarshal(raw, &packet)
+	packet["input"].(map[string]any)["scale"] = 100
+	tampered, _ := json.Marshal(packet)
+	if err := g.SignedInput(t.Context(), "viewer", tampered, 1920, 1080); err == nil {
+		t.Fatal("unsigned scale accepted")
+	}
+	delete(packet["input"].(map[string]any), "scale")
+	dropped, _ := json.Marshal(packet)
+	if err := g.SignedInput(t.Context(), "viewer", dropped, 1920, 1080); err == nil {
+		t.Fatal("a scaled resize with its scale removed accepted")
+	}
+	if err := g.SignedInput(t.Context(), "viewer", signedScaledResize(t, private, until, 1, 2560, 1600, 50), 1920, 1080); err == nil {
+		t.Fatal("scale below 1x accepted")
+	}
+	if err := g.SignedInput(t.Context(), "viewer", raw, 1920, 1080); err != nil {
+		t.Fatal("signed scaled resize rejected:", err)
+	}
+	if err := g.SignedInput(t.Context(), "viewer", signedResize(t, private, until, 2, 1280, 720), 1920, 1080); err != nil {
+		t.Fatal("unscaled resize rejected:", err)
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.scales) != 2 || n.scales[0] != 200 || n.scales[1] != 0 {
+		t.Fatalf("native resize scales = %v, want [200 0]", n.scales)
+	}
+}

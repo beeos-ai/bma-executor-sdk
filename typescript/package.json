@@ -1,0 +1,38 @@
+{
+  "name": "@beeos-ai/bma-executor-sdk",
+  "version": "1.12.2",
+  "description": "BMA executor protocol (bma.executor.v1.1): executor, harness and agent ends with WebSocket, local socket and in-process transports.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/beeos-ai/bma-executor-sdk.git",
+    "directory": "typescript"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.test.json && node --test build-test/test/*.test.js"
+  },
+  "dependencies": {
+    "@types/ws": "8.18.2",
+    "ws": "8.22.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "expect-type": "1.4.0",
+    "typescript": "7.0.2"
+  }
+}

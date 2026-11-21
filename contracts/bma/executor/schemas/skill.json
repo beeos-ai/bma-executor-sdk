@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.bma.beeos.ai/schemas/skill.json",
+  "title": "BMA executor skill types",
+  "description": "skill.install (machine-scoped executors).",
+  "$defs": {
+    "SkillInstallResult": {
+      "type": "object",
+      "description": "skill.install result. state is \"ready\", or \"failed\" with error_code and error.",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "ready",
+            "failed"
+          ]
+        },
+        "error_code": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

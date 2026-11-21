@@ -1,0 +1,1169 @@
+// Executor end of the BMA executor protocol: registration, heartbeat,
+// reconnect with resume, session lifecycle, tool dispatch and cancellation,
+// retried tool results and the raw MCP channel. Mirrors go/executor Client.
+
+import { SessionContexts, type SessionContext } from './session-context.js'
+import {
+  ChannelScope,
+  ConnectionState,
+  JsonRpcErrorCode,
+  methods,
+  ProtocolVersion,
+  type Ack,
+  type Capabilities,
+  type ExecutorCapabilitiesUpdateParams,
+  type ExecutorDrainParams,
+  type ExecutorDrainResult,
+  type ExecutorHeartbeatParams,
+  type ExecutorHeartbeatResult,
+  type ExecutorTokenRefreshParams,
+  type ExecutorTokenRefreshResult,
+  type ExecutorInfo,
+  type ExecutorLoad,
+  type ExecutorRegisterParams,
+  type ExecutorRegisterResult,
+  type ExecutorResume,
+  type ExecutorTokenResponse,
+  type SessionAssignParams,
+  type SessionAssignResult,
+  type SessionEndedParams,
+  type SessionEventParams,
+  type SessionEventResult,
+  type SessionReadyParams,
+  type SessionStatusParams,
+  type SessionStopParams,
+  type SessionStopResult,
+  type ToolCallParams,
+  type ToolCancelParams,
+  type ToolCancelResult,
+  type ToolProgressParams,
+  type ToolResultParams,
+  type AgentCapability,
+  type ArtifactRef,
+  type ExecutorToHarnessNotificationMethod,
+  type ExecutorToHarnessRequestMethod,
+  type HarnessToExecutorRequestMethod,
+  type MethodParamsMap,
+  type MethodResultMap,
+  type ContentBlock,
+  type ToolCallInputMap,
+  type ToolPermission,
+  ToolName,
+} from './generated/executor.js'
+import { AgentRuntime, type AgentHandler, type AgentHost } from './agent.js'
+import {
+  ChannelClosedError,
+  Code,
+  ClientStoppedError,
+  CredentialRejectedError,
+  deferred,
+  NotConnectedError,
+  ReconnectExhaustedError,
+  RegistrationRefusedError,
+  RequestTimeoutError,
+  RpcError,
+  ToolError,
+} from './errors.js'
+import { DEFAULT_PROTOCOLS } from './local.js'
+import { RpcPeer, type LogLevel, type Logger } from './rpc.js'
+import { dialWebSocket, FrameChannel, type Conn } from './transport.js'
+
+/** The executor origin of the hosted deployment. */
+export const DEFAULT_BASE_URL = 'https://executor.beeos.ai'
+
+/**
+ * API hosts executors used to dial, retired for executors, and the executor host of the same deployment
+ * (same routes). A stored base URL on one of them moves to the executor host; remove an entry once no
+ * executor dials the old host.
+ */
+const RETIRED_EXECUTOR_HOSTS: Record<string, string> = {
+  'api.bma.beeos.ai': 'executor.beeos.ai',
+  'api.staging.bma.beeos.ai': 'executor.staging.beeos.ai',
+}
+
+/**
+ * The deployment origin of baseUrl (as BMA_BASE_URL in bma-sdk): a trailing /api/v1 is dropped and a
+ * retired executor host is replaced by its executor host. Callers that persist the URL write it back.
+ */
+export function executorOrigin(baseUrl: string = DEFAULT_BASE_URL): string {
+  const base = baseUrl.replace(/\/+$/, '').replace(/\/api\/v1$/, '')
+  try {
+    const url = new URL(base)
+    const host = RETIRED_EXECUTOR_HOSTS[url.hostname.toLowerCase()]
+    if (!host) return base
+    url.hostname = host
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return base
+  }
+}
+/** The environment variable that carries the machine id of a machine-scoped executor (injected by the machine pool template). */
+export const MACHINE_ID_ENV = 'BMA_MACHINE_ID'
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+/** 0 reconnects until stop(), as gRPC connection backoff and long-running agents (GitHub Actions runner, Buildkite agent) do. */
+export const DEFAULT_MAX_RECONNECT_ATTEMPTS = 0
+export const DEFAULT_RECONNECT_BASE_DELAY_MS = 1000
+export const DEFAULT_TOOL_RESULT_RETRY_ATTEMPTS = 5
+export const DEFAULT_TOOL_RESULT_RETRY_BASE_DELAY_MS = 250
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000
+/** Largest bash output returned inline, as Go Core's DefaultCoreInlineResultBytes. */
+export const INLINE_RESULT_BYTES = 48 * 1024
+const MAX_TRACKED_TOOL_CALLS = 8192
+const MAX_TOOL_RESULT_RETRY_DELAY_MS = 10_000
+const MAX_RECONNECT_DELAY_MS = 60_000
+/** Registrations the platform may refuse in a row before the client gives up (RegistrationRefusedError). */
+const MAX_REFUSED_REGISTRATIONS = 3
+/** Fraction of a token's lifetime after which executor.token.refresh is sent. */
+const TOKEN_REFRESH_AT = 0.7
+
+/**
+ * Close codes after which the executor must not reconnect: the contract's
+ * 4003 (unsupported protocol) and 4004 (replaced). Every other close,
+ * including 4002 (machine runtime refused or ended, for example by a
+ * restarting server) and 4005 (drained), reconnects.
+ */
+export function isTerminalCloseCode(code: number): boolean {
+  return code === 4003 || code === 4004
+}
+
+/**
+ * Whether error is the platform refusing the registration: the close 4002 "runtime registration
+ * refused", or an executor.register error for the executor's capabilities or params.
+ */
+function isRegistrationRefusal(error: unknown): boolean {
+  if (error instanceof RpcError) return error.code === Code.CapabilityUnavailable || error.code === Code.InvalidParams
+  return error instanceof ChannelClosedError && error.code === 4002 && /registration refused/i.test(error.reason)
+}
+
+/** Which channel to open: the control channel, or one MCP channel of a session. */
+export interface ChannelTarget {
+  channel: ChannelScope
+  sessionId?: string
+  serverKey?: string
+}
+
+/** Opens a channel. Called again for every reconnect and every MCP channel. */
+export type Dialer = (target: ChannelTarget) => Promise<Conn>
+
+export type TokenSource = () => Promise<Pick<ExecutorTokenResponse, 'token' | 'ws_url'> & Partial<ExecutorTokenResponse>>
+
+/** A TokenSource for a harness reached directly: ws://127.0.0.1, unix:///path.sock or npipe:////./pipe/<name>. */
+export function staticToken(wsUrl: string, token = ''): TokenSource {
+  return async () => ({ token, ws_url: wsUrl })
+}
+
+export interface WebSocketDialerOptions {
+  /**
+   * The selfhost environment (POST {baseUrl}/v1/environments/{environmentId}/token). environmentId and
+   * machineId are alternatives. With neither, the legacy alias POST {baseUrl}/v1/executors/token
+   * serves a machine daemon token (removed in contract 2.0).
+   */
+  environmentId: string
+  /**
+   * The machine of a machine-scoped executor (POST {baseUrl}/v1/machines/{machineId}/token). Defaults to
+   * BMA_MACHINE_ID when environmentId is empty. It must equal the machine of the credential, else 404.
+   */
+  machineId?: string
+  /**
+   * One instance of a platform brain fleet (contract 1.23.0 ExecutorTokenRequest.instance_id, ADR-0083), for example
+   * the pod name: the instances share the machine credential and each gets a token and control channel of its own.
+   * Only the deployment's platform brain machines may send it. Omitted: the machine's own executor.
+   */
+  instanceId?: string
+  executor: ExecutorInfo
+  /** POST the token exchange to {baseUrl} with environmentKey, unless tokenSource is set. */
+  baseUrl?: string
+  environmentKey?: string
+  tokenSource?: TokenSource
+  /** Overrides the ws_url of the token response. */
+  wsUrl?: string
+  protocols?: string[]
+  fetch?: typeof fetch
+  /** Bounds one request, the token request included (as Go and Python). Defaults to 30s. */
+  requestTimeoutMs?: number
+}
+
+export function channelUrl(rawUrl: string, target: ChannelTarget): string {
+  const url = new URL(rawUrl)
+  if (!['ws:', 'wss:', 'unix:', 'npipe:'].includes(url.protocol)) {
+    throw new Error('executor channel URL must use ws, wss, unix or npipe')
+  }
+  if (target.channel === ChannelScope.Mcp) {
+    url.searchParams.set('channel', 'mcp')
+    url.searchParams.set('session_id', target.sessionId ?? '')
+    url.searchParams.set('server_key', target.serverKey ?? '')
+  }
+  return url.toString()
+}
+
+/** The cloud dialer: token bootstrap, then an outbound WebSocket with the bearer token. */
+export function webSocketDialer(options: WebSocketDialerOptions): Dialer {
+  const fetchToken = executorTokenSource(options)
+  return async (target) => dialWithToken(options, await fetchToken(), target)
+}
+
+/** The machine id of a machine-scoped executor: options.machineId, else BMA_MACHINE_ID when there is no environmentId. */
+function machineIdOf(options: Pick<WebSocketDialerOptions, 'environmentId' | 'machineId'>): string {
+  if (options.environmentId && options.machineId) throw new Error('environmentId and machineId are alternatives; set one')
+  if (options.environmentId) return ''
+  return options.machineId ?? process.env[MACHINE_ID_ENV]?.trim() ?? ''
+}
+
+/** The token exchange of the executor's own resource (ADR-0023 1.3); the legacy alias serves a machine token without an id. */
+function tokenPath(environmentId: string, machineId: string): string {
+  if (environmentId) return `/v1/environments/${encodeURIComponent(environmentId)}/token`
+  if (machineId) return `/v1/machines/${encodeURIComponent(machineId)}/token`
+  return '/v1/executors/token'
+}
+
+/** options.tokenSource, or the token exchange with environmentKey. */
+function executorTokenSource(options: WebSocketDialerOptions): TokenSource {
+  if (!options.tokenSource && !options.environmentKey?.trim()) throw new Error('environmentKey or tokenSource is required')
+  return (
+    options.tokenSource ??
+    (async () => {
+      const base = executorOrigin(options.baseUrl)
+      const path = tokenPath(options.environmentId, machineIdOf(options))
+      const response = await (options.fetch ?? fetch)(`${base}${path}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${options.environmentKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          environment_id: options.environmentId,
+          executor: options.executor,
+          ...(options.instanceId ? { instance_id: options.instanceId } : {}),
+        }),
+        signal: AbortSignal.timeout(options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+      })
+      if (response.status !== 200) {
+        const detail = (await response.text()).slice(0, 4096).trim()
+        const message = `executor token request failed: ${response.status}: ${detail}`
+        if (response.status === 401 || response.status === 403) throw new CredentialRejectedError(response.status, message)
+        throw new Error(message)
+      }
+      const token = (await response.json()) as ExecutorTokenResponse
+      if (!token.token || !token.ws_url) throw new Error('executor token response is missing token or ws_url')
+      return token
+    })
+  )
+}
+
+function dialWithToken(options: WebSocketDialerOptions, token: Awaited<ReturnType<TokenSource>>, target: ChannelTarget): Promise<Conn> {
+  const wsUrl = options.wsUrl || token.ws_url
+  if (!wsUrl) throw new Error('token source returned no ws_url')
+  if (target.channel === ChannelScope.Mcp && token.channel_scope?.length && !token.channel_scope.includes(ChannelScope.Mcp)) {
+    throw new Error('executor token does not allow the mcp channel')
+  }
+  return dialWebSocket(channelUrl(wsUrl, target), { protocols: options.protocols ?? DEFAULT_PROTOCOLS, token: token.token })
+}
+
+/** A complete tool result without the ids the client fills in. */
+export type ToolResult = Omit<ToolResultParams, 'session_id' | 'tool_call_id'>
+
+export interface ToolContext {
+  /** Aborted by tool.cancel, deadline_ms, or stop(). */
+  signal: AbortSignal
+  /** Sends tool.progress for this call (best-effort). */
+  progress(message: string): void
+  sessionId: string
+  toolCallId: string
+  permission?: ToolPermission
+}
+
+/**
+ * What a tool handler returns. A string is one text block; `isError` reports
+ * a tool-level error to the model (outcome succeeded, is_error true), like
+ * throwing ToolError. Any other exception is outcome failed.
+ */
+export type ToolOutput = string | ContentBlock[] | { content: ContentBlock[]; isError?: boolean; artifacts?: ArtifactRef[] }
+
+/**
+ * bash output, rendered as Go Core renders it: stdout, stderr, `exit_code: N`.
+ * Output beyond INLINE_RESULT_BYTES, or marked `truncated` by the handler, is
+ * cut to Core's preview (half the limit of stdout, a quarter of stderr).
+ */
+export interface BashResult {
+  stdout: string
+  stderr: string
+  exitCode: number
+  /** The handler already cut the output short. */
+  truncated?: boolean
+}
+
+/** Built-in tools with a slot; computer_observe and computer_action get one once the contract defines their input. */
+export type SlotToolName = Exclude<ToolName, 'computer_observe' | 'computer_action'>
+export type ToolOutputOf<N extends ToolName> = N extends 'bash' ? ToolOutput | BashResult : ToolOutput
+export type ToolHandler<N extends ToolName> = (input: ToolCallInputMap[N], context: ToolContext) => Promise<ToolOutputOf<N>>
+
+/** One built-in tool of the executor. */
+export interface ToolSlot<N extends ToolName> {
+  /**
+   * Serves tool.call for this tool; replaces an earlier handler. After
+   * start() the changed capabilities are sent with executor.capabilities.update.
+   */
+  handle(handler: ToolHandler<N>): void
+}
+
+/** `client.tools.<name>`: one typed slot per built-in tool. */
+export type ExecutorTools = { readonly [N in SlotToolName]: ToolSlot<N> }
+
+/** Required members of each tool input (schemas/tool.json <Tool>Input.required). */
+export const REQUIRED_TOOL_INPUT: Readonly<Record<SlotToolName, readonly string[]>> = {
+  bash: ['command'],
+  read: ['path'],
+  write: ['path', 'content'],
+  edit: ['path', 'old_string', 'new_string'],
+  glob: ['pattern'],
+  grep: ['pattern'],
+  list_files: [],
+}
+
+/** Harness-to-executor requests the client serves itself (tools, sessions, drain, agent). */
+type ServedRequestMethod =
+  | 'tool.call'
+  | 'tool.cancel'
+  | 'session.assign'
+  | 'session.stop'
+  | 'executor.drain'
+  | 'turn.start'
+  | 'turn.input'
+  | 'turn.cancel'
+  | 'session.close'
+  | 'interaction.response'
+  | 'agent.custom_tool_result'
+/** Harness-to-executor requests served with `onRequest`: process.*, terminal.*, skill.install, workspace.backup. */
+export type ExecutorRequestMethod = Exclude<HarnessToExecutorRequestMethod, ServedRequestMethod>
+export type RequestHandler<M extends ExecutorRequestMethod> = (
+  params: MethodParamsMap[M],
+) => MethodResultMap[M] | Promise<MethodResultMap[M]>
+
+export type SessionAssignHandler = (params: SessionAssignParams) => Promise<SessionAssignResult>
+export type SessionStopHandler = (params: SessionStopParams) => Promise<SessionStopResult>
+export type DrainHandler = (params: ExecutorDrainParams) => Promise<ExecutorDrainResult>
+
+export interface ExecutorClientOptions extends Omit<WebSocketDialerOptions, 'environmentKey' | 'tokenSource'> {
+  environmentKey?: string
+  tokenSource?: TokenSource
+  capabilities?: Capabilities
+  /** Replaces the WebSocket dialer, for example listenExecutor().dialer or Harness.inProcessDialer. */
+  dialer?: Dialer
+  /** false for a connection that cannot be redialed (an accepted local connection). */
+  reconnect?: boolean
+  /** Overrides the interval returned by executor.register. */
+  heartbeatIntervalMs?: number
+  heartbeatLoad?: () => ExecutorLoad | undefined
+  /**
+   * Bounds consecutive failed reconnects; the client then ends and
+   * waitClosed() rejects with ReconnectExhaustedError. 0 (the default) or a
+   * negative value reconnects until stop().
+   */
+  maxReconnectAttempts?: number
+  /** The first reconnect backoff (default 1 s); it doubles per failed attempt up to reconnectMaxDelayMs, with jitter. */
+  reconnectBaseDelayMs?: number
+  /** Caps the reconnect backoff before jitter; defaults to 60 s. */
+  reconnectMaxDelayMs?: number
+  random?: () => number
+  /** Total tool.result attempts including the first; 1 disables retries. */
+  toolResultRetryAttempts?: number
+  toolResultRetryBaseDelayMs?: number
+  /**
+   * Called when a tool result was not accepted after all retries or the error
+   * is not retryable. Persist it and replay it with the same tool_call_id.
+   */
+  onToolResultLost?: (result: ToolResultParams, error: unknown) => void
+  onLog?: Logger
+}
+
+/** Remembers up to MAX_TRACKED_TOOL_CALLS ids, evicting the oldest. */
+class BoundedSet {
+  private readonly items = new Set<string>()
+  has(id: string): boolean {
+    return this.items.has(id)
+  }
+  add(id: string): void {
+    if (this.items.size >= MAX_TRACKED_TOOL_CALLS) {
+      const oldest = this.items.values().next().value
+      if (oldest !== undefined) this.items.delete(oldest)
+    }
+    this.items.add(id)
+  }
+  delete(id: string): void {
+    this.items.delete(id)
+  }
+}
+
+interface RunningToolCall {
+  abort: AbortController
+  canceled: boolean
+  reason: string
+}
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new ClientStoppedError())
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(new ClientStoppedError())
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/** An executor client. One client is one logical executor connection to one harness. */
+export class ExecutorClient {
+  private readonly options: ExecutorClientOptions
+  private readonly dialer: Dialer
+  /** Set when the client bootstraps tokens itself; such a connection refreshes its token in place. */
+  private readonly tokenSource?: TokenSource
+  private peer?: RpcPeer
+  private currentState: ConnectionState = ConnectionState.Disconnected
+  private stopped = false
+  private readonly stopController = new AbortController()
+  private closeError?: Error
+  private readonly closed = deferred()
+  private registerResult?: ExecutorRegisterResult
+  private currentConnectionId = ''
+  private currentExecutorId = ''
+  private heartbeatIntervalMs: number
+  private heartbeatTimer?: ReturnType<typeof setTimeout>
+  private reconnectAttempts = 0
+  /** Registrations refused in a row; the peer that stayed registered for one heartbeat interval; replaced whenever one does. */
+  private refusedStreak = 0
+  private stablePeer?: RpcPeer
+  private stable = deferred()
+  private readonly sessions = new Set<string>()
+  private readonly completedToolResults = new BoundedSet()
+  private readonly seenToolCalls = new BoundedSet()
+  private readonly running = new Map<string, RunningToolCall>()
+  private readonly handlers = new Map<ToolName, ToolHandler<ToolName>>()
+  /** Typed tool handlers; capabilities shell/files/computer_use follow what is registered. */
+  readonly tools: ExecutorTools
+  private sessionAssignHandler?: SessionAssignHandler
+  private sessionStopHandler?: SessionStopHandler
+  private drainHandler?: DrainHandler
+  private readonly requestHandlers = new Map<string, (params: unknown) => unknown>()
+  private registration = deferred()
+  private agent?: AgentRuntime
+  private readonly sessionContexts: SessionContexts
+
+  constructor(options: ExecutorClientOptions) {
+    if (options.environmentId === undefined) throw new Error('environmentId is required')
+    if (!options.executor?.name) throw new Error('executor.name is required')
+    machineIdOf(options)
+    this.options = options
+    this.dialer = options.dialer ?? webSocketDialer(options)
+    if (!options.dialer) this.tokenSource = executorTokenSource(options)
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS
+    this.sessionContexts = new SessionContexts({
+      baseUrl: executorOrigin(options.baseUrl),
+      environmentId: options.environmentId,
+      environmentKey: options.environmentKey,
+      fetch: options.fetch,
+    })
+    const tools = {} as Record<SlotToolName, ToolSlot<ToolName>>
+    for (const name of Object.keys(REQUIRED_TOOL_INPUT) as SlotToolName[]) {
+      tools[name] = { handle: (handler) => this.setToolHandler(name, handler as ToolHandler<ToolName>) }
+    }
+    this.tools = tools as unknown as ExecutorTools
+  }
+
+  get state(): ConnectionState {
+    return this.currentState
+  }
+  get executorId(): string {
+    return this.currentExecutorId
+  }
+  get connectionId(): string {
+    return this.currentConnectionId
+  }
+  /** The negotiated protocol of the current connection. */
+  get protocol(): string | undefined {
+    return this.peer?.conn.protocol
+  }
+  get activeSessions(): string[] {
+    return [...this.sessions]
+  }
+
+  /**
+   * The context of the agent session processId runs for (process.start
+   * metadata agent_session_id): its environment and the metadata its creator
+   * set. Read it in a process.start handler to resolve a metadata reference
+   * or check an owner before spawning, and refuse with
+   * RpcError.withReason(...). Needs a machine-scoped executor
+   * (MachineTokenRequiredError); cached per session, failures are not.
+   * Throws SessionContextNotFoundError for a process not on this machine.
+   */
+  sessionContext(processId: string): Promise<SessionContext> {
+    return this.sessionContexts.byProcess(processId)
+  }
+
+  /** The context of an agent session bound to this machine (for an agent capability without a process); cached like sessionContext. */
+  sessionContextById(sessionId: string): Promise<SessionContext> {
+    return this.sessionContexts.byId(sessionId)
+  }
+
+  onSessionAssign(handler: SessionAssignHandler): void {
+    this.sessionAssignHandler = handler
+  }
+  onSessionStop(handler: SessionStopHandler): void {
+    this.sessionStopHandler = handler
+  }
+  onDrain(handler: DrainHandler): void {
+    this.drainHandler = handler
+  }
+  /**
+   * Serves a harness-to-executor request (process.*, terminal.*, skill.install,
+   * workspace.backup) with the contract's params and result types. Throw an
+   * RpcError to answer with a JSON-RPC error.
+   */
+  onRequest<M extends ExecutorRequestMethod>(method: M, handler: RequestHandler<M>): void {
+    this.requestHandlers.set(method, handler as (params: unknown) => unknown)
+  }
+
+  /** Advertises the agent capability and serves turn.*, session.close, interaction.response and agent.custom_tool_result. Call before start. */
+  serveAgent(handler: AgentHandler, capability: Omit<AgentCapability, 'enabled'> = {}): void {
+    if (capability.context_maintenance === true && (!handler.compactSession || !handler.cancelCompactSession)) throw new Error('context_maintenance requires compactSession and cancelCompactSession handlers')
+    this.agent = new AgentRuntime(this.agentHost(), handler, { ...capability, enabled: true })
+  }
+
+  /** Dials, registers and starts heartbeats. */
+  async start(): Promise<ExecutorRegisterResult> {
+    if (this.stopped) throw new ClientStoppedError()
+    if (this.peer) throw new Error('executor client already started')
+    try {
+      await this.connect()
+    } catch (error) {
+      this.currentState = ConnectionState.Disconnected
+      throw error
+    }
+    this.scheduleHeartbeat()
+    return this.registerResult!
+  }
+
+  /**
+   * Resolves once the executor is registered and the registration stayed open for one heartbeat
+   * interval. `state` is ready as soon as executor.register returns, but a machine-scoped executor
+   * that declared neither the process nor the agent capability is closed with 4002 right after
+   * that, so only waitReady() separates a usable executor from a registration about to be refused.
+   * Rejects with the error of a client that ended (waitClosed()), ClientStoppedError after stop(),
+   * and RequestTimeoutError after timeoutMs.
+   */
+  async waitReady(timeoutMs?: number): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      if (timeoutMs !== undefined) timer = setTimeout(() => reject(new RequestTimeoutError('waitReady')), timeoutMs)
+    })
+    try {
+      for (;;) {
+        if (this.stopped) throw this.closeError ?? new ClientStoppedError()
+        if (this.peer && this.stablePeer === this.peer) return
+        await Promise.race([this.stable.promise, this.closed.promise, timeout])
+      }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /**
+   * Resolves when the client stops for good: after stop() or executor.close.
+   * Rejects with ChannelClosedError for a terminal close code (4003, 4004),
+   * CredentialRejectedError when the token endpoint rejects the credential on
+   * reconnect, RegistrationRefusedError after 3 refused registrations in a row, and
+   * ReconnectExhaustedError after a positive maxReconnectAttempts.
+   */
+  async waitClosed(): Promise<void> {
+    await this.closed.promise
+    if (this.closeError) throw this.closeError
+  }
+
+  /** Sends executor.close, closes the channel and stops reconnecting. */
+  stop(reason = 'stopped'): void {
+    if (this.stopped) return
+    this.end()
+    const peer = this.peer
+    this.peer = undefined
+    if (peer && !peer.closed) {
+      try {
+        peer.notify('executor.close', { reason })
+      } catch {
+        // already gone
+      }
+      peer.close(1000, reason)
+    }
+  }
+
+  /** Stops for good; waitClosed() then resolves, or rejects with error. */
+  private end(error?: Error): void {
+    if (this.stopped) return
+    this.stopped = true
+    this.closeError = error
+    this.currentState = ConnectionState.Closed
+    clearTimeout(this.heartbeatTimer)
+    this.stopController.abort(new ClientStoppedError())
+    this.closed.resolve()
+  }
+
+  /** Sends an executor-to-harness request on the control channel, typed by the contract. */
+  call<M extends ExecutorToHarnessRequestMethod>(method: M, params: MethodParamsMap[M]): Promise<MethodResultMap[M]> {
+    return this.rawCall(method, params)
+  }
+
+  /** Sends an executor-to-harness notification on the control channel, typed by the contract. */
+  notify<M extends ExecutorToHarnessNotificationMethod>(method: M, params: MethodParamsMap[M]): void {
+    const peer = this.peer
+    if (!peer) throw new NotConnectedError()
+    peer.notify(method, params)
+  }
+
+  private rawCall<T>(method: string, params: unknown): Promise<T> {
+    const peer = this.peer
+    if (!peer) return Promise.reject(this.stopped ? new ClientStoppedError() : new NotConnectedError())
+    return peer.call<T>(method, params, this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS)
+  }
+
+  /** Reports that the session is prepared; call after workspace and MCP setup. */
+  sessionReady(params: SessionReadyParams): Promise<Ack> {
+    return this.call('session.ready', params)
+  }
+
+  /** Reports that every process and MCP server of the session stopped. */
+  async sessionEnded(params: SessionEndedParams): Promise<Ack> {
+    const result = await this.call('session.ended', params)
+    this.sessions.delete(params.session_id)
+    return result
+  }
+
+  /** session.event for a tool executor (v1 shape, without agent fields). */
+  sessionEvent(params: SessionEventParams): Promise<SessionEventResult> {
+    return this.call('session.event', params)
+  }
+
+  sessionStatus(params: SessionStatusParams): void {
+    this.notify('session.status', params)
+  }
+
+  toolProgress(params: ToolProgressParams): void {
+    this.notify('tool.progress', params)
+  }
+
+  /**
+   * Replaces the configured capabilities and sends them; the shell and files
+   * groups stay enabled only while a handler of the group is registered, and
+   * an explicit `enabled: false` wins. They are also sent on every re-register.
+   */
+  updateCapabilities(capabilities: Capabilities): void {
+    this.options.capabilities = capabilities
+    const params: ExecutorCapabilitiesUpdateParams = { capabilities: this.registeredCapabilities() }
+    this.notify('executor.capabilities.update', params)
+  }
+
+  /**
+   * Sends tool.result once per tool_call_id, retrying retryable failures with
+   * exponential backoff. A repeat for an accepted id resolves without a frame.
+   */
+  async reportToolResult(params: ToolResultParams): Promise<Ack> {
+    if (this.completedToolResults.has(params.tool_call_id)) return { accepted: true }
+    this.completedToolResults.add(params.tool_call_id)
+    const attempts = this.options.toolResultRetryAttempts ?? DEFAULT_TOOL_RESULT_RETRY_ATTEMPTS
+    let lastError: unknown
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        return await this.call('tool.result', params)
+      } catch (error) {
+        lastError = error
+        if (attempt === attempts || !retryableToolResultError(error)) break
+        this.log('warn', `tool.result for ${params.tool_call_id} failed on attempt ${attempt}, retrying`, error)
+        try {
+          await sleep(this.toolResultRetryDelay(attempt), this.stopController.signal)
+        } catch (stopped) {
+          lastError = stopped
+          break
+        }
+      }
+    }
+    this.completedToolResults.delete(params.tool_call_id)
+    throw lastError
+  }
+
+  /** Opens the raw MCP channel for one session.assign mcp_servers entry. */
+  async openMcpChannel(sessionId: string, serverKey: string): Promise<FrameChannel> {
+    if (!sessionId.trim()) throw new Error('sessionId is required')
+    if (!serverKey.trim()) throw new Error('serverKey is required')
+    if (this.stopped) throw new ClientStoppedError()
+    return new FrameChannel(await this.dialer({ channel: ChannelScope.Mcp, sessionId, serverKey }))
+  }
+
+  // --- connection -----------------------------------------------------------
+
+  /**
+   * The configured capabilities with shell and files enabled while a handler
+   * of the group is registered and the option does not turn the group off
+   * (`enabled: false` wins, as MCP's RegisteredTool.enabled), so nothing
+   * unimplemented is advertised. computer_use stays off: its tools have no slot.
+   */
+  private registeredCapabilities(): Capabilities {
+    const capabilities = { ...(this.options.capabilities ?? {}) }
+    const has = (...names: ToolName[]) => names.some((n) => this.handlers.has(n))
+    capabilities.shell = { ...capabilities.shell, enabled: (capabilities.shell?.enabled ?? true) && has('bash') }
+    capabilities.files = {
+      ...capabilities.files,
+      enabled: (capabilities.files?.enabled ?? true) && has('read', 'write', 'edit', 'glob', 'grep', 'list_files'),
+    }
+    capabilities.computer_use = false
+    if (this.agent) capabilities.agent = this.agent.capability
+    return capabilities
+  }
+
+  /**
+   * Registers a tool handler; on a registered connection the changed
+   * capabilities go out with executor.capabilities.update (as an MCP server
+   * sends tools/list_changed for a tool registered after connecting).
+   */
+  private setToolHandler(name: ToolName, handler: ToolHandler<ToolName>): void {
+    this.handlers.set(name, handler)
+    if (this.currentState !== ConnectionState.Ready && this.currentState !== ConnectionState.Draining) return
+    try {
+      this.notify('executor.capabilities.update', { capabilities: this.registeredCapabilities() })
+    } catch (error) {
+      this.log('warn', 'executor.capabilities.update not sent; the next registration carries it', error)
+    }
+  }
+
+  private resumeState(): ExecutorResume | undefined {
+    if (!this.currentExecutorId && !this.currentConnectionId && this.sessions.size === 0) return undefined
+    return {
+      active_sessions: this.activeSessions,
+      ...(this.currentExecutorId ? { executor_id: this.currentExecutorId } : {}),
+      ...(this.currentConnectionId ? { last_connection_id: this.currentConnectionId } : {}),
+    }
+  }
+
+  private async connect(): Promise<void> {
+    this.currentState = ConnectionState.Connecting
+    const control = { channel: ChannelScope.Control }
+    const token = this.tokenSource ? await this.tokenSource() : undefined
+    const conn = token ? await dialWithToken(this.options, token, control) : await this.dialer(control)
+    if (this.stopped) {
+      conn.close(1000, 'stopped')
+      throw new ClientStoppedError()
+    }
+    const peer: RpcPeer = new RpcPeer(conn, {
+      idPrefix: 'req_',
+      requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      onRequest: (method, params) => this.dispatchRequest(method, params),
+      onNotification: (method, params) => this.dispatchNotification(peer, method, params),
+      onClose: (code, reason) => this.disconnected(peer, code, reason),
+      log: this.options.onLog,
+    })
+    this.peer = peer
+    const protocol = (conn.protocol || ProtocolVersion.BmaExecutorV11) as ExecutorRegisterParams['protocol']
+    const resume = this.resumeState()
+    const params: ExecutorRegisterParams = {
+      protocol,
+      environment_id: this.options.environmentId,
+      executor: this.options.executor,
+      capabilities: this.registeredCapabilities(),
+      ...(resume ? { resume } : {}),
+    }
+    let result: ExecutorRegisterResult
+    try {
+      result = await this.call('executor.register', params)
+    } catch (error) {
+      if (this.peer === peer) this.peer = undefined
+      peer.close(1011, 'registration failed')
+      throw error
+    }
+    this.registerResult = result
+    this.currentConnectionId = result.connection_id
+    this.currentExecutorId = result.executor_id
+    this.heartbeatIntervalMs =
+      result.heartbeat_interval_ms > 0 ? result.heartbeat_interval_ms : (this.options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS)
+    this.currentState = result.drain ? ConnectionState.Draining : ConnectionState.Ready
+    this.reconnectAttempts = 0
+    const stableTimer = setTimeout(() => this.markStable(peer), this.heartbeatIntervalMs)
+    stableTimer.unref?.()
+    const registered = this.registration
+    this.registration = deferred()
+    registered.resolve()
+    this.log('info', `executor registered as ${result.executor_id}`)
+    if (token?.expires_in) this.scheduleTokenRefresh(peer, token.expires_in * 1000, Date.now() + token.expires_in * 1000)
+  }
+
+  /** peer stayed registered for one heartbeat interval: the platform did not refuse its runtime. */
+  private markStable(peer: RpcPeer): void {
+    if (this.stopped || this.peer !== peer) return
+    this.stablePeer = peer
+    this.refusedStreak = 0
+    const stable = this.stable
+    this.stable = deferred()
+    stable.resolve()
+  }
+
+  /** Records one refused registration; ends the client with RegistrationRefusedError at the limit. */
+  private countRefusedRegistration(cause: unknown): boolean {
+    if (++this.refusedStreak < MAX_REFUSED_REGISTRATIONS) return false
+    this.log('error', 'executor registration refused; not reconnecting', cause)
+    this.end(new RegistrationRefusedError(this.refusedStreak, cause))
+    return true
+  }
+
+  /**
+   * Keeps peer open across token lifetimes: at 70% of the token's lifetime it
+   * fetches a new token and sends executor.token.refresh. A harness without
+   * the method (-32601) closes with 4001 at expiry and the client reconnects.
+   */
+  private scheduleTokenRefresh(peer: RpcPeer, lifetimeMs: number, expiresAt: number, waitMs = lifetimeMs * TOKEN_REFRESH_AT): void {
+    const timer = setTimeout(() => void refresh(), waitMs)
+    timer.unref?.()
+    const refresh = async () => {
+      if (this.stopped || this.peer !== peer || !this.tokenSource) return
+      try {
+        const fresh = await this.tokenSource()
+        await this.call('executor.token.refresh', { token: fresh.token })
+        if (fresh.expires_in) this.scheduleTokenRefresh(peer, fresh.expires_in * 1000, Date.now() + fresh.expires_in * 1000)
+      } catch (error) {
+        if (error instanceof RpcError && (error.code === -32601 || error.code === -32012)) {
+          this.log('info', 'harness does not refresh executor tokens; reconnecting at expiry')
+          return
+        }
+        this.log('warn', 'executor token refresh failed', error)
+        const remaining = expiresAt - Date.now()
+        if (remaining >= 2000) this.scheduleTokenRefresh(peer, lifetimeMs, expiresAt, remaining / 2)
+      }
+    }
+  }
+
+  private disconnected(peer: RpcPeer, code: number, reason: string): void {
+    if (this.peer !== peer) return
+    const wasStable = this.stablePeer === peer
+    this.peer = undefined
+    if (this.stopped) {
+      this.currentState = ConnectionState.Closed
+      return
+    }
+    this.currentState = ConnectionState.Disconnected
+    if (isTerminalCloseCode(code) || this.options.reconnect === false) {
+      this.log('warn', `executor channel closed with ${code}; not reconnecting`)
+      this.end(new ChannelClosedError(code, reason))
+      return
+    }
+    const closed = new ChannelClosedError(code, reason)
+    if (!wasStable && isRegistrationRefusal(closed)) {
+      if (this.countRefusedRegistration(closed)) return
+    } else {
+      this.refusedStreak = 0
+    }
+    this.scheduleReconnect(closed)
+  }
+
+  /** Retries after cause, the failure that ended the last connection or reconnect attempt. */
+  private scheduleReconnect(cause: unknown): void {
+    if (this.stopped) return
+    const max = this.options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS
+    if (max > 0 && this.reconnectAttempts >= max) {
+      this.log('error', 'executor reconnect attempts exhausted', cause)
+      this.end(new ReconnectExhaustedError(cause))
+      return
+    }
+    const attempt = this.reconnectAttempts++
+    const base = this.options.reconnectBaseDelayMs ?? DEFAULT_RECONNECT_BASE_DELAY_MS
+    const cap = this.options.reconnectMaxDelayMs ?? MAX_RECONNECT_DELAY_MS
+    const delay = Math.min(base * 2 ** attempt, cap) * (0.5 + this.random() * 0.5)
+    this.log('info', `reconnecting executor channel in ${Math.round(delay)}ms`)
+    setTimeout(() => void this.reconnect(), delay)
+  }
+
+  private async reconnect(): Promise<void> {
+    if (this.stopped) return
+    try {
+      await this.connect()
+    } catch (error) {
+      if (error instanceof CredentialRejectedError) {
+        // Retrying cannot help a revoked or invalid credential (GitHub Actions runner and Buildkite agent stop on 401/403 too).
+        this.log('error', 'executor credential rejected; not reconnecting', error)
+        this.end(error)
+        return
+      }
+      if (isRegistrationRefusal(error) && this.countRefusedRegistration(error)) return
+      this.log('warn', 'executor reconnect failed', error)
+      this.currentState = ConnectionState.Disconnected
+      this.scheduleReconnect(error)
+    }
+  }
+
+  private scheduleHeartbeat(): void {
+    if (this.stopped) return
+    this.heartbeatTimer = setTimeout(() => {
+      void this.heartbeat().finally(() => this.scheduleHeartbeat())
+    }, this.heartbeatIntervalMs)
+    this.heartbeatTimer.unref?.()
+  }
+
+  private async heartbeat(): Promise<void> {
+    if (this.currentState !== ConnectionState.Ready && this.currentState !== ConnectionState.Draining) return
+    const load = this.options.heartbeatLoad?.()
+    const params: ExecutorHeartbeatParams = {
+      connection_id: this.currentConnectionId,
+      active_sessions: this.activeSessions,
+      ...(load ? { load } : {}),
+    }
+    const peer = this.peer
+    try {
+      const result = await this.call('executor.heartbeat', params)
+      if (result.drain && this.currentState === ConnectionState.Ready) this.currentState = ConnectionState.Draining
+    } catch (error) {
+      this.log('warn', 'executor heartbeat failed', error)
+      if (error instanceof RequestTimeoutError && peer && peer === this.peer) {
+        // No answer within requestTimeoutMs: the connection is dead (a half-open TCP connection
+        // after a network cut). Close it so the client reconnects, as gRPC keepalive closes a
+        // transport whose ping times out.
+        this.log('warn', 'executor heartbeat timed out; closing the connection to reconnect')
+        peer.close(1001, 'heartbeat timeout')
+      }
+    }
+  }
+
+  // --- inbound --------------------------------------------------------------
+
+  private dispatchRequest(method: string, params: unknown): unknown {
+    switch (method) {
+      case 'tool.call':
+        return this.acceptToolCall(params as ToolCallParams)
+      case 'tool.cancel':
+        return this.cancelToolCall(params as ToolCancelParams)
+      case 'session.assign':
+        return this.assignSession(params as SessionAssignParams)
+      case 'session.stop':
+        return this.stopSession(params as SessionStopParams)
+      case 'executor.drain':
+        return this.drain(params as ExecutorDrainParams)
+    }
+    const agentResult = this.agent?.dispatch(method, params)
+    if (agentResult !== undefined) return agentResult
+    const handler = this.requestHandlers.get(method)
+    if (!handler) throw unregisteredMethodError(method)
+    return handler(params)
+  }
+
+  private dispatchNotification(peer: RpcPeer, method: string, params: unknown): void {
+    if (method === 'executor.close') {
+      if (this.peer === peer) this.peer = undefined
+      peer.close(1000, 'executor.close')
+      this.end()
+      return
+    }
+    // executor.close is the only harness-to-executor notification.
+    void params
+  }
+
+  private async assignSession(params: SessionAssignParams): Promise<SessionAssignResult> {
+    if (this.currentState === ConnectionState.Draining) return { accepted: false, session_id: params.session_id }
+    const result = this.sessionAssignHandler
+      ? await this.sessionAssignHandler(params)
+      : { accepted: true, session_id: params.session_id }
+    if (result.accepted) this.sessions.add(params.session_id)
+    return result
+  }
+
+  private async stopSession(params: SessionStopParams): Promise<SessionStopResult> {
+    const result = this.sessionStopHandler ? await this.sessionStopHandler(params) : { stopped: true }
+    this.sessions.delete(params.session_id)
+    return result
+  }
+
+  private async drain(params: ExecutorDrainParams): Promise<ExecutorDrainResult> {
+    this.currentState = ConnectionState.Draining
+    if (this.drainHandler) return this.drainHandler(params)
+    return { accepted: true, active_sessions: this.activeSessions }
+  }
+
+  /** Accepts a tool.call at most once per tool_call_id; a resent call is acknowledged and ignored. */
+  private acceptToolCall(call: ToolCallParams): Ack {
+    if (!call || typeof call.tool_call_id !== 'string' || typeof call.session_id !== 'string') {
+      throw new RpcError(JsonRpcErrorCode.InvalidParams, 'invalid tool.call params')
+    }
+    if (!this.handlers.has(call.tool)) {
+      // As Go Core: a tool without a handler is refused before the ack.
+      throw new RpcError(JsonRpcErrorCode.CapabilityUnavailable, 'capability_unavailable', { capability: `tool:${call.tool}` })
+    }
+    if (this.seenToolCalls.has(call.tool_call_id) || this.running.has(call.tool_call_id)) {
+      this.log('debug', `duplicate tool.call for ${call.tool_call_id} ignored`)
+      return { accepted: true }
+    }
+    this.seenToolCalls.add(call.tool_call_id)
+    const running: RunningToolCall = { abort: new AbortController(), canceled: false, reason: '' }
+    this.running.set(call.tool_call_id, running)
+    // Starts after the acknowledgement is written.
+    setImmediate(() => void this.runToolCall(call, running))
+    return { accepted: true }
+  }
+
+  private cancelToolCall(params: ToolCancelParams): ToolCancelResult {
+    const running = this.running.get(params.tool_call_id)
+    if (!running) return { canceled: false }
+    running.canceled = true
+    running.reason = params.reason ?? ''
+    running.abort.abort(new Error(`canceled: ${params.reason}`))
+    this.log('info', `canceled tool.call ${params.tool_call_id}`)
+    return { canceled: true }
+  }
+
+  private async runToolCall(call: ToolCallParams, running: RunningToolCall): Promise<void> {
+    const handler = this.handlers.get(call.tool)
+    const onStop = () => running.abort.abort(new ClientStoppedError())
+    this.stopController.signal.addEventListener('abort', onStop, { once: true })
+    const deadline =
+      call.deadline_ms && call.deadline_ms > 0
+        ? setTimeout(() => running.abort.abort(new RequestTimeoutError('tool.call')), call.deadline_ms)
+        : undefined
+    const started = Date.now()
+    let result: ToolResult
+    try {
+      if (!handler) throw new Error(`no handler registered for tool ${call.tool}`)
+      const missing = missingRequired(call.tool, call.input)
+      if (missing) throw new Error(`${call.tool} requires ${missing}`)
+      const output = await handler(call.input, {
+        signal: running.abort.signal,
+        sessionId: call.session_id,
+        toolCallId: call.tool_call_id,
+        ...(call.permission ? { permission: call.permission } : {}),
+        progress: (message) => {
+          try {
+            this.toolProgress({ session_id: call.session_id, tool_call_id: call.tool_call_id, message })
+          } catch (error) {
+            this.log('debug', 'tool.progress dropped', error)
+          }
+        },
+      })
+      result = { ...renderToolOutput(output), duration_ms: Date.now() - started }
+    } catch (error) {
+      result =
+        error instanceof ToolError
+          ? { outcome: 'succeeded', is_error: true, content: error.content, duration_ms: Date.now() - started }
+          : failedToolResult(error instanceof Error ? error.message : String(error))
+    } finally {
+      clearTimeout(deadline)
+      this.stopController.signal.removeEventListener('abort', onStop)
+      this.running.delete(call.tool_call_id)
+    }
+    if (running.canceled) result = canceledToolResult(running.reason)
+    // The result identifies the dispatched call whatever the handler returned.
+    const params: ToolResultParams = { ...result, session_id: call.session_id, tool_call_id: call.tool_call_id }
+    try {
+      await this.reportToolResult(params)
+    } catch (error) {
+      this.log('error', `failed to report tool result for ${call.tool_call_id}`, error)
+      this.options.onToolResultLost?.(params, error)
+    }
+  }
+
+  private toolResultRetryDelay(attempt: number): number {
+    const base = this.options.toolResultRetryBaseDelayMs ?? DEFAULT_TOOL_RESULT_RETRY_BASE_DELAY_MS
+    const delay = Math.min(base * 2 ** (attempt - 1), MAX_TOOL_RESULT_RETRY_DELAY_MS)
+    return delay * (0.5 + this.random() * 0.5)
+  }
+
+  private random(): number {
+    return (this.options.random ?? Math.random)()
+  }
+
+  private log(level: LogLevel, message: string, error?: unknown): void {
+    this.options.onLog?.({ level, message, error })
+  }
+
+  private agentHost(): AgentHost {
+    return {
+      call: (method, params) => this.call(method, params),
+      notify: (method, params) => this.notify(method, params),
+      stopSignal: this.stopController.signal,
+      connected: () => this.currentState === ConnectionState.Ready || this.currentState === ConnectionState.Draining,
+      nextRegistration: () => this.registration.promise,
+      addSession: (id) => this.sessions.add(id),
+      removeSession: (id) => this.sessions.delete(id),
+      sessionEnded: (params) => this.sessionEnded(params),
+      log: (level, message, error) => this.log(level, message, error),
+    }
+  }
+}
+
+export function retryableToolResultError(error: unknown): boolean {
+  if (error instanceof RpcError) {
+    if (error.data?.retryable !== undefined) return error.data.retryable
+    return error.code === JsonRpcErrorCode.ExecutorBusy || error.code === JsonRpcErrorCode.Timeout
+  }
+  return error instanceof NotConnectedError || error instanceof RequestTimeoutError
+}
+
+/** Renders a handler's output as tool.result content (bash as Go Core's bashResult). */
+function renderToolOutput(output: ToolOutputOf<ToolName>): ToolResult {
+  if (typeof output === 'string') return { outcome: 'succeeded', is_error: false, content: [{ type: 'text', text: output }] }
+  if (Array.isArray(output)) return { outcome: 'succeeded', is_error: false, content: output }
+  if ('exitCode' in output) {
+    const exit = `exit_code: ${output.exitCode}`
+    const bytes = (text: string) => Buffer.byteLength(text)
+    if (!output.truncated && bytes(output.stdout) + bytes(output.stderr) + exit.length <= INLINE_RESULT_BYTES) {
+      const content: ContentBlock[] = []
+      if (output.stdout) content.push({ type: 'text', text: output.stdout })
+      if (output.stderr) content.push({ type: 'text', text: output.stderr })
+      content.push({ type: 'text', text: exit })
+      return { outcome: 'succeeded', is_error: false, content }
+    }
+    const total = bytes(output.stdout) + bytes(output.stderr)
+    return {
+      outcome: 'succeeded',
+      is_error: false,
+      content: [
+        { type: 'text', text: truncateBytes(output.stdout, INLINE_RESULT_BYTES / 2) },
+        { type: 'text', text: truncateBytes(output.stderr, INLINE_RESULT_BYTES / 4) },
+        { type: 'text', text: `${exit} (output truncated to fit the result; ${total} bytes total)` },
+      ],
+    }
+  }
+  return {
+    outcome: 'succeeded',
+    is_error: output.isError ?? false,
+    content: output.content,
+    ...(output.artifacts ? { artifacts: output.artifacts } : {}),
+  }
+}
+
+/** The first leading UTF-8 bytes of text, not splitting a character. */
+function truncateBytes(text: string, limit: number): string {
+  const raw = Buffer.from(text)
+  if (raw.length <= limit) return text
+  let end = limit
+  while (end > 0 && (raw[end]! & 0xc0) === 0x80) end--
+  return raw.subarray(0, end).toString()
+}
+
+/** The first required input member that is absent or null (or an empty bash command, as Core rejects). */
+function missingRequired(tool: ToolName, input: unknown): string | undefined {
+  const members = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
+  return (REQUIRED_TOOL_INPUT[tool as SlotToolName] ?? []).find(
+    (name) => members[name] === undefined || members[name] === null || (name === 'command' && members[name] === ''),
+  )
+}
+
+function failedToolResult(message: string): ToolResult {
+  return { outcome: 'failed', is_error: true, content: [{ type: 'text', text: message }] }
+}
+
+function canceledToolResult(reason: string): ToolResult {
+  return { outcome: 'canceled', is_error: false, content: [{ type: 'text', text: reason ? `canceled: ${reason}` : 'canceled' }] }
+}
+
+/**
+ * A contract method behind a capability this executor did not register is
+ * capability_unavailable naming that capability; anything else is
+ * method_not_found.
+ */
+function unregisteredMethodError(method: string): RpcError {
+  const spec = Object.hasOwn(methods, method) ? methods[method as keyof typeof methods] : undefined
+  if (!spec?.capability || spec.direction === 'executor-to-harness') {
+    return new RpcError(JsonRpcErrorCode.MethodNotFound, `unknown method ${method}`)
+  }
+  return new RpcError(JsonRpcErrorCode.CapabilityUnavailable, 'capability_unavailable', { capability: spec.capability })
+}

@@ -1,0 +1,1502 @@
+package bmaexecutor
+
+// The Claude adapter (ADR-0066 of BMA, decision 6): drives the official
+// `claude` CLI, unmodified, over its stream-json input and output and its
+// control protocol (https://code.claude.com/docs/en/cli-reference,
+// https://code.claude.com/docs/en/agent-sdk/typescript.md). Nothing sits
+// between the executor and the CLI.
+//
+//	BrainHost / BrainSink        Claude adapter                      claude -p (stream-json)
+//	Open                         one CLI process per conversation    --session-id <uuid> | --resume <uuid>
+//	Prompt                       user message                        {"type":"user","uuid":...} (replayed when the CLI takes it)
+//	Steer                        user message into the running turn  the CLI reads it with the next tool result; one
+//	                                                                 that comes after the last runs right after the turn
+//	Delta                        <-                                  stream_event text_delta / thinking_delta
+//	Message                      <-                                  stream_event content_block_stop (text, thinking)
+//	ToolUse                      <-                                  stream_event content_block_stop (tool_use)
+//	Permission                   <->                                 control_request can_use_tool / control_response
+//	Call                         <->                                 loopback MCP tools/call (mcp__bma__<tool>)
+//	ToolResult                   <-                                  user message tool_result
+//	ctx canceled                 ->                                  control_request interrupt; kill after CancelGrace
+//	Prompt's error               <-                                  result / assistant.error
+//
+// Credentials. The CLI runs with its node owner's own credentials (their login
+// under HOME, or ANTHROPIC_API_KEY or a third-party provider's variables in
+// ACPAgentOptions.Env). They never pass through BMA: no model proxy, no
+// harness_model, and the SDK never reads or logs them.
+//
+// Gates, all fail closed: the CLI binary must be a pinned release (version and
+// sha256, claudeCLIPins); it starts with no built-in tool (--tools ""), only
+// the injected MCP server (--strict-mcp-config), no settings files
+// (--setting-sources ""), and the permission mode default; its system init
+// message must list exactly the injected tools and the mode default; a
+// permission request for any other tool is refused.
+
+import (
+	"bufio"
+	"cmp"
+	"context"
+	"crypto/rand"
+	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+const (
+	claudeMCPServerName = "bma"
+	claudeToolPrefix    = "mcp__" + claudeMCPServerName + "__"
+	// claudeToolUseIDMeta is the tools/call _meta key the CLI names the call's tool_use_id with.
+	claudeToolUseIDMeta = "claudecode/toolUseId"
+	// cliMaxToolRequestBytes bounds one MCP request of the CLI.
+	cliMaxToolRequestBytes = 32 << 20
+)
+
+// claudeCLIPin is one release of the official claude CLI this SDK is tested
+// with: its version (claude --version) and the sha256 of its binary per
+// GOOS/GOARCH. Adding a release is a reviewed change: its contract tests
+// (brain_claude_cli_test.go) must pass against it.
+type claudeCLIPin struct {
+	Version string
+	SHA256  map[string]string
+}
+
+// claudeCLIPins: the digests are the checksums of Anthropic's release
+// manifest (https://downloads.claude.ai/claude-code-releases/<version>/manifest.json,
+// the one the official installer verifies). 2.1.318 is also the binary of the
+// Agent SDK 0.3.318 platform packages the tests install.
+var claudeCLIPins = []claudeCLIPin{
+	{Version: "2.1.318", SHA256: map[string]string{
+		"darwin/arm64": "677a2ea7bf576cedd20e191d973914ed8a41796f53a63b1923381ddc4d5b5e7d",
+		"darwin/amd64": "ee9c8577a528aa8efa478bf552b17efa40bb58aa4981d2913c13d383a4d409a4",
+		"linux/arm64":  "53a0d7e219d7b0804ecba5dbc002745e89f786cc946d2de85a6470d5b2d1fb06",
+		"linux/amd64":  "708c77b204db30086ff6f1ed34577bda03e1be74ced80557cbf7b54249ebf0bd",
+	}},
+	{Version: "2.1.322", SHA256: map[string]string{
+		"darwin/arm64": "a9d237949db816a0b7afd88a9a8e1df36b3a597a30f5a41d1c0539eb180a3450",
+		"darwin/amd64": "b513d15117cbf1bb05095dab41963fd394ff40de1fa99dcc6d7d1033bf292e9b",
+		"linux/arm64":  "f220ca50ea4f3222043ff83cc224a1262e0196e9897acc0871efa94235b0c1fd",
+		"linux/amd64":  "bfb3703ad5380242328459bc62ada4bde8ae7ba57c6e1eeadb9c00e08874c478",
+	}},
+}
+
+// ClaudeCLIOptions configures the Claude adapter.
+type ClaudeCLIOptions struct {
+	// Executable is the official claude binary whose digest is checked
+	// against the pins (default: ACPAgentOptions.Command[0]). Set it when
+	// Command is the owner's launcher that runs that binary.
+	Executable string
+}
+
+// NewClaudeCLIAdapter is the adapter of the official claude CLI.
+func NewClaudeCLIAdapter(opts ClaudeCLIOptions) BrainAdapter {
+	return &claudeCLIAdapter{opts: opts, convs: map[string]*cliConv{}}
+}
+
+type claudeCLIAdapter struct {
+	opts ClaudeCLIOptions
+	env  BrainEnv
+	pin  claudeCLIPin
+	mcp  *cliToolServer
+
+	mu     sync.Mutex
+	convs  map[string]*cliConv // by placeholder (the MCP bearer)
+	closed bool
+}
+
+func (a *claudeCLIAdapter) log(level LogLevel, message string, err error) {
+	if a.env.Log != nil {
+		a.env.Log(level, message, err)
+	}
+}
+
+func (a *claudeCLIAdapter) Start(ctx context.Context, env BrainEnv) (BrainCapabilities, error) {
+	switch {
+	case env.PlatformModel:
+		return BrainCapabilities{}, errors.New("bmaexecutor: the Claude CLI uses the node owner's own credentials; PlatformModel (harness_model) is not allowed")
+	case len(env.Models) > 0:
+		return BrainCapabilities{}, errors.New("bmaexecutor: ACPAgentOptions.Models: the Claude CLI reports the models its owner's account may use")
+	}
+	a.env = env
+	pin, err := a.checkPin(ctx)
+	if err != nil {
+		return BrainCapabilities{}, err
+	}
+	a.pin = pin
+	server, err := startCLIToolServer(a)
+	if err != nil {
+		return BrainCapabilities{}, err
+	}
+	a.mcp = server
+	// One process that is never prompted proves the control protocol (a
+	// prompt would spend the owner's credit) and reports the models the
+	// owner's account may use.
+	models, err := a.probe(ctx)
+	if err != nil {
+		server.close()
+		return BrainCapabilities{}, err
+	}
+	id := env.HarnessID
+	if id == "" {
+		id = "claude-code"
+	}
+	return BrainCapabilities{
+		Harness: AgentHarnessCapability{
+			ID: id, Version: pin.Version, Protocol: "claude-cli/stream-json",
+			AgentName: "claude", AgentVersion: pin.Version,
+			Streaming: "token", PermissionRelay: "full", SessionResume: true, StructuredErrors: true,
+		},
+		// The models and effort levels the CLI reports for the owner's
+		// account; a turn's model and thinking level are passed unchanged
+		// (--model, --effort).
+		ModelCredentials: BrainModelOwner,
+		ModelChoice:      true,
+		Models:           models,
+		ImageInputs:      true,
+		HostTools:        true,
+		CustomTools:      true,
+		InputSkills:      true,
+		// A user message written while the CLI runs a turn is read with the
+		// next tool result (one after the last runs right after it); the
+		// prompt ends only when the CLI took every message written to it.
+		Steering: true,
+	}, nil
+}
+
+// checkPin finds the release of the configured binary: its version and its digest.
+func (a *claudeCLIAdapter) checkPin(ctx context.Context) (claudeCLIPin, error) {
+	vctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(vctx, a.env.Command[0], append(slices.Clone(a.env.Command[1:]), "--version")...)
+	cmd.Env = a.processEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		return claudeCLIPin{}, fmt.Errorf("claude --version: %w", err)
+	}
+	version, _, _ := strings.Cut(strings.TrimSpace(string(out)), " ")
+	i := slices.IndexFunc(claudeCLIPins, func(p claudeCLIPin) bool { return p.Version == version })
+	if i < 0 {
+		return claudeCLIPin{}, fmt.Errorf("claude %s is not a pinned release (supported: %s): refused (fail-closed)", version, claudeCLIPinned())
+	}
+	pin := claudeCLIPins[i]
+	platform := runtime.GOOS + "/" + runtime.GOARCH
+	want := pin.SHA256[platform]
+	if want == "" {
+		return claudeCLIPin{}, fmt.Errorf("claude %s has no pinned digest for %s: refused (fail-closed)", version, platform)
+	}
+	exe := a.opts.Executable
+	if exe == "" {
+		exe = a.env.Command[0]
+	}
+	got, err := fileSHA256(exe)
+	if err != nil {
+		return claudeCLIPin{}, err
+	}
+	if got != want {
+		return claudeCLIPin{}, fmt.Errorf("%s is not the pinned claude %s binary for %s (sha256 %s, want %s): refused (fail-closed)", exe, version, platform, got, want)
+	}
+	return pin, nil
+}
+
+func claudeCLIPinned() string {
+	var versions []string
+	for _, p := range claudeCLIPins {
+		versions = append(versions, p.Version)
+	}
+	return strings.Join(versions, ", ")
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// claudeCLIEnv are the CLI settings that give its model requests the
+// executor's stop semantics: a stream that sends nothing for 90 s is stalled
+// (the DSH adapter's limit). The CLI asks again without streaming once a
+// stream stalled; the adapter lets that one fresh request answer a stall
+// before any content and ends the turn on a stall after content (onStream).
+// ACPAgentOptions.Env may override them.
+var claudeCLIEnv = []string{"CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS=90000"}
+
+// processEnv is the CLI's environment: PATH, HOME, USER, LANG, TMPDIR (HOME
+// and USER of RunAs), claudeCLIEnv, then the host's Env.
+func (a *claudeCLIAdapter) processEnv() []string {
+	var env []string
+	runAs := a.env.RunAs
+	for _, key := range []string{"PATH", "HOME", "USER", "LANG", "TMPDIR"} {
+		value, ok := os.LookupEnv(key)
+		switch {
+		case runAs != nil && key == "HOME":
+			value, ok = runAs.Home, runAs.Home != ""
+		case runAs != nil && key == "USER":
+			value, ok = runAs.User, runAs.User != ""
+		}
+		if ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	env = append(env, claudeCLIEnv...)
+	return append(env, a.env.Env...)
+}
+
+// probe starts the CLI once without a prompt: it must answer initialize,
+// whose models are the models the CLI offers its owner (initialize response
+// models: value, displayName, supportedEffortLevels).
+func (a *claudeCLIAdapter) probe(ctx context.Context) ([]AgentModel, error) {
+	dir, err := os.MkdirTemp(a.env.StateDir, "probe-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	p, err := a.spawn(ctx, cliLaunch{cwd: dir, placeholder: "bma-probe", noSession: true})
+	if err != nil {
+		return nil, err
+	}
+	p.stop(a.env.KillGrace)
+	var init struct {
+		Models []struct {
+			Value                 string   `json:"value"`
+			DisplayName           string   `json:"displayName"`
+			SupportsEffort        bool     `json:"supportsEffort"`
+			SupportedEffortLevels []string `json:"supportedEffortLevels"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(p.init, &init); err != nil || len(init.Models) == 0 {
+		return nil, fmt.Errorf("claude initialize reported no models: refused (fail-closed)")
+	}
+	models := make([]AgentModel, 0, len(init.Models))
+	for _, m := range init.Models {
+		model := AgentModel{ID: m.Value, DisplayName: m.DisplayName}
+		if m.SupportsEffort {
+			model.ThinkingLevels = slices.DeleteFunc(slices.Clone(m.SupportedEffortLevels), func(l string) bool { return !slices.Contains(acpReasoningEfforts, l) })
+		}
+		models = append(models, model)
+	}
+	return models, nil
+}
+
+// claudeSessionUUID is the CLI's conversation id of a conversation handle: a
+// UUID version 5 (RFC 9562) of the handle in a fixed namespace, so every
+// process on any restart names the same conversation. (The handle of a
+// session's first conversation, before handles had a suffix, is the UUID of
+// the session id itself: claudeConversationUUID.)
+func claudeSessionUUID(sessionID string) string {
+	// Namespace: UUIDv5 of the URL "https://beeos.ai/bma/claude-session" in the RFC 9562 URL namespace.
+	ns := [16]byte{0x6b, 0xa7, 0xb8, 0x11, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8}
+	h := sha1.New()
+	h.Write(ns[:])
+	h.Write([]byte("bma-claude-session:" + sessionID))
+	sum := h.Sum(nil)
+	sum[6] = sum[6]&0x0f | 0x50
+	sum[8] = sum[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", sum[0:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
+}
+
+// claudeConversationUUID is the CLI's conversation id of the handle ref of a
+// session's conversation: ref is "<session id>@<suffix>" (hashed to the id),
+// or the id itself for the handle of a session's first conversation, which
+// was the UUID of the session id (claudeSessionUUID). Any other ref is not
+// this session's: ok is false.
+func claudeConversationUUID(sessionID, ref string) (uuid string, ok bool) {
+	switch {
+	case ref == claudeSessionUUID(sessionID):
+		return ref, true
+	case strings.HasPrefix(ref, sessionID+"@"):
+		return claudeSessionUUID(ref), true
+	}
+	return "", false
+}
+
+// holds reports whether the CLI has the conversation uuid: its transcript
+// <config dir>/projects/<project>/<uuid>.jsonl, where it keeps what --resume
+// loads, in the config dir of the CLI's own environment (CLAUDE_CONFIG_DIR,
+// else HOME/.claude). A new HOME, a deleted config dir or another machine has
+// none: the conversation is lost.
+func (a *claudeCLIAdapter) holds(uuid string) bool {
+	var home, dir string // the CLI sees the last value of a variable
+	for _, kv := range a.processEnv() {
+		if v, ok := strings.CutPrefix(kv, "CLAUDE_CONFIG_DIR="); ok {
+			dir = v
+		} else if v, ok := strings.CutPrefix(kv, "HOME="); ok {
+			home = v
+		}
+	}
+	if dir == "" {
+		dir = filepath.Join(home, ".claude")
+	}
+	found, _ := filepath.Glob(filepath.Join(dir, "projects", "*", uuid+".jsonl"))
+	return len(found) > 0
+}
+
+func (a *claudeCLIAdapter) Close() error {
+	a.mu.Lock()
+	a.closed = true
+	convs := slices.Collect(maps.Values(a.convs))
+	a.mu.Unlock()
+	for _, c := range convs {
+		c.stopProcess()
+	}
+	if a.mcp != nil {
+		a.mcp.close()
+	}
+	return nil
+}
+
+// --- conversations ---
+
+type cliConv struct {
+	a           *claudeCLIAdapter
+	sessionID   string
+	ref         string // the conversation's handle (executor_session_ref)
+	uuid        string
+	placeholder string
+	cwd         string
+	system      string
+
+	mu     sync.Mutex
+	proc   *cliProc
+	model  string
+	effort string
+	// tools are the turn's tools besides the six (BrainOpen.Tools).
+	tools  []BrainTool
+	prompt *cliPrompt
+	closed bool
+}
+
+func (a *claudeCLIAdapter) Open(ctx context.Context, req BrainOpen) (BrainSession, error) {
+	a.mu.Lock()
+	closed := a.closed
+	a.mu.Unlock()
+	if closed {
+		return nil, &AgentError{Code: AgentErrorCodeAgentUnavailable, Message: "agent unavailable: the adapter is closed"}
+	}
+	if c, _ := req.Current.(*cliConv); c != nil && c.Ready() {
+		c.mu.Lock()
+		c.model, c.tools = req.Model, req.Tools
+		c.mu.Unlock()
+		return c, nil
+	}
+	ref := cmp.Or(req.Ref, req.New)
+	uuid, ok := claudeConversationUUID(req.SessionID, ref)
+	if !ok {
+		return nil, &AgentError{Code: AgentErrorCodeAgentError, Message: "the local conversation " + ref + " is not this session's (" + req.SessionID + ")"}
+	}
+	if req.Ref != "" && !a.holds(uuid) {
+		return nil, fmt.Errorf("claude conversation %s: %w", uuid, ErrConversationLost)
+	}
+	c := &cliConv{a: a, sessionID: req.SessionID, ref: ref, uuid: uuid, placeholder: newPlaceholder(),
+		cwd: req.Cwd, system: req.SystemPrompt, model: req.Model, tools: req.Tools}
+	// Registered first: the CLI connects to the tool server while it starts.
+	a.mu.Lock()
+	a.convs[c.placeholder] = c
+	a.mu.Unlock()
+	if err := c.ensure(ctx, req.Ref != "", req.Effort); err != nil {
+		c.forget()
+		return nil, err
+	}
+	return c, nil
+}
+
+// ensure has a CLI process for the conversation with the given model,
+// effort and tools, starting (or restarting) one with --resume once the
+// conversation exists: the CLI takes them when it starts.
+func (c *cliConv) ensure(ctx context.Context, resume bool, effort string) error {
+	c.mu.Lock()
+	proc, model, tools := c.proc, c.model, c.tools
+	c.mu.Unlock()
+	if proc != nil && proc.alive() && proc.model == model && proc.effort == effort && sameBrainTools(proc.turnTools, tools) {
+		return nil
+	}
+	if proc != nil {
+		proc.stop(c.a.env.KillGrace)
+		resume = true
+	}
+	p, err := c.a.spawn(ctx, cliLaunch{cwd: c.cwd, placeholder: c.placeholder, system: c.system, uuid: c.uuid, resume: resume, model: model, effort: effort, tools: tools})
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.proc, c.effort = p, effort
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *cliConv) Ref() string { return c.ref }
+
+func (c *cliConv) Ready() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.closed && c.proc != nil && c.proc.alive()
+}
+
+func (c *cliConv) stopProcess() {
+	c.mu.Lock()
+	proc := c.proc
+	c.closed = true
+	c.mu.Unlock()
+	if proc != nil {
+		proc.stop(c.a.env.KillGrace)
+	}
+}
+
+func (c *cliConv) forget() {
+	c.a.mu.Lock()
+	if c.a.convs[c.placeholder] == c {
+		delete(c.a.convs, c.placeholder)
+	}
+	c.a.mu.Unlock()
+}
+
+func (c *cliConv) Suspend(context.Context) error {
+	c.stopProcess()
+	c.forget()
+	return nil
+}
+
+func (c *cliConv) Close(context.Context) error {
+	c.stopProcess()
+	c.forget()
+	return nil
+}
+
+// cliPrompt is the input a conversation is running.
+type cliPrompt struct {
+	ctx  context.Context
+	sink BrainSink
+
+	mu      sync.Mutex
+	blocks  map[int]*cliBlock // stream content blocks by index, of the current message
+	message string            // id of the current message
+	failure atomic.Pointer[AgentError]
+	errText string // the assistant's error type, if any
+	// reported are the calls whose result the tool server reported: what
+	// the tool returned, not the CLI's rendering of it for the model.
+	reported map[string]bool
+	// streamed: the current model response streamed content; fallback: it
+	// stalled before any, and the CLI's non-streaming request answers next.
+	streamed bool
+	fallback bool
+	// waiting are the uuids of the user messages written for this prompt
+	// (its input and the steered ones) the CLI has not taken yet: it replays
+	// a message when it takes it (--replay-user-messages). ended: the prompt
+	// took its last message and ends; Steer refuses more.
+	waiting map[string]bool
+	ended   bool
+}
+
+// result reports a call's result once.
+func (p *cliPrompt) result(callID string, content []ContentBlock, isError bool) {
+	p.mu.Lock()
+	done := p.reported[callID]
+	p.reported[callID] = true
+	p.mu.Unlock()
+	if !done {
+		p.sink.ToolResult(callID, content, isError)
+	}
+}
+
+type cliBlock struct {
+	kind string // text, thinking, tool_use
+	text strings.Builder
+}
+
+func (c *cliConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) error {
+	if err := c.ensure(ctx, false, in.Effort); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	proc := c.proc
+	p := &cliPrompt{ctx: ctx, sink: sink, blocks: map[int]*cliBlock{}, reported: map[string]bool{}, waiting: map[string]bool{}}
+	c.prompt = p
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.prompt = nil
+		c.mu.Unlock()
+	}()
+	content := []map[string]any{}
+	if len(in.Skills) > 0 {
+		// Selected skills of this input: a text block of the input, as
+		// Claude Code itself hands the model an invoked skill.
+		raw, _ := json.Marshal(in.Skills)
+		content = append(content, map[string]any{"type": "text", "text": "Skills explicitly selected for this input only:\n" + string(raw)})
+	}
+	results := proc.subscribe(p)
+	defer proc.unsubscribe()
+	if err := p.send(proc, append(content, cliImages(in.Images)...), in.Text); err != nil {
+		return &AgentError{Code: AgentErrorCodeAgentUnavailable, Message: "write to claude: " + err.Error()}
+	}
+	for {
+		select {
+		case r := <-results:
+			// A message written after the turn's last tool result runs as
+			// the CLI's next turn, right after this one: still this prompt's.
+			if p.finish(r) {
+				return p.end(r)
+			}
+			continue
+		case <-proc.done:
+			return &AgentError{Code: AgentErrorCodeAgentUnavailable, Message: "claude exited: " + proc.exitText()}
+		case <-ctx.Done():
+			p.mu.Lock()
+			p.ended = true
+			p.mu.Unlock()
+		}
+		break
+	}
+	ictx, cancel := context.WithTimeout(context.Background(), c.a.env.CancelGrace)
+	defer cancel()
+	_, _ = proc.control(ictx, map[string]any{"subtype": "interrupt"})
+	select {
+	case <-results:
+	case <-proc.done:
+	case <-ictx.Done():
+		c.a.log(LogWarn, "claude did not end a canceled turn within "+c.a.env.CancelGrace.String()+"; killing it", nil)
+		proc.stop(c.a.env.KillGrace)
+	}
+	return ctx.Err()
+}
+
+// cliImages are a user message's image blocks.
+func cliImages(images []BrainImage) []map[string]any {
+	var out []map[string]any
+	for _, img := range images {
+		out = append(out, map[string]any{"type": "image", "source": map[string]any{
+			"type": "base64", "media_type": img.MimeType, "data": base64.StdEncoding.EncodeToString(img.Data)}})
+	}
+	return out
+}
+
+// send writes one user message of the prompt (blocks, then text), which the
+// prompt then waits for the CLI to take; ErrNotSteered once the prompt ended.
+func (p *cliPrompt) send(proc *cliProc, blocks []map[string]any, text string) error {
+	raw := make([]byte, 16)
+	_, _ = rand.Read(raw)
+	raw[6], raw[8] = raw[6]&0x0f|0x40, raw[8]&0x3f|0x80
+	uuid := fmt.Sprintf("%x-%x-%x-%x-%x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ended {
+		return ErrNotSteered
+	}
+	p.waiting[uuid] = true
+	content := append(blocks, map[string]any{"type": "text", "text": text})
+	return proc.write(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": content},
+		"parent_tool_use_id": nil, "session_id": "", "uuid": uuid})
+}
+
+// taken records that the CLI took the user message uuid (its replay).
+func (p *cliPrompt) taken(uuid string) {
+	p.mu.Lock()
+	delete(p.waiting, uuid)
+	p.mu.Unlock()
+}
+
+// finish reports whether result r ends the prompt: a failure does, a success
+// once the CLI took every message written to it (the prompt then refuses
+// more).
+func (p *cliPrompt) finish(r cliResult) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if r.IsError || r.Subtype != "success" || len(p.waiting) == 0 || p.failure.Load() != nil {
+		p.ended = true
+	}
+	return p.ended
+}
+
+// Steer writes a user message into the running turn: the CLI reads it with
+// the next tool result, or runs it right after the turn when the turn had
+// its last one; the prompt waits for it either way.
+func (c *cliConv) Steer(_ context.Context, in BrainInput) error {
+	c.mu.Lock()
+	p, proc := c.prompt, c.proc
+	c.mu.Unlock()
+	if p == nil || proc == nil {
+		return ErrNotSteered
+	}
+	return p.send(proc, cliImages(in.Images), in.Text)
+}
+
+// cliResult is the result message of a prompt.
+type cliResult struct {
+	Subtype    string `json:"subtype"`
+	IsError    bool   `json:"is_error"`
+	StopReason string `json:"stop_reason"`
+	Result     string `json:"result"`
+	Errors     []string
+}
+
+// end maps the end of a prompt to its result (contract stop codes).
+func (p *cliPrompt) end(r cliResult) error {
+	if f := p.failure.Load(); f != nil {
+		return f
+	}
+	p.mu.Lock()
+	errText := p.errText
+	p.mu.Unlock()
+	switch {
+	case strings.Contains(r.Result, "Prompt is too long"):
+		return &AgentError{Code: AgentErrorCodeContextTooLarge, Message: AgentErrorCodeContextTooLarge + ": the conversation does not fit the model's context window even after compaction"}
+	case strings.Contains(r.Result, "Stream idle timeout"):
+		return &AgentError{Code: AgentErrorCodeModelStreamIdle, Message: AgentErrorCodeModelStreamIdle + ": " + r.Result}
+	case errText == "max_output_tokens" || r.StopReason == "max_tokens":
+		return &AgentError{Code: AgentErrorCodeOutputLimitReached, Message: AgentErrorCodeOutputLimitReached + ": the model reply was cut at its output limit"}
+	case slices.Contains([]string{"authentication_failed", "oauth_org_not_allowed", "billing_error", "cloud_credential_error", "account_on_hold", "verification_required"}, errText):
+		return &AgentError{Code: AgentErrorCodeAgentAuthRequired, Message: "claude: " + errText + ": " + r.Result}
+	case errText != "":
+		return &AgentError{Code: AgentErrorCodeAgentError, Message: "claude: " + errText + ": " + r.Result}
+	case r.IsError || r.Subtype != "success":
+		return &AgentError{Code: AgentErrorCodeAgentError, Message: "claude: " + r.Subtype + ": " + r.Result}
+	}
+	return nil
+}
+
+func (p *cliPrompt) fail(code, detail string) {
+	p.failure.CompareAndSwap(nil, &AgentError{Code: code, Message: code + ": " + detail})
+}
+
+// --- the CLI process ---
+
+type cliLaunch struct {
+	cwd, placeholder, system, uuid, model, effort string
+	resume, noSession                             bool
+	tools                                         []BrainTool
+}
+
+type cliProc struct {
+	a      *claudeCLIAdapter
+	cmd    *exec.Cmd
+	tree   *processTree
+	stdin  io.WriteCloser
+	wmu    sync.Mutex
+	stderr *tailBuffer
+	done   chan struct{}
+	model  string
+	effort string
+
+	mu      sync.Mutex
+	nextID  int64
+	waiting map[string]chan cliControlResponse
+	prompt  *cliPrompt
+	results chan cliResult
+	perms   map[string]context.CancelFunc // pending can_use_tool by request id
+	exitErr error
+	// turnTools are the tools it was started with besides the six; tools
+	// their MCP names with the six, which the init message must list.
+	turnTools []BrainTool
+	tools     []string
+	// init is the initialize response.
+	init json.RawMessage
+}
+
+type cliControlResponse struct {
+	Subtype  string          `json:"subtype"`
+	ID       string          `json:"request_id"`
+	Response json.RawMessage `json:"response"`
+	Error    string          `json:"error"`
+}
+
+// mcpConfig is the --mcp-config of a conversation: the loopback tool server
+// with the conversation's placeholder as bearer.
+func (a *claudeCLIAdapter) mcpConfig(placeholder string) string {
+	raw, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{claudeMCPServerName: map[string]any{
+		"type": "http", "url": a.mcp.url + "/mcp", "headers": map[string]string{"Authorization": "Bearer " + placeholder}}}})
+	return string(raw)
+}
+
+// args are the CLI's arguments for a launch.
+func (a *claudeCLIAdapter) args(l cliLaunch) []string {
+	args := append(slices.Clone(a.env.Command[1:]),
+		"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+		"--replay-user-messages",
+		"--permission-prompt-tool", "stdio", "--permission-mode", "default",
+		"--tools", "", "--mcp-config", a.mcpConfig(l.placeholder), "--strict-mcp-config", "--setting-sources", "")
+	switch {
+	case l.noSession:
+		args = append(args, "--no-session-persistence")
+	case l.resume:
+		args = append(args, "--resume", l.uuid)
+	default:
+		args = append(args, "--session-id", l.uuid)
+	}
+	if l.system != "" {
+		args = append(args, "--system-prompt", l.system)
+	}
+	if l.model != "" && l.model != "default" {
+		args = append(args, "--model", l.model)
+	}
+	return args
+}
+
+func (a *claudeCLIAdapter) spawn(ctx context.Context, l cliLaunch) (*cliProc, error) {
+	cmd := exec.Command(a.env.Command[0], a.args(l)...)
+	// The turn's thinking level, or none: the API applies the model's own
+	// default. The variable outranks --effort and the owner's settings.
+	cmd.Env = append(a.processEnv(), "CLAUDE_CODE_EFFORT_LEVEL="+cmp.Or(l.effort, "unset"))
+	cmd.Dir = l.cwd
+	setProcessGroupID(cmd)
+	setCredential(cmd, a.env.RunAs)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	p := &cliProc{a: a, cmd: cmd, stdin: stdin, stderr: &tailBuffer{max: 16 << 10}, done: make(chan struct{}),
+		model: l.model, effort: l.effort, waiting: map[string]chan cliControlResponse{}, perms: map[string]context.CancelFunc{},
+		turnTools: l.tools, tools: claudeMCPNames(l.tools)}
+	cmd.Stderr = p.stderr
+	tree, err := startCommand(cmd)
+	if err != nil {
+		return nil, &AgentError{Code: AgentErrorCodeAgentUnavailable, Message: "start claude: " + err.Error()}
+	}
+	p.tree = tree
+	go p.readLoop(stdout)
+	go func() {
+		err := cmd.Wait()
+		tree.close()
+		p.mu.Lock()
+		p.exitErr = err
+		p.mu.Unlock()
+		close(p.done)
+	}()
+	ictx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	init, err := p.control(ictx, map[string]any{"subtype": "initialize"})
+	if err != nil {
+		p.stop(a.env.KillGrace)
+		text := p.exitText()
+		if strings.Contains(text, "No conversation found") {
+			return nil, &AgentError{Code: AgentErrorCodeAgentError, Message: "the local conversation " + l.uuid + " was not found; it is not recreated"}
+		}
+		return nil, &AgentError{Code: AgentErrorCodeAgentUnavailable, Message: "claude initialize: " + err.Error() + ": " + text}
+	}
+	p.init = init
+	return p, nil
+}
+
+// claudeMCPNames are the MCP names of the tools the CLI must offer: the six
+// platform tools and a turn's tools.
+func claudeMCPNames(tools []BrainTool) []string {
+	var names []string
+	for name := range brainToolNames(tools) {
+		names = append(names, claudeToolPrefix+name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+func (p *cliProc) alive() bool {
+	select {
+	case <-p.done:
+		return false
+	default:
+		return true
+	}
+}
+
+func (p *cliProc) exitText() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return fmt.Sprintf("%v: %s", p.exitErr, lastLine(p.stderr.String()))
+}
+
+func (p *cliProc) stop(grace time.Duration) {
+	if !p.alive() {
+		return
+	}
+	_ = p.stdin.Close()
+	select {
+	case <-p.done:
+		return
+	case <-time.After(grace):
+	}
+	_ = p.tree.signal(signalTerminate)
+	select {
+	case <-p.done:
+	case <-time.After(grace):
+		_ = p.tree.signal(signalKill)
+		<-p.done
+	}
+}
+
+func (p *cliProc) write(v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	p.wmu.Lock()
+	defer p.wmu.Unlock()
+	_, err = p.stdin.Write(append(b, '\n'))
+	return err
+}
+
+// control sends a control request and waits for its response.
+func (p *cliProc) control(ctx context.Context, request map[string]any) (json.RawMessage, error) {
+	p.mu.Lock()
+	p.nextID++
+	id := fmt.Sprintf("bma_%d", p.nextID)
+	ch := make(chan cliControlResponse, 1)
+	p.waiting[id] = ch
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		delete(p.waiting, id)
+		p.mu.Unlock()
+	}()
+	if err := p.write(map[string]any{"type": "control_request", "request_id": id, "request": request}); err != nil {
+		return nil, err
+	}
+	select {
+	case r := <-ch:
+		if r.Subtype != "success" {
+			return nil, fmt.Errorf("control %v: %s", request["subtype"], r.Error)
+		}
+		return r.Response, nil
+	case <-p.done:
+		return nil, errors.New("claude exited")
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (p *cliProc) subscribe(prompt *cliPrompt) <-chan cliResult {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.prompt, p.results = prompt, make(chan cliResult, 1)
+	return p.results
+}
+
+func (p *cliProc) unsubscribe() {
+	p.mu.Lock()
+	p.prompt, p.results = nil, nil
+	p.mu.Unlock()
+}
+
+func (p *cliProc) current() *cliPrompt {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.prompt
+}
+
+func (p *cliProc) readLoop(r io.Reader) {
+	reader := bufio.NewReaderSize(r, 1<<20)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(strings.TrimSpace(string(line))) > 0 {
+			p.dispatch(line)
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// cliMessage is one stdout line of the CLI.
+type cliMessage struct {
+	Type            string          `json:"type"`
+	Subtype         string          `json:"subtype"`
+	RequestID       string          `json:"request_id"`
+	Request         json.RawMessage `json:"request"`
+	Response        json.RawMessage `json:"response"`
+	Event           json.RawMessage `json:"event"`
+	Message         json.RawMessage `json:"message"`
+	ParentToolUseID *string         `json:"parent_tool_use_id"`
+	Error           string          `json:"error"`
+	Tools           []string        `json:"tools"`
+	PermissionMode  string          `json:"permissionMode"`
+	Abandoned       json.RawMessage `json:"abandoned_blocks"`
+	UUID            string          `json:"uuid"`
+}
+
+func (p *cliProc) dispatch(line []byte) {
+	p.a.log(LogDebug, fmt.Sprintf("claude stdout: %.2000s", line), nil)
+	var m cliMessage
+	if json.Unmarshal(line, &m) != nil {
+		p.a.log(LogWarn, "claude wrote a non-JSON line on stdout", nil)
+		return
+	}
+	switch m.Type {
+	case "control_response":
+		var r cliControlResponse
+		if json.Unmarshal(m.Response, &r) == nil {
+			p.mu.Lock()
+			ch := p.waiting[r.ID]
+			p.mu.Unlock()
+			if ch != nil {
+				ch <- r
+			}
+		}
+		return
+	case "control_request":
+		go p.onControl(m.RequestID, m.Request)
+		return
+	case "control_cancel_request":
+		p.mu.Lock()
+		cancel := p.perms[m.RequestID]
+		p.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return
+	}
+	prompt := p.current()
+	if prompt == nil || (m.ParentToolUseID != nil && *m.ParentToolUseID != "") {
+		return // nothing running, or a subagent's message
+	}
+	if prompt.failure.Load() != nil && m.Type != "result" {
+		return // the turn ended at a stop; what the CLI does until the interrupt lands is not the turn's
+	}
+	switch m.Type {
+	case "system":
+		switch m.Subtype {
+		case "init":
+			p.checkInit(prompt, m)
+		case "api_retry":
+			p.onRetry(prompt, line)
+		}
+	case "stream_event":
+		p.onStream(prompt, m.Event, m.Abandoned != nil)
+	case "assistant":
+		prompt.mu.Lock()
+		if m.Error != "" {
+			prompt.errText = m.Error
+		}
+		fallback := prompt.fallback && m.Error == ""
+		prompt.fallback = false
+		prompt.mu.Unlock()
+		if fallback {
+			p.onUnstreamed(prompt, m.Message)
+		}
+	case "user":
+		prompt.taken(m.UUID)
+		p.onUser(prompt, m.Message)
+	case "result":
+		var r cliResult
+		_ = json.Unmarshal(line, &r)
+		p.mu.Lock()
+		results := p.results
+		p.mu.Unlock()
+		if results != nil {
+			select {
+			case results <- r:
+			default:
+			}
+		}
+	}
+}
+
+// checkInit fails the turn unless the CLI offers exactly the injected tools in the mode default.
+func (p *cliProc) checkInit(prompt *cliPrompt, m cliMessage) {
+	got := slices.Sorted(slices.Values(m.Tools))
+	if !slices.Equal(got, p.tools) {
+		prompt.fail(AgentErrorCodeAgentProtocolError, fmt.Sprintf("tool_catalog_violation: claude offers the tools [%s], not exactly [%s]", strings.Join(got, ","), strings.Join(p.tools, ",")))
+		p.interrupt()
+		return
+	}
+	if m.PermissionMode != "default" {
+		prompt.fail(AgentErrorCodeAgentProtocolError, fmt.Sprintf("mode_not_default: claude started the turn in the permission mode %q", m.PermissionMode))
+		p.interrupt()
+	}
+}
+
+// onRetry ends the turn where the executor's semantics have no retry: a
+// request the API refused (credentials, an invalid or too large request).
+// Overload, rate limits and server errors are left to the CLI's retries.
+func (p *cliProc) onRetry(prompt *cliPrompt, line []byte) {
+	var r struct {
+		Status *int   `json:"error_status"`
+		Error  string `json:"error"`
+	}
+	_ = json.Unmarshal(line, &r)
+	switch {
+	case r.Status != nil && (*r.Status == http.StatusUnauthorized || *r.Status == http.StatusForbidden):
+		prompt.fail(AgentErrorCodeAgentAuthRequired, fmt.Sprintf("the model API refused the owner's credentials (%d %s)", *r.Status, r.Error))
+	case r.Status != nil && *r.Status == http.StatusRequestEntityTooLarge:
+		prompt.fail(AgentErrorCodeContextTooLarge, fmt.Sprintf("the request is too large for the model (%d %s)", *r.Status, r.Error))
+	case r.Status != nil && *r.Status >= 400 && *r.Status < 500 && *r.Status != http.StatusTooManyRequests && *r.Status != http.StatusRequestTimeout:
+		prompt.fail(AgentErrorCodeAgentError, fmt.Sprintf("the model API refused the request (%d %s)", *r.Status, r.Error))
+	default:
+		return
+	}
+	p.interrupt()
+}
+
+func (p *cliProc) interrupt() {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), p.a.env.CancelGrace)
+		defer cancel()
+		_, _ = p.control(ctx, map[string]any{"subtype": "interrupt"})
+	}()
+}
+
+// onStream handles one stream event; abandoned marks the message_stop of a
+// stream that stalled (abandoned_blocks).
+func (p *cliProc) onStream(prompt *cliPrompt, raw json.RawMessage, abandoned bool) {
+	var e struct {
+		Type    string `json:"type"`
+		Index   int    `json:"index"`
+		Message struct {
+			ID string `json:"id"`
+		} `json:"message"`
+		ContentBlock struct {
+			Type string `json:"type"`
+		} `json:"content_block"`
+		Delta struct {
+			Type       string `json:"type"`
+			Text       string `json:"text"`
+			Thinking   string `json:"thinking"`
+			StopReason string `json:"stop_reason"`
+		} `json:"delta"`
+	}
+	if json.Unmarshal(raw, &e) != nil {
+		return
+	}
+	prompt.mu.Lock()
+	switch e.Type {
+	case "message_start":
+		prompt.message, prompt.blocks, prompt.streamed = e.Message.ID, map[int]*cliBlock{}, false
+		prompt.mu.Unlock()
+		return
+	case "message_stop":
+		streamed := prompt.streamed
+		prompt.fallback = abandoned && !streamed
+		prompt.mu.Unlock()
+		if abandoned && streamed {
+			// The stream stalled after content: the turn fails, as for every brain.
+			prompt.fail(AgentErrorCodeModelStreamIdle, "the model stream stalled after it sent content")
+			p.interrupt()
+		}
+		return
+	case "message_delta":
+		// A text reply cut at its output limit is left to the CLI, which asks
+		// the model to go on (a bounded number of times), as every brain does;
+		// a prompt that still ends cut is output_limit_reached (end). A cut
+		// tool call has incomplete input and must never run: the turn fails
+		// here instead.
+		toolCut := e.Delta.StopReason == "max_tokens" && slices.ContainsFunc(slices.Collect(maps.Values(prompt.blocks)),
+			func(b *cliBlock) bool { return b.kind == "tool_use" })
+		prompt.mu.Unlock()
+		if toolCut {
+			prompt.fail(AgentErrorCodeOutputLimitReached, "the model reply was cut at its output limit while writing a tool call")
+			p.interrupt()
+		}
+		return
+	case "content_block_start":
+		prompt.blocks[e.Index] = &cliBlock{kind: e.ContentBlock.Type}
+		prompt.mu.Unlock()
+		return
+	}
+	b := prompt.blocks[e.Index]
+	key := fmt.Sprintf("%s:%d", prompt.message, e.Index)
+	if e.Type == "content_block_delta" {
+		prompt.streamed = true
+	}
+	prompt.mu.Unlock()
+	if b == nil {
+		return
+	}
+	switch e.Type {
+	case "content_block_delta":
+		switch e.Delta.Type {
+		case "text_delta":
+			b.text.WriteString(e.Delta.Text)
+			prompt.sink.Delta(BrainKindMessage, key, e.Delta.Text)
+		case "thinking_delta":
+			b.text.WriteString(e.Delta.Thinking)
+			prompt.sink.Delta(BrainKindThinking, key, e.Delta.Thinking)
+		}
+	case "content_block_stop":
+		switch b.kind {
+		case "text":
+			if strings.TrimSpace(b.text.String()) != "" {
+				prompt.sink.Message(BrainKindMessage, key, b.text.String())
+			}
+		case "thinking":
+			prompt.sink.Message(BrainKindThinking, key, b.text.String())
+		}
+		// A tool_use block is reported when the CLI asks to run it
+		// (can_use_tool → Permission), one call at a time as the CLI runs
+		// them: an agent.tool_use that waits for approval is then always
+		// one whose interaction is open.
+	}
+}
+
+// onUnstreamed reports the content of a response the CLI asked for without
+// streaming (after a stream stalled before any content).
+func (p *cliProc) onUnstreamed(prompt *cliPrompt, raw json.RawMessage) {
+	var m struct {
+		ID      string `json:"id"`
+		Content []struct {
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Thinking string `json:"thinking"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(raw, &m) != nil {
+		return
+	}
+	for i, b := range m.Content {
+		key := fmt.Sprintf("%s:unstreamed:%d", m.ID, i)
+		switch b.Type {
+		case "text":
+			if strings.TrimSpace(b.Text) != "" {
+				prompt.sink.Message(BrainKindMessage, key, b.Text)
+			}
+		case "thinking":
+			prompt.sink.Message(BrainKindThinking, key, b.Thinking)
+		}
+	}
+}
+
+// claudeHostTool maps an injected MCP tool name to the platform's tool name.
+func claudeHostTool(mcpName string, injected []string) (string, bool) {
+	if !slices.Contains(injected, mcpName) {
+		return "", false
+	}
+	return strings.TrimPrefix(mcpName, claudeToolPrefix), true
+}
+
+func (p *cliProc) onUser(prompt *cliPrompt, raw json.RawMessage) {
+	var m struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &m) != nil {
+		return
+	}
+	var blocks []struct {
+		Type      string          `json:"type"`
+		ToolUseID string          `json:"tool_use_id"`
+		IsError   bool            `json:"is_error"`
+		Content   json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(m.Content, &blocks) != nil {
+		return
+	}
+	for _, b := range blocks {
+		if b.Type != "tool_result" {
+			continue
+		}
+		// A call the tool server ran is reported already; this is the
+		// result of one that did not reach it (refused, failed in the CLI).
+		prompt.result(b.ToolUseID, claudeResultText(b.Content), b.IsError)
+	}
+}
+
+// claudeResultText is the text of a tool_result's content (a string or blocks).
+func claudeResultText(raw json.RawMessage) []ContentBlock {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return []ContentBlock{{Type: ContentBlockTypeText, Text: s}}
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	_ = json.Unmarshal(raw, &blocks)
+	var out []ContentBlock
+	for _, b := range blocks {
+		if b.Type == "text" {
+			out = append(out, ContentBlock{Type: ContentBlockTypeText, Text: b.Text})
+		}
+	}
+	return out
+}
+
+// onControl answers the CLI's control requests: can_use_tool goes to the host.
+func (p *cliProc) onControl(id string, raw json.RawMessage) {
+	var r struct {
+		Subtype   string         `json:"subtype"`
+		ToolName  string         `json:"tool_name"`
+		Input     map[string]any `json:"input"`
+		ToolUseID string         `json:"tool_use_id"`
+	}
+	if json.Unmarshal(raw, &r) != nil || r.Subtype != "can_use_tool" {
+		_ = p.write(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "error", "request_id": id,
+			"error": "unsupported control request " + r.Subtype}})
+		return
+	}
+	answer := func(result map[string]any) {
+		_ = p.write(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": id, "response": result}})
+	}
+	deny := func(message string) {
+		answer(map[string]any{"behavior": "deny", "message": message, "toolUseID": r.ToolUseID})
+	}
+	prompt := p.current()
+	name, ok := claudeHostTool(r.ToolName, p.tools)
+	switch {
+	case prompt == nil || prompt.failure.Load() != nil:
+		deny("No turn of this session is running.")
+		return
+	case !ok:
+		p.a.log(LogWarn, fmt.Sprintf("claude asked to use %q, which is not a platform tool: refused", r.ToolName), nil)
+		deny("The tool " + r.ToolName + " is not available.")
+		return
+	}
+	ctx, cancel := context.WithCancel(prompt.ctx)
+	defer cancel()
+	p.mu.Lock()
+	p.perms[id] = cancel
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		delete(p.perms, id)
+		p.mu.Unlock()
+	}()
+	d := prompt.sink.Permission(ctx, BrainCall{ID: r.ToolUseID, Name: name, Input: r.Input})
+	switch d.Outcome {
+	case BrainAllow:
+		// Never a CLI permission rule: a session grant ("always allow") is
+		// the platform's record, which answers every later request of the
+		// tool (and can be revoked), so the CLI asks each time.
+		answer(map[string]any{"behavior": "allow", "updatedInput": r.Input, "toolUseID": r.ToolUseID})
+	case BrainDeny:
+		message := d.Message
+		if message == "" {
+			message = refusalText
+		}
+		deny(message)
+	default:
+		deny("The request was withdrawn before it was answered.")
+	}
+}
+
+// --- the tools as an MCP server on loopback ---
+
+// cliToolServer serves the platform tools and the host tools to the CLI
+// over MCP Streamable HTTP; a request carries its conversation's
+// placeholder as bearer, so a conversation reaches only its own turn.
+type cliToolServer struct {
+	a      *claudeCLIAdapter
+	url    string
+	server *http.Server
+	anon   atomic.Int64
+}
+
+func startCLIToolServer(a *claudeCLIAdapter) (*cliToolServer, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	s := &cliToolServer{a: a, url: "http://" + listener.Addr().String()}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/mcp", s.serve)
+	s.server = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = s.server.Serve(listener) }()
+	return s, nil
+}
+
+func (s *cliToolServer) close() { _ = s.server.Close() }
+
+func (s *cliToolServer) conv(token string) (*cliConv, bool) {
+	if token == "bma-probe" {
+		return nil, true
+	}
+	s.a.mu.Lock()
+	defer s.a.mu.Unlock()
+	for placeholder, c := range s.a.convs {
+		if subtle.ConstantTimeCompare([]byte(placeholder), []byte(token)) == 1 {
+			return c, true
+		}
+	}
+	return nil, false
+}
+
+func (s *cliToolServer) serve(w http.ResponseWriter, r *http.Request) {
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	conv, known := s.conv(token)
+	if token == "" || !known {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, cliMaxToolRequestBytes))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(req.ID) == 0 {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	reply := func(result any, rpcErr map[string]any) {
+		out := map[string]any{"jsonrpc": "2.0", "id": req.ID}
+		if rpcErr != nil {
+			out["error"] = rpcErr
+		} else {
+			out["result"] = result
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	}
+	switch req.Method {
+	case "initialize":
+		var p struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		_ = json.Unmarshal(req.Params, &p)
+		version := "2025-06-18"
+		if slices.Contains([]string{"2025-03-26", "2025-06-18", "2025-11-25"}, p.ProtocolVersion) {
+			version = p.ProtocolVersion
+		}
+		reply(map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}},
+			"serverInfo": map[string]any{"name": "bma-executor-sdk", "version": "0"}}, nil)
+	case "ping":
+		reply(map[string]any{}, nil)
+	case "tools/list":
+		reply(map[string]any{"tools": conv.toolList()}, nil)
+	case "tools/call":
+		var p struct {
+			Name      string         `json:"name"`
+			Arguments map[string]any `json:"arguments"`
+			Meta      map[string]any `json:"_meta"`
+		}
+		if err := json.Unmarshal(req.Params, &p); err != nil || !brainToolNames(conv.turnTools())[p.Name] {
+			reply(nil, map[string]any{"code": -32602, "message": "unknown tool " + p.Name})
+			return
+		}
+		callID, _ := p.Meta[claudeToolUseIDMeta].(string)
+		// A call can outlast the CLI's first-byte budget for an HTTP MCP
+		// request: answer as an SSE stream, the result as its one event.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		data, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": s.call(r.Context(), conv, callID, p.Name, p.Arguments)})
+		_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", data)
+	default:
+		reply(nil, map[string]any{"code": -32601, "message": "method not found: " + req.Method})
+	}
+}
+
+func (s *cliToolServer) call(ctx context.Context, c *cliConv, callID, name string, input map[string]any) map[string]any {
+	var result *RouteResult
+	var prompt *cliPrompt
+	if c != nil {
+		c.mu.Lock()
+		prompt = c.prompt
+		c.mu.Unlock()
+	}
+	if prompt == nil {
+		result = refused("stale_turn", "no turn of this session is running")
+	} else {
+		if callID == "" {
+			callID = fmt.Sprintf("mcp-%d", s.anon.Add(1))
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		defer context.AfterFunc(prompt.ctx, cancel)()
+		result = prompt.sink.Call(ctx, BrainCall{ID: callID, Name: name, Input: input})
+		prompt.result(callID, []ContentBlock{{Type: ContentBlockTypeText, Text: result.Text}}, result.IsError)
+	}
+	content := []any{map[string]any{"type": "text", "text": result.Text}}
+	for _, img := range result.Images {
+		content = append(content, map[string]any{"type": "image", "data": img.Data, "mimeType": img.MimeType})
+	}
+	return map[string]any{"content": content, "isError": result.IsError}
+}
+
+// turnTools are the conversation's tools besides the six (none for the probe).
+func (c *cliConv) turnTools() []BrainTool {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tools
+}
+
+// toolList is the MCP tools/list: the six platform tools and the turn's tools.
+func (c *cliConv) toolList() []any {
+	tools := claudeToolList()
+	for _, t := range c.turnTools() {
+		tools = append(tools, map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.Parameters})
+	}
+	return tools
+}
+
+func newPlaceholder() string {
+	key := make([]byte, 16)
+	_, _ = rand.Read(key)
+	return "bma-local-" + hex.EncodeToString(key)
+}
+
+func claudeToolList() []any {
+	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
+	integer := func(desc string) map[string]any { return map[string]any{"type": "integer", "description": desc} }
+	boolean := func(desc string) map[string]any { return map[string]any{"type": "boolean", "description": desc} }
+	tool := func(name, desc string, required []string, props map[string]any) map[string]any {
+		return map[string]any{"name": name, "description": desc,
+			"inputSchema": map[string]any{"type": "object", "properties": props, "required": required}}
+	}
+	return []any{
+		tool(ToolNameBash, "Run a shell command in the working directory. A command that runs longer than the wait is left running; the call then returns its pid and the file its output goes to.",
+			[]string{"command"}, map[string]any{
+				"command":    str("The command to run."),
+				"timeout":    integer("How long to wait for the command, in milliseconds (default 120000, at most 600000)."),
+				"on_timeout": map[string]any{"type": "string", "enum": []string{"background", "kill"}, "description": "At the end of the wait: leave the command running (default) or stop it."},
+			}),
+		tool(ToolNameRead, "Read a file.", []string{"file_path"}, map[string]any{
+			"file_path": str("Path of the file."), "offset": integer("First line to read."), "limit": integer("Number of lines to read."),
+		}),
+		tool(ToolNameWrite, "Write a file, replacing its content.", []string{"file_path", "content"}, map[string]any{
+			"file_path": str("Path of the file."), "content": str("The new content."),
+		}),
+		tool(ToolNameEdit, "Replace text in a file.", []string{"file_path", "old_string", "new_string"}, map[string]any{
+			"file_path": str("Path of the file."), "old_string": str("The text to replace."), "new_string": str("The replacement."),
+			"replace_all": boolean("Replace every occurrence instead of exactly one."),
+		}),
+		tool(ToolNameGlob, "Find files by glob pattern.", []string{"pattern"}, map[string]any{
+			"pattern": str("The glob pattern."), "path": str("Directory to search in."),
+		}),
+		tool(ToolNameGrep, "Search file contents with a regular expression.", []string{"pattern"}, map[string]any{
+			"pattern": str("The regular expression."), "path": str("File or directory to search in."), "glob": str("Only files matching this glob."),
+			"output_mode":      map[string]any{"type": "string", "enum": []string{"content", "files_with_matches", "count"}, "description": "What to return."},
+			"case_insensitive": boolean("Ignore case."),
+		}),
+	}
+}

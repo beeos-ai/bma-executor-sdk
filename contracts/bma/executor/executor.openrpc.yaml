@@ -1,0 +1,2456 @@
+openrpc: 1.2.6
+info:
+  title: BMA Executor Protocol
+  version: 1.25.0
+  description: >-
+    Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
+    WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
+    docs/architecture/executor-protocol-v1.md and the v1.1 delta doc. JSON-RPC params are named
+    object members; each OpenRPC param is one member.
+
+
+    x-bma-since is the first protocol that has the method; a server never sends a v1.1 method to a
+    v1 connection. x-bma-capability names the capability bit the harness checks before sending the
+    method; an executor without it answers -32012 capability_unavailable.
+
+
+    WebSocket close codes: 4001 token expired (reconnect with a new token), 4003 unsupported
+    protocol, 4004 replaced by a newer connection for the same executor (stop), 4005 drained
+    (reconnect).
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+servers:
+  - name: machine
+    url: wss://{host}/v1/machines/{machine_id}/channel?channel=control
+    summary: Machine-scoped executor control channel.
+    description: The executor's token comes from POST /v1/machines/{machine_id}/token. machine_id must equal the machine in the credential, otherwise the server answers 404. Executors read it from BMA_MACHINE_ID.
+    variables:
+      host:
+        default: executor.example.com
+        description: BMA executor host.
+      machine_id:
+        default: mach_example
+        description: Machine id.
+  - name: environment
+    url: wss://{host}/v1/environments/{environment_id}/channel?channel=control
+    summary: Environment-scoped executor control channel; ?channel=mcp selects the raw MCP channel.
+    description: The executor's token comes from POST /v1/environments/{environment_id}/token. environment_id must equal the environment in the credential, otherwise the server answers 404. The raw MCP channel for one environment-origin MCP server is the same path with ?channel=mcp&session_id={session_id}&server_key={server_key}.
+    variables:
+      host:
+        default: executor.example.com
+        description: BMA executor host.
+      environment_id:
+        default: env_example
+        description: Environment id.
+  - name: control
+    url: wss://{host}/v1/executors/channel?channel=control
+    summary: Deprecated alias of the machine and environment servers; executor control channel.
+    variables:
+      host:
+        default: api.bma.beeos.ai
+        description: BMA API host.
+  - name: mcp
+    url: wss://{host}/v1/executors/channel?channel=mcp&session_id={session_id}&server_key={server_key}
+    summary: Deprecated alias of the environment server with ?channel=mcp; raw MCP JSON-RPC channel for one environment-origin MCP server.
+    variables:
+      host:
+        default: api.bma.beeos.ai
+        description: BMA API host.
+      session_id:
+        default: sess_example
+        description: Assigned session id.
+      server_key:
+        default: chrome
+        description: MCP server key from the session assignment.
+methods:
+  - name: screen.start
+    summary: Start a native WebRTC screen producer.
+    description: >-
+      Starts a single native screen relay for this machine; no shell or virtual
+      desktop is created. The server-selected session is idempotent; another
+      active session is rejected. The relay ticket must never be logged. Human
+      input remains disabled until separately fenced and authorized.
+    tags:
+      - name: screen
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: display.native_webrtc
+    x-bma-idempotent-by: session_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: relay_url
+        required: true
+        schema:
+          type: string
+      - name: relay_ticket
+        required: true
+        schema:
+          type: string
+    result:
+      name: result
+      schema:
+        $ref: schemas/executor.json#/$defs/ScreenStartResult
+  - name: screen.stop
+    summary: Stop a native screen session.
+    description: >-
+      Fences human input and stops the named native screen producer, waiting
+      for cleanup before returning. Never resumes an agent. A repeated stop
+      is safe; it must not affect a replacement session.
+    tags:
+      - name: screen
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: display.native_webrtc
+    x-bma-idempotent-by: session_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+    result:
+      name: result
+      schema:
+        $ref: schemas/executor.json#/$defs/ScreenStopResult
+  - name: executor.register
+    summary: Register an executor connection.
+    description: Executor to harness request, the first frame on the control channel. protocol MUST
+      equal the negotiated WebSocket subprotocol; otherwise the server answers -32010 and closes
+      with 4003. A machine-scoped executor sends an empty environment_id. resume.active_sessions
+      reattaches sessions after reconnect. A machine-scoped executor that declares neither
+      capabilities.process nor capabilities.agent is answered -32012 with data.reason
+      "capability_missing" and data.capability "process" instead of a result; no runtime is bound
+      and the connection stays unregistered.
+    tags:
+      - name: executor
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1
+    params:
+      - name: protocol
+        required: true
+        schema:
+          $ref: schemas/common.json#/$defs/ProtocolVersion
+      - name: environment_id
+        required: true
+        description: Selfhost environment id; empty for a machine-scoped executor.
+        schema:
+          type: string
+      - name: executor
+        required: true
+        schema:
+          $ref: schemas/executor.json#/$defs/ExecutorInfo
+      - name: capabilities
+        required: true
+        schema:
+          $ref: schemas/executor.json#/$defs/Capabilities
+      - name: resume
+        required: false
+        schema:
+          $ref: schemas/executor.json#/$defs/ExecutorResume
+    result:
+      name: ExecutorRegisterResult
+      schema:
+        $ref: schemas/executor.json#/$defs/ExecutorRegisterResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/InvalidRequest"
+      - $ref: "#/components/errors/Unauthorized"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/NotFound"
+      - $ref: "#/components/errors/PayloadTooLarge"
+      - $ref: "#/components/errors/UnsupportedProtocol"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: executor.heartbeat
+    summary: Refresh the executor lease.
+    description: Executor to harness request, sent every heartbeat_interval_ms. Two missed heartbeats
+      expire the lease server-side. drain=true means the executor must stop accepting new sessions
+      and finish current work.
+    tags:
+      - name: executor
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1
+    params:
+      - name: connection_id
+        required: true
+        schema:
+          type: string
+      - name: active_sessions
+        required: true
+        schema:
+          type: array
+          items:
+            type: string
+      - name: load
+        required: false
+        schema:
+          $ref: schemas/common.json#/$defs/ExecutorLoad
+    result:
+      name: ExecutorHeartbeatResult
+      schema:
+        $ref: schemas/executor.json#/$defs/ExecutorHeartbeatResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Unauthorized"
+      - $ref: "#/components/errors/LeaseExpired"
+      - $ref: "#/components/errors/InternalError"
+  - name: executor.token.refresh
+    summary: Extend the connection with a fresh executor token.
+    description: Executor to harness request. Before the current token expires the executor fetches
+      a new one from POST /v1/machines/{machine_id}/token or POST /v1/environments/{environment_id}/token
+      (legacy alias POST /v1/executors/token) with its original credential and sends it on the open
+      control channel. The harness verifies that it names the same executor, scope and machine
+      credential as the connection and moves the connection's 4001 deadline to the new token's
+      expiry; nothing else about the connection changes. A rejected token leaves the old deadline in
+      place. A harness without the method answers -32601; the executor then keeps reconnecting on
+      4001.
+    tags:
+      - name: executor
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    params:
+      - name: token
+        required: true
+        schema:
+          type: string
+    result:
+      name: ExecutorTokenRefreshResult
+      schema:
+        $ref: schemas/executor.json#/$defs/ExecutorTokenRefreshResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Unauthorized"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/InternalError"
+  - name: executor.capabilities.update
+    summary: Publish changed executor capabilities.
+    description: Executor to harness notification. It may change capabilities, not the protocol version.
+    tags:
+      - name: executor
+    x-bma-direction: executor-to-harness
+    x-bma-kind: notification
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1
+    params:
+      - name: capabilities
+        required: true
+        schema:
+          $ref: schemas/executor.json#/$defs/Capabilities
+  - name: executor.drain
+    summary: Ask the executor to drain.
+    description: Harness to executor request. The executor stops accepting new sessions, finishes
+      current work, and reports active_sessions.
+    tags:
+      - name: executor
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1
+    params:
+      - name: reason
+        required: true
+        schema:
+          type: string
+      - name: deadline_ms
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+    result:
+      name: ExecutorDrainResult
+      schema:
+        $ref: schemas/executor.json#/$defs/ExecutorDrainResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/InternalError"
+  - name: executor.close
+    summary: Close the executor connection.
+    description: Either side notification, followed by WebSocket close code 1000 or 1001.
+    tags:
+      - name: executor
+    x-bma-direction: bidirectional
+    x-bma-kind: notification
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1
+    params:
+      - name: reason
+        required: true
+        schema:
+          type: string
+  - name: session.assign
+    summary: Assign a session to the executor.
+    description: Harness to executor request. The executor rejects a session that exceeds its capability
+      or resource limits with -32009. metadata.source "harness" marks a long-lived harness session;
+      any other source is one-shot and ends after its tool call.
+    tags:
+      - name: session
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: work_id
+        required: true
+        schema:
+          type: string
+      - name: agent_id
+        required: false
+        schema:
+          type: string
+      - name: environment_id
+        required: true
+        schema:
+          type: string
+      - name: deadline_ms
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+      - name: lease
+        required: true
+        schema:
+          $ref: schemas/common.json#/$defs/Lease
+      - name: resources
+        required: false
+        schema:
+          type: array
+          items:
+            $ref: schemas/session.json#/$defs/SessionMemoryResource
+          x-go-type: "[]json.RawMessage"
+      - name: mcp_servers
+        required: false
+        schema:
+          type: array
+          items:
+            $ref: schemas/mcp.json#/$defs/McpServerConfig
+      - name: metadata
+        required: false
+        description: >-
+          String key/value pairs. egress (contract 1.9.0, only to an executor that declared
+          egress.forwarder): the JSON text of the session's EgressHandoff (schemas/executor.json), for an
+          executor that runs the session's tools without running its turns (hands of a session whose brain
+          is elsewhere). The harness sends session.assign before the session's tool calls and again on
+          reconnect; every session.assign of a session, a repeated one included, replaces the session's
+          handoff with the one it carries, and one without egress removes it (the session's connections go
+          direct, so the sandbox's own network applies). The harness renews the token by a repeated
+          session.assign before expires_at. The handoff ends with the session on this executor
+          (session.stop, session.close). Never logged or echoed.
+        schema:
+          type: object
+          additionalProperties:
+            type: string
+    result:
+      name: SessionAssignResult
+      schema:
+        $ref: schemas/session.json#/$defs/SessionAssignResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/NotFound"
+      - $ref: "#/components/errors/LeaseExpired"
+      - $ref: "#/components/errors/ExecutorBusy"
+      - $ref: "#/components/errors/InternalError"
+  - name: session.ready
+    summary: Report a session ready.
+    description: Executor to harness request after session.assign is accepted.
+    tags:
+      - name: session
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: work_id
+        required: true
+        schema:
+          type: string
+      - name: lease_token
+        required: true
+        schema:
+          type: string
+    result:
+      name: Ack
+      schema:
+        $ref: schemas/common.json#/$defs/Ack
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/LeaseExpired"
+      - $ref: "#/components/errors/InternalError"
+  - name: session.event
+    summary: Emit a durable session event.
+    description: Executor to harness request for durable session events. A tool executor's event is
+      idempotent by its JSON-RPC id. An agent executor (capability agent) also sends turn_id,
+      event_id and sequence; the harness deduplicates by (session_id, event_id), accepts a sequence at
+      or below acked_sequence as a duplicate, and rejects a gap with -32013 conflict
+      (data.expected_sequence). An agent event matches schemas/agent.json AgentEvent. The JSON-RPC response is the ACK; the executor keeps every unacked
+      event and resends them in sequence order after reconnect, before any new event. Contract 1.7.0
+      clarifies two rules that keep a session from stalling. A failure on the harness side that
+      resending can fix (storage conflict or outage) is answered with data.retryable true and the
+      executor resends the same event; only a rejection of the event itself (invalid params) is
+      permanent, and it ends the turn; the executor sends session.error (bma_error_code
+      event_rejected) and session.status_idle for the turn in place of the rejected event, renumbers
+      from data.expected_sequence only so that this session.error is accepted, and never continues
+      the turn.
+    tags:
+      - name: session
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1
+    x-bma-idempotent-by: jsonrpc_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: turn_id
+        required: false
+        description: Agent sessions; the turn that produced the event.
+        schema:
+          type: string
+      - name: event_id
+        required: false
+        description: Agent sessions; executor-assigned, unique within the session, stable across resends.
+        schema:
+          type: string
+      - name: sequence
+        required: false
+        description: Agent sessions; starts at 1 and increases by 1 per durable event within the session.
+        schema:
+          type: integer
+          minimum: 1
+      - name: idempotency_key
+        required: false
+        description: Agent sessions; optional key the executor keeps for this event across process
+          restarts (its outbox entry id, for example). A new executor epoch renumbers sequence and
+          suffixes event_id, so only this key lets the harness recognize an event it stored just
+          before the executor crashed. The harness acknowledges an event whose key the session
+          already stored as a duplicate (sequence advanced, nothing added to the session log), in
+          any epoch. Without it an event resent in a new epoch is stored again (at-least-once).
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 200
+      - name: event
+        required: true
+        schema:
+          $ref: schemas/session.json#/$defs/SessionEvent
+          x-go-type: json.RawMessage
+    result:
+      name: SessionEventResult
+      schema:
+        $ref: schemas/session.json#/$defs/SessionEventResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/LeaseExpired"
+      - $ref: "#/components/errors/PayloadTooLarge"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+  - name: session.status
+    summary: Report session status.
+    description: Executor to harness notification. detail carries free-form context such as tool_running
+      or mcp_unavailable.
+    tags:
+      - name: session
+    x-bma-direction: executor-to-harness
+    x-bma-kind: notification
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: status
+        required: true
+        schema:
+          $ref: schemas/session.json#/$defs/SessionStatus
+      - name: detail
+        required: false
+        schema:
+          type: string
+  - name: session.stop
+    summary: Stop a session.
+    description: Harness to executor request. The executor terminates every process and MCP server of
+      the session (SIGTERM, then SIGKILL) and then sends session.ended.
+    tags:
+      - name: session
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: reason
+        required: true
+        schema:
+          type: string
+      - name: deadline_ms
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+    result:
+      name: SessionStopResult
+      schema:
+        $ref: schemas/session.json#/$defs/SessionStopResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/Timeout"
+      - $ref: "#/components/errors/InternalError"
+  - name: session.ended
+    summary: Report a session ended.
+    description: Executor to harness request, sent after every process of the session is gone. Retried
+      until accepted.
+    tags:
+      - name: session
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: reason
+        required: true
+        schema:
+          type: string
+    result:
+      name: Ack
+      schema:
+        $ref: schemas/common.json#/$defs/Ack
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/ExecutorBusy"
+      - $ref: "#/components/errors/InternalError"
+  - name: tool.call
+    summary: Dispatch a tool call.
+    description: Harness to executor request. The executor acknowledges the dispatch and reports the
+      outcome separately with tool.result. A duplicate tool_call_id is acknowledged without
+      re-execution. A tool the executor does not serve is -32012 with data.capability "tool:<name>".
+    tags:
+      - name: tool
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1
+    # The tool param selects the input schema, in the shape of the OpenAPI
+    # Discriminator Object (propertyName + mapping) applied to the params.
+    x-bma-params-discriminator:
+      propertyName: tool
+      param: input
+      mapping:
+        bash: schemas/tool.json#/$defs/BashInput
+        read: schemas/tool.json#/$defs/ReadInput
+        write: schemas/tool.json#/$defs/WriteInput
+        edit: schemas/tool.json#/$defs/EditInput
+        glob: schemas/tool.json#/$defs/GlobInput
+        grep: schemas/tool.json#/$defs/GrepInput
+        list_files: schemas/tool.json#/$defs/ListFilesInput
+        computer_observe: schemas/tool.json#/$defs/ComputerObserveInput
+        computer_action: schemas/tool.json#/$defs/ComputerActionInput
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: tool_call_id
+        required: true
+        schema:
+          type: string
+      - name: tool
+        required: true
+        schema:
+          $ref: schemas/tool.json#/$defs/ToolName
+      - name: input
+        required: true
+        schema:
+          $ref: schemas/tool.json#/$defs/ToolInput
+          x-go-type: json.RawMessage
+      - name: deadline_ms
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+      - name: permission
+        required: false
+        schema:
+          $ref: schemas/tool.json#/$defs/ToolPermission
+    result:
+      name: Ack
+      schema:
+        $ref: schemas/common.json#/$defs/Ack
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/LeaseExpired"
+      - $ref: "#/components/errors/ExecutorBusy"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: tool.result
+    summary: Report a tool result.
+    description: Executor to harness request, idempotent by tool_call_id and retried until accepted.
+      Large output is uploaded first (POST /v1/environments/{environment_id}/artifacts; legacy alias POST /v1/executors/artifacts) and referenced by an artifact
+      content block.
+    tags:
+      - name: tool
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1
+    x-bma-idempotent-by: tool_call_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: tool_call_id
+        required: true
+        schema:
+          type: string
+      - name: outcome
+        required: true
+        schema:
+          $ref: schemas/tool.json#/$defs/ToolOutcome
+      - name: is_error
+        required: true
+        schema:
+          type: boolean
+      - name: content
+        required: true
+        schema:
+          type: array
+          items:
+            $ref: schemas/tool.json#/$defs/ContentBlock
+      - name: duration_ms
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+      - name: artifacts
+        required: false
+        schema:
+          type: array
+          items:
+            $ref: schemas/tool.json#/$defs/ArtifactRef
+    result:
+      name: Ack
+      schema:
+        $ref: schemas/common.json#/$defs/Ack
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/LeaseExpired"
+      - $ref: "#/components/errors/PayloadTooLarge"
+      - $ref: "#/components/errors/ExecutorBusy"
+      - $ref: "#/components/errors/InternalError"
+  - name: tool.cancel
+    summary: Cancel a running tool call.
+    description: Harness to executor request. The executor kills the process group; canceled=false when
+      the call is unknown or already finished.
+    tags:
+      - name: tool
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: tool_call_id
+        required: true
+        schema:
+          type: string
+      - name: reason
+        required: false
+        schema:
+          type: string
+    result:
+      name: ToolCancelResult
+      schema:
+        $ref: schemas/tool.json#/$defs/ToolCancelResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/InternalError"
+  - name: tool.progress
+    summary: Report tool progress.
+    description: Executor to harness notification, optional.
+    tags:
+      - name: tool
+    x-bma-direction: executor-to-harness
+    x-bma-kind: notification
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: tool_call_id
+        required: true
+        schema:
+          type: string
+      - name: message
+        required: true
+        schema:
+          type: string
+  - name: process.start
+    summary: Start a process.
+    description: 'Harness to executor request (v1.1 §3.3). Idempotent by (session_id, process_id): a
+      repeat returns the live state. wait_ms waits up to that long for the process to end before
+      answering. A spawn failure is an error with data.reason "spawn_failed". io_mode, file_transfer,
+      package_install and git_credentials each require the matching process capability bit.'
+    tags:
+      - name: process
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: process.enabled
+    x-bma-idempotent-by: session_id+process_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: process_id
+        required: true
+        schema:
+          type: string
+      - name: argv
+        required: true
+        description: Command and arguments (at most 256 entries, 4 KiB each, 16 KiB total). Must be empty
+          when file_transfer or package_install is set.
+        schema:
+          type: array
+          items:
+            type: string
+          maxItems: 256
+      - name: cwd
+        required: false
+        schema:
+          type: string
+      - name: env
+        required: false
+        schema:
+          type: object
+          additionalProperties:
+            type: string
+      - name: stdin
+        required: false
+        schema:
+          $ref: schemas/process.json#/$defs/StdinMode
+      - name: stderr
+        required: false
+        description: Empty keeps separate stdout/stderr streams.
+        schema:
+          $ref: schemas/process.json#/$defs/StderrMode
+      - name: wait_ms
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 300000
+      - name: timeout_ms
+        required: false
+        description: Kills the process and ends it as failed with reason "timeout".
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 86400000
+      - name: metadata
+        required: false
+        description: >-
+          Who started the process. A process an agent tool started (a command, a file transfer, a
+          package install) always carries agent_session_id (the public agent session id) and
+          tool_call_id; it carries no initiator. A process the platform started on its own carries
+          initiator "platform" and no agent_session_id. A process
+          with neither is not started by the harness: an executor that resolves a directory, files or
+          owner per session refuses it (reason session_rejected) instead of using a default.
+          Human console terminals are terminal.attach, not process.start.
+        schema:
+          type: object
+          additionalProperties:
+            type: string
+      - name: io_mode
+        required: false
+        description: Requires capability process.pty.
+        schema:
+          $ref: schemas/process.json#/$defs/IOMode
+      - name: file_transfer
+        required: false
+        description: Requires capability process.file_transfer. Excludes argv entries, io_mode and
+          git_credentials.
+        schema:
+          $ref: schemas/process.json#/$defs/ProcessFileTransfer
+      - name: package_install
+        required: false
+        description: Requires capability process.package_install. Excludes argv entries, io_mode,
+          file_transfer and git_credentials.
+        schema:
+          $ref: schemas/process.json#/$defs/ProcessPackageInstall
+      - name: git_credentials
+        required: false
+        description: Installs a per-process Git credential helper for https://github.com that fetches
+          short-lived tokens for this process while it runs. Requires capability
+          process.git_credentials.
+        schema:
+          type: boolean
+    result:
+      name: ProcessState
+      schema:
+        $ref: schemas/process.json#/$defs/ProcessState
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/ResourceUnavailable"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+  - name: process.read
+    summary: Read process output from a cursor.
+    description: Harness to executor request (v1.1 §3.4). Long-polls up to wait_ms for new bytes.
+      gap=true when bytes before earliest_cursor were dropped from the ring buffer.
+    tags:
+      - name: process
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: process.enabled
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: process_id
+        required: true
+        schema:
+          type: string
+      - name: stream
+        required: true
+        schema:
+          $ref: schemas/process.json#/$defs/ProcessStream
+      - name: cursor
+        required: true
+        schema:
+          type: integer
+          minimum: 0
+      - name: max_bytes
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 32768
+          x-go-type: int
+      - name: wait_ms
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 300000
+    result:
+      name: ProcessReadResult
+      schema:
+        $ref: schemas/process.json#/$defs/ProcessReadResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/NotFound"
+      - $ref: "#/components/errors/ExecutorBusy"
+      - $ref: "#/components/errors/InternalError"
+  - name: process.write
+    summary: Write to process stdin.
+    description: Harness to executor request (v1.1 §3.5). Exactly one of data (base64, at most 32 KiB
+      decoded) or close_stdin. close_stdin is rejected for io_mode "pty".
+    tags:
+      - name: process
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: process.enabled
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: process_id
+        required: true
+        schema:
+          type: string
+      - name: data
+        required: false
+        schema:
+          type: string
+      - name: close_stdin
+        required: false
+        schema:
+          type: boolean
+    result:
+      name: ProcessWriteResult
+      schema:
+        $ref: schemas/process.json#/$defs/ProcessWriteResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/NotFound"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/PayloadTooLarge"
+      - $ref: "#/components/errors/InternalError"
+  - name: process.interrupt
+    summary: Interrupt a process (SIGINT).
+    description: Harness to executor request (v1.1 §3.6).
+    tags:
+      - name: process
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: process.enabled
+    x-bma-params-type: ProcessSignalParams
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: process_id
+        required: true
+        schema:
+          type: string
+      - name: grace_ms
+        required: false
+        description: Only meaningful for process.terminate.
+        schema:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          maximum: 30000
+    result:
+      name: ProcessState
+      schema:
+        $ref: schemas/process.json#/$defs/ProcessState
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/NotFound"
+      - $ref: "#/components/errors/InternalError"
+  - name: process.terminate
+    summary: Terminate a process (SIGTERM, then SIGKILL after grace_ms).
+    description: Harness to executor request (v1.1 §3.6).
+    tags:
+      - name: process
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: process.enabled
+    x-bma-params-type: ProcessSignalParams
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: process_id
+        required: true
+        schema:
+          type: string
+      - name: grace_ms
+        required: false
+        description: Only meaningful for process.terminate.
+        schema:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          maximum: 30000
+    result:
+      name: ProcessState
+      schema:
+        $ref: schemas/process.json#/$defs/ProcessState
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/NotFound"
+      - $ref: "#/components/errors/InternalError"
+  - name: process.list
+    summary: List the processes of a session.
+    description: Harness to executor request (v1.1 §3.7). A new connection starts with an empty process table.
+    tags:
+      - name: process
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: process.enabled
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+    result:
+      name: ProcessListResult
+      schema:
+        $ref: schemas/process.json#/$defs/ProcessListResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/InternalError"
+  - name: process.status
+    summary: Advise a process state change.
+    description: "Executor to harness notification (v1.1 §3.8). Advisory: the harness confirms state
+      with process.read or process.list."
+    tags:
+      - name: process
+    x-bma-direction: executor-to-harness
+    x-bma-kind: notification
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: process.enabled
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: process_id
+        required: true
+        schema:
+          type: string
+      - name: state
+        required: true
+        schema:
+          $ref: schemas/process.json#/$defs/ProcessStateName
+      - name: exit_code
+        required: false
+        schema:
+          type:
+            - integer
+            - "null"
+          x-go-type: int
+      - name: exit_signal
+        required: false
+        schema:
+          type:
+            - string
+            - "null"
+      - name: ended_at
+        required: false
+        schema:
+          type: string
+      - name: reason
+        required: false
+        schema:
+          type: string
+      - name: observed_at
+        required: true
+        schema:
+          type: string
+  - name: terminal.open
+    summary: Create or reuse a PTY.
+    description: Harness to executor request (machine-scoped). Returns the live PTY with the same
+      terminal_id; rows/cols only size a new PTY, and the rest of the spec must match a live
+      terminal or the executor answers -32013.
+    tags:
+      - name: terminal
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: terminal.enabled
+    x-bma-idempotent-by: terminal_id
+    params:
+      - name: terminal_id
+        required: true
+        schema:
+          type: string
+      - name: kind
+        required: true
+        description: human or agent.
+        schema:
+          type: string
+      - name: shell
+        required: false
+        schema:
+          type: string
+      - name: argv
+        required: false
+        schema:
+          type: array
+          items:
+            type: string
+      - name: cwd
+        required: false
+        schema:
+          type: string
+      - name: env
+        required: false
+        schema:
+          type: object
+          additionalProperties:
+            type: string
+      - name: rows
+        required: false
+        schema:
+          type: integer
+          x-go-type: uint16
+      - name: cols
+        required: false
+        schema:
+          type: integer
+          x-go-type: uint16
+    result:
+      name: TerminalOpenResult
+      schema:
+        $ref: schemas/terminal.json#/$defs/TerminalOpenResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/ResourceUnavailable"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+  - name: terminal.attach
+    summary: Attach one consumer to a live PTY.
+    description: Harness to executor request. The executor dials host.url with the ticket, offering
+      subprotocol bma.terminal.v1, and answers after the attached frame was written.
+      from_seq/ack_seq resume output exactly as the bma.terminal.v1 attach frame does; can_write
+      requests the single writer lease. Closing the host socket detaches; the PTY survives.
+    tags:
+      - name: terminal
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: terminal.enabled
+    params:
+      - name: terminal_id
+        required: true
+        schema:
+          type: string
+      - name: epoch
+        required: true
+        schema:
+          type: integer
+      - name: stream_id
+        required: true
+        schema:
+          type: string
+      - name: can_write
+        required: true
+        schema:
+          type: boolean
+      - name: from_seq
+        required: true
+        schema:
+          type: integer
+      - name: ack_seq
+        required: true
+        schema:
+          type: integer
+      - name: host
+        required: true
+        schema:
+          $ref: schemas/terminal.json#/$defs/TerminalHost
+    result:
+      name: TerminalAttachResult
+      schema:
+        $ref: schemas/terminal.json#/$defs/TerminalAttachResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/NotFound"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+  - name: terminal.close
+    summary: Close a PTY.
+    description: Harness to executor request. Idempotent.
+    tags:
+      - name: terminal
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: terminal.enabled
+    x-bma-idempotent-by: terminal_id
+    params:
+      - name: terminal_id
+        required: true
+        schema:
+          type: string
+      - name: reason
+        required: false
+        schema:
+          type: string
+    result:
+      name: TerminalCloseResult
+      schema:
+        $ref: schemas/terminal.json#/$defs/TerminalCloseResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: desktop.attach
+    summary: Attach a desktop session to the machine's running desktop.
+    description: Harness to executor request (machine-scoped executors that claim display.desktop).
+      The machine's desktop agent runs from machine start (desktop-relay.md §1); the executor hands
+      it the session and answers once the agent accepted it. The agent then dials the session's
+      relay lanes at relay_url with the ticket (Authorization bearer) and serves the session until
+      it is closed (session_close, or a lane refused with 4001/4003/4004) or attached again, which
+      replaces the earlier attach. width and height, together, resize the desktop unless the same
+      size was asked for last. wallpaper names the environment's default wallpaper; the result asks
+      for its bytes (desktop.wallpaper) when the machine lacks them. Waits at most 5 s for a desktop
+      that is still starting, then answers ResourceUnavailable with data.reason desktop_starting and
+      data.retryable true (the platform answers 409 machine_starting stage=desktop_starting with
+      Retry-After). With capture_id, attach only the media relay of that already running screen_live
+      capture on machine_id; session_id remains the desktop relay session. This requires an exact
+      active machine/capture match and forbids width, height and wallpaper. It never starts a capture,
+      the legacy peer-to-peer path or another input worker, and a missing capture is rejected.
+    tags:
+      - name: desktop
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: display.desktop
+    x-bma-idempotent-by: session_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: capture_id
+        required: false
+        schema:
+          type: string
+          description: The active screen_live capture to attach as media only (contract 1.21.0); distinct from the desktop session_id.
+      - name: machine_id
+        required: true
+        schema:
+          type: string
+      - name: relay_url
+        required: true
+        schema:
+          type: string
+      - name: ticket
+        required: true
+        schema:
+          type: string
+      - name: width
+        required: false
+        schema:
+          type: integer
+          x-go-type: int
+      - name: height
+        required: false
+        schema:
+          type: integer
+          x-go-type: int
+      - name: wallpaper
+        required: false
+        schema:
+          $ref: schemas/desktop.json#/$defs/DesktopWallpaper
+    result:
+      name: DesktopAttachResult
+      schema:
+        $ref: schemas/desktop.json#/$defs/DesktopAttachResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/ResourceUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: desktop.wallpaper
+    summary: Send one chunk of the default wallpaper a desktop.attach asked for.
+    description: Harness to executor request. Chunks follow each other from offset 0 (data is
+      standard base64, at most max_process_write_bytes decoded); the chunk with done installs the
+      image when its sha256 matches and applies it to the running desktop.
+    tags:
+      - name: desktop
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: display.desktop
+    params:
+      - name: sha256
+        required: true
+        schema:
+          type: string
+      - name: ext
+        required: true
+        schema:
+          type: string
+      - name: offset
+        required: true
+        schema:
+          type: integer
+      - name: data
+        required: true
+        schema:
+          type: string
+      - name: done
+        required: true
+        schema:
+          type: boolean
+    result:
+      name: DesktopWallpaperResult
+      schema:
+        $ref: schemas/desktop.json#/$defs/DesktopWallpaperResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/ResourceUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: skill.install
+    summary: Install one skill revision on the machine.
+    description: Harness to executor request (machine-scoped). The executor downloads the revision
+      archive with download_token, verifies digest, and installs it. Idempotent by (skill_id,
+      revision_id, digest).
+    tags:
+      - name: skill
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: skills.install
+    x-bma-idempotent-by: skill_id+revision_id+digest
+    params:
+      - name: machine_id
+        required: true
+        schema:
+          type: string
+      - name: skill_id
+        required: true
+        schema:
+          type: string
+      - name: revision_id
+        required: true
+        schema:
+          type: string
+      - name: digest
+        required: true
+        schema:
+          type: string
+      - name: download_token
+        required: true
+        schema:
+          type: string
+      - name: download_expires_at
+        required: true
+        description: Unix seconds.
+        schema:
+          type: integer
+    result:
+      name: SkillInstallResult
+      schema:
+        $ref: schemas/skill.json#/$defs/SkillInstallResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: workspace.backup
+    summary: Upload one backup of the machine workspace.
+    description: Harness to executor request (machine-scoped). The executor walks paths (absolute),
+      skipping exclude entries and its own BMA_HOME, and streams a tar+zstd archive with PUT to
+      /daemon/machine-backups/{backup_id}/archive over the machine token, with the tree fingerprint
+      in X-BMA-Backup-Fingerprint. When the fingerprint equals skip_if_fingerprint nothing is
+      uploaded and the result is "unchanged". Restore has no method; a recreated executor fetches
+      /daemon/machine-backup-restore before executor.register.
+    tags:
+      - name: workspace
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: workspace.backup
+    x-bma-idempotent-by: backup_id
+    params:
+      - name: backup_id
+        required: true
+        schema:
+          type: string
+      - name: paths
+        required: true
+        schema:
+          type: array
+          items:
+            type: string
+      - name: exclude
+        schema:
+          type: array
+          items:
+            type: string
+      - name: skip_if_fingerprint
+        schema:
+          type: string
+    result:
+      name: WorkspaceBackupResult
+      schema:
+        $ref: schemas/workspace.json#/$defs/WorkspaceBackupResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: fs.mount
+    summary: Mount session file views backed by bma-file.
+    description: Harness to executor request (machine-scoped). The executor mounts each listed view
+      at its path as a FUSE file system that reads from service_url with the view's token, and keeps
+      the token in memory only. Idempotent by (session_id, view), so resending the same mounts with new
+      tokens renews the tokens without remounting; a changed path or readonly remounts. Sent when the
+      session is bound to the machine and again after a resume or reconnect, because tokens are bound
+      to the binding epoch. Sessions are independent, so a request for one session never changes the
+      mounts of another, and fs.unmount ends one session only. An executor that declared fs.skills_per_session
+      receives the skills view of each session at its own path (<session_files.root>/<agent_session_id>/skills,
+      root /mnt/session when it declared none) and removes the mount points it created on fs.unmount; any
+      other executor receives no skills view (there is no machine-wide skills path).
+      Since contract 1.18.0 an executor that declared fs.copy_views (and a
+      session_files.root) also receives fs.mount, for those views only, at <root>/<agent_session_id>/<view>;
+      it copies the view as read-only files through the bma-file read routes instead of mounting it (see
+      FsCapability.copy_views and file.json).
+    tags:
+      - name: fs
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: fs.fuse
+    x-bma-idempotent-by: session_id+view
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: service_url
+        required: true
+        description: Complete prefix of the bma-file routes for this machine, ending in /v1/machines/{machine_id}/fs (for example https://executor.example.com/v1/machines/mach_01/fs). The executor appends "/<op>" and nothing else; it does not compose the machine id itself.
+        schema:
+          type: string
+      - name: mounts
+        required: true
+        schema:
+          type: array
+          minItems: 1
+          items:
+            $ref: schemas/file.json#/$defs/FsMount
+    result:
+      name: FsMountResult
+      schema:
+        $ref: schemas/file.json#/$defs/FsMountResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/ResourceUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: fs.unmount
+    summary: Unmount the session file views.
+    description: Harness to executor request (machine-scoped). Unmounts every view of the session and
+      drops its tokens. With flush the executor first commits pending writes (none for read-only
+      views). Idempotent by session_id, a session with nothing mounted answers "unmounted". For a view
+      placed by copying (fs.copy_views) the executor deletes that session's copied directory.
+    tags:
+      - name: fs
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: fs.fuse
+    x-bma-idempotent-by: session_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: flush
+        schema:
+          type: boolean
+    result:
+      name: FsUnmountResult
+      schema:
+        $ref: schemas/file.json#/$defs/FsUnmountResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: session_files.flush
+    summary: Upload the session outputs written so far and wait for the uploads.
+    description: Harness to executor request (machine-scoped, contract 1.13.0). Before the platform
+      pauses or hibernates the machine it asks the executor to upload every changed file under the
+      outputs of every session it shows (what the periodic scan would upload next, without waiting
+      for the file to be seen stable) and answers when all uploads are done. "flushed" means no
+      upload is outstanding; "failed" means at least one upload failed and may be retried, so the
+      platform must not pause yet. A file the platform refuses for good (size, quota, name) is not
+      a failure. Idempotent; an executor that does not know the method answers -32601, which the
+      platform treats as nothing to flush.
+    tags:
+      - name: file
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: session_files
+    params: []
+    result:
+      name: SessionFilesFlushResult
+      schema:
+        $ref: schemas/file.json#/$defs/SessionFilesFlushResult
+    errors:
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: turn.start
+    summary: Start an agent turn.
+    description: Harness to executor request (capability agent). Opens the agent session on first use
+      (no session.assign) or continues it; executor_session_ref from an earlier TurnStartResult lets
+      the executor resume its local conversation after a restart. The executor answers as soon as the
+      turn is accepted and reports progress with session.event. Idempotent by turn_id. A session
+      with a running turn answers -32013 conflict (use turn.input); a turn.start while
+      max_sessions turns are running answers -32009 (an idle session holds no slot). A request that
+      would serialize to more than 48 KiB carries a single input_ref block as its input (contract
+      1.7.0, only to an executor that declared agent.input_by_reference).
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    x-bma-idempotent-by: turn_id
+    params:
+      - name: session_id
+        required: true
+        description: Platform session id.
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        schema:
+          type: string
+      - name: input_id
+        required: true
+        description: Platform input id of the user message that starts the turn.
+        schema:
+          type: string
+      - name: input
+        required: true
+        schema:
+          type: array
+          minItems: 1
+          items:
+            $ref: schemas/agent.json#/$defs/AgentInputBlock
+      - name: executor_session_ref
+        required: false
+        schema:
+          type: string
+      - name: config
+        required: false
+        schema:
+          $ref: schemas/agent.json#/$defs/AgentTurnConfig
+      - name: deadline_ms
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+      - name: metadata
+        required: false
+        description: >-
+          String key/value pairs the platform adds to the turn. Per-turn credentials the executor
+          declared in AgentCapability.platform_credentials: model_base_url, model_token (and optionally
+          model_context_window, model_max_output_tokens) for harness_model; for brain_tools (contract 1.4.0,
+          only when this machine is the brain and a different machine the hands of the session)
+          tools_mcp_url (https://executor.<domain>/v1/machines/{brain_machine_id}/mcp), tools_mcp_token and
+          tools_mcp_token_expires_at (RFC 3339, 1 hour after turn.start). With tools_mcp_* present every tool
+          call of the turn must go to that endpoint as an MCP tools/call (tools bash, read, write, edit, glob,
+          grep) and none may run on this machine: when the endpoint cannot be reached or refuses the token
+          the call fails and the executor never falls back to running the tool locally (fail closed). The
+          token is bound to the turn's event epoch: the same turn started again after an executor restart
+          (turn.start with the same turn_id, a new epoch) carries a new token and the previous token is
+          refused. Refresh with tools_token.refresh. tool_policy is a JSON object of tool name to allow, ask
+          or deny (for example {"bash":"ask","write":"deny"}): the permission of those tools for this turn,
+          applied over AgentTurnConfig.permission_mode; an executor may only make a tool stricter than its own
+          ceiling, never looser, and a tool the object does not name keeps the mode's permission. Keys the
+          executor does not know are ignored.
+          egress (contract 1.9.0, only to an executor that declared egress.forwarder): the JSON text of the
+          session's EgressHandoff (schemas/executor.json) for an executor that runs the turn and its tools
+          itself; it replaces the session's handoff as session.assign metadata egress does, and a turn.start
+          without it removes the handoff.
+        schema:
+          type: object
+          additionalProperties:
+            type: string
+    result:
+      name: TurnStartResult
+      schema:
+        $ref: schemas/agent.json#/$defs/TurnStartResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/ExecutorBusy"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+  - name: turn.input
+    summary: Add user input to the running turn.
+    description: Harness to executor request (capability agent). The local agent consumes the input
+      at its next step (contract 1.25.0, agent.steering - at the running turn's next step boundary, before
+      its next model request; without it after the running prompt ends). Idempotent by input_id. When turn_id is not the running turn the executor
+      answers -32013 conflict and the harness starts a new turn instead. A request that would
+      serialize to more than 48 KiB carries a single input_ref block as its input (contract 1.7.0,
+      only to an executor that declared agent.input_by_reference).
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    x-bma-idempotent-by: input_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        schema:
+          type: string
+      - name: input_id
+        required: true
+        schema:
+          type: string
+      - name: input
+        required: true
+        schema:
+          type: array
+          minItems: 1
+          items:
+            $ref: schemas/agent.json#/$defs/AgentInputBlock
+    result:
+      name: Ack
+      schema:
+        $ref: schemas/common.json#/$defs/Ack
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+  - name: turn.cancel
+    summary: Stop the running turn.
+    description: Harness to executor request (capability agent). The executor stops the agent loop,
+      cancels its local tool calls, withdraws open interactions (interaction.cancel turn_canceled),
+      and ends the turn with session.status_idle turn_outcome=canceled. The session stays open for
+      the next turn.start. Unlike tool.cancel (one harness-dispatched tool call) and session.stop
+      (a hand session and its processes), it targets only the agent turn.
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        schema:
+          type: string
+      - name: reason
+        required: false
+        schema:
+          type: string
+    result:
+      name: TurnCancelResult
+      schema:
+        $ref: schemas/agent.json#/$defs/TurnCancelResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/InternalError"
+  - name: session.compact
+    summary: Compact an idle agent context without sending a turn.
+    description: >-
+      Explicit idle-session maintenance. The platform reserves the session against new inputs,
+      pending decisions and automatic continuations before calling. The executor independently
+      rejects an active turn, pending interactions or another maintenance operation. It keeps the
+      original transcript, compacts an isolated durable context and atomically publishes its pointer
+      and immutable receipt only after success. Failed or cancelled preparation preserves the old
+      context. Unknown publication is reconciled with the same operation_id and expected version,
+      never a fresh id. Metadata contains maintenance-only platform credentials, not a historical
+      turn token. No tool may run during summarization. Older handlers explicitly refuse this method.
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent.context_maintenance
+    x-bma-idempotent-by: operation_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: operation_id
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[a-zA-Z0-9_-]+$'
+      - name: expected_context_version
+        required: true
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740990
+      - name: expected_last_input_id
+        required: true
+        description: Exact platform input whose settled context the reservation owns.
+        schema:
+          type: string
+      - name: model
+        required: true
+        schema:
+          type: string
+      - name: deadline_ms
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 300000
+      - name: metadata
+        required: true
+        schema:
+          type: object
+          additionalProperties:
+            type: string
+    result:
+      name: SessionCompactResult
+      schema:
+        $ref: schemas/agent.json#/$defs/SessionCompactResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+  - name: session.compact_cancel
+    summary: Request cancellation of one context maintenance operation.
+    description: >-
+      Durably fences publication of the exact operation or returns its already-applied receipt.
+      It never closes the conversation or cancels an ordinary turn. canceled=true means the
+      operation cannot publish, including a late retry; settled=false means its SDK reservation
+      still belongs to work that has not settled. The platform retains its admission barrier until
+      settled=true, and reconciles uncertain replies by repeating this exact cancel request.
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent.context_maintenance
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: operation_id
+        required: true
+        schema:
+          type: string
+      - name: expected_context_version
+        required: true
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740990
+      - name: expected_last_input_id
+        required: true
+        schema:
+          type: string
+      - name: model
+        required: true
+        schema:
+          type: string
+    result:
+      name: SessionCompactCancelResult
+      schema:
+        $ref: schemas/agent.json#/$defs/SessionCompactCancelResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: session.close
+    summary: Close an agent session.
+    description: Harness to executor request (capability agent). The executor cancels a running turn
+      as turn.cancel does, waits until its events are acknowledged, releases the local conversation,
+      and then sends session.ended. closed=false for an unknown session. A later turn.start with the
+      same session_id starts a new local conversation.
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: reason
+        required: true
+        schema:
+          type: string
+    result:
+      name: SessionCloseResult
+      schema:
+        $ref: schemas/agent.json#/$defs/SessionCloseResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/InternalError"
+  - name: session.event_delta
+    summary: Stream a preview of a durable agent event.
+    description: Executor to harness notification (capability agent). Transient and lossy; never
+      acknowledged or resent. event_id is the event_id of the durable session.event that finalizes
+      the preview. The harness relays it to subscribers as Anthropic event_start and event_delta.
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: notification
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        schema:
+          type: string
+      - name: event_id
+        required: true
+        schema:
+          type: string
+      - name: event_type
+        required: true
+        schema:
+          $ref: schemas/agent.json#/$defs/EventDeltaType
+      - name: index
+        required: true
+        description: Content block index within the event.
+        schema:
+          type: integer
+          minimum: 0
+      - name: text
+        required: true
+        description: Text appended to the block.
+        schema:
+          type: string
+  - name: session.history
+    summary: Read the conversation of a session before a turn.
+    description: >-
+      Executor to harness request (capability agent, contract 1.15.0). The executor that is the session's
+      brain (the target the session's turns are dispatched to) reads the session's conversation as the
+      platform's event log keeps it, the single source of truth of a session: the durable events before the
+      opening input of the given running turn, a page at a time in log order (has_more says more follow).
+      Only the conversation travels: user.message, agent.message, agent.tool_use, agent.tool_result,
+      agent.custom_tool_use, user.custom_tool_result, agent.mcp_tool_use and agent.mcp_tool_result, each with
+      its bma_sequence, id, type and official body. To an executor that declared agent.input_by_reference a
+      user.message whose body is over 48 KiB carries its content as a single input_ref block (contract 1.7.0)
+      whose input_id is the event's id: the inputs endpoint answers the message's content blocks. A brain calls it when it opens a session it holds no
+      local state for although the session has a past, for example a session whose earlier turns ran on
+      another brain (data migration from another stack) or whose state was lost; it rebuilds its context from
+      the events, replaying messages, tool calls and their results in its model's format under its usual
+      context limits, and answers the turn.start with context_rebuilt true. Only the session's brain may read
+      it: any other connection gets forbidden (-32001), before any turn of the session was dispatched
+      not_dispatched (-32013, retryable); a turn that is not open is session_not_active (-32007); an unknown or
+      deleted session is session_not_found (-32002). A harness without the method answers -32601; the brain
+      then has no history to rebuild from.
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        description: Platform session id.
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        description: The running turn whose past is read; its opening input is not part of the history.
+        schema:
+          type: string
+      - name: after
+        required: false
+        description: Read the events with a bma_sequence greater than this (default 0, from the start).
+        schema:
+          type: integer
+          minimum: 0
+      - name: limit
+        required: false
+        description: At most this many events (1-500, default 500); a page also stays within 512 KiB of event bodies (one event always fits).
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 500
+    result:
+      name: SessionHistoryResult
+      schema:
+        $ref: schemas/agent.json#/$defs/SessionHistoryResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/NotFound"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+  - name: interaction.request
+    summary: Ask the platform for an approval or an answer.
+    description: Executor to harness request (capability agent). The harness opens one platform agent
+      interaction (the same request on desktop, mobile and integrations) and answers with
+      interaction.response later. Idempotent by interaction_id. A permission request references the
+      agent.tool_use event in tool_use_id, sent earlier with evaluated_permission ask. The executor
+      keeps local authority; it may still deny, and it treats expires_at as a local deny.
+      An interaction_id of the form appr_ plus 24 lower-case hex digits (the deterministic approval
+      id) is adopted as the platform interaction id; the interactions API, its card and the session
+      stream use it, platform_interaction_id equals it, and a repeat of it (after an executor
+      restart too) names the same interaction, never a second card. The same id for another
+      tool_use_id (within one executor epoch) or another kind is refused with error conflict
+      (-32013) and the stored interaction is left unchanged. An interaction_id of any other form is
+      only the executor's key; the platform assigns its own id (int_...) and returns it.
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    x-bma-idempotent-by: interaction_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        schema:
+          type: string
+      - name: interaction_id
+        required: true
+        description: Executor-assigned, unique within the session and stable for the same tool call
+          or question across executor and brain restarts (derive it from the session, the turn
+          and the call, for example appr_ + the first 24 hex chars of sha256(session_id, NUL,
+          turn_id, NUL, call_id); the turn is part of it because some providers reuse call ids
+          such as call_0 in every turn), so a restarted
+          executor asks again with the same id and gets the same platform interaction, and an
+          answer given while it was offline, back. The platform interaction is the one card every
+          client of the session shows; a local UI shows the same interaction rather than a
+          separate local prompt.
+        schema:
+          type: string
+      - name: kind
+        required: true
+        schema:
+          $ref: schemas/agent.json#/$defs/InteractionKind
+      - name: tool_use_id
+        required: false
+        description: Required for permission.
+        schema:
+          type: string
+      - name: tool_name
+        required: false
+        schema:
+          type: string
+      - name: tool_input
+        required: false
+        schema:
+          type: object
+          additionalProperties: true
+      - name: scopes
+        required: false
+        description: Grant scopes the user may pick for permission; defaults to once.
+        schema:
+          type: array
+          items:
+            $ref: schemas/agent.json#/$defs/InteractionScope
+      - name: question
+        required: false
+        description: Required for question.
+        schema:
+          $ref: schemas/agent.json#/$defs/InteractionQuestion
+      - name: expires_at
+        required: false
+        description: RFC 3339 time after which the executor stops waiting.
+        schema:
+          type: string
+    result:
+      name: InteractionRequestResult
+      schema:
+        $ref: schemas/agent.json#/$defs/InteractionRequestResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+  - name: interaction.response
+    summary: Deliver the answer to an interaction.
+    description: Harness to executor request (capability agent). Sent once the platform interaction
+      resolves, expires or is canceled; retried with the same interaction_id until answered. The
+      first answer wins; a repeat or an unknown interaction answers accepted=false.
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    x-bma-idempotent-by: interaction_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: interaction_id
+        required: true
+        schema:
+          type: string
+      - name: outcome
+        required: true
+        schema:
+          $ref: schemas/agent.json#/$defs/InteractionOutcome
+      - name: scope
+        required: false
+        description: Granted scope for allow.
+        schema:
+          $ref: schemas/agent.json#/$defs/InteractionScope
+      - name: deny_message
+        required: false
+        schema:
+          type: string
+      - name: answers
+        required: false
+        description: Selected option ids or free text for answered.
+        schema:
+          type: array
+          items:
+            type: string
+      - name: responder
+        required: false
+        schema:
+          $ref: schemas/agent.json#/$defs/InteractionResponder
+    result:
+      name: InteractionResponseResult
+      schema:
+        $ref: schemas/agent.json#/$defs/InteractionResponseResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/InternalError"
+  - name: agent.custom_tool_result
+    summary: Deliver the user's result of a custom tool call.
+    description: >-
+      Harness to executor request (capability agent; sent only to an executor that declared
+      agent.custom_tools). The executor emitted agent.custom_tool_use (its event_id is the
+      tool_use_id) and waits; the platform sends the result the user's application submitted with
+      user.custom_tool_result. Only the first result of a call counts: the platform accepts one
+      per tool_use_id and the executor answers a repeat, an unknown tool_use_id or a call it no
+      longer waits for with accepted=false. Idempotent by tool_use_id: the platform retries the
+      same result until the executor answers, also on a new connection. Timeout: the executor
+      owns the wait. When its own limit passes it ends the call with a failed agent.tool_result
+      (tool_use_id of the call, is_error true), continues the turn, and answers a later result
+      with accepted=false; the platform stops accepting results for that call. Cancel: turn.cancel ends the waiting call as canceled with the turn, and the
+      platform drops results it has not delivered yet for a turn that ended.
+    tags:
+      - name: agent
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    x-bma-idempotent-by: tool_use_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: tool_use_id
+        required: true
+        description: The event_id of the agent.custom_tool_use this result answers.
+        schema:
+          type: string
+      - name: content
+        required: true
+        schema:
+          type: array
+          items:
+            $ref: schemas/tool.json#/$defs/ContentBlock
+      - name: is_error
+        required: false
+        description: The user's application reports the call failed; the content explains why.
+        schema:
+          type: boolean
+    result:
+      name: CustomToolResultResult
+      schema:
+        $ref: schemas/agent.json#/$defs/CustomToolResultResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/InternalError"
+  - name: interaction.cancel
+    summary: Withdraw an open interaction.
+    description: Executor to harness request (capability agent). The executor no longer needs the
+      answer, for example the user answered in the local UI (resolved_locally) or the turn was
+      canceled. The harness cancels the platform interaction so every client dismisses it.
+      Idempotent by interaction_id.
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    x-bma-idempotent-by: interaction_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+      - name: interaction_id
+        required: true
+        schema:
+          type: string
+      - name: reason
+        required: true
+        schema:
+          $ref: schemas/agent.json#/$defs/InteractionCancelReason
+    result:
+      name: Ack
+      schema:
+        $ref: schemas/common.json#/$defs/Ack
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/InternalError"
+  - name: model_token.refresh
+    summary: Fetch a fresh model token for a running turn.
+    description: >-
+      Executor to harness request (capability agent). A brain started by turn.start with a model
+      credential (metadata model_token, valid 1 hour) calls it before the token expires (the
+      reference executors do so when less than 10 minutes remain) and joins model_base_url with
+      the new model_token for its next model calls; the old token stays valid until it expires.
+      The platform signs a new token only while the turn is active (pending, running or
+      rescheduling) and the turn belongs to a session routed to this executor's machine, so a
+      turn that ended, was canceled or failed gets no further tokens: this is how the platform
+      revokes model access per turn (a token already issued runs out its own expiry). Each call
+      returns a new token; calls are not idempotent and a repeat is harmless. Errors carry
+      data.reason: turn_inactive (-32007: the turn is not active), forbidden (-32001: the session
+      or turn is unknown, belongs to another executor, or this executor is not entitled to
+      platform credentials), model_token_unavailable (-32012: the platform issues no such token).
+      A harness without the method answers -32601; the executor then keeps the token it has.
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        description: Platform session id of the turn.
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        description: Platform id of the running turn the token is for.
+        schema:
+          type: string
+    result:
+      name: ModelTokenRefreshResult
+      schema:
+        $ref: schemas/agent.json#/$defs/ModelTokenRefreshResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: tools_token.refresh
+    summary: Fetch a fresh platform tools token for a running turn.
+    description: >-
+      Executor to harness request (capability agent, contract 1.4.0). A brain started by turn.start with
+      a platform tools credential (metadata tools_mcp_token, valid 1 hour, handed over only when the
+      session's brain machine and hands machine differ) calls it before the token expires (the reference
+      executors do so when less than 10 minutes remain) and uses the new tools_mcp_token with
+      tools_mcp_url for its next tool calls; the old token stays valid until it expires or its epoch is
+      superseded. The shape and rules are those of model_token.refresh: the platform signs a new token only
+      while the turn is active (pending, running or rescheduling), the turn belongs to a session routed to
+      this executor's machine as the brain machine, and the call comes from the turn's current epoch, so a
+      turn that ended, was canceled or failed, or was started again in a newer epoch gets no further
+      token for the old epoch. Each call returns a new token; calls are not idempotent and a repeat is
+      harmless. Errors carry data.reason: turn_inactive (-32007: the turn is not active), forbidden
+      (-32001: the session or turn is unknown, belongs to another executor, or this executor is not
+      entitled to brain_tools), tools_token_unavailable (-32012: the platform issues no such token for
+      this turn, for example brain and hands are one machine). A harness without the method answers
+      -32601; the executor then keeps the token it has.
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        description: Platform session id of the turn.
+        schema:
+          type: string
+      - name: turn_id
+        required: true
+        description: Platform id of the running turn the token is for.
+        schema:
+          type: string
+    result:
+      name: ToolsTokenRefreshResult
+      schema:
+        $ref: schemas/agent.json#/$defs/ToolsTokenRefreshResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/SessionNotActive"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/InternalError"
+  - name: working_log.read
+    summary: Read a page of the session's working log.
+    description: >-
+      Executor to harness request (capability agent, contract 1.22.0, ADR-0083). The executor that is
+      the session's brain (the target the session's turns are dispatched to) reads the working log it
+      keeps on the platform: its entries after the given sequence, in order, a page at a time
+      (has_more says that more follow), and the highest local
+      sequence the platform has acknowledged. An executor reads it when it opens a session it holds no
+      copy of, for example after another instance of its brain fleet ran the session's earlier turns.
+      Only the session's brain may read it: any other connection gets forbidden (-32001), and before any
+      turn of the session was dispatched not_dispatched (-32013, retryable). An unknown or deleted
+      session is session_not_found (-32002).
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        description: Platform session id.
+        schema:
+          type: string
+      - name: after
+        required: false
+        description: Read the entries with a sequence greater than this (default 0, the whole log).
+        schema:
+          type: integer
+          minimum: 0
+      - name: limit
+        required: false
+        description: At most this many entries (1-500, default 500).
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 500
+    result:
+      name: WorkingLogReadResult
+      schema:
+        $ref: schemas/agent.json#/$defs/WorkingLogReadResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/NotFound"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+  - name: working_log.append
+    summary: Append entries to the session's working log.
+    description: >-
+      Executor to harness request (capability agent, contract 1.22.0, ADR-0083). The session's brain
+      appends entries to the working log it keeps on the platform; the answer means they are stored. An
+      entry whose key the log already has is skipped, so a repeated append is harmless; the entries of
+      one call are stored together or not at all, at most 500 per call. acked_sequence moves the
+      platform's record of the highest acknowledged local sequence up (never down, never beyond the
+      log). The same refusals as working_log.read apply; a refused append means the executor is no
+      longer the session's brain and must stop the session's turn. Invalid entries (no type, a payload
+      that is not an object, too many) and an acked_sequence beyond the log are invalid_params with
+      data.reason invalid_entry, batch_too_large or acked_beyond_log.
+    tags:
+      - name: agent
+    x-bma-direction: executor-to-harness
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: agent
+    params:
+      - name: session_id
+        required: true
+        description: Platform session id.
+        schema:
+          type: string
+      - name: entries
+        required: false
+        description: The entries to append, in order (sequence is ignored). Omitted or empty with acked_sequence only moves the mark.
+        schema:
+          type: array
+          maxItems: 500
+          items:
+            $ref: schemas/agent.json#/$defs/WorkingLogEntry
+      - name: acked_sequence
+        required: false
+        description: The highest local sequence the platform has acknowledged so far.
+        schema:
+          type: integer
+          minimum: 0
+    result:
+      name: WorkingLogAppendResult
+      schema:
+        $ref: schemas/agent.json#/$defs/WorkingLogAppendResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/Forbidden"
+      - $ref: "#/components/errors/NotFound"
+      - $ref: "#/components/errors/Conflict"
+      - $ref: "#/components/errors/InternalError"
+components:
+  errors:
+    ParseError:
+      code: -32700
+      message: parse_error
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    InvalidRequest:
+      code: -32600
+      message: invalid_request
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    MethodNotFound:
+      code: -32601
+      message: method_not_found
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    InvalidParams:
+      code: -32602
+      message: invalid_params
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    InternalError:
+      code: -32603
+      message: internal_error
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    Unauthorized:
+      code: -32000
+      message: unauthorized
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    Forbidden:
+      code: -32001
+      message: forbidden
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    NotFound:
+      code: -32002
+      message: not_found
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    LeaseExpired:
+      code: -32003
+      message: lease_expired
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    Timeout:
+      code: -32004
+      message: timeout
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    Canceled:
+      code: -32005
+      message: canceled
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    PayloadTooLarge:
+      code: -32006
+      message: payload_too_large
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    SessionNotActive:
+      code: -32007
+      message: session_not_active
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    McpUnavailable:
+      code: -32008
+      message: mcp_unavailable
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    ExecutorBusy:
+      code: -32009
+      message: executor_busy
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    UnsupportedProtocol:
+      code: -32010
+      message: unsupported_protocol
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    ResourceUnavailable:
+      code: -32011
+      message: resource_unavailable
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    CapabilityUnavailable:
+      code: -32012
+      message: capability_unavailable
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
+    Conflict:
+      code: -32013
+      message: conflict
+      data:
+        $ref: schemas/common.json#/$defs/JsonRpcErrorData
