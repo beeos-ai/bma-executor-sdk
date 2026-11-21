@@ -31,7 +31,8 @@ const (
 	// a machine-scoped executor (injected by the machine pool template).
 	MachineIDEnv = "BMA_MACHINE_ID"
 
-	DefaultBaseURL        = "https://api.bma.beeos.ai"
+	// DefaultBaseURL is the executor origin of the hosted deployment.
+	DefaultBaseURL        = "https://executor.beeos.ai"
 	DefaultRequestTimeout = 30 * time.Second
 	// DefaultMaxReconnectAttempts is 0: reconnect until Stop, as gRPC's
 	// connection backoff and long-running agents (GitHub Actions runner,
@@ -343,6 +344,40 @@ type Client struct {
 	wallNow func() time.Time
 }
 
+// retiredExecutorHosts are API hosts executors used to dial, retired for
+// executors, and the executor host of the same deployment that serves the
+// same routes. A base URL stored with one of them (configurations written
+// before) is moved to the executor host. Remove an entry once no executor
+// dials the old host.
+var retiredExecutorHosts = map[string]string{
+	"api.bma.beeos.ai":         "executor.beeos.ai",
+	"api.staging.bma.beeos.ai": "executor.staging.beeos.ai",
+}
+
+// executorOrigin is the deployment origin of base (as BMA_BASE_URL in
+// bma-sdk): a trailing /api/v1 is dropped so the /v1 paths are not nested,
+// and a retired executor host is replaced by its executor host.
+func executorOrigin(base string) string {
+	base = strings.TrimSuffix(strings.TrimRight(base, "/"), "/api/v1")
+	if u, err := url.Parse(base); err == nil {
+		if host, ok := retiredExecutorHosts[strings.ToLower(u.Hostname())]; ok {
+			if p := u.Port(); p != "" {
+				host += ":" + p
+			}
+			u.Host = host
+			base = u.String()
+		}
+	}
+	return base
+}
+
+// MigrateExecutorURL answers the executor origin for a stored base URL and
+// whether it changed: callers that persist the URL write the answer back.
+func MigrateExecutorURL(base string) (string, bool) {
+	next := executorOrigin(base)
+	return next, next != strings.TrimRight(base, "/")
+}
+
 // NewClient validates options and returns a disconnected client.
 func NewClient(options Options) (*Client, error) {
 	if options.TokenSource == nil && strings.TrimSpace(options.EnvironmentKey) == "" {
@@ -371,9 +406,7 @@ func NewClient(options Options) (*Client, error) {
 	if options.BaseURL == "" {
 		options.BaseURL = DefaultBaseURL
 	}
-	// BaseURL is the deployment origin (as BMA_BASE_URL in bma-sdk); a
-	// trailing /api/v1 is dropped so the /v1 paths are not nested.
-	options.BaseURL = strings.TrimSuffix(strings.TrimRight(options.BaseURL, "/"), "/api/v1")
+	options.BaseURL = executorOrigin(options.BaseURL)
 	if options.HTTPClient == nil {
 		options.HTTPClient = http.DefaultClient
 	}

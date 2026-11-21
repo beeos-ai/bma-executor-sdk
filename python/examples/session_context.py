@@ -103,7 +103,7 @@ def make_client() -> ExecutorClient:
         # A machine daemon token and no environment id: a machine-scoped executor.
         environment_id="",
         environment_key=os.environ["BMA_MACHINE_TOKEN"],
-        base_url=os.environ.get("BMA_BASE_URL", "https://api.bma.beeos.ai"),
+        base_url=os.environ.get("BMA_BASE_URL", "https://executor.beeos.ai"),
         executor={"name": "session-context-example", "os": platform.system().lower(), "arch": platform.machine(), "version": "0.1.0"},
         capabilities={"process": {"enabled": True, "max_processes": 8, "buffer_bytes": 1 << 20}},
     )

@@ -68,7 +68,35 @@ import { DEFAULT_PROTOCOLS } from './local.js'
 import { RpcPeer, type LogLevel, type Logger } from './rpc.js'
 import { dialWebSocket, FrameChannel, type Conn } from './transport.js'
 
-export const DEFAULT_BASE_URL = 'https://api.bma.beeos.ai'
+/** The executor origin of the hosted deployment. */
+export const DEFAULT_BASE_URL = 'https://executor.beeos.ai'
+
+/**
+ * API hosts executors used to dial, retired for executors, and the executor host of the same deployment
+ * (same routes). A stored base URL on one of them moves to the executor host; remove an entry once no
+ * executor dials the old host.
+ */
+const RETIRED_EXECUTOR_HOSTS: Record<string, string> = {
+  'api.bma.beeos.ai': 'executor.beeos.ai',
+  'api.staging.bma.beeos.ai': 'executor.staging.beeos.ai',
+}
+
+/**
+ * The deployment origin of baseUrl (as BMA_BASE_URL in bma-sdk): a trailing /api/v1 is dropped and a
+ * retired executor host is replaced by its executor host. Callers that persist the URL write it back.
+ */
+export function executorOrigin(baseUrl: string = DEFAULT_BASE_URL): string {
+  const base = baseUrl.replace(/\/+$/, '').replace(/\/api\/v1$/, '')
+  try {
+    const url = new URL(base)
+    const host = RETIRED_EXECUTOR_HOSTS[url.hostname.toLowerCase()]
+    if (!host) return base
+    url.hostname = host
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return base
+  }
+}
 /** The environment variable that carries the machine id of a machine-scoped executor (injected by the machine pool template). */
 export const MACHINE_ID_ENV = 'BMA_MACHINE_ID'
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
@@ -194,8 +222,7 @@ function executorTokenSource(options: WebSocketDialerOptions): TokenSource {
   return (
     options.tokenSource ??
     (async () => {
-      // The deployment origin (as BMA_BASE_URL in bma-sdk); a trailing /api/v1 is dropped.
-      const base = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '').replace(/\/api\/v1$/, '')
+      const base = executorOrigin(options.baseUrl)
       const path = tokenPath(options.environmentId, machineIdOf(options))
       const response = await (options.fetch ?? fetch)(`${base}${path}`, {
         method: 'POST',
@@ -431,7 +458,7 @@ export class ExecutorClient {
     if (!options.dialer) this.tokenSource = executorTokenSource(options)
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS
     this.sessionContexts = new SessionContexts({
-      baseUrl: options.baseUrl ?? DEFAULT_BASE_URL,
+      baseUrl: executorOrigin(options.baseUrl),
       environmentId: options.environmentId,
       environmentKey: options.environmentKey,
       fetch: options.fetch,

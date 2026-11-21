@@ -4,11 +4,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { ChannelScope, DEFAULT_BASE_URL, ExecutorClient, MACHINE_ID_ENV, webSocketDialer } from '../src/index.js'
+import { ChannelScope, DEFAULT_BASE_URL, ExecutorClient, executorOrigin, MACHINE_ID_ENV, webSocketDialer } from '../src/index.js'
 import { executorInfo } from './helpers.js'
 
 test('baseUrl is the origin; a trailing /api/v1 is not repeated', async () => {
-  assert.equal(DEFAULT_BASE_URL, 'https://api.bma.beeos.ai')
+  assert.equal(DEFAULT_BASE_URL, 'https://executor.beeos.ai')
   for (const baseUrl of ['https://bma.test', 'https://bma.test/', 'https://bma.test/api/v1', 'https://bma.test/api/v1/']) {
     const urls: string[] = []
     const fetch = (async (url: string) => {
@@ -19,6 +19,22 @@ test('baseUrl is the origin; a trailing /api/v1 is not repeated', async () => {
     await assert.rejects(dial({ channel: ChannelScope.Control }))
     assert.deepEqual(urls, ['https://bma.test/v1/environments/env/token'], baseUrl)
   }
+})
+
+test('a base URL on a host retired for executors moves to the executor host', async () => {
+  assert.equal(executorOrigin('https://api.bma.beeos.ai/api/v1/'), 'https://executor.beeos.ai')
+  assert.equal(executorOrigin('https://API.staging.bma.beeos.ai'), 'https://executor.staging.beeos.ai')
+  assert.equal(executorOrigin('https://executor.beeos.ai/'), 'https://executor.beeos.ai')
+  assert.equal(executorOrigin('https://api.beeos.ai'), 'https://api.beeos.ai')
+  assert.equal(executorOrigin(), 'https://executor.beeos.ai')
+  const urls: string[] = []
+  const fetch = (async (url: string) => {
+    urls.push(String(url))
+    return new Response('nope', { status: 500 })
+  }) as typeof globalThis.fetch
+  const dial = webSocketDialer({ environmentId: '', machineId: 'mch_1', executor: executorInfo, baseUrl: 'https://api.bma.beeos.ai', environmentKey: 'k', fetch })
+  await assert.rejects(dial({ channel: ChannelScope.Control }))
+  assert.deepEqual(urls, ['https://executor.beeos.ai/v1/machines/mch_1/token'])
 })
 
 test('a machine token with neither id keeps the legacy alias /api/v1/executors/token', async () => {

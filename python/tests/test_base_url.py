@@ -9,7 +9,7 @@ import bma_executor_sdk as bx
 
 @pytest.mark.parametrize("base_url", ["https://bma.test", "https://bma.test/", "https://bma.test/api/v1", "https://bma.test/api/v1/"])
 def test_base_url_is_the_origin(base_url: str) -> None:
-    assert bx.DEFAULT_BASE_URL == "https://api.bma.beeos.ai"
+    assert bx.DEFAULT_BASE_URL == "https://executor.beeos.ai"
     client = bx.ExecutorClient(
         environment_id="env", environment_key="k", base_url=base_url,
         executor={"name": "t", "os": "linux", "arch": "arm64", "version": "0"},
@@ -58,3 +58,13 @@ async def test_machine_id_comes_from_bma_machine_id(monkeypatch: pytest.MonkeyPa
 def test_environment_id_and_machine_id_are_alternatives() -> None:
     with pytest.raises(ValueError, match="environment_id and machine_id"):
         bx.ExecutorClient(environment_id="env", machine_id="mach_1", environment_key="k", executor=_EXECUTOR)  # type: ignore[arg-type]
+
+
+def test_retired_executor_hosts_move_to_the_executor_host() -> None:
+    assert bx.executor_origin("https://api.bma.beeos.ai/api/v1/") == "https://executor.beeos.ai"
+    assert bx.executor_origin("https://API.staging.bma.beeos.ai") == "https://executor.staging.beeos.ai"
+    assert bx.executor_origin("https://api.staging.bma.beeos.ai:443") == "https://executor.staging.beeos.ai:443"
+    assert bx.executor_origin("https://executor.beeos.ai/") == "https://executor.beeos.ai"
+    assert bx.executor_origin("https://api.beeos.ai") == "https://api.beeos.ai"
+    client = bx.ExecutorClient(environment_id="env", environment_key="k", base_url="https://api.bma.beeos.ai", executor=_EXECUTOR)  # type: ignore[arg-type]
+    assert client._base_url == "https://executor.beeos.ai"  # pyright: ignore[reportPrivateUsage]

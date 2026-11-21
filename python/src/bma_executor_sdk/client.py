@@ -13,7 +13,7 @@ import random as _random
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 
@@ -65,7 +65,29 @@ if TYPE_CHECKING:
     from .agent import AgentHandler, _AgentRuntime
     from .generated import AgentCapability
 
-DEFAULT_BASE_URL = "https://api.bma.beeos.ai"
+DEFAULT_BASE_URL = "https://executor.beeos.ai"
+"""The executor origin of the hosted deployment."""
+
+# API hosts executors used to dial, retired for executors, and the executor host
+# of the same deployment (same routes). A stored base URL on one of them moves to
+# the executor host; remove an entry once no executor dials the old host.
+_RETIRED_EXECUTOR_HOSTS = {
+    "api.bma.beeos.ai": "executor.beeos.ai",
+    "api.staging.bma.beeos.ai": "executor.staging.beeos.ai",
+}
+
+
+def executor_origin(base_url: str = DEFAULT_BASE_URL) -> str:
+    """The deployment origin of base_url (as BMA_BASE_URL in bma-sdk): a trailing
+    /api/v1 is dropped and a retired executor host is replaced by its executor
+    host. Callers that persist the URL write the answer back."""
+    base = base_url.rstrip("/").removesuffix("/api/v1")
+    parts = urlsplit(base)
+    host = _RETIRED_EXECUTOR_HOSTS.get((parts.hostname or "").lower())
+    if host is None:
+        return base
+    netloc = host if parts.port is None else f"{host}:{parts.port}"
+    return urlunsplit(parts._replace(netloc=netloc))
 # The environment variable that carries the machine id of a machine-scoped executor
 # (injected by the machine pool template).
 MACHINE_ID_ENV = "BMA_MACHINE_ID"
@@ -169,9 +191,7 @@ class ExecutorClient:
         self._executor = executor
         self._capabilities: Capabilities = capabilities or {}
         self._environment_key = environment_key
-        # The deployment origin (as BMA_BASE_URL in bma-sdk); a trailing
-        # /api/v1 is dropped so the /v1 paths are not nested.
-        self._base_url = base_url.rstrip("/").removesuffix("/api/v1")
+        self._base_url = executor_origin(base_url)
         self._ws_url = ws_url
         self._token_source = token_source
         self._dialer: Dialer = dialer or dial
@@ -958,6 +978,7 @@ def _canceled_tool_result(params: ToolCallParams, reason: str) -> ToolResultPara
 
 __all__ = [
     "DEFAULT_BASE_URL",
+    "executor_origin",
     "MACHINE_ID_ENV",
     "PROTOCOL_V1",
     "PROTOCOL_V11",

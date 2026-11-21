@@ -308,3 +308,20 @@ func TestExitCodeClasses(t *testing.T) {
 		t.Fatal("exit codes")
 	}
 }
+
+func TestStoredExecutorURLOnARetiredHostMovesToTheExecutorHost(t *testing.T) {
+	useHome(t)
+	c := defaultConfig()
+	c.ExecutorURL, c.MachineID = "https://api.bma.beeos.ai/", "mch_1"
+	if err := c.save(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadConfig()
+	if err != nil || got.ExecutorURL != "https://executor.beeos.ai" {
+		t.Fatalf("loaded %q %v", got.ExecutorURL, err)
+	}
+	b, _ := os.ReadFile(configPath())
+	if !strings.Contains(string(b), `"executor_url": "https://executor.beeos.ai"`) {
+		t.Fatalf("not persisted: %s", b)
+	}
+}

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.9.0
+
+- The default executor base URL is `https://executor.beeos.ai` (Go
+  `DefaultBaseURL`, TypeScript and Python `DEFAULT_BASE_URL`). A base URL on
+  `api.bma.beeos.ai` / `api.staging.bma.beeos.ai`, retired for executors, is
+  replaced by `executor.beeos.ai` / `executor.staging.beeos.ai` (same routes;
+  the daemon routes stay under `<origin>/api/v1/daemon`). Programs that store
+  the URL persist the answer of `MigrateExecutorURL` (Go) / `executorOrigin`
+  (TypeScript) / `executor_origin` (Python); `bma` rewrites the
+  `executor_url` of `~/.bma/config.json` once.
+
 ## 1.8.0
 
 - Go: a signed `resize` may carry `scale`, the viewer's devicePixelRatio × 100
