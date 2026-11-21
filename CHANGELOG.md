@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.12.0
+
+- Go: `NativeDesktopLease` (optional, next to `NativeDesktopResizer`): an input device with its own exclusive control lease, such as a phone whose own agent must stop while a person controls it. The `DesktopControlGate` calls `Hold(ctx, until)` on a `screen.control` grant (after draining, before the holder's first input; a refusal refuses the grant) and on every renew (a refusal keeps the old deadline), and `Drop(ctx, resume)` when the human lease ends (handback: `resume` true; release, expiry, recovery: false). A failed drop answers the release `ErrDesktopInputUnknown` and is retried by the next release of the same lease. Implementers without it are unaffected.
+
 ## 1.11.0
 
 - Go: removed `Client.UploadArtifact` and `CoreOptions.UploadArtifacts`, and the `DefaultMaxArtifactBytes` constant. The executor gateway serves no `POST /v1/environments/{environment_id}/artifacts` (a request gets 404 `route_not_found`) and the platform dispatches no work to an environment executor that could use it, so `Core` no longer advertises the `artifacts` capability and always truncates bash output over `InlineResultBytes`. `NewArtifactRef`, `NewArtifactContentBlock` and `ArtifactRef` stay for results that reference an artifact from elsewhere. TypeScript and Python never had an upload call. Breaking for callers of the removed names (none known).
