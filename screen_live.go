@@ -182,11 +182,30 @@ func (p *ScreenLivePipe) runInputs(parent context.Context, queue <-chan screenPi
 	}
 }
 
-func (p *ScreenLivePipe) inputResult(id string, err error) {
-	code := ""
-	if errors.Is(err, ErrDesktopResizeUnsupported) {
-		code = "resize_unsupported"
+// ScreenInputRefusal is the code of a refused screen_input (empty when it
+// succeeded): why the gate or the native input did not take it.
+func ScreenInputRefusal(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrDesktopResizeUnsupported):
+		return "resize_unsupported"
+	case errors.Is(err, ErrDesktopInputUnknown):
+		return "input_outcome_unknown"
+	case errors.Is(err, ErrDesktopRecoveryRequired):
+		return "recovery_required"
+	case errors.Is(err, ErrDesktopDraining):
+		return "human_takeover_pending"
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return "input_timeout"
+	case errors.Is(err, ErrDesktopControl):
+		return "control_not_current"
 	}
+	return "input_failed"
+}
+
+func (p *ScreenLivePipe) inputResult(id string, err error) {
+	code := ScreenInputRefusal(err)
 	p.writeMu.Lock()
 	writeErr := json.NewEncoder(p.writer).Encode(struct {
 		Type string `json:"type"`
