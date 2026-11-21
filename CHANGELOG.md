@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.53
+
+- Go: a refused `screen_input` says why in its `screen_input_result` code
+  (`ScreenInputRefusal`): `control_not_current`, `human_takeover_pending`,
+  `input_outcome_unknown`, `recovery_required`, `input_timeout`,
+  `resize_unsupported`, otherwise `input_failed`. Before, every refusal but
+  `resize_unsupported` came back with an empty code.
+
 ## 1.6.50
 
 - Go, Codex: the continuation note of a reply cut at the output limit is the
