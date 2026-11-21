@@ -12502,6 +12502,35 @@ components:
           format: date-time
           description: When the session started waiting.
       additionalProperties: false
+    BmaToolResultFile:
+      type: object
+      description: A session file a tool call created (`agent.tool_result.bma_files`), for example an image of the platform
+        tool `generate_image`. Read it with `GET /v1/files/{file_id}/content`.
+      required:
+        - file_id
+        - filename
+        - media_type
+        - size_bytes
+      properties:
+        file_id:
+          type: string
+        filename:
+          type: string
+        media_type:
+          type: string
+        size_bytes:
+          type: integer
+          minimum: 0
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
+        model:
+          type: string
+          description: The model that generated the file (generated files only).
+      additionalProperties: false
     CapabilitySupport:
       type: object
       properties:
@@ -18167,3 +18196,12 @@ x-bma-extension-fields:
       parameter); `{}` when unlabeled. Replaces the unprefixed `metadata` (removed 11-12).
     schema:
       $ref: "#/components/schemas/BmaFileLabels"
+  - operation: GET /v1/sessions/{session_id}/events, GET /v1/sessions/{session_id}/events/stream
+    direction: response
+    field: bma_files
+    description: Property of an `agent.tool_result` event. The session files the call created (the images of the platform
+      tool `generate_image`, ADR-0101), so a client shows them with the call. Absent when it created none.
+    schema:
+      type: array
+      items:
+        $ref: "#/components/schemas/BmaToolResultFile"

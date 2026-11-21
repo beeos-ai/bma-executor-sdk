@@ -5,7 +5,7 @@
 package main
 
 // contractSource is the OpenAPI document the commands were generated from.
-const contractSource = "contracts/bma-api/bma.openapi.yaml sha256:f7b6db1ec3f320fc350541c4ffed2feb32a357f9ade554848da1d3838e21c3fe"
+const contractSource = "contracts/bma-api/bma.openapi.yaml sha256:a4673063673570d04a59e2ce2325e5f2e4b0db32af8a189d5cec8439a0edfaaa"
 
 // apiOperations are the operations of the public BMA API, one command each.
 var apiOperations = []apiOp{
