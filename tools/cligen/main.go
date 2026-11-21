@@ -27,7 +27,9 @@ import (
 	"fmt"
 	"go/format"
 	"log"
+	"net/url"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -35,14 +37,24 @@ import (
 )
 
 type doc struct {
-	Servers    []struct{ URL string } `yaml:"servers"`
-	Paths      map[string]map[string]yaml.Node
-	Components struct {
+	Servers         []struct{ URL string } `yaml:"servers"`
+	ExtensionFields []extField             `yaml:"x-bma-extension-fields"`
+	Paths           map[string]map[string]yaml.Node
+	Components      struct {
 		Parameters    map[string]parameter `yaml:"parameters"`
 		Schemas       map[string]*schema   `yaml:"schemas"`
 		RequestBodies map[string]body      `yaml:"requestBodies"`
 		Responses     map[string]response  `yaml:"responses"`
 	}
+}
+
+// extField is a bma_* field of an official operation's body or answer.
+type extField struct {
+	Operation   string  `yaml:"operation"` // "METHOD /path[, METHOD /path...]"
+	Direction   string  `yaml:"direction"`
+	Field       string  `yaml:"field"`
+	Description string  `yaml:"description"`
+	Schema      *schema `yaml:"schema"`
 }
 
 type operation struct {
@@ -92,7 +104,10 @@ type schema struct {
 	Items       *schema            `yaml:"items"`
 }
 
-var methods = []string{"get", "post", "put", "patch", "delete"}
+var (
+	methods   = []string{"get", "post", "put", "patch", "delete"}
+	versionRE = regexp.MustCompile(`^v[0-9]+$`)
+)
 
 func main() {
 	specPath := flag.String("spec", "", "the public OpenAPI document")
@@ -134,9 +149,24 @@ func generate(raw []byte, source string) ([]byte, error) {
 	if err := yaml.Unmarshal(raw, &d); err != nil {
 		return nil, err
 	}
-	prefix := "/v1"
+	// The server URL's path prefixes the paths (/v1 for a document whose
+	// paths start below it; nothing when the paths carry /v1 themselves).
+	prefix := ""
 	if len(d.Servers) > 0 {
-		prefix = strings.TrimRight(d.Servers[0].URL, "/")
+		u, err := url.Parse(d.Servers[0].URL)
+		if err != nil {
+			return nil, err
+		}
+		prefix = strings.TrimRight(u.Path, "/")
+	}
+	extra := map[string][]extField{}
+	for _, f := range d.ExtensionFields {
+		if f.Direction != "request" {
+			continue
+		}
+		for _, o := range strings.Split(f.Operation, ",") {
+			extra[strings.TrimSpace(o)] = append(extra[strings.TrimSpace(o)], f)
+		}
 	}
 	paths := make([]string, 0, len(d.Paths))
 	for p := range d.Paths {
@@ -158,7 +188,7 @@ func generate(raw []byte, source string) ([]byte, error) {
 			if o.OperationID == "" {
 				return nil, fmt.Errorf("%s %s has no operationId", m, p)
 			}
-			g, err := d.build(prefix, p, m, o)
+			g, err := d.build(prefix, p, m, o, extra[strings.ToUpper(m)+" "+p])
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", o.OperationID, err)
 			}
@@ -194,8 +224,12 @@ func (d *doc) subResource(path string) bool {
 	return false
 }
 
-func (d *doc) build(prefix, path, method string, o operation) (op, error) {
+func (d *doc) build(prefix, path, method string, o operation, ext []extField) (op, error) {
 	segs := strings.Split(strings.Trim(path, "/"), "/")
+	version := ""
+	if len(segs) > 1 && versionRE.MatchString(segs[0]) { // /v1/... : the version names no command
+		version, segs = "/"+segs[0], segs[1:]
+	}
 	g := op{ID: o.OperationID, Method: strings.ToUpper(method), Path: prefix + path, Summary: o.Summary,
 		Description: o.Description}
 	last := segs[len(segs)-1]
@@ -205,7 +239,7 @@ func (d *doc) build(prefix, path, method string, o operation) (op, error) {
 		resource = segs[:len(segs)-1]
 		g.Verb = map[string]string{"get": "get", "post": "update", "put": "update", "patch": "update",
 			"delete": "delete"}[method]
-	case len(segs) == 1 || d.subResource(path) || !isParam(segs[len(segs)-2]) && !d.hasCollection(segs):
+	case len(segs) == 1 || d.subResource(version+"/"+strings.Join(segs, "/")) || !isParam(segs[len(segs)-2]) && !d.hasCollection(version, segs):
 		g.Verb = map[string]string{"get": "list", "post": "create", "put": "replace", "patch": "update",
 			"delete": "delete"}[method]
 		if method == "get" && !d.isList(o) {
@@ -281,6 +315,11 @@ func (d *doc) build(prefix, path, method string, o operation) (op, error) {
 			}
 		}
 	}
+	// bma_* request fields of official operations (x-bma-extension-fields).
+	for _, f := range ext {
+		g.Body = true
+		g.Params = append(g.Params, d.flagParam(f.Field, "body", f.Schema, f.Description, false))
+	}
 	// A body field and a query parameter of one name share the flag name: the
 	// body field is reached through --body.
 	flags := map[string]bool{"body": true, "output": true, "all": true}
@@ -301,8 +340,8 @@ func (d *doc) build(prefix, path, method string, o operation) (op, error) {
 // hasCollection: the parent of a trailing non-parameter segment is itself a
 // collection path (so the segment is an action on the collection, e.g.
 // /machine_pools/check_connection).
-func (d *doc) hasCollection(segs []string) bool {
-	_, ok := d.Paths["/"+strings.Join(segs[:len(segs)-1], "/")]
+func (d *doc) hasCollection(version string, segs []string) bool {
+	_, ok := d.Paths[version+"/"+strings.Join(segs[:len(segs)-1], "/")]
 	return ok
 }
 
@@ -427,8 +466,10 @@ func (d *doc) isList(o operation) bool {
 	return data != nil && typeOf(data) == "array"
 }
 
+// oneLine is the first line of a description, without backquotes (pflag
+// reads a backquoted word of a flag's usage as the name of its value).
 func oneLine(s string) string {
-	s = strings.TrimSpace(s)
+	s = strings.ReplaceAll(strings.TrimSpace(s), "`", "")
 	if i := strings.IndexAny(s, "\n"); i >= 0 {
 		s = s[:i]
 	}

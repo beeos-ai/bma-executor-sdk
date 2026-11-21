@@ -37,4 +37,6 @@ jobs:
         env:
           BMA_API_KEY: ${{ secrets.BMA_STAGING_ACCEPTANCE_API_KEY }}
           BMA_BASE_URL: https://api.staging.beeos.ai
+          # The Default workspace of the BMA Staging Ops organization (the key reaches two).
+          BMA_WORKSPACE_ID: proj_agq4dohyvb2xni7qtoc23hqpg4
         run: tools/cli_e2e.sh
