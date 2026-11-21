@@ -36,7 +36,7 @@ def make_client() -> ExecutorClient:
         client = ExecutorClient(
             environment_id=os.environ["BMA_ENVIRONMENT_ID"],
             environment_key=os.environ["BMA_ENVIRONMENT_KEY"],
-            base_url=os.environ.get("BMA_BASE_URL", "https://api.bma.beeos.ai"),
+            base_url=os.environ.get("BMA_BASE_URL", "https://executor.beeos.ai"),
             executor=info,  # type: ignore[arg-type]
         )
     client.tools.bash.handler(run_bash)  # advertises the shell capability

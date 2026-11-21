@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	bmaexecutor "github.com/beeos-ai/bma-executor-sdk"
 )
 
 // defaultAPI is the console origin `bma up` signs in through.
@@ -71,6 +73,14 @@ func loadConfig() (config, error) {
 	}
 	if c.Harnesses == nil {
 		c.Harnesses = map[string]string{}
+	}
+	// An executor URL on a host retired for executors moves to the executor
+	// host once, persisted (bmaexecutor.MigrateExecutorURL).
+	if next, changed := bmaexecutor.MigrateExecutorURL(c.ExecutorURL); c.ExecutorURL != "" && changed {
+		c.ExecutorURL = next
+		if err := c.save(); err != nil {
+			return c, err
+		}
 	}
 	return c, nil
 }
