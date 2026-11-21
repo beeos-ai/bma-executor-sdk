@@ -262,7 +262,8 @@ func uninstallCmd() *cobra.Command {
 				fmt.Fprintln(os.Stderr, "✓ Disconnected and cleaned up; remove the binary with `brew uninstall bma`")
 				return nil
 			}
-			if err := os.Remove(exe); err != nil {
+			// The install.sh layout keeps bma in ~/.bma/bin: removing ~/.bma took it already.
+			if err := os.Remove(exe); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return err
 			}
 			fmt.Fprintf(os.Stderr, "✓ bma removed (%s); delete the PATH line for ~/.bma/bin from your shell profile\n", exe)

@@ -782,12 +782,8 @@ func (c *cutWriter) Write(b []byte) (int, error) {
 			c.seen++
 		}
 		if c.seen >= c.events {
+			// The proxy aborts the handler on the write error: the client's connection drops.
 			c.done = true
-			if hj, ok := c.ResponseWriter.(http.Hijacker); ok {
-				if conn, _, err := hj.Hijack(); err == nil {
-					_ = conn.Close()
-				}
-			}
 			c.cancel()
 			return 0, io.ErrClosedPipe
 		}
@@ -795,6 +791,9 @@ func (c *cutWriter) Write(b []byte) (int, error) {
 }
 
 func (c *cutWriter) Flush() {
+	if c.done {
+		return
+	}
 	if f, ok := c.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
@@ -1276,7 +1275,7 @@ func (e *e2e) testBYO(t *testing.T) {
 	}
 	out, errOut, code := run("harness", "list")
 	e.feature(t, "harness list", code == 0 && strings.Contains(out, "claude-code"), short(out+errOut))
-	out, errOut, code = run("up", "--harness", "codex", "--labels", "e2e,cli")
+	out, errOut, code = run("up", "--harness", "claude-code", "--labels", "e2e,cli")
 	e.feature(t, "up (token kept, harness download+verify, systemd user service, connected)", code == 0 && strings.Contains(out, "Connected"), short(out+errOut))
 	out, errOut, code = run("status", "--json")
 	st := map[string]any{}

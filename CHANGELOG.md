@@ -9,6 +9,8 @@
 - bma: flags of bracketed query parameters drop the brackets (`--group-by`, `--created-at-gte`; zsh globbed
   the old `--group-by[]`), and an array value (`--group-by '[workspace_id, description]'`) is sent once per item.
 - bma: a body that is an `allOf` with variants (`machine-pools create`) offers its shared fields as flags.
+- bma: `bma uninstall` of an install.sh installation (bma in ~/.bma/bin) no longer ends with "remove …/bma: no such
+  file or directory" after it removed everything.
 - bma: `go test -tags e2e ./cmd/bma` runs every API operation and hand-written command against a deployment
   (CI: cli-e2e on main), replacing tools/cli_e2e.sh.
 
