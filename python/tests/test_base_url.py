@@ -45,7 +45,7 @@ async def test_token_exchange_path_follows_the_resource(monkeypatch: pytest.Monk
     assert await _token_path(monkeypatch, environment_id="", machine_id="mach_1") == "/v1/machines/mach_1/token"
     assert await _token_path(monkeypatch, environment_id="", machine_id="a/b") == "/v1/machines/a%2Fb/token"
     # No id: the legacy alias keeps serving a machine daemon token.
-    assert await _token_path(monkeypatch, environment_id="") == "/api/v1/executors/token"
+    assert await _token_path(monkeypatch, environment_id="") == "/v1/executors/token"
 
 
 async def test_machine_id_comes_from_bma_machine_id(monkeypatch: pytest.MonkeyPatch) -> None:
