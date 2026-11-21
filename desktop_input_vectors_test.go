@@ -91,7 +91,7 @@ func (*vectorNative) ReleaseAll(context.Context) error { return nil }
 
 type vectorResizer struct{ vectorNative }
 
-func (*vectorResizer) Resize(context.Context, uint16, uint16) error { return nil }
+func (*vectorResizer) Resize(context.Context, uint16, uint16, uint16) error { return nil }
 
 // The gate, told the vectors' control, answers every vector's ACK in order.
 func TestDesktopInputVectorsGate(t *testing.T) {

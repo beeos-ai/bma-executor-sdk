@@ -31,7 +31,9 @@ type DesktopSignedInput struct {
 		Down    bool   `json:"down"`
 		Width   uint16 `json:"width"`
 		Height  uint16 `json:"height"`
-		Text    string `json:"text"`
+		// Scale is the viewer's devicePixelRatio × 100 of a resize (100–400); 0 = not sent.
+		Scale uint16 `json:"scale,omitempty"`
+		Text  string `json:"text"`
 	} `json:"input"`
 	Signature string `json:"signature"`
 }
@@ -63,7 +65,7 @@ func (g *DesktopControlGate) SignedInput(ctx context.Context, identity string, r
 	if err != nil || !ed25519.Verify(key, payload, signature) {
 		return ErrDesktopControl
 	}
-	event := DesktopInputEvent{Type: p.Input.Type, X: float64(p.Input.X), Y: float64(p.Input.Y), W: w, H: h, Buttons: p.Input.Buttons, Keysym: p.Input.Keysym, Down: p.Input.Down, Width: p.Input.Width, Height: p.Input.Height, Text: p.Input.Text}
+	event := DesktopInputEvent{Type: p.Input.Type, X: float64(p.Input.X), Y: float64(p.Input.Y), W: w, H: h, Buttons: p.Input.Buttons, Keysym: p.Input.Keysym, Down: p.Input.Down, Width: p.Input.Width, Height: p.Input.Height, Scale: p.Input.Scale, Text: p.Input.Text}
 	if event.Type == "pointer" && (event.Buttons == 8 || event.Buttons == 16) {
 		event.Type = "wheel"
 		event.DY = 1
@@ -82,7 +84,8 @@ func (p DesktopSignedInput) SigningBytes() ([]byte, error) {
 }
 
 // desktopInputPayload preserves the existing v1 bytes; resize adds tag 4 and
-// its two uint16 dimensions, text tag 5 with a uint16 length and its UTF-8.
+// its two uint16 dimensions (tag 6 and a third uint16, the scale, when the
+// resize carries one), text tag 5 with a uint16 length and its UTF-8.
 func desktopInputPayload(p DesktopSignedInput, key []byte) ([]byte, error) {
 	var b bytes.Buffer
 	b.WriteString("beeos.desktop.input.v1\x00")
@@ -115,9 +118,19 @@ func desktopInputPayload(p DesktopSignedInput, key []byte) ([]byte, error) {
 	case "release_all":
 		put(uint8(3))
 	case "resize":
-		put(uint8(4))
+		if p.Input.Scale == 0 {
+			put(uint8(4))
+			put(p.Input.Width)
+			put(p.Input.Height)
+			break
+		}
+		if p.Input.Scale < DesktopScaleMin || p.Input.Scale > DesktopScaleMax {
+			return nil, ErrDesktopControl
+		}
+		put(uint8(6))
 		put(p.Input.Width)
 		put(p.Input.Height)
+		put(p.Input.Scale)
 	case "text":
 		if len(p.Input.Text) < 1 || len(p.Input.Text) > DesktopTextMaxBytes {
 			return nil, ErrDesktopControl

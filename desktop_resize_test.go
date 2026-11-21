@@ -16,12 +16,24 @@ import (
 type resizeNative struct {
 	controlNative
 	resize func(context.Context, uint16, uint16) error
+	scales []uint16
 }
 
-func (n *resizeNative) Resize(ctx context.Context, w, h uint16) error { return n.resize(ctx, w, h) }
+func (n *resizeNative) Resize(ctx context.Context, w, h, scale uint16) error {
+	n.mu.Lock()
+	n.scales = append(n.scales, scale)
+	n.mu.Unlock()
+	return n.resize(ctx, w, h)
+}
 
 // This encoder follows the published bytes independently of the SDK parser.
 func signedResize(t *testing.T, private ed25519.PrivateKey, expires time.Time, sequence uint64, w, h uint16) []byte {
+	t.Helper()
+	return signedScaledResize(t, private, expires, sequence, w, h, 0)
+}
+
+// signedScaledResize signs tag 6 (dimensions and scale) when scale is set, tag 4 otherwise.
+func signedScaledResize(t *testing.T, private ed25519.PrivateKey, expires time.Time, sequence uint64, w, h, scale uint16) []byte {
 	t.Helper()
 	public := private.Public().(ed25519.PublicKey)
 	var payload bytes.Buffer
@@ -39,16 +51,25 @@ func signedResize(t *testing.T, private ed25519.PrivateKey, expires time.Time, s
 	put(uint64(expires.UnixMilli()))
 	payload.Write(public)
 	put(sequence)
-	put(uint8(4))
-	put(w)
-	put(h)
+	input := map[string]any{"type": "resize", "width": w, "height": h}
+	if scale == 0 {
+		put(uint8(4))
+		put(w)
+		put(h)
+	} else {
+		put(uint8(6))
+		put(w)
+		put(h)
+		put(scale)
+		input["scale"] = scale
+	}
 	key := make([]int, len(public))
 	for i, b := range public {
 		key[i] = int(b)
 	}
 	packet := map[string]any{"grant": map[string]any{"epoch": "1", "generation": 1, "lease_id": "lease",
 		"holder": "viewer", "input_key": key, "expires_at": expires.UnixMilli()}, "sequence": sequence,
-		"input":     map[string]any{"type": "resize", "width": w, "height": h},
+		"input":     input,
 		"signature": base64.RawURLEncoding.EncodeToString(ed25519.Sign(private, payload.Bytes()))}
 	raw, err := json.Marshal(packet)
 	if err != nil {
@@ -259,4 +280,37 @@ type failingRestoreNative struct{ controlNative }
 
 func (*failingRestoreNative) RestoreDesktop(context.Context) error {
 	return errors.New("xrandr failed")
+}
+
+func TestSignedResizeBindsScale(t *testing.T) {
+	n := &resizeNative{resize: func(context.Context, uint16, uint16) error { return nil }}
+	until := time.Now().Add(20 * time.Second)
+	g, private := resizeGrant(t, n, until)
+	raw := signedScaledResize(t, private, until, 1, 2560, 1600, 200)
+	var packet map[string]any
+	_ = json.Unmarshal(raw, &packet)
+	packet["input"].(map[string]any)["scale"] = 100
+	tampered, _ := json.Marshal(packet)
+	if err := g.SignedInput(t.Context(), "viewer", tampered, 1920, 1080); err == nil {
+		t.Fatal("unsigned scale accepted")
+	}
+	delete(packet["input"].(map[string]any), "scale")
+	dropped, _ := json.Marshal(packet)
+	if err := g.SignedInput(t.Context(), "viewer", dropped, 1920, 1080); err == nil {
+		t.Fatal("a scaled resize with its scale removed accepted")
+	}
+	if err := g.SignedInput(t.Context(), "viewer", signedScaledResize(t, private, until, 1, 2560, 1600, 50), 1920, 1080); err == nil {
+		t.Fatal("scale below 1x accepted")
+	}
+	if err := g.SignedInput(t.Context(), "viewer", raw, 1920, 1080); err != nil {
+		t.Fatal("signed scaled resize rejected:", err)
+	}
+	if err := g.SignedInput(t.Context(), "viewer", signedResize(t, private, until, 2, 1280, 720), 1920, 1080); err != nil {
+		t.Fatal("unscaled resize rejected:", err)
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.scales) != 2 || n.scales[0] != 200 || n.scales[1] != 0 {
+		t.Fatalf("native resize scales = %v, want [200 0]", n.scales)
+	}
 }

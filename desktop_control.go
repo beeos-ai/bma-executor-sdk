@@ -38,11 +38,13 @@ type NativeDesktopInput interface {
 	ReleaseAll(context.Context) error
 }
 
-// NativeDesktopResizer is optional. Resize must return only after its native
-// operation has ended, including after cancellation. Unsupported is a refusal
-// before dispatch; it must never represent an uncertain native outcome.
+// NativeDesktopResizer is optional. Resize fits the desktop to a viewer of
+// width x height device pixels whose devicePixelRatio × 100 is scale (0 = not
+// sent: 1×). It must return only after its native operation has ended,
+// including after cancellation. Unsupported is a refusal before dispatch; it
+// must never represent an uncertain native outcome.
 type NativeDesktopResizer interface {
-	Resize(context.Context, uint16, uint16) error
+	Resize(ctx context.Context, width, height, scale uint16) error
 }
 
 // NativeDesktopRestorer is optional. RestoreDesktop undoes every Resize since
@@ -65,8 +67,16 @@ type DesktopInputEvent struct {
 	DY      float64 `json:"dy,omitempty"`
 	Width   uint16  `json:"width,omitempty"`
 	Height  uint16  `json:"height,omitempty"`
-	Text    string  `json:"text,omitempty"`
+	// Scale of a resize: the viewer's devicePixelRatio × 100 (DesktopScaleMin–DesktopScaleMax); 0 = not sent (1×).
+	Scale uint16 `json:"scale,omitempty"`
+	Text  string `json:"text,omitempty"`
 }
+
+// The scale a resize may carry (devicePixelRatio × 100): 1× to 4×.
+const (
+	DesktopScaleMin = 100
+	DesktopScaleMax = 400
+)
 
 // DesktopTextMaxBytes bounds one text event (UTF-8 bytes).
 const DesktopTextMaxBytes = 1024
@@ -478,7 +488,7 @@ func (g *DesktopControlGate) HumanInput(ctx context.Context, epoch uint64, lease
 	case "release_all":
 		err = g.native.ReleaseAll(inputCtx)
 	case "resize":
-		err = resizer.Resize(inputCtx, event.Width, event.Height)
+		err = resizer.Resize(inputCtx, event.Width, event.Height, event.Scale)
 	default:
 		err = g.native.Apply(inputCtx, event)
 	}
@@ -502,7 +512,7 @@ func validateDesktopInput(e DesktopInputEvent) error {
 	case "heartbeat", "release_all":
 		return nil
 	case "resize":
-		if e.Width == 0 || e.Height == 0 {
+		if e.Width == 0 || e.Height == 0 || e.Scale != 0 && (e.Scale < DesktopScaleMin || e.Scale > DesktopScaleMax) {
 			return ErrDesktopControl
 		}
 		return nil
