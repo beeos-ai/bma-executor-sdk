@@ -55,6 +55,19 @@ type NativeDesktopRestorer interface {
 	RestoreDesktop(context.Context) error
 }
 
+// NativeDesktopLease is optional: an input device that keeps its own exclusive
+// control lease, such as a phone whose own agent must stop while a person
+// controls it. Hold takes or extends that lease until the human lease's
+// deadline: on a grant before the human's first input, and on every renew.
+// Drop gives it up when the human lease ends, after the human's input was
+// released; resume is true for a handback (the device lets its agent act
+// again), false for a release or an expiry. A failed Drop is retried by the
+// next release of the same lease.
+type NativeDesktopLease interface {
+	Hold(ctx context.Context, until time.Time) error
+	Drop(ctx context.Context, resume bool) error
+}
+
 type DesktopInputEvent struct {
 	Type    string  `json:"type"`
 	X       float64 `json:"x,omitempty"`
@@ -96,11 +109,14 @@ type DesktopControlGate struct {
 	until, heartbeat       time.Time
 	observed               map[string]uint64
 	resume                 bool
-	releasing              chan struct{}
-	timer                  *time.Timer
-	closed                 bool
-	agentUnknown           bool
-	nativeCancel           context.CancelFunc
+	// dropPending is set while the device lease of the released human lease
+	// was not confirmed dropped; dropResume is what that release asked for.
+	dropPending, dropResume bool
+	releasing               chan struct{}
+	timer                   *time.Timer
+	closed                  bool
+	agentUnknown            bool
+	nativeCancel            context.CancelFunc
 }
 
 func NewDesktopControlGate(backend ComputerUseBackend, native NativeDesktopInput) *DesktopControlGate {
@@ -141,15 +157,31 @@ func (g *DesktopControlGate) grant(ctx context.Context, epoch uint64, lease, ide
 	}
 	if epoch == g.epoch {
 		valid := g.state == "human" && g.lease == lease && g.identity == identity && bytes.Equal(g.key, key) && g.mediaID == mediaID && now.Before(g.until) && now.Before(g.heartbeat)
-		if valid {
+		device, held := g.native.(NativeDesktopLease)
+		if valid && !held {
 			g.until = now.Add(deadline.Sub(now))
 			g.armLocked()
 		}
 		g.mu.Unlock()
-		if valid {
+		if !valid {
+			return rejectDesktopControl(ErrDesktopControl, "current_lease_mismatch", deadline, now)
+		}
+		if !held {
 			return nil
 		}
-		return rejectDesktopControl(ErrDesktopControl, "current_lease_mismatch", deadline, now)
+		// The device lease is extended before the platform lease is: a
+		// renew the device refused leaves the old deadline in force.
+		if err := device.Hold(ctx, deadline); err != nil {
+			return rejectDesktopControl(ErrDesktopControl, "native_lease_refused", deadline, time.Now())
+		}
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		if g.epoch != epoch || g.state != "human" || g.lease != lease {
+			return rejectDesktopControl(ErrDesktopControl, "state_changed_during_renew", deadline, time.Now())
+		}
+		g.until = now.Add(deadline.Sub(now))
+		g.armLocked()
+		return nil
 	}
 	// A second controller cannot silently replace an active or draining one.
 	if g.state == "human" || g.state == "draining" || g.state == "releasing" {
@@ -184,6 +216,17 @@ func (g *DesktopControlGate) grant(ctx context.Context, epoch uint64, lease, ide
 	if err := g.native.ReleaseAll(drain); err != nil {
 		g.state = "blocked"
 		return rejectDesktopControl(ErrDesktopInputUnknown, "native_release_failed", deadline, time.Now())
+	}
+	if device, ok := g.native.(NativeDesktopLease); ok {
+		// The device stops its own agent before the human's first input.
+		if err := device.Hold(ctx, deadline); err != nil {
+			// The device may hold its lease anyway: the release of this
+			// lease drops it again.
+			g.state, g.lease, g.key, g.identity = "released", lease, nil, ""
+			g.dropPending, g.dropResume = true, false
+			return rejectDesktopControl(ErrDesktopControl, "native_lease_refused", deadline, time.Now())
+		}
+		g.dropPending = false
 	}
 	g.lastSeq = 0
 	g.key = append([]byte(nil), key...)
@@ -247,7 +290,21 @@ func (g *DesktopControlGate) release(ctx context.Context, epoch uint64, lease st
 		return g.release(ctx, epoch, lease, resume, expiredOnly)
 	}
 	if g.state == "released" {
-		allowed := !resume || g.resume
+		if g.dropPending && resume == g.dropResume {
+			// The device lease of this release was not confirmed dropped.
+			device := g.native.(NativeDesktopLease)
+			g.mu.Unlock()
+			if err := device.Drop(ctx, resume); err != nil {
+				return ErrDesktopInputUnknown
+			}
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			if g.epoch == epoch && g.lease == lease && g.state == "released" && g.dropPending {
+				g.dropPending, g.resume = false, resume
+			}
+			return nil
+		}
+		allowed := (!resume || g.resume) && !g.dropPending
 		g.mu.Unlock()
 		if !allowed {
 			return ErrDesktopControl
@@ -302,6 +359,10 @@ func (g *DesktopControlGate) release(ctx context.Context, epoch uint64, lease st
 	if err == nil {
 		g.restoreDesktop(ctx)
 	}
+	var dropErr error
+	if device, ok := g.native.(NativeDesktopLease); ok && err == nil {
+		dropErr = device.Drop(ctx, resume)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.key = nil
@@ -311,6 +372,12 @@ func (g *DesktopControlGate) release(ctx context.Context, epoch uint64, lease st
 		return ErrDesktopInputUnknown
 	}
 	g.state = "released"
+	if dropErr != nil {
+		// No human input is admitted any more; the release is retried for
+		// the device lease only.
+		g.resume, g.dropPending, g.dropResume = false, true, resume
+		return ErrDesktopInputUnknown
+	}
 	g.resume = resume
 	return nil
 }
@@ -415,6 +482,11 @@ func (g *DesktopControlGate) recover(ctx context.Context, epoch uint64, lease st
 		return ErrDesktopRecoveryRequired
 	}
 	g.restoreDesktop(ctx)
+	if device, ok := g.native.(NativeDesktopLease); ok {
+		if err := device.Drop(ctx, false); err != nil {
+			return ErrDesktopRecoveryRequired
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -424,7 +496,7 @@ func (g *DesktopControlGate) recover(ctx context.Context, epoch uint64, lease st
 	g.key = nil
 	g.identity = ""
 	g.agentUnknown = false
-	g.resume = false
+	g.resume, g.dropPending = false, false
 	g.observed = map[string]uint64{}
 	g.state = "released"
 	return nil
