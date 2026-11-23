@@ -5,6 +5,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,6 +30,10 @@ type apiOp struct {
 	// Body: the operation takes a JSON body; List: it answers a page; Raw: it
 	// answers bytes; HandWritten: a hand-written command serves it.
 	Body, List, Raw, HandWritten bool
+	// Idempotent: the operation requires an Idempotency-Key; the command
+	// sends --idempotency-key, else a new key per run (the SDK's retries of
+	// that run reuse it).
+	Idempotent bool
 }
 
 // apiParam is a path parameter (positional), a query parameter or a
@@ -120,6 +126,11 @@ func apiCommand(op *apiOp) *cobra.Command {
 	if op.Raw {
 		cmd.Flags().StringVarP(&output, "output", "o", "", "write the content to this file (default: stdout)")
 	}
+	var key string
+	if op.Idempotent {
+		cmd.Flags().StringVar(&key, "idempotency-key", "",
+			"Idempotency-Key of the request; reuse it to retry safely (default: a new key per run)")
+	}
 	cmd.RunE = func(cmd *cobra.Command, a []string) error {
 		s, err := apiSession()
 		if err != nil {
@@ -131,7 +142,14 @@ func apiCommand(op *apiOp) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return runOp(cmd.Context(), s, op, path, query, payload, all, output)
+		var o []option.RequestOption
+		if op.Idempotent {
+			if key == "" {
+				key = newIdempotencyKey()
+			}
+			o = append(o, option.WithHeader("Idempotency-Key", key))
+		}
+		return runOp(cmd.Context(), s, op, path, query, payload, all, output, o...)
 	}
 	return cmd
 }
@@ -279,10 +297,17 @@ func (s *session) do(ctx context.Context, method, path string, query url.Values,
 	return resp, nil
 }
 
+// newIdempotencyKey is a random Idempotency-Key.
+func newIdempotencyKey() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b) // crypto/rand.Read never fails
+	return "bma-cli-" + hex.EncodeToString(b)
+}
+
 func runOp(ctx context.Context, s *session, op *apiOp, path string, query url.Values, payload []byte, all bool,
-	output string) error {
+	output string, o ...option.RequestOption) error {
 	if op.Raw {
-		resp, err := s.do(ctx, op.Method, path, query, payload)
+		resp, err := s.do(ctx, op.Method, path, query, payload, o...)
 		if err != nil {
 			return err
 		}
@@ -290,7 +315,7 @@ func runOp(ctx context.Context, s *session, op *apiOp, path string, query url.Va
 		return writeContent(resp.Body, output)
 	}
 	if !all {
-		v, err := s.json(ctx, op.Method, path, query, payload)
+		v, err := s.json(ctx, op.Method, path, query, payload, o...)
 		if err != nil || v == nil {
 			return err
 		}
@@ -301,7 +326,7 @@ func runOp(ctx context.Context, s *session, op *apiOp, path string, query url.Va
 	}
 	var items []any
 	for {
-		v, err := s.json(ctx, op.Method, path, query, payload)
+		v, err := s.json(ctx, op.Method, path, query, payload, o...)
 		if err != nil {
 			return err
 		}
@@ -323,8 +348,9 @@ func runOp(ctx context.Context, s *session, op *apiOp, path string, query url.Va
 }
 
 // json sends a request and decodes its answer; nil for an empty answer.
-func (s *session) json(ctx context.Context, method, path string, query url.Values, payload []byte) (any, error) {
-	resp, err := s.do(ctx, method, path, query, payload)
+func (s *session) json(ctx context.Context, method, path string, query url.Values, payload []byte,
+	o ...option.RequestOption) (any, error) {
+	resp, err := s.do(ctx, method, path, query, payload, o...)
 	if err != nil {
 		return nil, err
 	}

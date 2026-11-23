@@ -5,7 +5,7 @@
 package main
 
 // contractSource is the OpenAPI document the commands were generated from.
-const contractSource = "contracts/bma-api/bma.openapi.yaml sha256:78d5db8f18febe2bf262700304260cb4b9d5bdfddb8634f2e97e9882ec0d3d81"
+const contractSource = "contracts/bma-api/bma.openapi.yaml sha256:3b3e84d88b6d253401862722bfc6528a9299255cb01ab47465edfce39c72936d"
 
 // apiOperations are the operations of the public BMA API, one command each.
 var apiOperations = []apiOp{
@@ -388,7 +388,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "updateMachine", Method: "POST", Path: "/v1/machines/{machine_id}", Group: []string{"machines"}, Verb: "update", Summary: "Update a machine",
-		Description: "`agent_ids` replaces the agents bound to a persistent machine as a whole (`[]` opens a persistent pool machine to every agent of its workspace); the managers of the workspace that owns the machine may change it.",
+		Description: "`agent_ids` replaces the agents bound to a persistent machine as a whole (`[]` opens a persistent pool machine to every agent of its workspace); the managers of the workspace that owns the machine may change it. To add or remove one agent without overwriting concurrent changes use addMachineAgent / removeMachineAgent.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -403,6 +403,20 @@ var apiOperations = []apiOp{
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "agent_id", Flag: "agent-id", In: "query", Type: "string", Required: false},
+		},
+	},
+	{ID: "addMachineAgent", Method: "PUT", Path: "/v1/machines/{machine_id}/agents/{agent_id}", Group: []string{"machines", "agents"}, Verb: "update", Summary: "Bind an agent to a machine",
+		Description: "Adds one agent to a persistent pool machine's `agent_ids` (ADR-0085), atomically against concurrent agent changes of the machine; an agent already bound is a no-op (200). No request body. On a machine bound to no agent it narrows the machine from every agent of its workspace to this one. 404 when the agent is not an agent of the machine's workspace; 400 `validation_failed` for a machine that is not a persistent pool machine or already has 100 agents. The managers of the workspace that owns the machine may change it.",
+		Params: []apiParam{
+			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
+			{Name: "agent_id", Flag: "", In: "path", Type: "string", Required: true},
+		},
+	},
+	{ID: "removeMachineAgent", Method: "DELETE", Path: "/v1/machines/{machine_id}/agents/{agent_id}", Group: []string{"machines", "agents"}, Verb: "delete", Summary: "Unbind an agent from a machine",
+		Description: "Removes one agent from a machine's `agent_ids` (ADR-0085), atomically against concurrent agent changes of the machine; an agent not bound is a no-op (200). Removing the last agent is refused with 400 `validation_failed`: an empty `agent_ids` opens the machine to every agent of its workspace, which only an explicit `agent_ids: []` (updateMachine) does. The managers of the workspace that owns the machine may change it.",
+		Params: []apiParam{
+			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
+			{Name: "agent_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "listMachineBackups", Method: "GET", Path: "/v1/machines/{machine_id}/backups", Group: []string{"machines", "backups"}, Verb: "list", Summary: "List a machine's backups",
@@ -1084,6 +1098,19 @@ var apiOperations = []apiOp{
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "event_deltas", Flag: "event-deltas", In: "query", Type: "json", Required: false, Description: "When set, this connection also receives streaming deltas (event_start, event_delta) while an event is being produced, before the event itself arrives. Deltas are best-effort; when the final event is produced it carries the complete content. A model request that ends early (an error or interrupt) produces no final event — its terminal span.model_request_end closes the preview. Accepts one or more event types to preview and may be repeated: agent.message streams content_delta fragments; agent.thinking is start-only — a signal that the agent has begun extended thinking, concluded by the agent.thinking event itself. Only previews of the requested event types are sent."},
+		},
+	},
+	{ID: "forkSession", Method: "POST", Path: "/v1/sessions/{session_id}/fork", Group: []string{"sessions"}, Verb: "fork", Summary: "Fork a session (copies the conversation only, not files)",
+		Description: "Creates a new session in the source session's workspace that starts with a copy of the source's conversation up to a turn boundary, and returns it (idle). The source is unchanged. Copied: the conversation events `session.history` hands a brain (`user.message`, `agent.message`, `agent.tool_use`, `agent.tool_result`, `agent.custom_tool_use`, `user.custom_tool_result`, `agent.mcp_tool_use`, `agent.mcp_tool_result`; platform notices left out) in order, each under a new event id, every `user.message` under a new `bma_input_id`, and the members naming another copied event or input (`tool_use_id`, `mcp_tool_use_id`, `custom_tool_use_id`, `bma_steering_target_input_id`) rewritten to the new ids; `bma_sequence` restarts at 1, `occurred_at` and `processed_at` are kept. Inherited: the frozen agent snapshot (agent version, session overrides, frozen skills), `bma_harness`, `environment_id`, the `bma_placement` request, resources, `bma_executor_config` and `vault_ids` (re-checked for the caller; see the request). Not inherited: session tool grants, queued or running inputs, the executor binding and working log, usage, `bma_model_override`, `metadata`. A fork copies the conversation only: no file is copied, snapshotted or rolled back. The new session uses the same environment and gets its machine by the usual rules: on the same persistent or BYO machine it shares that machine's workspace as it is now; a pool machine is a new, clean one. Its first turn rebuilds the context from the copied events without a runtime notice. Only a session whose brain rebuilds context from session events (executor capability `agent.history_rebuild`) can be forked, else 400 `fork_unsupported` (529 `brain_offline`, retryable, while no instance of the brain is connected to say). `fork_point_invalid` (400): the input is unknown or not the opening input of a turn, both points are given, or a turn opened before the cut has not ended (a turn in progress at the cut point). A source in another workspace is 404. The source may be archived. The fork and its source have independent lifecycles: archiving or deleting the source leaves the fork as it is, and the other way round; a compliance purge of a source finds its forks (and theirs) by `bma_forked_from.session_id` and purges them too. Limits (v1): at most 10000 copied events and 67108864 bytes (64 MiB) of copied payload, else 400 `fork_too_large`. Idempotency-Key is required (400 `idempotency_key_required`); a replay returns the same new session. The path carries no `bma_` prefix by a documented naming exception (aligned with an official fork if Claude Managed Agents ships one).",
+		Body:        true, List: false, Raw: false, HandWritten: false,
+		Idempotent: true,
+		Params: []apiParam{
+			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
+			{Name: "before_input_id", Flag: "before-input-id", In: "body", Type: "string", Required: false, Description: "The bma_input_id of the user.message that opened a turn; the fork ends before that turn (ask again from there)."},
+			{Name: "metadata", Flag: "metadata", In: "body", Type: "json", Required: false, Description: "Defaults to {}; the source's metadata is not inherited."},
+			{Name: "through_input_id", Flag: "through-input-id", In: "body", Type: "string", Required: false, Description: "The bma_input_id of the user.message that opened a turn; the fork includes that turn (its steering messages and every agent event). The turn must have ended."},
+			{Name: "title", Flag: "title", In: "body", Type: "string", Required: false, Description: "Defaults to the source's title followed by \" (fork)\", empty when the source has none."},
+			{Name: "vault_ids", Flag: "vault-ids", In: "body", Type: "json", Required: false, Description: "Defaults to the source's vaults, checked for the caller as on create; [] attaches none."},
 		},
 	},
 	{ID: "sessions.resources.list", Method: "GET", Path: "/v1/sessions/{session_id}/resources", Group: []string{"sessions", "resources"}, Verb: "list", Summary: "List Session Resources",

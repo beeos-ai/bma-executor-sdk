@@ -1486,7 +1486,8 @@ paths:
         - Machines
       summary: Update a machine
       description: "`agent_ids` replaces the agents bound to a persistent machine as a whole (`[]` opens a persistent pool
-        machine to every agent of its workspace); the managers of the workspace that owns the machine may change it."
+        machine to every agent of its workspace); the managers of the workspace that owns the machine may change it. To
+        add or remove one agent without overwriting concurrent changes use addMachineAgent / removeMachineAgent."
       parameters:
         - name: machine_id
           in: path
@@ -1536,6 +1537,73 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MachineDeleted"
+        4XX:
+          $ref: "#/components/responses/Error"
+        5XX:
+          $ref: "#/components/responses/Error"
+      x-bma-extension: true
+  /v1/machines/{machine_id}/agents/{agent_id}:
+    put:
+      operationId: addMachineAgent
+      tags:
+        - Machines
+      summary: Bind an agent to a machine
+      description: Adds one agent to a persistent pool machine's `agent_ids` (ADR-0085), atomically against concurrent agent
+        changes of the machine; an agent already bound is a no-op (200). No request body. On a machine bound to no agent
+        it narrows the machine from every agent of its workspace to this one. 404 when the agent is not an agent of the
+        machine's workspace; 400 `validation_failed` for a machine that is not a persistent pool machine or already has
+        100 agents. The managers of the workspace that owns the machine may change it.
+      parameters:
+        - name: machine_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: agent_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The machine after the change.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Machine"
+        4XX:
+          $ref: "#/components/responses/Error"
+        5XX:
+          $ref: "#/components/responses/Error"
+      x-bma-extension: true
+    delete:
+      operationId: removeMachineAgent
+      tags:
+        - Machines
+      summary: Unbind an agent from a machine
+      description: "Removes one agent from a machine's `agent_ids` (ADR-0085), atomically against concurrent agent changes of
+        the machine; an agent not bound is a no-op (200). Removing the last agent is refused with 400
+        `validation_failed`: an empty `agent_ids` opens the machine to every agent of its workspace, which only an
+        explicit `agent_ids: []` (updateMachine) does. The managers of the workspace that owns the machine may change
+        it."
+      parameters:
+        - name: machine_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: agent_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The machine after the change.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Machine"
         4XX:
           $ref: "#/components/responses/Error"
         5XX:
@@ -4951,6 +5019,70 @@ paths:
           $ref: "#/components/responses/Error"
         5XX:
           $ref: "#/components/responses/Error"
+  /v1/sessions/{session_id}/fork:
+    post:
+      operationId: forkSession
+      tags:
+        - sessions
+      summary: Fork a session (copies the conversation only, not files)
+      description: "Creates a new session in the source session's workspace that starts with a copy of the source's
+        conversation up to a turn boundary, and returns it (idle). The source is unchanged. Copied: the conversation
+        events `session.history` hands a brain (`user.message`, `agent.message`, `agent.tool_use`, `agent.tool_result`,
+        `agent.custom_tool_use`, `user.custom_tool_result`, `agent.mcp_tool_use`, `agent.mcp_tool_result`; platform
+        notices left out) in order, each under a new event id, every `user.message` under a new `bma_input_id`, and the
+        members naming another copied event or input (`tool_use_id`, `mcp_tool_use_id`, `custom_tool_use_id`,
+        `bma_steering_target_input_id`) rewritten to the new ids; `bma_sequence` restarts at 1, `occurred_at` and
+        `processed_at` are kept. Inherited: the frozen agent snapshot (agent version, session overrides, frozen skills),
+        `bma_harness`, `environment_id`, the `bma_placement` request, resources, `bma_executor_config` and `vault_ids`
+        (re-checked for the caller; see the request). Not inherited: session tool grants, queued or running inputs, the
+        executor binding and working log, usage, `bma_model_override`, `metadata`. A fork copies the conversation only:
+        no file is copied, snapshotted or rolled back. The new session uses the same environment and gets its machine by
+        the usual rules: on the same persistent or BYO machine it shares that machine's workspace as it is now; a pool
+        machine is a new, clean one. Its first turn rebuilds the context from the copied events without a runtime
+        notice. Only a session whose brain rebuilds context from session events (executor capability
+        `agent.history_rebuild`) can be forked, else 400 `fork_unsupported` (529 `brain_offline`, retryable, while no
+        instance of the brain is connected to say). `fork_point_invalid` (400): the input is unknown or not the opening
+        input of a turn, both points are given, or a turn opened before the cut has not ended (a turn in progress at the
+        cut point). A source in another workspace is 404. The source may be archived. The fork and its source have
+        independent lifecycles: archiving or deleting the source leaves the fork as it is, and the other way round; a
+        compliance purge of a source finds its forks (and theirs) by `bma_forked_from.session_id` and purges them too.
+        Limits (v1): at most 10000 copied events and 67108864 bytes (64 MiB) of copied payload, else 400
+        `fork_too_large`. Idempotency-Key is required (400 `idempotency_key_required`); a replay returns the same new
+        session. The path carries no `bma_` prefix by a documented naming exception (aligned with an official fork if
+        Claude Managed Agents ships one)."
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+          description: Replays the first result of the fork; the same key with another body is 400 `idempotency_key_reused`, one
+            while the first still runs 409 `idempotency_key_in_use`.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForkSessionRequest"
+      responses:
+        "200":
+          description: The new session, the same shape as the answer of POST /v1/sessions, with `bma_forked_from`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BetaManagedAgentsSession"
+        4XX:
+          $ref: "#/components/responses/Error"
+        5XX:
+          $ref: "#/components/responses/Error"
+      x-bma-extension: true
   /v1/sessions/{session_id}/resources:
     get:
       operationId: sessions.resources.list
@@ -6184,7 +6316,8 @@ components:
         type: string
         minLength: 1
         maxLength: 255
-      description: Replays the first result of a create; the same key with another body is 409.
+      description: Replays the first result of a create; the same key with another body is 400 `idempotency_key_reused`, one
+        while the first still runs 409 `idempotency_key_in_use`.
     Limit:
       name: limit
       in: query
@@ -12748,6 +12881,34 @@ components:
               - type: number
               - type: boolean
       additionalProperties: false
+    BmaSessionForkedFrom:
+      type: object
+      description: The session this one was forked from and where its conversation was cut (read-only). At most one of
+        `through_input_id` and `before_input_id` is set; both null when the source had no ended turn. The input ids are
+        the source's.
+      required:
+        - session_id
+        - through_input_id
+        - before_input_id
+        - inherited_through_sequence
+      properties:
+        session_id:
+          type: string
+          description: The source session.
+        through_input_id:
+          type:
+            - string
+            - "null"
+        before_input_id:
+          type:
+            - string
+            - "null"
+        inherited_through_sequence:
+          type: integer
+          minimum: 0
+          description: The `bma_sequence` of the last copied event in this session (0 for none); events up to it were inherited, a
+            client draws its "forked here" divider after it.
+      additionalProperties: false
     BmaSessionHarness:
       type: object
       description: The session's brain (`bma_harness`). On create it overrides the agent's brain for this session (same values
@@ -13991,6 +14152,19 @@ components:
           $ref: "#/components/schemas/DesktopCapabilities"
         control:
           $ref: "#/components/schemas/EmbeddedDesktopControlStatus"
+        close_reason:
+          type: string
+          enum:
+            - closed_by_user
+            - expired
+            - capture_refused
+            - capture_unconfirmed
+            - capture_lost
+          description: Why the session ended, present once it is closed. `capture_refused` - the machine refused to publish its
+            screen (opening again gets the same answer until something changes on the machine); `capture_unconfirmed` -
+            the machine did not confirm the start in time; `capture_lost` - the machine stopped renewing a running
+            capture; `expired` - the keepalive passed; `closed_by_user` - closed through `POST
+            /v1/desktop_sessions/{desktop_session_id}/close`.
       additionalProperties: false
     DesktopSessionClosed:
       type: object
@@ -14511,6 +14685,34 @@ components:
         - mime_type
         - size_bytes
         - type
+    ForkSessionRequest:
+      type: object
+      description: "Where to cut the source's conversation and the new session's own members. At most one of
+        `through_input_id` and `before_input_id`; with neither, the fork takes the conversation through the source's
+        last ended turn (none: an empty conversation)."
+      properties:
+        through_input_id:
+          type: string
+          description: The `bma_input_id` of the `user.message` that opened a turn; the fork includes that turn (its steering
+            messages and every agent event). The turn must have ended.
+        before_input_id:
+          type: string
+          description: The `bma_input_id` of the `user.message` that opened a turn; the fork ends before that turn (ask again from
+            there).
+        title:
+          type: string
+          description: Defaults to the source's title followed by " (fork)", empty when the source has none.
+        metadata:
+          type: object
+          description: Defaults to `{}`; the source's metadata is not inherited.
+          additionalProperties:
+            type: string
+        vault_ids:
+          type: array
+          description: Defaults to the source's vaults, checked for the caller as on create; `[]` attaches none.
+          items:
+            type: string
+      additionalProperties: false
     InputExecutionCapabilities:
       type: object
       additionalProperties: false
@@ -18325,6 +18527,14 @@ x-bma-extension-fields:
       oneOf:
         - $ref: "#/components/schemas/BmaSessionPlacement"
         - type: "null"
+  - operation: GET /v1/sessions, GET /v1/sessions/{session_id}, POST /v1/sessions/{session_id}, POST
+      /v1/sessions/{session_id}/archive, POST /v1/sessions/{session_id}/fork
+    direction: response
+    field: bma_forked_from
+    description: Present on a session created by POST /v1/sessions/{session_id}/fork (read-only); omitted otherwise. A fork
+      copies the conversation only, never files.
+    schema:
+      $ref: "#/components/schemas/BmaSessionForkedFrom"
   - operation: GET /v1/sessions, GET /v1/sessions/{session_id}, POST /v1/sessions, POST /v1/sessions/{session_id}
     direction: response
     field: bma_waiting
