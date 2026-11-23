@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.13.1
+
+- Go: a desktop control grant whose drain could not settle native input (for example a cold input worker on a new machine) blocks input as before, but the release of that same grant now recovers the gate. Before, the blocked gate kept the previous lease, the release was refused as `desktop_control_not_current`, and every later grant answered `recovery_required` until the executor restarted, so the machine could not be controlled.
+
 ## 1.13.0
 
 - Go: a turn canceled while a claude-code tool call waits (an `ask_user_question`, a permission) now interrupts the CLI before the waiting call is released. Released first, the call's result reached the CLI ahead of the interrupt, and the CLI could send one more model request after the cancel.

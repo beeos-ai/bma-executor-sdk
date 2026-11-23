@@ -522,3 +522,46 @@ func TestControlReleaseIsIdempotentAcrossFiveWatchControlRounds(t *testing.T) {
 		t.Fatalf("native releases = %d, want one per grant and one per release", released)
 	}
 }
+
+// A grant whose drain could not settle native input (a cold input worker on a
+// new machine) blocks input, but the platform's release of that same grant
+// recovers the gate: the next grant is admitted instead of recovery_required
+// for the life of the executor. Holds on a fresh gate and after an earlier lease.
+func TestFailedGrantDrainIsRecoveredByItsOwnRelease(t *testing.T) {
+	for _, earlier := range []bool{false, true} {
+		t.Run(fmt.Sprintf("earlier_lease=%v", earlier), func(t *testing.T) {
+			native := &failingNativeCleanup{}
+			g := NewDesktopControlGate(&controlBackend{}, native)
+			defer g.Close()
+			ctx := context.Background()
+			deadline := time.Now().Add(20 * time.Second)
+			epoch := uint64(1)
+			if earlier {
+				if err := g.Grant(ctx, epoch, "old", "viewer", deadline); err != nil {
+					t.Fatal(err)
+				}
+				if err := g.Release(ctx, epoch, "old", false); err != nil {
+					t.Fatal(err)
+				}
+				epoch++
+			}
+			native.fail = true
+			if err := g.Grant(ctx, epoch, "lease", "viewer", deadline); !errors.Is(err, ErrDesktopInputUnknown) {
+				t.Fatalf("grant = %v, want input outcome unknown", err)
+			}
+			if err := g.HumanInput(ctx, epoch, "lease", "viewer", 1, DesktopInputEvent{Type: "key", Keysym: 65, Down: true}); err == nil {
+				t.Fatal("a failed grant admitted input")
+			}
+			native.fail = false
+			if err := g.Release(ctx, epoch, "lease", false); err != nil {
+				t.Fatalf("release of the failed grant = %v, want recovered", err)
+			}
+			if g.state != "released" {
+				t.Fatalf("state = %s, want released", g.state)
+			}
+			if err := g.Grant(ctx, epoch+1, "retry", "viewer", deadline); err != nil {
+				t.Fatalf("retried grant = %v", err)
+			}
+		})
+	}
+}

@@ -214,7 +214,9 @@ func (g *DesktopControlGate) grant(ctx context.Context, epoch uint64, lease, ide
 		return rejectDesktopControl(ErrDesktopControl, "deadline_expired_after_drain", deadline, drainNow)
 	}
 	if err := g.native.ReleaseAll(drain); err != nil {
-		g.state = "blocked"
+		// Blocked on behalf of this grant: its release (the platform reverts
+		// an unconfirmed grant) recovers the gate. No key: no input is admitted.
+		g.state, g.lease, g.key, g.identity = "blocked", lease, nil, ""
 		return rejectDesktopControl(ErrDesktopInputUnknown, "native_release_failed", deadline, time.Now())
 	}
 	if device, ok := g.native.(NativeDesktopLease); ok {
