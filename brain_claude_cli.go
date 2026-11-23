@@ -244,7 +244,7 @@ func fileSHA256(path string) (string, error) {
 // executor's stop semantics: a stream that sends nothing for 90 s is stalled
 // (the DSH adapter's limit). The CLI asks again without streaming once a
 // stream stalled; the adapter lets that one fresh request answer a stall
-// before any content and ends the turn on a stall after content (onStream).
+// before any content and ends the turn on a stall after content (armIdle).
 // ACPAgentOptions.Env may override them.
 var claudeCLIEnv = []string{"CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS=90000"}
 
@@ -521,6 +521,8 @@ type cliPrompt struct {
 	// stalled before any, and the CLI's non-streaming request answers next.
 	streamed bool
 	fallback bool
+	// idle ends the turn when the stream stalls after content (armIdle).
+	idle *time.Timer
 	// waiting are the uuids of the user messages written for this prompt
 	// (its input and the steered ones) the CLI has not taken yet: it replays
 	// a message when it takes it (--replay-user-messages). ended: the prompt
@@ -564,6 +566,7 @@ func (c *cliConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) err
 		c.mu.Lock()
 		c.prompt = nil
 		c.mu.Unlock()
+		p.stopIdle()
 	}()
 	content := []map[string]any{}
 	if len(in.Skills) > 0 {
@@ -1110,10 +1113,12 @@ func (p *cliProc) onStream(prompt *cliPrompt, raw json.RawMessage, abandoned boo
 	switch e.Type {
 	case "message_start":
 		prompt.message, prompt.blocks, prompt.streamed = e.Message.ID, map[int]*cliBlock{}, false
+		prompt.stopIdleLocked()
 		prompt.mu.Unlock()
 		return
 	case "message_stop":
 		streamed := prompt.streamed
+		prompt.stopIdleLocked()
 		prompt.fallback = abandoned && !streamed
 		prompt.mu.Unlock()
 		if abandoned && streamed {
@@ -1146,6 +1151,9 @@ func (p *cliProc) onStream(prompt *cliPrompt, raw json.RawMessage, abandoned boo
 	if e.Type == "content_block_delta" {
 		prompt.streamed = true
 	}
+	if prompt.streamed {
+		p.armIdle(prompt)
+	}
 	prompt.mu.Unlock()
 	if b == nil {
 		return
@@ -1174,6 +1182,61 @@ func (p *cliProc) onStream(prompt *cliPrompt, raw json.RawMessage, abandoned boo
 		// them: an agent.tool_use that waits for approval is then always
 		// one whose interaction is open.
 	}
+}
+
+// armIdle (prompt.mu held) restarts the watch for a stream that stalls after
+// content: no stream event for nine tenths of the CLI's own idle limit ends the
+// turn here and interrupts the CLI before its watchdog fires. The watchdog
+// abandons the stream and sends the CLI's non-streaming request at once, which
+// an interrupt can only chase: a request that wins that race is a second model
+// request for the turn.
+func (p *cliProc) armIdle(prompt *cliPrompt) {
+	limit := p.a.streamIdle() / 10 * 9
+	if limit <= 0 {
+		return
+	}
+	if prompt.idle != nil {
+		prompt.idle.Reset(limit)
+		return
+	}
+	prompt.idle = time.AfterFunc(limit, func() {
+		prompt.mu.Lock()
+		stalled := prompt.streamed && !prompt.ended
+		prompt.mu.Unlock()
+		if stalled {
+			prompt.fail(AgentErrorCodeModelStreamIdle, "the model stream stalled after it sent content")
+			p.interrupt()
+		}
+	})
+}
+
+func (p *cliPrompt) stopIdleLocked() {
+	if p.idle != nil {
+		p.idle.Stop()
+	}
+}
+
+func (p *cliPrompt) stopIdle() {
+	p.mu.Lock()
+	p.stopIdleLocked()
+	p.mu.Unlock()
+}
+
+// streamIdle is the CLI's stream idle limit (the last
+// CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS of its environment), 0 when it has none.
+func (a *claudeCLIAdapter) streamIdle() time.Duration {
+	const key = "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS="
+	var limit time.Duration
+	for _, kv := range append(slices.Clone(claudeCLIEnv), a.env.Env...) {
+		if v, ok := strings.CutPrefix(kv, key); ok {
+			ms, err := strconv.Atoi(v)
+			limit = time.Duration(max(ms, 0)) * time.Millisecond
+			if err != nil {
+				limit = 0
+			}
+		}
+	}
+	return limit
 }
 
 // onUnstreamed reports the content of a response the CLI asked for without

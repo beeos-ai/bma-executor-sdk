@@ -26,6 +26,9 @@ type scriptedModel struct {
 	tool   string
 	input  map[string]any
 
+	// hang: a streamed reply stalls after its first text, until the request ends.
+	hang bool
+
 	mu       sync.Mutex
 	requests []modelRequest
 	toolUses int
@@ -154,6 +157,11 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 		if b["type"] == "text" {
 			event("content_block_start", map[string]any{"index": i, "content_block": block{"type": "text", "text": ""}})
 			event("content_block_delta", map[string]any{"index": i, "delta": block{"type": "text_delta", "text": b["text"]}})
+			if m.hang {
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
+				return
+			}
 		} else {
 			event("content_block_start", map[string]any{"index": i, "content_block": block{"type": "tool_use", "id": b["id"], "name": b["name"], "input": block{}}})
 			raw, _ := json.Marshal(b["input"])

@@ -369,3 +369,29 @@ func TestClaudeCLICancelWhileACustomToolWaitsSendsNoModelRequest(t *testing.T) {
 		t.Fatalf("model requests = %d, want 1", n)
 	}
 }
+
+// A stream that stalls after content ends the turn model_stream_idle before the
+// CLI's own watchdog fires: the watchdog would abandon the stream and send the
+// CLI's non-streaming request at once, a second model request for the turn that
+// an interrupt can only chase.
+func TestClaudeCLIStalledStreamAfterContentFailsBeforeTheCLIWatchdog(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	model := newScriptedModel(t, "bash", map[string]any{})
+	model.hang = true
+	// The CLI's watchdog takes 10 s at least.
+	f := startClaudeCLIFixture(t, ctx, model, ACPAgentOptions{Env: []string{"CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS=10000"}}, t.TempDir())
+	started := time.Now()
+	f.start(t, ctx, "sesn_i", "turn_1", "hi")
+	assertIdle(t, f.platform.waitIdleWithin(t, 30*time.Second, "turn_1"), TurnOutcomeFailed)
+	if took := time.Since(started); took >= 10*time.Second {
+		t.Fatalf("the turn failed after %v, not before the CLI watchdog (10 s)", took)
+	}
+	time.Sleep(3 * time.Second)
+	if n := len(model.requests); n != 1 {
+		t.Fatalf("model requests = %d, want 1", n)
+	}
+	if got := strings.Join(claudeEvents(t, f, "turn_1"), ","); !strings.Contains(got, AgentEventTypeSessionError) {
+		t.Fatalf("events = %s, want a session.error", got)
+	}
+}
