@@ -54,10 +54,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf16"
 )
 
 const (
@@ -177,6 +179,8 @@ func (a *claudeCLIAdapter) Start(ctx context.Context, env BrainEnv) (BrainCapabi
 		// next tool result (one after the last runs right after it); the
 		// prompt ends only when the CLI took every message written to it.
 		Steering: true,
+		// A new conversation starts from the session's past (writeTranscript).
+		HistoryRebuild: true,
 	}, nil
 }
 
@@ -335,10 +339,16 @@ func claudeConversationUUID(sessionID, ref string) (uuid string, ok bool) {
 
 // holds reports whether the CLI has the conversation uuid: its transcript
 // <config dir>/projects/<project>/<uuid>.jsonl, where it keeps what --resume
-// loads, in the config dir of the CLI's own environment (CLAUDE_CONFIG_DIR,
-// else HOME/.claude). A new HOME, a deleted config dir or another machine has
-// none: the conversation is lost.
+// loads. A new HOME, a deleted config dir or another machine has none: the
+// conversation is lost.
 func (a *claudeCLIAdapter) holds(uuid string) bool {
+	found, _ := filepath.Glob(filepath.Join(a.configDir(), "projects", "*", uuid+".jsonl"))
+	return len(found) > 0
+}
+
+// configDir is the config dir of the CLI's own environment
+// (CLAUDE_CONFIG_DIR, else HOME/.claude).
+func (a *claudeCLIAdapter) configDir() string {
 	var home, dir string // the CLI sees the last value of a variable
 	for _, kv := range a.processEnv() {
 		if v, ok := strings.CutPrefix(kv, "CLAUDE_CONFIG_DIR="); ok {
@@ -350,8 +360,7 @@ func (a *claudeCLIAdapter) holds(uuid string) bool {
 	if dir == "" {
 		dir = filepath.Join(home, ".claude")
 	}
-	found, _ := filepath.Glob(filepath.Join(dir, "projects", "*", uuid+".jsonl"))
-	return len(found) > 0
+	return dir
 }
 
 func (a *claudeCLIAdapter) Close() error {
@@ -416,7 +425,17 @@ func (a *claudeCLIAdapter) Open(ctx context.Context, req BrainOpen) (BrainSessio
 	a.mu.Lock()
 	a.convs[c.placeholder] = c
 	a.mu.Unlock()
-	if err := c.ensure(ctx, req.Ref != "", req.Effort); err != nil {
+	resume := req.Ref != ""
+	if !resume && len(req.History) > 0 {
+		// A conversation of the session's past: the CLI resumes the
+		// transcript the adapter writes for it.
+		if err := a.writeTranscript(req.Cwd, uuid, req.History); err != nil {
+			c.forget()
+			return nil, &AgentError{Code: AgentErrorCodeAgentError, Message: "write the claude conversation of the session's history: " + err.Error()}
+		}
+		resume = true
+	}
+	if err := c.ensure(ctx, resume, req.Effort); err != nil {
 		c.forget()
 		return nil, err
 	}
@@ -1506,4 +1525,115 @@ func claudeToolList() []any {
 			"case_insensitive": boolean("Ignore case."),
 		}),
 	}
+}
+
+// writeTranscript writes the conversation uuid of the session's past in the
+// CLI's own transcript format, where --resume loads it:
+// <config dir>/projects/<project of cwd>/<uuid>.jsonl, one JSON line per
+// message, each naming the one before (parentUuid). A run of assistant text
+// and tool calls is one assistant message, a run of tool results one user
+// message, and the tools have the names the CLI knows them by (mcp__bma__).
+func (a *claudeCLIAdapter) writeTranscript(cwd, uuid string, history []SessionHistoryEvent) error {
+	if real, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = real // the CLI names the project after its working directory as the OS reports it
+	}
+	type message struct {
+		role    string
+		content []any
+	}
+	var msgs []message
+	add := func(role string, block any) {
+		if n := len(msgs); n > 0 && msgs[n-1].role == role && (role == "assistant" || isToolResult(msgs[n-1].content) == isToolResult([]any{block})) {
+			msgs[n-1].content = append(msgs[n-1].content, block)
+			return
+		}
+		msgs = append(msgs, message{role: role, content: []any{block}})
+	}
+	for _, it := range historyItems(history) {
+		switch it.Kind {
+		case historyUser:
+			add("user", map[string]any{"type": "text", "text": it.Text})
+		case historyAssistant:
+			add("assistant", map[string]any{"type": "text", "text": it.Text})
+		case historyCall:
+			add("assistant", map[string]any{"type": "tool_use", "id": it.CallID, "name": claudeToolPrefix + it.Name, "input": it.Input})
+		case historyResult:
+			add("user", map[string]any{"type": "tool_result", "tool_use_id": it.CallID, "content": []any{map[string]any{"type": "text", "text": it.Text}}, "is_error": it.IsError})
+		}
+	}
+	var buf strings.Builder
+	parent := any(nil)
+	now := time.Now().UTC()
+	for i, m := range msgs {
+		id, err := newUUIDv7()
+		if err != nil {
+			return err
+		}
+		line := map[string]any{
+			"parentUuid": parent, "isSidechain": false, "userType": "external", "cwd": cwd, "sessionId": uuid,
+			"version": a.pin.Version, "type": m.role, "uuid": id,
+			"timestamp": now.Add(time.Duration(i) * time.Millisecond).Format("2006-01-02T15:04:05.000Z"),
+		}
+		if m.role == "assistant" {
+			stop := "end_turn"
+			if slices.ContainsFunc(m.content, func(b any) bool { return b.(map[string]any)["type"] == "tool_use" }) {
+				stop = "tool_use"
+			}
+			line["message"] = map[string]any{"id": "msg_" + strings.ReplaceAll(id, "-", ""), "type": "message", "role": "assistant",
+				"model": "<synthetic>", "content": m.content, "stop_reason": stop, "stop_sequence": nil,
+				"usage": map[string]any{"input_tokens": 0, "output_tokens": 0}}
+		} else {
+			line["message"] = map[string]any{"role": "user", "content": m.content}
+		}
+		raw, err := json.Marshal(line)
+		if err != nil {
+			return err
+		}
+		buf.Write(raw)
+		buf.WriteByte('\n')
+		parent = id
+	}
+	dir := filepath.Join(a.configDir(), "projects", claudeProject(cwd))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, uuid+".jsonl"), []byte(buf.String()), 0o600)
+}
+
+// isToolResult reports whether content is tool results (a user message of
+// tool results is not merged with one the user wrote).
+func isToolResult(content []any) bool {
+	return len(content) > 0 && content[0].(map[string]any)["type"] == "tool_result"
+}
+
+// claudeProject is the CLI's directory name of the project of cwd: every
+// character other than an ASCII letter or digit is "-", and a name longer
+// than 200 characters is cut there and followed by "-" and a base-36 hash
+// of cwd (the CLI's own rule).
+func claudeProject(cwd string) string {
+	// The CLI replaces each UTF-16 code unit; a multi-byte UTF-8 character
+	// is one or two of them.
+	slug := []rune{}
+	for _, r := range cwd {
+		switch {
+		case r < 0x80 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'):
+			slug = append(slug, r)
+		case r > 0xFFFF:
+			slug = append(slug, '-', '-')
+		default:
+			slug = append(slug, '-')
+		}
+	}
+	if len(slug) <= 200 {
+		return string(slug)
+	}
+	var h int32
+	for _, u := range utf16.Encode([]rune(cwd)) {
+		h = h<<5 - h + int32(u)
+	}
+	n := int64(h)
+	if n < 0 {
+		n = -n
+	}
+	return string(slug[:200]) + "-" + strconv.FormatInt(n, 36)
 }

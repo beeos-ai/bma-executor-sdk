@@ -26,6 +26,8 @@ type recordingPlatform struct {
 	changed      chan struct{}
 	// afterPersist runs after an event is durable and before it is acked.
 	afterPersist func(AgentEventRecord)
+	// history is what session.history answers per session (one page).
+	history map[string][]SessionHistoryEvent
 }
 
 func newRecordingPlatform() *recordingPlatform {
@@ -33,6 +35,18 @@ func newRecordingPlatform() *recordingPlatform {
 }
 
 func (p *recordingPlatform) recorder() *recordingPlatform { return p }
+
+func (p *recordingPlatform) SessionHistory(_ context.Context, _ *Executor, params SessionHistoryParams) (SessionHistoryResult, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	page := SessionHistoryResult{Events: []SessionHistoryEvent{}}
+	for _, e := range p.history[params.SessionID] {
+		if e.BmaSequence > params.After {
+			page.Events = append(page.Events, e)
+		}
+	}
+	return page, nil
+}
 
 func (p *recordingPlatform) notify() {
 	select {

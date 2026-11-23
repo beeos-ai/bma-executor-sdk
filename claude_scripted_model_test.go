@@ -5,6 +5,7 @@ package bmaexecutor
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -38,6 +39,8 @@ type modelRequest struct {
 	Texts []string
 	// Images counts the image blocks of its user messages.
 	Images int
+	// Body is the request as sent.
+	Body string
 }
 
 func newScriptedModel(t *testing.T, tool string, input map[string]any) *scriptedModel {
@@ -58,8 +61,9 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 		Tools    []struct{ Name string }
 		Messages []json.RawMessage
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	req := modelRequest{Model: body.Model, APIKey: r.Header.Get("X-Api-Key")}
+	raw, _ := io.ReadAll(r.Body)
+	_ = json.Unmarshal(raw, &body)
+	req := modelRequest{Body: string(raw), Model: body.Model, APIKey: r.Header.Get("X-Api-Key")}
 	for _, tool := range body.Tools {
 		req.Tools = append(req.Tools, tool.Name)
 	}

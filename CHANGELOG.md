@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.15.0
+
+- Go: the claude-code and codex brains rebuild a session they hold no conversation for from its past on the platform (contract 2.2.0 `agent.history_rebuild`, `session.history`): a fork's first turn, or a session whose local state is gone, continues with the earlier conversation and answers `context_rebuilt: true` instead of starting without it. The Claude adapter writes the past as the CLI's own transcript and resumes it; the Codex adapter writes it as a codex rollout of a new thread with the turn's tools and resumes it. Past images and files are named in a line of text. `BrainCapabilities.HistoryRebuild`, `BrainOpen.History`, `ReadSessionHistory` (inside `OpenTurn`) and, for a harness, `AgentSessionHistory`. The DSH brain does not declare it yet.
+- Go, TypeScript, Python: the contract snapshot is executor contract 2.3.0 (from 1.25.0). Breaking: `fs.mount` / `fs.unmount` and `capabilities.fs` are gone from the contract (the platform has not sent them since 2.0.0), and with them `SkillViews` / `NewSkillViews` and the generated `Fs*` types; a session's skills reach an executor with `skill.install`. `ScreenLiveResult` is the generated type.
+
 ## 1.14.1
 
 - Go, TypeScript, Python: a machine daemon token with neither machine id nor environment id posts its token request to the machine token alias `/api/v1/executors/token` again. Since 1.10.0 it went to `/v1/executors/token`, which the gateway serves only for an environment key (ADR-0023 3.3): every such executor got 401, reported as `ErrCredentialRejected` / `CredentialRejectedError`, and stopped as if its token had been revoked. Executors that set the machine id (`/v1/machines/{machine_id}/token`) or the environment id are unchanged. Upgrade from 1.10.0-1.14.0 if a machine executor may run without its machine id.

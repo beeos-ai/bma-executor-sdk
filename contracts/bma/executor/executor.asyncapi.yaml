@@ -1,8 +1,8 @@
 asyncapi: 3.0.0
-id: https://contracts.bma.beeos.ai/executor.asyncapi
+id: https://contracts.beeos.ai/executor.asyncapi
 info:
   title: BMA Executor Protocol channels
-  version: 1.25.0
+  version: 2.3.0
   description: "WebSocket channels for bma.executor.v1 and bma.executor.v1.1. The control channel carries JSON-RPC 2.0 requests, notifications, and responses. The mcp channel carries raw MCP JSON-RPC with no BMA wrapper. PTY bytes travel on per-attach outbound host sockets (subprotocol bma.terminal.v1), not on these channels. Contract 1.4.0 adds the platform tools endpoint (x-bma-platform-tools): the HTTP MCP endpoint a brain on one machine calls to run its tools on the session's hands machine."
   license:
     name: Apache-2.0
@@ -48,8 +48,8 @@ servers:
       - $ref: "#/components/securitySchemes/executorJWT"
     variables:
       host:
-        default: api.bma.beeos.ai
-        description: BMA API host.
+        default: executor.example.com
+        description: BMA executor host.
   mcp:
     host: "{host}"
     protocol: wss
@@ -61,8 +61,8 @@ servers:
       - $ref: "#/components/securitySchemes/executorJWT"
     variables:
       host:
-        default: api.bma.beeos.ai
-        description: BMA API host.
+        default: executor.example.com
+        description: BMA executor host.
 channels:
   control:
     address: /v1/executors/channel?channel=control
@@ -77,6 +77,10 @@ channels:
         $ref: "#/components/messages/screenStart"
       screenStop:
         $ref: "#/components/messages/screenStop"
+      screenLive:
+        $ref: "#/components/messages/screenLive"
+      screenControl:
+        $ref: "#/components/messages/screenControl"
       executorRegister:
         $ref: "#/components/messages/executorRegister"
       executorHeartbeat:
@@ -137,10 +141,6 @@ channels:
         $ref: "#/components/messages/skillInstall"
       workspaceBackup:
         $ref: "#/components/messages/workspaceBackup"
-      fsMount:
-        $ref: "#/components/messages/fsMount"
-      fsUnmount:
-        $ref: "#/components/messages/fsUnmount"
       sessionFilesFlush:
         $ref: "#/components/messages/sessionFilesFlush"
       turnStart:
@@ -218,6 +218,18 @@ operations:
       $ref: "#/channels/control"
     messages:
       - $ref: "#/components/messages/screenStop"
+  screenLiveReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/screenLive"
+  screenControlReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/screenControl"
   executorRegisterSend:
     action: send
     channel:
@@ -398,18 +410,6 @@ operations:
       $ref: "#/channels/control"
     messages:
       - $ref: "#/components/messages/workspaceBackup"
-  fsMountReceive:
-    action: receive
-    channel:
-      $ref: "#/channels/control"
-    messages:
-      - $ref: "#/components/messages/fsMount"
-  fsUnmountReceive:
-    action: receive
-    channel:
-      $ref: "#/channels/control"
-    messages:
-      - $ref: "#/components/messages/fsUnmount"
   sessionFilesFlushReceive:
     action: receive
     channel:
@@ -518,7 +518,7 @@ components:
       name: screen.start
       title: screen.start
       summary: Start a native WebRTC screen producer.
-      description: Starts a single native screen relay for this machine; no shell or virtual desktop is created. The server-selected session is idempotent; another active session is rejected. The relay ticket must never be logged. Human input remains disabled until separately fenced and authorized.
+      description: "Deprecated: a native screen producer publishes into the SFU with screen.live (display.screen_live) instead; screen.start and screen.stop are removed once no executor declares display.native_webrtc. Starts a single native screen relay for this machine; no shell or virtual desktop is created. The server-selected session is idempotent; another active session is rejected. The relay ticket must never be logged. Human input remains disabled until separately fenced and authorized."
       contentType: application/json
       payload:
         type: object
@@ -560,7 +560,7 @@ components:
       name: screen.stop
       title: screen.stop
       summary: Stop a native screen session.
-      description: Fences human input and stops the named native screen producer, waiting for cleanup before returning. Never resumes an agent. A repeated stop is safe; it must not affect a replacement session.
+      description: Deprecated with screen.start. Fences human input and stops the named native screen producer, waiting for cleanup before returning. Never resumes an agent. A repeated stop is safe; it must not affect a replacement session.
       contentType: application/json
       payload:
         type: object
@@ -592,6 +592,150 @@ components:
       x-bma-kind: request
       x-bma-channel: control
       x-bma-idempotent-by: session_id
+    screenLive:
+      name: screen.live
+      title: screen.live
+      summary: Publish, renew or stop the machine's live screen in the SFU.
+      description: "The platform's command to the screen publisher of a machine (desktop-relay.md §5; ADR-0080). screen_live_start: join room at url with token as publisher_identity and publish one SCREEN_SHARE video track; answer published=true only once the track is published. screen_live_renew: extend the publisher's local lease to expires_at_ms. screen_live_stop: unpublish and leave the room. The publisher stops on its own when the local lease passes without a renew. A start for the same session_id and generation is idempotent; a start with a higher generation replaces the current publication. width and height (start only, both or neither) are the size the session asked for; a physical screen keeps its own size. The token must never be logged. The publisher receives the holder's signed input as SFU data (bma.input.v1) and hands it to the executor's control gate; it holds no input authority itself. An executor declares at most one of display.screen_live and display.native_webrtc."
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: screen.live
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              type:
+                type: string
+                enum:
+                  - screen_live_start
+                  - screen_live_renew
+                  - screen_live_stop
+              request_id:
+                type: string
+              session_id:
+                type: string
+                description: The capture (one publication); distinct from the desktop session.
+              desktop_session_id:
+                type: string
+              machine_id:
+                type: string
+                description: Must equal the executor's machine; otherwise invalid params.
+              generation:
+                type: integer
+                minimum: 1
+                x-go-type: int64
+              room:
+                type: string
+              url:
+                type: string
+                description: SFU signaling URL (wss), on screen_live_start.
+              token:
+                type: string
+                description: Publisher access token for room, on screen_live_start. Never logged.
+              publisher_identity:
+                type: string
+              expires_at_ms:
+                type: integer
+                x-go-type: int64
+                description: The publisher's local lease deadline (Unix milliseconds).
+              width:
+                type: integer
+                x-go-type: int32
+              height:
+                type: integer
+                x-go-type: int32
+            required:
+              - type
+              - request_id
+              - session_id
+              - machine_id
+              - generation
+              - room
+              - expires_at_ms
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: screen.live
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: session_id
+    screenControl:
+      name: screen.control
+      title: screen.control
+      summary: Grant, renew, release or hand back a human's input lease on the live screen.
+      description: The executor's input fence for screen live sessions (rewrite-realtime.md §1.2). grant and renew admit only signed input (desktop-relay.md §5b) from identity, signed with input_key (32-byte Ed25519 public key, base64url without padding), under epoch and lease_id until expires_at_ms, and refuse the agent's input meanwhile; epoch never decreases within the executor process. release and handback drain the holder's input and release everything it holds before answering; handback lets the agent resume. The executor answers accepted only after the fence is in effect.
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: screen.control
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              session_id:
+                type: string
+                description: The capture.
+              action:
+                type: string
+                enum:
+                  - grant
+                  - renew
+                  - release
+                  - handback
+              machine_id:
+                type: string
+              epoch:
+                type: integer
+                x-go-type: int64
+              lease_id:
+                type: string
+              identity:
+                type: string
+                description: The holder's SFU participant identity (grant, renew).
+              input_key:
+                type: string
+                description: The holder's Ed25519 public key, base64url (grant, renew).
+              expires_at_ms:
+                type: integer
+                x-go-type: int64
+            required:
+              - session_id
+              - action
+              - machine_id
+              - epoch
+              - lease_id
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: screen.control
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: lease_id
     executorRegister:
       name: executor.register
       title: executor.register
@@ -1921,7 +2065,7 @@ components:
       name: skill.install
       title: skill.install
       summary: Install one skill revision on the machine.
-      description: Harness to executor request (machine-scoped). The executor downloads the revision archive with download_token, verifies digest, and installs it. Idempotent by (skill_id, revision_id, digest).
+      description: Harness to executor request (machine-scoped). The executor downloads the revision archive with download_token, verifies digest, and installs it. Idempotent by (skill_id, revision_id, digest). Installed at $BMA_HOME/installations/executor/machines/{machine_id}/skills/{skill_id}/revisions/{revision_id}/ (the archive's single top-level directory removed). The platform calls it (contract 2.3.0) on the session's hands machine before a platform tool call runs there, and, for a session whose brain runs on the machine (turn.start without tools_mcp_*), on that machine before every turn.start, once per frozen skill revision of the session, in the order the session froze them. That turn's config.system then names each installed revision's SKILL.md at that path; an executor that sandboxes its brain lets it read those directories, never write them. A failed install ends the turn failed (session.error skills_install_failed) without a turn.start; when the executor does not declare skills.install the turn runs without the skills after a session.error skills_unsupported.
       contentType: application/json
       payload:
         type: object
@@ -2015,89 +2159,6 @@ components:
       x-bma-kind: request
       x-bma-channel: control
       x-bma-idempotent-by: backup_id
-    fsMount:
-      name: fs.mount
-      title: fs.mount
-      summary: Mount session file views backed by bma-file.
-      description: Harness to executor request (machine-scoped). The executor mounts each listed view at its path as a FUSE file system that reads from service_url with the view's token, and keeps the token in memory only. Idempotent by (session_id, view), so resending the same mounts with new tokens renews the tokens without remounting; a changed path or readonly remounts. Sent when the session is bound to the machine and again after a resume or reconnect, because tokens are bound to the binding epoch. Sessions are independent, so a request for one session never changes the mounts of another, and fs.unmount ends one session only. An executor that declared fs.skills_per_session receives the skills view of each session at its own path (<session_files.root>/<agent_session_id>/skills, root /mnt/session when it declared none) and removes the mount points it created on fs.unmount; any other executor receives no skills view (there is no machine-wide skills path). Since contract 1.18.0 an executor that declared fs.copy_views (and a session_files.root) also receives fs.mount, for those views only, at <root>/<agent_session_id>/<view>; it copies the view as read-only files through the bma-file read routes instead of mounting it (see FsCapability.copy_views and file.json).
-      contentType: application/json
-      payload:
-        type: object
-        additionalProperties: false
-        properties:
-          jsonrpc:
-            type: string
-            const: "2.0"
-          id:
-            $ref: schemas/common.json#/$defs/JsonRpcId
-          method:
-            type: string
-            const: fs.mount
-          params:
-            type: object
-            additionalProperties: false
-            properties:
-              session_id:
-                type: string
-              service_url:
-                type: string
-              mounts:
-                type: array
-                minItems: 1
-                items:
-                  $ref: schemas/file.json#/$defs/FsMount
-            required:
-              - session_id
-              - service_url
-              - mounts
-        required:
-          - jsonrpc
-          - id
-          - method
-          - params
-      x-bma-jsonrpc-method: fs.mount
-      x-bma-direction: harness-to-executor
-      x-bma-kind: request
-      x-bma-channel: control
-      x-bma-idempotent-by: session_id+view
-    fsUnmount:
-      name: fs.unmount
-      title: fs.unmount
-      summary: Unmount the session file views.
-      description: Harness to executor request (machine-scoped). Unmounts every view of the session and drops its tokens. With flush the executor first commits pending writes (none for read-only views). Idempotent by session_id, a session with nothing mounted answers "unmounted". For a view placed by copying (fs.copy_views) the executor deletes that session's copied directory.
-      contentType: application/json
-      payload:
-        type: object
-        additionalProperties: false
-        properties:
-          jsonrpc:
-            type: string
-            const: "2.0"
-          id:
-            $ref: schemas/common.json#/$defs/JsonRpcId
-          method:
-            type: string
-            const: fs.unmount
-          params:
-            type: object
-            additionalProperties: false
-            properties:
-              session_id:
-                type: string
-              flush:
-                type: boolean
-            required:
-              - session_id
-        required:
-          - jsonrpc
-          - id
-          - method
-          - params
-      x-bma-jsonrpc-method: fs.unmount
-      x-bma-direction: harness-to-executor
-      x-bma-kind: request
-      x-bma-channel: control
-      x-bma-idempotent-by: session_id
     sessionFilesFlush:
       name: session_files.flush
       title: session_files.flush
@@ -3088,16 +3149,18 @@ x-bma-platform-tools:
     - glob
     - grep
   mcp-tools: "Contract 1.14.0. The names of the turn.start AgentTurnConfig.mcp_tools entries (mcp__<mcp_server_name>__<tool_name>) are tools of the endpoint for that turn too: tools/list lists them after the platform tools, and tools/call runs the named tool on its MCP server (not on the hands machine) with the server's credential, through the same token, policy, approval and idempotency checks; a name the turn was not given answers invalid params. The answer is the server's CallToolResult (text over 100,000 characters replaced by a preview), with structuredContent outcome; a server that could not be used answers isError with outcome not_forwarded (could not connect, credential refused: safe to retry) or unknown (the request left and no answer came: never rerun) and error_code mcp_connection_failed or mcp_authentication_failed."
+  platform-tools: "Contract 1.26.0. The names of the turn.start AgentTurnConfig.platform_tools entries are tools of the endpoint for that turn too: tools/list lists them, and tools/call runs the named tool on the platform itself (no hands machine; it works while the session has no machine bound), through the same token, policy, approval and idempotency checks; a name the turn was not given answers invalid params. generate_image (input tool.json GenerateImageInput, structuredContent tool.json GenerateImageResult) calls the image model on the session's own model route (the provider its model calls go to, which pays), stores each image as a session output file (output_path generated/<name>.png, mounted at uploads/generated/<name>.png, with an XMP TC260 AIGC label written without re-encoding the pixels) and answers a text, one preview image per file (at most 1024 px, annotations.audience [assistant]) and structuredContent. A model the turn does not offer answers error_code image_model_not_allowed with available_models. A keyed call still generating when sync_wait_ms passes answers in_progress; the generation completes on the platform and the same key returns its result (replayed=true) without generating or recording usage again (contracts/bma/platform-tool-image.vectors.json). Contract 2.1.0: web_search (input tool.json WebSearchInput, structuredContent tool.json WebSearchResult) and web_fetch (tool.json WebFetchInput / WebFetchResult) of agent_toolset_20260401 are platform tools too, offered when the agent's toolset enables them (the agent tool_policy decides them like its other toolset tools) and run on the platform: web_search with the platform's search providers (Chinese-region queries first to a Chinese provider, the next provider while one is throttled or unavailable; structuredContent.provider names the one that answered; the platform pays; each search is one usage fact of the session at that provider's list price), web_fetch through the platform's SSRF guard (public addresses only at connect time, every redirect hop included; robots.txt respected). Their text carries the external content inside <untrusted_web_content> … </untrusted_web_content>. A turn runs at most 20 web_search and 30 web_fetch calls; past that a call answers max_uses_exceeded (contracts/bma/platform-tool-web.vectors.json)."
   tools-call-meta:
     ai.beeos.bma/approval: "Approval evidence for a call the policy resolved as always_ask: the interaction id the user answered with allow. A missing or mismatched value answers approval_required or approval_invalid."
     ai.beeos.bma/idempotency_key: Caller-chosen key (1-200 bytes) that makes a repeated call return the stored result instead of running the tool again; the same key with different input answers idempotency_key_reused. Results are kept for 24 hours.
     ai.beeos.bma/sync_wait_ms: How long the call waits for the hands machine before it answers in_progress (the work continues and the same key fetches the result).
   structured-content:
     outcome: "executed | not_forwarded | unknown. executed: ran and finished. not_forwarded: certainly not run (for example the hands machine was offline for the whole wait). unknown: forwarded but the result is lost (hands restarted or disconnected); the platform never reruns it."
-    error_code: "Open set, set when the call did not execute normally: environment_unavailable, machine_starting, machine_rebuilding, permission_denied, approval_required, approval_invalid, in_progress, idempotency_key_reused, and for computer use calls desktop_busy and desktop_human_control (a person holds the desktop control lease: observe and action are both refused, nothing runs, no screenshot); receivers must accept values they do not know. A paused pool hands machine is woken for the call; machine_starting / machine_rebuilding (outcome not_forwarded, retryable: the text says when to call again) is a pool machine still starting or being rebuilt when the wait of the call ends; environment_unavailable is a machine that is offline (contracts/bma/platform-tool-machine-wake.vectors.json)."
+    error_code: "Open set, set when the call did not execute normally: environment_unavailable, machine_starting, machine_rebuilding, permission_denied, approval_required, approval_invalid, in_progress, idempotency_key_reused, for computer use calls desktop_busy and desktop_human_control (a person holds the desktop control lease: observe and action are both refused, nothing runs, no screenshot), and for generate_image content_policy_violation, invalid_image_input, rate_limited, image_model_unavailable, image_model_not_allowed and billing_suspended (contract 1.26.0), for web_search and web_fetch url_not_allowed, unsupported_content_type, content_too_large, fetch_failed, search_unavailable, rate_limited, max_uses_exceeded and billing_suspended (contract 2.1.0); receivers must accept values they do not know. A paused pool hands machine is woken for the call; machine_starting / machine_rebuilding (outcome not_forwarded, retryable: the text says when to call again) is a pool machine still starting or being rebuilt when the wait of the call ends; environment_unavailable is a machine that is offline (contracts/bma/platform-tool-machine-wake.vectors.json)."
     replayed: true when the result is the stored one of an earlier call with the same idempotency key.
     output_file: Path on the hands machine of the full output when it was truncated.
     pid: Process id on the hands machine of a call that is still running (in_progress).
+    files: Contract 1.26.0. Session files the call created (tool.json ToolResultFile[]); the brain copies them into agent.tool_result.bma_files.
 x-bma-token-endpoint:
   deprecated: true
   description: Deprecated alias of the two endpoints in x-bma-token-endpoints; the credential, not the path, picks the executor kind.

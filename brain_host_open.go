@@ -45,6 +45,9 @@ type acpOpenPlan struct {
 	tools []BrainTool
 	// skills are the checked input_skills of the opening input.
 	skills []InputSkillDocument
+	// history is the session's past a new conversation starts from
+	// (BrainOpen.History).
+	history []SessionHistoryEvent
 }
 
 // acpOpening is an open of a session in flight.
@@ -69,7 +72,7 @@ func (a *BrainHost) openSession(ctx context.Context, s *acpSession) error {
 			brain, err := a.adapter.Open(openCtx, BrainOpen{
 				SessionID: plan.params.SessionID, Ref: plan.params.ExecutorSessionRef, New: plan.newRef, Current: current,
 				Cwd: plan.cwd, SystemPrompt: a.systemPrompt(plan.promptCwd, plan.system, plan.hands),
-				Mode: plan.mode, Model: plan.model, Effort: plan.effort, Metadata: plan.params.Metadata, Tools: plan.tools,
+				Mode: plan.mode, Model: plan.model, Effort: plan.effort, Metadata: plan.params.Metadata, Tools: plan.tools, History: plan.history,
 			})
 			a.mu.Lock()
 			if err == nil {

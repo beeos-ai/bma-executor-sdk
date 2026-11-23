@@ -39,6 +39,14 @@ type AgentModelTokens interface {
 	RefreshModelToken(ctx context.Context, executor *Executor, params ModelTokenRefreshParams) (ModelTokenRefreshResult, error)
 }
 
+// AgentSessionHistory is implemented by an AgentPlatform that answers
+// session.history: a page of a session's conversation before a turn's
+// opening input. A returned *RPCError is sent as is. Without it the method is
+// not handled (-32601: the executor's agent has no history to rebuild from).
+type AgentSessionHistory interface {
+	SessionHistory(ctx context.Context, executor *Executor, params SessionHistoryParams) (SessionHistoryResult, error)
+}
+
 // AgentEventRecord is one validated durable agent event.
 type AgentEventRecord struct {
 	SessionID string
@@ -127,6 +135,24 @@ func (h *Harness) dispatchAgent(ctx context.Context, executor *Executor, method 
 			return nil, rpcErr(CodeInvalidParams, "invalid model_token.refresh params", false), true
 		}
 		result, err := tokens.RefreshModelToken(ctx, executor, params)
+		var rpc *RPCError
+		switch {
+		case errors.As(err, &rpc):
+			return nil, &JSONRPCError{Code: rpc.Code, Message: rpc.Message, Data: rpc.Data}, true
+		case err != nil:
+			return nil, rpcErr(CodeInternalError, err.Error(), true), true
+		}
+		return result, nil, true
+	case MethodSessionHistory:
+		history, ok := platform.(AgentSessionHistory)
+		if !ok {
+			return nil, nil, false
+		}
+		var params SessionHistoryParams
+		if json.Unmarshal(raw, &params) != nil || params.SessionID == "" || params.TurnID == "" {
+			return nil, rpcErr(CodeInvalidParams, "invalid session.history params", false), true
+		}
+		result, err := history.SessionHistory(ctx, executor, params)
 		var rpc *RPCError
 		switch {
 		case errors.As(err, &rpc):

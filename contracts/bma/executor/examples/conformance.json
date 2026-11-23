@@ -46,12 +46,6 @@
             },
             "workspace": {
               "backup": true
-            },
-            "fs": {
-              "fuse": true,
-              "views": [
-                "uploads"
-              ]
             }
           },
           "resume": {
@@ -193,12 +187,6 @@
             },
             "session_files": {
               "root": "/Users/alice/Library/Application Support/Agent/sessions"
-            },
-            "fs": {
-              "fuse": false,
-              "copy_views": [
-                "skills"
-              ]
             }
           }
         }
@@ -997,7 +985,7 @@
           "from_seq": 0,
           "ack_seq": 0,
           "host": {
-            "url": "wss://api.bma.beeos.ai/daemon/terminals/term_01/host",
+            "url": "wss://executor.example.com/daemon/terminals/term_01/host",
             "ticket": "tkt_example"
           }
         }
@@ -1148,59 +1136,6 @@
         "digest": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
         "size_bytes": 1048576,
         "entries": 42
-      }
-    },
-    {
-      "name": "fs.mount request",
-      "method": "fs.mount",
-      "kind": "request",
-      "message": {
-        "jsonrpc": "2.0",
-        "id": "req_fs_mount",
-        "method": "fs.mount",
-        "params": {
-          "session_id": "sesn_01JFS",
-          "service_url": "https://executor.example.com/v1/machines/mach_01/fs",
-          "mounts": [
-            {
-              "view": "uploads",
-              "path": "/mnt/session/sesn_01JFS/uploads",
-              "readonly": true,
-              "token": "bma_cap_v1.example.example"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "name": "fs.mount result",
-      "method": "fs.mount",
-      "kind": "result",
-      "result": {
-        "state": "mounted"
-      }
-    },
-    {
-      "name": "fs.unmount request",
-      "method": "fs.unmount",
-      "kind": "request",
-      "message": {
-        "jsonrpc": "2.0",
-        "id": "req_fs_unmount",
-        "method": "fs.unmount",
-        "params": {
-          "session_id": "sesn_01JFS",
-          "flush": true
-        }
-      }
-    },
-    {
-      "name": "fs.unmount result",
-      "method": "fs.unmount",
-      "kind": "result",
-      "result": {
-        "state": "unmounted",
-        "pending_bytes": 0
       }
     },
     {
@@ -1967,6 +1902,66 @@
       "kind": "result",
       "result": {
         "stopped": true
+      }
+    },
+    {
+      "name": "screen.live request",
+      "method": "screen.live",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_screen_live",
+        "method": "screen.live",
+        "params": {
+          "type": "screen_live_start",
+          "request_id": "slr_1",
+          "session_id": "cap_phone",
+          "desktop_session_id": "dsn_phone",
+          "machine_id": "mch_phone",
+          "generation": 1,
+          "room": "bma_cap_phone",
+          "url": "wss://api.example.test/internal/realtime/desktop/media",
+          "token": "fixture-publisher-token",
+          "publisher_identity": "publisher_cap_phone",
+          "expires_at_ms": 1767225630000
+        }
+      }
+    },
+    {
+      "name": "screen.live result",
+      "method": "screen.live",
+      "kind": "result",
+      "result": {
+        "accepted": true,
+        "published": true
+      }
+    },
+    {
+      "name": "screen.control request",
+      "method": "screen.control",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_screen_control",
+        "method": "screen.control",
+        "params": {
+          "session_id": "cap_phone",
+          "action": "grant",
+          "machine_id": "mch_phone",
+          "epoch": 1767225600000,
+          "lease_id": "lease_1",
+          "identity": "viewer_7f3a",
+          "input_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "expires_at_ms": 1767225628000
+        }
+      }
+    },
+    {
+      "name": "screen.control result",
+      "method": "screen.control",
+      "kind": "result",
+      "result": {
+        "accepted": true
       }
     },
     {

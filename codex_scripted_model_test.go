@@ -5,6 +5,7 @@ package bmaexecutor
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,6 +47,8 @@ type responsesRequest struct {
 	Texts []string
 	// Images counts the input_image parts of its user messages.
 	Images int
+	// Body is the request as sent.
+	Body string
 }
 
 func newScriptedResponses(t *testing.T, tool string, input map[string]any) *scriptedResponses {
@@ -74,8 +77,9 @@ func (m *scriptedResponses) serve(w http.ResponseWriter, r *http.Request) {
 			Tools   []codexWireTool `json:"tools"`
 		} `json:"input"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	req := responsesRequest{Model: body.Model, Effort: body.Reasoning.Effort, APIKey: strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")}
+	raw, _ := io.ReadAll(r.Body)
+	_ = json.Unmarshal(raw, &body)
+	req := responsesRequest{Body: string(raw), Model: body.Model, Effort: body.Reasoning.Effort, APIKey: strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")}
 	// The tools come in the request's tools, or (for a model of codex's
 	// catalog) in an additional_tools input item, namespaced.
 	req.Tools = codexToolNames(body.Tools)

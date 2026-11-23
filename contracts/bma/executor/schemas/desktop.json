@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.bma.beeos.ai/schemas/desktop.json",
+  "$id": "https://contracts.beeos.ai/schemas/desktop.json",
   "title": "BMA executor desktop types",
   "description": "v1.1 desktop.* control methods (machine-scoped executors that claim display.desktop, contract 1.11.0, additive). The desktop and its agent run from machine start; a desktop session only attaches to them (desktop-relay.md \u00a71).",
   "$defs": {

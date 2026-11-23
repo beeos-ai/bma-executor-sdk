@@ -14,10 +14,6 @@ from .generated import (
     DesktopWallpaperParams,
     DesktopWallpaperResult,
     ExecutorCapabilitiesUpdateParams,
-    FsMountParams,
-    FsMountResult,
-    FsUnmountParams,
-    FsUnmountResult,
     InteractionCancelParams,
     InteractionRequestParams,
     InteractionRequestResult,
@@ -33,6 +29,10 @@ from .generated import (
     ProcessStatusParams,
     ProcessWriteParams,
     ProcessWriteResult,
+    ScreenControlParams,
+    ScreenControlResult,
+    ScreenLiveParams,
+    ScreenLiveResult,
     ScreenStartParams,
     ScreenStartResult,
     ScreenStopParams,
@@ -74,6 +74,8 @@ from .generated import (
 __all__ = [
     "SCREEN_START",
     "SCREEN_STOP",
+    "SCREEN_LIVE",
+    "SCREEN_CONTROL",
     "PROCESS_START",
     "PROCESS_READ",
     "PROCESS_WRITE",
@@ -87,8 +89,6 @@ __all__ = [
     "DESKTOP_WALLPAPER",
     "SKILL_INSTALL",
     "WORKSPACE_BACKUP",
-    "FS_MOUNT",
-    "FS_UNMOUNT",
     "SESSION_FILES_FLUSH",
     "SESSION_COMPACT",
     "SESSION_COMPACT_CANCEL",
@@ -114,6 +114,8 @@ __all__ = [
 # Harness-to-executor requests a client serves with on_request.
 SCREEN_START: Request[ScreenStartParams, ScreenStartResult] = Request("screen.start")
 SCREEN_STOP: Request[ScreenStopParams, ScreenStopResult] = Request("screen.stop")
+SCREEN_LIVE: Request[ScreenLiveParams, ScreenLiveResult] = Request("screen.live")
+SCREEN_CONTROL: Request[ScreenControlParams, ScreenControlResult] = Request("screen.control")
 PROCESS_START: Request[ProcessStartParams, ProcessState] = Request("process.start")
 PROCESS_READ: Request[ProcessReadParams, ProcessReadResult] = Request("process.read")
 PROCESS_WRITE: Request[ProcessWriteParams, ProcessWriteResult] = Request("process.write")
@@ -127,8 +129,6 @@ DESKTOP_ATTACH: Request[DesktopAttachParams, DesktopAttachResult] = Request("des
 DESKTOP_WALLPAPER: Request[DesktopWallpaperParams, DesktopWallpaperResult] = Request("desktop.wallpaper")
 SKILL_INSTALL: Request[SkillInstallParams, SkillInstallResult] = Request("skill.install")
 WORKSPACE_BACKUP: Request[WorkspaceBackupParams, WorkspaceBackupResult] = Request("workspace.backup")
-FS_MOUNT: Request[FsMountParams, FsMountResult] = Request("fs.mount")
-FS_UNMOUNT: Request[FsUnmountParams, FsUnmountResult] = Request("fs.unmount")
 SESSION_FILES_FLUSH: Request[SessionFilesFlushParams, SessionFilesFlushResult] = Request("session_files.flush")
 SESSION_COMPACT: Request[SessionCompactParams, SessionCompactResult] = Request("session.compact")
 SESSION_COMPACT_CANCEL: Request[SessionCompactCancelParams, SessionCompactCancelResult] = Request("session.compact_cancel")

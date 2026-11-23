@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.bma.beeos.ai/schemas/executor.json",
+  "$id": "https://contracts.beeos.ai/schemas/executor.json",
   "title": "BMA executor lifecycle types",
   "description": "Token bootstrap, registration, capabilities, heartbeat and drain.",
   "$defs": {
@@ -114,7 +114,15 @@
         },
         "native_webrtc": {
           "type": "boolean",
-          "description": "Native screen producer supports screen.start/stop and the bma desktop relay, without process execution. Does not grant input authority."
+          "description": "Deprecated (screen_live replaces it; removed once no executor declares it). Native screen producer supports screen.start/stop and the bma desktop relay, without process execution. Does not grant input authority."
+        },
+        "screen_live": {
+          "type": "boolean",
+          "description": "The executor's screen publisher serves screen.live: it publishes the machine's screen into the SFU (a desktop, or a physical screen such as a phone's). Not together with native_webrtc."
+        },
+        "screen_control": {
+          "type": "boolean",
+          "description": "With screen_live: the executor serves screen.control and admits a lease holder's signed input (desktop-relay.md §5b)."
         }
       },
       "required": [],
@@ -219,40 +227,6 @@
       },
       "required": [
         "backup"
-      ],
-      "additionalProperties": true
-    },
-    "FsCapability": {
-      "type": "object",
-      "description": "Session file views mounted by the executor as FUSE file systems backed by bma-file (docs/adr/0021). Declared only after the executor probed that it can mount. Absent, or fuse=false without copy_views: the session files stay on the copy-and-scan protocol (session_files). views lists the views the executor can mount; the harness only mounts those. copy_views lists the read-only views an executor without FUSE places by copying them (fuse=false is allowed with it). Machine-scoped executors only.",
-      "properties": {
-        "fuse": {
-          "type": "boolean"
-        },
-        "views": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "skills_per_session": {
-          "type": "boolean",
-          "description": "Contract 1.4.0. The executor mounts the skills view at the path of each fs.mount, whatever it is, and keeps the views of several sessions mounted at once: mounting or unmounting one session never touches another session's views. When true, the harness mounts a session's skills at <root>/<agent_session_id>/skills (next to its uploads and outputs; root is session_files.root, or /mnt/session when none is declared), so sessions sharing a machine each see their own skills; the executor removes the mount points it created when the session is unmounted. Absent or false: the harness mounts no skills view (since 1.20.0 there is no machine-wide /mnt/skills)."
-        },
-        "copy_views": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "enum": [
-              "skills"
-            ]
-          },
-          "uniqueItems": true,
-          "description": "Contract 1.18.0. Views the executor places by copying instead of mounting, for an executor that cannot mount FUSE (macOS, Windows; ADR-0021 decision 9). Only skills, an immutable view (versions frozen when the session was created). Declare it only together with session_files.root. The harness then sends fs.mount and fs.unmount for these views exactly as for a FUSE mount (same read-only token, same service_url, path <root>/<agent_session_id>/skills); the executor reads the view through the bma-file read routes (list, lookup, read; see file.json) and writes it as read-only files at that path, the same as a read-only mount: it answers fs.mount mounted only once every file is in place and its sha256 checked (nothing half-copied stays), failed with error_code fs_unavailable (bma-file unreachable, or 429/5xx after retries) or mount_failed (anything else), and invalid_params for a path outside <root>/<agent_session_id>/skills. The harness waits at most 30 s for an answer: a copy that takes longer goes on, and the repeated fs.mount of the same session and path joins it. A repeated fs.mount of the same session and path (token renewal, reconnect) only replaces the token and needs no new copy. Sessions are independent, several may be placed at once, and fs.unmount deletes that session's directory only. A view listed in both views (with fuse true) and copy_views is mounted. Absent: nothing changes."
-        }
-      },
-      "required": [
-        "fuse"
       ],
       "additionalProperties": true
     },
@@ -378,9 +352,6 @@
         },
         "session_files": {
           "$ref": "executor.json#/$defs/SessionFilesCapability"
-        },
-        "fs": {
-          "$ref": "executor.json#/$defs/FsCapability"
         },
         "remote_brain": {
           "$ref": "executor.json#/$defs/RemoteBrainCapability"
@@ -570,6 +541,35 @@
       ],
       "additionalProperties": true
     },
+    "ScreenLiveResult": {
+      "type": "object",
+      "description": "accepted: the command took effect. published: true exactly for an accepted screen_live_start (the track is published), false for renew and stop.",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "published": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "accepted",
+        "published"
+      ],
+      "additionalProperties": false
+    },
+    "ScreenControlResult": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "accepted"
+      ],
+      "additionalProperties": false
+    },
     "ScreenStartResult": {
       "type": "object",
       "properties": {
@@ -593,6 +593,30 @@
         "stopped"
       ],
       "additionalProperties": false
+    },
+    "SessionFilesFlushResult": {
+      "type": "object",
+      "description": "session_files.flush result. state flushed: every changed output was uploaded; failed: at least one upload failed (error names it) and the request may be repeated.",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "flushed",
+            "failed"
+          ]
+        },
+        "uploaded": {
+          "type": "integer",
+          "description": "Outputs uploaded by this request."
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "additionalProperties": true
     }
   }
 }

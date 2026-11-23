@@ -70,6 +70,8 @@ agent 会话**不需要** `session.assign`：首个 `turn.start` 即打开；exe
 
 结果 `TurnStartResult`：`{accepted, turn_id, executor_session_ref, resumed, effective{model, thinking_level, permission_mode, cwd}}`。`executor_session_ref` 是本地对话句柄，平台保存并在下一轮回传，用于 executor 重启后恢复。
 
+执行端没有对话的会话（首轮、fork 的首轮、本地状态已丢）可能在平台上有历史。声明 `history_rebuild` 的 agent 在应答 `turn.start` 之前用 `session.history` 读出历史，新对话从它开始，应答 `resumed: false, context_rebuilt: true`（契约 2.2.0）；平台只对这类 agent 的会话允许 fork（`POST /v1/sessions/{session_id}/fork`）。Go：在 `OpenTurn` 里调 `ReadSessionHistory(ctx, sessionID, turnID)` 读全部分页；`BrainHost` 对声明 `BrainCapabilities.HistoryRebuild` 的适配器自动做，并把历史放进 `BrainOpen.History`。Claude 适配器把它写成 CLI 自己的转写（`<config dir>/projects/<project>/<uuid>.jsonl`，`--resume` 载入），Codex 适配器写成一个新 thread 的 codex rollout（带本轮工具，`thread/resume` 载入）；过去的图片与文件变成一行说明文字。DSH 适配器暂不声明：这类会话照旧开新对话（`resumed: false`，新的 `executor_session_ref`）。
+
 - ID 映射：平台 session ↔ 本地对话一对一；一轮用平台 `turn_id` / `input_id` 关联。
 - 同一 `turn_id` 重发返回首次结果，不会跑第二次。
 - 会话已有运行中的轮次 → `-32013`（改用 `turn.input`）；正在运行的轮次已达 `max_sessions` 时的 `turn.start` → `-32009`（可重试；空闲会话不占槽，只有运行中的轮次占）；`cwd` 不在允许根内 → `-32001`。

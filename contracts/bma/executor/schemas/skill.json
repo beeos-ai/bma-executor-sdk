@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.bma.beeos.ai/schemas/skill.json",
+  "$id": "https://contracts.beeos.ai/schemas/skill.json",
   "title": "BMA executor skill types",
   "description": "skill.install (machine-scoped executors).",
   "$defs": {

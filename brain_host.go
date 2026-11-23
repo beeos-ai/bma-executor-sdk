@@ -204,7 +204,7 @@ type ACPAgentOptions struct {
 	// SessionMounts limits the session's directories below SessionFilesRoot
 	// that the file tools reach and the model is told about to these of
 	// "uploads", "skills" and "outputs"; nil means all three. A host whose
-	// local turns get only the skills view (SkillViews) and do not sync
+	// local turns get only the skills view and do not sync
 	// uploads or outputs sets []string{"skills"}, so the model is not told to
 	// write deliverables nobody collects.
 	SessionMounts []string
@@ -537,6 +537,8 @@ func (a *BrainHost) Capability() AgentCapability {
 		InputSkills: a.caps.InputSkills,
 		// A turn.input joins the running prompt at the brain's next step boundary (RunTurn, BrainSession.Steer).
 		Steering: a.caps.Steering,
+		// A session without a conversation here starts from its past on the platform (OpenTurn, history).
+		HistoryRebuild: a.caps.HistoryRebuild,
 		// The host continues a turn an executor restart interrupted (recover).
 		TurnResume:  true,
 		FileInputs:  a.fileInputs(h.ImageInputs),
@@ -663,6 +665,12 @@ func (a *BrainHost) OpenTurn(ctx context.Context, params TurnStartParams) (TurnS
 	s.plan = acpOpenPlan{newRef: newRef, params: params, cwd: cwd, promptCwd: promptCwd, model: model, effort: level, mode: mode, system: system, hands: config.EnvironmentInfo,
 		tools: tools, skills: config.InputSkills}
 	a.mu.Unlock()
+	rebuilt := false
+	if newRef != "" {
+		if rebuilt, err = a.readHistory(ctx, s, params); err != nil {
+			return TurnStartResult{}, err
+		}
+	}
 	if err := a.opts.Core.openLocal(acpBrain, params.SessionID, cwd); err != nil {
 		return TurnStartResult{}, err
 	}
@@ -696,13 +704,35 @@ func (a *BrainHost) OpenTurn(ctx context.Context, params TurnStartParams) (TurnS
 			s.plan.params.ExecutorSessionRef, s.plan.newRef = "", newRef
 			a.mu.Unlock()
 			ref, resumed = newRef, false
+			if rebuilt, err = a.readHistory(ctx, s, params); err != nil {
+				return TurnStartResult{}, err
+			}
 			_ = a.openSession(ctx, s)
 		}
 	}
 	return TurnStartResult{
-		Accepted: true, TurnID: params.TurnID, ExecutorSessionRef: ref, Resumed: resumed,
+		Accepted: true, TurnID: params.TurnID, ExecutorSessionRef: ref, Resumed: resumed, ContextRebuilt: rebuilt,
 		Effective: AgentTurnConfig{Model: model, ThinkingLevel: level, PermissionMode: mode, Cwd: promptCwd, Harness: a.harness.ID, InputSkillReceipt: receipt},
 	}, nil
+}
+
+// readHistory gives a new conversation of the session the session's past on
+// the platform (session.history) to start from, for a brain that rebuilds
+// one (BrainCapabilities.HistoryRebuild): rebuilt when there is a past. A
+// session's first turn has none. The turn is refused when the past cannot be
+// read: it never runs without the context it had.
+func (a *BrainHost) readHistory(ctx context.Context, s *acpSession, params TurnStartParams) (bool, error) {
+	if !a.caps.HistoryRebuild {
+		return false, nil
+	}
+	past, err := ReadSessionHistory(ctx, params.SessionID, params.TurnID)
+	if err != nil {
+		return false, &RPCError{Code: CodeInternalError, Message: "session history not read: " + err.Error()}
+	}
+	a.mu.Lock()
+	s.plan.history = past
+	a.mu.Unlock()
+	return len(past) > 0, nil
 }
 
 // newConversationRef is the handle of a new conversation of a session: the

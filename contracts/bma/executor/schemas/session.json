@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.bma.beeos.ai/schemas/session.json",
+  "$id": "https://contracts.beeos.ai/schemas/session.json",
   "title": "BMA executor session types",
   "description": "Session assignment, readiness, events, and termination.",
   "$defs": {
