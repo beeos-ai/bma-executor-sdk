@@ -155,8 +155,8 @@ export function staticToken(wsUrl: string, token = ''): TokenSource {
 export interface WebSocketDialerOptions {
   /**
    * The selfhost environment (POST {baseUrl}/v1/environments/{environmentId}/token). environmentId and
-   * machineId are alternatives. With neither, the legacy alias POST {baseUrl}/v1/executors/token
-   * serves a machine daemon token (removed in contract 2.0).
+   * machineId are alternatives. With neither, the token is a machine daemon token and goes to its legacy
+   * alias POST {baseUrl}/api/v1/executors/token; an environment key always needs environmentId.
    */
   environmentId: string
   /**
@@ -209,11 +209,14 @@ function machineIdOf(options: Pick<WebSocketDialerOptions, 'environmentId' | 'ma
   return options.machineId ?? process.env[MACHINE_ID_ENV]?.trim() ?? ''
 }
 
-/** The token exchange of the executor's own resource (ADR-0023 1.3); the legacy alias serves a machine token without an id. */
+/**
+ * The token exchange of the executor's own resource (ADR-0023 1.3). A machine token without an id goes to its legacy
+ * alias /api/v1/executors/token; /v1/executors/token is the environment key alias and answers a machine token 401.
+ */
 function tokenPath(environmentId: string, machineId: string): string {
   if (environmentId) return `/v1/environments/${encodeURIComponent(environmentId)}/token`
   if (machineId) return `/v1/machines/${encodeURIComponent(machineId)}/token`
-  return '/v1/executors/token'
+  return '/api/v1/executors/token'
 }
 
 /** options.tokenSource, or the token exchange with environmentKey. */

@@ -33,7 +33,7 @@ The machine-readable contract is in this repository: [`executor.openrpc.yaml`](.
 
 | Path | Machine path (bma-api) | Environment path (managed-agents) |
 | --- | --- | --- |
-| token | `POST /v1/executors/token` | `POST /v1/executors/token` |
+| token | `POST /api/v1/executors/token` (machine daemon token only) | `POST /v1/executors/token` (environment key only) |
 | channel | `GET /v1/executors/channel` (WebSocket) | `GET /v1/executors/channel` |
 | artifacts | — | `POST /v1/executors/artifacts`, `GET /v1/executors/artifacts/{id}` |
 
@@ -48,11 +48,11 @@ Since 1.2.0 the executor host serves the same operations on the executor's own r
 
 bma-api mounts them only when the executor token secret is configured.
 
-### 2.2 Token exchange: `POST …/v1/executors/token`
+### 2.2 Token exchange: `POST …/token`
 
 ```http
-POST /v1/executors/token
-Authorization: Bearer <machine daemon token or environment key>
+POST /v1/machines/{machine_id}/token
+Authorization: Bearer <machine daemon token>
 Content-Type: application/json
 
 {"environment_id": "", "executor": {"name": "bmad", "os": "darwin", "arch": "arm64", "version": "0.2.11"}}

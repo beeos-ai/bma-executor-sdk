@@ -37,7 +37,7 @@ test('a base URL on a host retired for executors moves to the executor host', as
   assert.deepEqual(urls, ['https://executor.beeos.ai/v1/machines/mch_1/token'])
 })
 
-test('a machine token with neither id keeps the legacy alias /v1/executors/token', async () => {
+test('a machine token with neither id goes to the machine token alias /api/v1/executors/token', async () => {
   const urls: string[] = []
   const fetch = (async (url: string) => {
     urls.push(String(url))
@@ -45,7 +45,7 @@ test('a machine token with neither id keeps the legacy alias /v1/executors/token
   }) as typeof globalThis.fetch
   const dial = webSocketDialer({ environmentId: '', executor: executorInfo, baseUrl: 'https://bma.test', environmentKey: 'mtok', fetch })
   await assert.rejects(dial({ channel: ChannelScope.Control }))
-  assert.deepEqual(urls, ['https://bma.test/v1/executors/token'])
+  assert.deepEqual(urls, ['https://bma.test/api/v1/executors/token'])
 })
 
 // Go and Python bound the token request by the request timeout; fetch has none of its own.

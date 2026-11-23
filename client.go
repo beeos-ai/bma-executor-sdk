@@ -129,8 +129,9 @@ type Options struct {
 	EnvironmentKey string
 	// EnvironmentID is the selfhost environment. EnvironmentID and MachineID
 	// are alternatives: setting both is an error. With neither the client
-	// registers a machine-scoped executor on the legacy alias
-	// POST /v1/executors/token (removed in contract 2.0).
+	// registers a machine-scoped executor on the legacy machine token alias
+	// POST /api/v1/executors/token; an environment key always needs
+	// EnvironmentID.
 	EnvironmentID string
 	// MachineID is the machine of a machine-scoped executor, taken from
 	// BMA_MACHINE_ID (MachineIDEnv) when empty and EnvironmentID is empty.
@@ -877,8 +878,10 @@ func StaticToken(wsURL, token string) func(context.Context) (ExecutorTokenRespon
 
 // tokenPath is the token exchange of the executor's own resource (ADR-0023
 // 1.3): an environment key goes to /v1/environments/{id}/token, a machine
-// daemon token to /v1/machines/{id}/token. Without either id the legacy alias
-// serves a machine daemon token (the server derives the machine from it).
+// daemon token to /v1/machines/{id}/token. Without either id the token is a
+// machine daemon token and goes to its legacy alias /api/v1/executors/token
+// (the server derives the machine from it). /v1/executors/token is the
+// environment key alias and answers a machine token 401 (ADR-0023 3.3).
 func tokenPath(environmentID, machineID string) string {
 	switch {
 	case environmentID != "":
@@ -886,7 +889,7 @@ func tokenPath(environmentID, machineID string) string {
 	case machineID != "":
 		return "/v1/machines/" + url.PathEscape(machineID) + "/token"
 	default:
-		return "/v1/executors/token"
+		return "/api/v1/executors/token"
 	}
 }
 

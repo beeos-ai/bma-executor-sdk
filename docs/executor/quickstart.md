@@ -33,7 +33,7 @@ bma up                                            # approve the printed code in 
 
 ### 0.3 Option B: embedded in the desktop app
 
-Get the machine token with the same flow, keep it in secure storage (for example the OS keychain), and use the SDK executor end against `…/v1/executors/token` with `environment_id: ""`. **Do not** install or run bmad. The machine path requires `process.enabled` and `process.*`: with the Go SDK register `NewProcessCapability` on the `Core` (see [overview, option B](README.md#option-b-the-desktop-app-embeds-the-hand)); with TypeScript or Python implement `process.*` with `onRequest` / `on_request`, or integrate over the environment path (1B).
+Get the machine token with the same flow, keep it in secure storage (for example the OS keychain), and use the SDK executor end with `MachineID` set to the machine id (token exchange `…/v1/machines/{machine_id}/token`; never `…/v1/executors/token`, which takes only an environment key). **Do not** install or run bmad. The machine path requires `process.enabled` and `process.*`: with the Go SDK register `NewProcessCapability` on the `Core` (see [overview, option B](README.md#option-b-the-desktop-app-embeds-the-hand)); with TypeScript or Python implement `process.*` with `onRequest` / `on_request`, or integrate over the environment path (1B).
 
 ---
 

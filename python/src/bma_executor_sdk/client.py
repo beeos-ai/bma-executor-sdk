@@ -176,8 +176,9 @@ class ExecutorClient:
         # environment_id may be empty: a machine-scoped executor registers
         # without one (executor.register in the v1.1 contract). environment_id
         # and machine_id are alternatives; machine_id defaults to BMA_MACHINE_ID
-        # when environment_id is empty. With neither, the legacy alias
-        # POST /v1/executors/token serves a machine daemon token.
+        # when environment_id is empty. With neither, the token is a machine
+        # daemon token and goes to its legacy alias POST /api/v1/executors/token
+        # (/v1/executors/token is the environment key alias).
         if environment_id and machine_id:
             raise ValueError("bma_executor_sdk: environment_id and machine_id are alternatives; set one")
         if not environment_id and not machine_id:
@@ -508,12 +509,16 @@ class ExecutorClient:
             self._on_log(LogEvent(level, message, error))
 
     def _token_path(self) -> str:
-        """The token exchange of the executor's own resource (ADR-0023 1.3)."""
+        """The token exchange of the executor's own resource (ADR-0023 1.3).
+
+        A machine token without an id goes to its legacy alias
+        /api/v1/executors/token; /v1/executors/token is the environment key
+        alias and answers a machine token 401."""
         if self._environment_id:
             return f"/v1/environments/{quote(self._environment_id, safe='')}/token"
         if self._machine_id:
             return f"/v1/machines/{quote(self._machine_id, safe='')}/token"
-        return "/v1/executors/token"
+        return "/api/v1/executors/token"
 
     async def _fetch_token(self) -> ExecutorTokenResponse:
         if self._token_source is not None:
@@ -881,7 +886,7 @@ class ExecutorClient:
 
 
 class ExecutorTokenError(Exception):
-    """POST /v1/executors/token failed."""
+    """The token exchange (POST .../token) failed."""
 
 
 class CredentialRejectedError(ExecutorTokenError):
