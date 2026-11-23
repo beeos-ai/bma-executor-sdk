@@ -2,6 +2,7 @@
 
 ## 1.13.0
 
+- Go: a turn canceled while a claude-code tool call waits (an `ask_user_question`, a permission) now interrupts the CLI before the waiting call is released. Released first, the call's result reached the CLI ahead of the interrupt, and the CLI could send one more model request after the cancel.
 - bma: the organization commands `organizations workspaces create|update`, `organizations invites create`,
   `organizations api-keys update`, `organizations users update` and `organizations workspaces members create`
   take their fields as flags (the public API document now carries their request bodies), and the admin

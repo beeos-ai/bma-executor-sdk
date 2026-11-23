@@ -346,3 +346,26 @@ func TestClaudeSessionUUIDIsStableAndValid(t *testing.T) {
 		t.Fatalf("uuid = %s / %s", a, b)
 	}
 }
+
+// A cancel while a custom tool call waits for its answer interrupts the CLI
+// before the call is released: the released call's result must not let the CLI
+// issue another model request.
+func TestClaudeCLICancelWhileACustomToolWaitsSendsNoModelRequest(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	model := newScriptedModel(t, ToolNameAskUserQuestion, map[string]any{"questions": []any{map[string]any{
+		"question": "Which format?", "header": "Format", "options": []any{map[string]any{"label": "Markdown"}, map[string]any{"label": "PDF"}}}}})
+	f := startClaudeCLIFixture(t, ctx, model, ACPAgentOptions{AskUserQuestion: true}, t.TempDir())
+	f.start(t, ctx, "sesn_q", "turn_1", "run it")
+	f.platform.waitFor(t, "agent.custom_tool_use", func() bool {
+		return slices.Contains(eventTypes(eventsOf(f.platform.events, "turn_1")), AgentEventTypeAgentCustomToolUse)
+	})
+	if _, err := f.executor.CancelTurn(ctx, TurnCancelParams{SessionID: "sesn_q", TurnID: "turn_1"}); err != nil {
+		t.Fatal(err)
+	}
+	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCanceled)
+	time.Sleep(time.Second)
+	if n := len(model.requests); n != 1 {
+		t.Fatalf("model requests = %d, want 1", n)
+	}
+}
