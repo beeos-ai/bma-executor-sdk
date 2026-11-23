@@ -14,10 +14,14 @@ import (
 	"time"
 )
 
-const nativeInputArg = "--beework-native-input-worker"
+const nativeInputArg = "--native-input-worker"
+
+// legacyNativeInputArg is the argument the previous release starts the worker with: a parent of that
+// release whose binary was replaced in place still spawns it. Remove in the release after next.
+const legacyNativeInputArg = "--beework-native-input-worker"
 
 func RunNativeDesktopInputWorker() bool {
-	if len(os.Args) != 2 || os.Args[1] != nativeInputArg {
+	if len(os.Args) != 2 || (os.Args[1] != nativeInputArg && os.Args[1] != legacyNativeInputArg) {
 		return false
 	}
 	backend, err := newNativeDesktopInput()

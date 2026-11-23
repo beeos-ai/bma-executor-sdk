@@ -3,7 +3,7 @@
 // The bma command line against a deployment, every operation of the document
 // and every hand-written command. Run (CI: .github/workflows/cli-e2e.yaml):
 //
-//	BMA_API_KEY=… BMA_BASE_URL=https://api.staging.beeos.ai BMA_WORKSPACE_ID=… \
+//	BMA_API_KEY=… BMA_BASE_URL=http://127.0.0.1:58080 BMA_WORKSPACE_ID=… \
 //	  go test -tags e2e -run TestE2E -timeout 40m -v ./cmd/bma
 //
 // BMA_API_KEY is an organization key of an acceptance organization (admin

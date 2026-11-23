@@ -423,8 +423,8 @@ func TestACPAgentComputerUsePreflightBeforeApproval(t *testing.T) {
 	}
 }
 
-// platformAskUserQuestion is the agent's own ask_user_question, as the
-// beework backend defines it for every employee (2026-11-14).
+// platformAskUserQuestion is the agent's own ask_user_question, as a host
+// application defines it for every agent.
 var platformAskUserQuestion = CustomToolDefinition{Name: ToolNameAskUserQuestion, Description: "Ask the user (platform definition).",
 	InputSchema: map[string]any{"type": "object", "properties": map[string]any{"questions": map[string]any{"type": "array"}}}}
 
