@@ -28,6 +28,13 @@ paths:
                     - {properties: {provider: {type: string, enum: [a]}, cpu: {type: integer}}}
                     - {properties: {provider: {type: string, enum: [b]}}}
       responses: {"200": {content: {application/json: {schema: {type: object}}}}}
+  /v1/pools/{pool_id}/fork:
+    post:
+      operationId: pools.fork
+      parameters:
+        - {name: pool_id, in: path, required: true, schema: {type: string}}
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string}}
+      responses: {"200": {content: {application/json: {schema: {type: object}}}}}
 `
 
 func TestFlagsOfBracketedQueryAndMixedBodies(t *testing.T) {
@@ -49,5 +56,22 @@ func TestFlagsOfBracketedQueryAndMixedBodies(t *testing.T) {
 	}
 	if strings.Contains(s, `Flag: "provider"`) {
 		t.Errorf("a field of one oneOf variant became a flag:\n%s", s)
+	}
+}
+
+// An operation that requires an Idempotency-Key header is marked so the
+// command sends one; the header is no flag of its own.
+func TestRequiredIdempotencyKeyMarksTheOperation(t *testing.T) {
+	src, err := generate([]byte(spec), "spec.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	i := strings.Index(s, `{ID: "pools.fork"`)
+	if i < 0 || !strings.Contains(s[i:], "Idempotent: true") || strings.Contains(s, `Name: "Idempotency-Key"`) {
+		t.Fatalf("pools.fork not marked idempotent:\n%s", s)
+	}
+	if j := strings.Index(s, `{ID: "pools.create"`); strings.Contains(s[j:i], "Idempotent") {
+		t.Fatalf("an operation without the header is marked:\n%s", s)
 	}
 }

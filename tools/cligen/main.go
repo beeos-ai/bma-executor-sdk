@@ -136,6 +136,8 @@ type op struct {
 	Verb                                   string
 	Params                                 []param
 	Body, List, Raw, HandWritten           bool
+	// Idempotent: the operation requires an Idempotency-Key header.
+	Idempotent bool
 }
 
 type param struct {
@@ -280,6 +282,10 @@ func (d *doc) build(prefix, path, method string, o operation, ext []extField) (o
 			}
 		case "query":
 			g.Params = append(g.Params, d.flagParam(p.Name, "query", p.Schema, p.Description, p.Required))
+		case "header":
+			if strings.EqualFold(p.Name, "Idempotency-Key") && p.Required {
+				g.Idempotent = true
+			}
 		}
 	}
 	g.List = d.isList(o)
@@ -501,6 +507,9 @@ func render(ops []op, source string) ([]byte, error) {
 		}
 		if o.Body || o.List || o.Raw || o.HandWritten {
 			fmt.Fprintf(&b, "\t\tBody: %t, List: %t, Raw: %t, HandWritten: %t,\n", o.Body, o.List, o.Raw, o.HandWritten)
+		}
+		if o.Idempotent {
+			b.WriteString("\t\tIdempotent: true,\n")
 		}
 		if len(o.Params) > 0 {
 			b.WriteString("\t\tParams: []apiParam{\n")
