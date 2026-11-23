@@ -276,7 +276,7 @@
   retried up to twice with backoff, so one gateway 503 no longer ends a
   local turn. The SDK's model proxy passes the status and body through and
   does not retry itself. Hosts that pin the bundled brain to the SDK's
-  testdata version (beework-local `versions.lock`) move to 0.3.1 with this
+  testdata version (a host's `versions.lock`) move to 0.3.1 with this
   release.
 
 ## 1.6.32
@@ -298,7 +298,7 @@
 - **Go: `menu` needs the full path.** A `menu_path` of one top-level label
   (`["File"]`) made the driver open that menu and leave it open; the next five
   File > New Folder calls each reported success and made no folder
-  (2026-11-15, beework-local 0.1.13). A one-label path is now refused before
+  (2026-11-15). A one-label path is now refused before
   the driver: "menu_path needs the full path, the menu item last, for
   example ["File", "New Folder"]; to see which items there are, use
   computer_observe (the window's tree has the menu bar)". The tool schema
@@ -335,7 +335,7 @@
   foreground with the app in front.** 1.6.23 dropped the foreground key
   delivery and only brought an app in the background to the front, so with
   Finder already in front every `type` into its rename field ended in
-  `no_focused_text_input` (beework-local 0.1.12, CU3: 5 of 5 and 7 of 7).
+  `no_focused_text_input` (CU3: 5 of 5 and 7 of 7).
   Now `type` and `key` that end in `no_focused_text_input`, or in a refusal
   before input that recommends the foreground, are sent once more with
   `delivery_mode: "foreground"` after the window's app is made the front app
@@ -587,8 +587,8 @@
   `ACPAgentOptions.AskUserQuestion`.** 1.6.9-1.6.11 refused every such
   `turn.start` with `-32602 invalid params: custom tool ask_user_question has
   the name of one of the executor's tools`: the built-in `ask_user_question`
-  was added first and the agent's custom tool of the same name (which the
-  beework backend gives every employee) clashed with it. Both are the same
+  was added first and the agent's custom tool of the same name (which a
+  host application gives every agent) clashed with it. Both are the same
   ability, a custom tool call of the session, so the agent's definition now
   wins: the built-in one is offered only when the agent has none, the tool
   appears once, and a call is the session's custom tool call. Any other

@@ -49,7 +49,7 @@ await client.waitClosed(); // rejects when the client ends for good
 ```
 
 `baseUrl` is the executor origin of your BMA deployment, default `DEFAULT_BASE_URL`
-(`https://executor.beeos.ai`; staging `https://executor.staging.beeos.ai`); a URL on the retired
+(`https://executor.beeos.ai`); a URL on the retired
 bma API hosts (production and staging) is moved to the executor host (`executorOrigin`);
 the client posts the environment key to `{baseUrl}/v1/environments/{environmentId}/token` (a machine daemon token to
 `{baseUrl}/v1/machines/{machineId}/token`) and drops a trailing `/api/v1`. `machineId` and `environmentId` are alternatives;
