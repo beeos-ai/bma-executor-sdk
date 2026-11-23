@@ -180,7 +180,7 @@ Protocol messages are the same on every transport.
 ## 6. Identity, pairing and credentials
 
 - **Machine identity**: a computer = one machine record + one or more machine daemon tokens. Create one in the BMA dashboard ("Connect machine"), with `bma machines create-local`, or through the API. The token is shown once.
-- **Executor credential**: the machine token (machine path) or environment key (selfhost path) is only sent to `POST …/v1/executors/token`, which returns a 5-minute HS256 JWT. Only the JWT goes on the WebSocket.
+- **Executor credential**: the machine token (machine path) or environment key (selfhost path) is only sent to its token exchange (`POST …/v1/machines/{machine_id}/token` or `POST …/v1/environments/{environment_id}/token`), which returns a 5-minute HS256 JWT. Only the JWT goes on the WebSocket.
 - **Model credentials** of the local brain are separate from executor credentials; the SDK never reads or forwards them.
 - Option B pairing: the same machine-creation flow yields the machine token; store it securely (for example the OS keychain) and do not install bmad.
 

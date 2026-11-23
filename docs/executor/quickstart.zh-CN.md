@@ -33,7 +33,7 @@ bma up                                            # 在控制台批准屏幕上�
 
 ### 0.3 方案 B：Desktop 内嵌
 
-Desktop 用同一套 0.1 流程拿机器 token，保存在系统钥匙串之类的安全存储，用 SDK executor 端连 `…/v1/executors/token`（`environment_id: ""`）。**不要**再安装或运行 bmad。机器路径要求声明 `process.enabled` 并实现 `process.*`：Go SDK 在 `Core` 上注册 `NewProcessCapability` 即可（见[总览方案 B](README.zh-CN.md#方案-bdesktop-内嵌手)）；TypeScript / Python 需用 `onRequest` / `on_request` 自行实现 `process.*`，或先用示例 1B 的 environment 路径联调。
+Desktop 用同一套 0.1 流程拿机器 token，保存在系统钥匙串之类的安全存储，用 SDK executor 端并设置 `MachineID` 为机器 id（换 token 走 `…/v1/machines/{machine_id}/token`；不要用 `…/v1/executors/token`，它只收 environment key）。**不要**再安装或运行 bmad。机器路径要求声明 `process.enabled` 并实现 `process.*`：Go SDK 在 `Core` 上注册 `NewProcessCapability` 即可（见[总览方案 B](README.zh-CN.md#方案-bdesktop-内嵌手)）；TypeScript / Python 需用 `onRequest` / `on_request` 自行实现 `process.*`，或先用示例 1B 的 environment 路径联调。
 
 ---
 

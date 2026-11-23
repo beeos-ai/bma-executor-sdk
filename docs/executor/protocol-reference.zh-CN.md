@@ -35,7 +35,7 @@
 
 | 路径 | 机器路径（bma-api） | environment 路径（managed-agents） |
 | --- | --- | --- |
-| token | `POST /v1/executors/token` | `POST /v1/executors/token` |
+| token | `POST /api/v1/executors/token`（只收机器 daemon token） | `POST /v1/executors/token`（只收 environment key） |
 | 通道 | `GET /v1/executors/channel`（WebSocket） | `GET /v1/executors/channel` |
 | 产物 | — | `POST /v1/executors/artifacts`、`GET /v1/executors/artifacts/{id}` |
 
@@ -50,11 +50,11 @@ bma-api 只有在配置了 executor token secret 时才挂载。
 | 产物 | — | `POST /v1/environments/{environment_id}/artifacts` |
 | bma-file | `/v1/machines/{machine_id}/fs/<op>` | — |
 
-### 2.2 换 token：`POST …/v1/executors/token`
+### 2.2 换 token：`POST …/token`
 
 ```http
-POST /v1/executors/token
-Authorization: Bearer <机器 daemon token 或 environment key>
+POST /v1/machines/{machine_id}/token
+Authorization: Bearer <机器 daemon token>
 Content-Type: application/json
 
 {"environment_id": "", "executor": {"name": "bmad", "os": "darwin", "arch": "arm64", "version": "0.2.11"}}

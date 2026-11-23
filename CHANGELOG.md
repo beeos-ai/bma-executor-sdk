@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.14.1
+
+- Go, TypeScript, Python: a machine daemon token with neither machine id nor environment id posts its token request to the machine token alias `/api/v1/executors/token` again. Since 1.10.0 it went to `/v1/executors/token`, which the gateway serves only for an environment key (ADR-0023 3.3): every such executor got 401, reported as `ErrCredentialRejected` / `CredentialRejectedError`, and stopped as if its token had been revoked. Executors that set the machine id (`/v1/machines/{machine_id}/token`) or the environment id are unchanged. Upgrade from 1.10.0-1.14.0 if a machine executor may run without its machine id.
+
 ## 1.14.0
 
 - bma: `bma sessions fork <session_id> [--through-input-id ain_…|--before-input-id ain_…] [--title] [--metadata]

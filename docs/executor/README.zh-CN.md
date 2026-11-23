@@ -184,7 +184,7 @@ bma-executor-sdk（Go）
 ## 6. 身份、配对与凭据
 
 - **机器身份**：一台电脑 = 一条 machine 记录 + 一个或多个机器 daemon token。可在 BMA Dashboard（“Connect machine”）、`bma machines create-local` 或 API 创建。token 只显示一次。
-- **执行端凭据**：机器 token（机器路径）或 environment key（selfhost 路径）只用于 `POST …/v1/executors/token`，换出 5 分钟有效的 HS256 JWT；WebSocket 上只带 JWT，长期凭据不上 WebSocket。
+- **执行端凭据**：机器 token（机器路径）或 environment key（selfhost 路径）只用于各自的换 token 接口（`POST …/v1/machines/{machine_id}/token` 或 `POST …/v1/environments/{environment_id}/token`），换出 5 分钟有效的 HS256 JWT；WebSocket 上只带 JWT，长期凭据不上 WebSocket。
 - **本地脑访问模型的凭据**与执行端凭据分开管理，SDK 不读也不转发。
 - 方案 B 的 Desktop 配对：用上述同一套 machine 创建流程拿到机器 token，由 Desktop 安全保存（例如系统钥匙串），不要同时安装 bmad。
 

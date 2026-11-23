@@ -25,8 +25,9 @@ func tokenServer(t *testing.T, path *string) *httptest.Server {
 // The token exchange hangs off the executor's own resource (ADR-0023 1.3):
 // POST /v1/machines/{machine_id}/token for a machine daemon token and
 // POST /v1/environments/{environment_id}/token for an environment key. A
-// machine token without a machine id keeps the legacy alias, which the
-// server serves until it is removed.
+// machine token without a machine id goes to the machine token alias
+// POST /api/v1/executors/token: POST /v1/executors/token is the environment
+// key alias, which answers a machine token 401 (ADR-0023 3.3).
 func TestTokenExchangePathFollowsTheResource(t *testing.T) {
 	for name, tc := range map[string]struct {
 		environmentID string
@@ -39,7 +40,7 @@ func TestTokenExchangePathFollowsTheResource(t *testing.T) {
 		"machine id escaped":   {machineID: "a/b", want: "/v1/machines/a%2Fb/token"},
 		"environment":          {environmentID: "env_test", want: "/v1/environments/env_test/token"},
 		"environment wins env": {environmentID: "env_test", env: "mach_env", want: "/v1/environments/env_test/token"},
-		"legacy machine":       {want: "/v1/executors/token"},
+		"legacy machine":       {want: "/api/v1/executors/token"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv(MachineIDEnv, tc.env)
