@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.14.0
+
+- bma: `bma sessions fork <session_id> [--through-input-id ain_…|--before-input-id ain_…] [--title] [--metadata]
+  [--vault-ids]` forks a session (`POST /v1/sessions/{session_id}/fork`): a new session with a copy of the
+  source's conversation up to a turn boundary; it copies the conversation only, not files.
+- bma: an operation whose contract requires an `Idempotency-Key` sends one: `--idempotency-key`, or a new key
+  per run (kept across that run's retries).
+- bma: commands follow the public API document of beeos-managed-agents 4fef0564e.
+
 ## 1.13.1
 
 - Go: a desktop control grant whose drain could not settle native input (for example a cold input worker on a new machine) blocks input as before, but the release of that same grant now recovers the gate. Before, the blocked gate kept the previous lease, the release was refused as `desktop_control_not_current`, and every later grant answered `recovery_required` until the executor restarted, so the machine could not be controlled.
