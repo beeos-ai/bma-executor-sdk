@@ -532,7 +532,13 @@ func (c *cliConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) err
 	}
 	c.mu.Lock()
 	proc := c.proc
-	p := &cliPrompt{ctx: ctx, sink: sink, blocks: map[int]*cliBlock{}, reported: map[string]bool{}, waiting: map[string]bool{}}
+	// ctx is the turn's; the waits of its tool calls end on calls, which a
+	// cancel ends only after the CLI was told to interrupt: a call released
+	// first gets its result to the CLI before the interrupt and the CLI asks
+	// the model again.
+	calls, endCalls := context.WithCancel(context.WithoutCancel(ctx))
+	defer endCalls()
+	p := &cliPrompt{ctx: calls, sink: sink, blocks: map[int]*cliBlock{}, reported: map[string]bool{}, waiting: map[string]bool{}}
 	c.prompt = p
 	c.mu.Unlock()
 	defer func() {
@@ -573,6 +579,7 @@ func (c *cliConv) Prompt(ctx context.Context, in BrainInput, sink BrainSink) err
 	ictx, cancel := context.WithTimeout(context.Background(), c.a.env.CancelGrace)
 	defer cancel()
 	_, _ = proc.control(ictx, map[string]any{"subtype": "interrupt"})
+	endCalls()
 	select {
 	case <-results:
 	case <-proc.done:
