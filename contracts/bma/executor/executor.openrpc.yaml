@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 1.25.0
+  version: 2.3.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -48,15 +48,15 @@ servers:
     summary: Deprecated alias of the machine and environment servers; executor control channel.
     variables:
       host:
-        default: api.bma.beeos.ai
-        description: BMA API host.
+        default: executor.example.com
+        description: BMA executor host.
   - name: mcp
     url: wss://{host}/v1/executors/channel?channel=mcp&session_id={session_id}&server_key={server_key}
     summary: Deprecated alias of the environment server with ?channel=mcp; raw MCP JSON-RPC channel for one environment-origin MCP server.
     variables:
       host:
-        default: api.bma.beeos.ai
-        description: BMA API host.
+        default: executor.example.com
+        description: BMA executor host.
       session_id:
         default: sess_example
         description: Assigned session id.
@@ -67,10 +67,14 @@ methods:
   - name: screen.start
     summary: Start a native WebRTC screen producer.
     description: >-
+      Deprecated: a native screen producer publishes into the SFU with screen.live
+      (display.screen_live) instead; screen.start and screen.stop are removed once
+      no executor declares display.native_webrtc.
       Starts a single native screen relay for this machine; no shell or virtual
       desktop is created. The server-selected session is idempotent; another
       active session is rejected. The relay ticket must never be logged. Human
       input remains disabled until separately fenced and authorized.
+    deprecated: true
     tags:
       - name: screen
     x-bma-direction: harness-to-executor
@@ -99,9 +103,11 @@ methods:
   - name: screen.stop
     summary: Stop a native screen session.
     description: >-
+      Deprecated with screen.start.
       Fences human input and stops the named native screen producer, waiting
       for cleanup before returning. Never resumes an agent. A repeated stop
       is safe; it must not affect a replacement session.
+    deprecated: true
     tags:
       - name: screen
     x-bma-direction: harness-to-executor
@@ -119,6 +125,171 @@ methods:
       name: result
       schema:
         $ref: schemas/executor.json#/$defs/ScreenStopResult
+  - name: screen.live
+    summary: Publish, renew or stop the machine's live screen in the SFU.
+    description: >-
+      The platform's command to the screen publisher of a machine (desktop-relay.md §5; ADR-0080).
+      screen_live_start: join room at url with token as publisher_identity and publish one
+      SCREEN_SHARE video track; answer published=true only once the track is published.
+      screen_live_renew: extend the publisher's local lease to expires_at_ms. screen_live_stop:
+      unpublish and leave the room. The publisher stops on its own when the local lease passes
+      without a renew. A start for the same session_id and generation is idempotent; a start
+      with a higher generation replaces the current publication. width and height (start only,
+      both or neither) are the size the session asked for; a physical screen keeps its own size.
+      The token must never be logged. The publisher receives the holder's signed input as SFU data
+      (bma.input.v1) and hands it to the executor's control gate; it holds no input authority
+      itself. An executor declares at most one of display.screen_live and display.native_webrtc.
+    tags:
+      - name: screen
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: display.screen_live
+    x-bma-idempotent-by: session_id
+    params:
+      - name: type
+        required: true
+        schema:
+          type: string
+          enum:
+            - screen_live_start
+            - screen_live_renew
+            - screen_live_stop
+      - name: request_id
+        required: true
+        schema:
+          type: string
+      - name: session_id
+        required: true
+        schema:
+          type: string
+          description: The capture (one publication); distinct from the desktop session.
+      - name: desktop_session_id
+        required: false
+        schema:
+          type: string
+      - name: machine_id
+        required: true
+        schema:
+          type: string
+          description: Must equal the executor's machine; otherwise invalid params.
+      - name: generation
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+          x-go-type: int64
+      - name: room
+        required: true
+        schema:
+          type: string
+      - name: url
+        required: false
+        schema:
+          type: string
+          description: SFU signaling URL (wss), on screen_live_start.
+      - name: token
+        required: false
+        schema:
+          type: string
+          description: Publisher access token for room, on screen_live_start. Never logged.
+      - name: publisher_identity
+        required: false
+        schema:
+          type: string
+      - name: expires_at_ms
+        required: true
+        schema:
+          type: integer
+          x-go-type: int64
+          description: The publisher's local lease deadline (Unix milliseconds).
+      - name: width
+        required: false
+        schema:
+          type: integer
+          x-go-type: int32
+      - name: height
+        required: false
+        schema:
+          type: integer
+          x-go-type: int32
+    result:
+      name: result
+      schema:
+        $ref: schemas/executor.json#/$defs/ScreenLiveResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
+      - $ref: "#/components/errors/ResourceUnavailable"
+  - name: screen.control
+    summary: Grant, renew, release or hand back a human's input lease on the live screen.
+    description: >-
+      The executor's input fence for screen live sessions (rewrite-realtime.md §1.2). grant and
+      renew admit only signed input (desktop-relay.md §5b) from identity, signed with input_key
+      (32-byte Ed25519 public key, base64url without padding), under epoch and lease_id until
+      expires_at_ms, and refuse the agent's input meanwhile; epoch never decreases within the
+      executor process. release and handback drain the holder's input and release everything it
+      holds before answering; handback lets the agent resume. The executor answers accepted only
+      after the fence is in effect.
+    tags:
+      - name: screen
+    x-bma-direction: harness-to-executor
+    x-bma-kind: request
+    x-bma-channel: control
+    x-bma-since: bma.executor.v1.1
+    x-bma-capability: display.screen_control
+    x-bma-idempotent-by: lease_id
+    params:
+      - name: session_id
+        required: true
+        schema:
+          type: string
+          description: The capture.
+      - name: action
+        required: true
+        schema:
+          type: string
+          enum:
+            - grant
+            - renew
+            - release
+            - handback
+      - name: machine_id
+        required: true
+        schema:
+          type: string
+      - name: epoch
+        required: true
+        schema:
+          type: integer
+          x-go-type: int64
+      - name: lease_id
+        required: true
+        schema:
+          type: string
+      - name: identity
+        required: false
+        schema:
+          type: string
+          description: The holder's SFU participant identity (grant, renew).
+      - name: input_key
+        required: false
+        schema:
+          type: string
+          description: The holder's Ed25519 public key, base64url (grant, renew).
+      - name: expires_at_ms
+        required: false
+        schema:
+          type: integer
+          x-go-type: int64
+    result:
+      name: result
+      schema:
+        $ref: schemas/executor.json#/$defs/ScreenControlResult
+    errors:
+      - $ref: "#/components/errors/InvalidParams"
+      - $ref: "#/components/errors/CapabilityUnavailable"
   - name: executor.register
     summary: Register an executor connection.
     description: Executor to harness request, the first frame on the control channel. protocol MUST
@@ -1338,7 +1509,7 @@ methods:
     summary: Install one skill revision on the machine.
     description: Harness to executor request (machine-scoped). The executor downloads the revision
       archive with download_token, verifies digest, and installs it. Idempotent by (skill_id,
-      revision_id, digest).
+      revision_id, digest). Installed at $BMA_HOME/installations/executor/machines/{machine_id}/skills/{skill_id}/revisions/{revision_id}/ (the archive's single top-level directory removed). The platform calls it (contract 2.3.0) on the session's hands machine before a platform tool call runs there, and, for a session whose brain runs on the machine (turn.start without tools_mcp_*), on that machine before every turn.start, once per frozen skill revision of the session, in the order the session froze them. That turn's config.system then names each installed revision's SKILL.md at that path; an executor that sandboxes its brain lets it read those directories, never write them. A failed install ends the turn failed (session.error skills_install_failed) without a turn.start; when the executor does not declare skills.install the turn runs without the skills after a session.error skills_unsupported.
     tags:
       - name: skill
     x-bma-direction: harness-to-executor
@@ -1424,86 +1595,6 @@ methods:
       - $ref: "#/components/errors/InvalidParams"
       - $ref: "#/components/errors/CapabilityUnavailable"
       - $ref: "#/components/errors/InternalError"
-  - name: fs.mount
-    summary: Mount session file views backed by bma-file.
-    description: Harness to executor request (machine-scoped). The executor mounts each listed view
-      at its path as a FUSE file system that reads from service_url with the view's token, and keeps
-      the token in memory only. Idempotent by (session_id, view), so resending the same mounts with new
-      tokens renews the tokens without remounting; a changed path or readonly remounts. Sent when the
-      session is bound to the machine and again after a resume or reconnect, because tokens are bound
-      to the binding epoch. Sessions are independent, so a request for one session never changes the
-      mounts of another, and fs.unmount ends one session only. An executor that declared fs.skills_per_session
-      receives the skills view of each session at its own path (<session_files.root>/<agent_session_id>/skills,
-      root /mnt/session when it declared none) and removes the mount points it created on fs.unmount; any
-      other executor receives no skills view (there is no machine-wide skills path).
-      Since contract 1.18.0 an executor that declared fs.copy_views (and a
-      session_files.root) also receives fs.mount, for those views only, at <root>/<agent_session_id>/<view>;
-      it copies the view as read-only files through the bma-file read routes instead of mounting it (see
-      FsCapability.copy_views and file.json).
-    tags:
-      - name: fs
-    x-bma-direction: harness-to-executor
-    x-bma-kind: request
-    x-bma-channel: control
-    x-bma-since: bma.executor.v1.1
-    x-bma-capability: fs.fuse
-    x-bma-idempotent-by: session_id+view
-    params:
-      - name: session_id
-        required: true
-        schema:
-          type: string
-      - name: service_url
-        required: true
-        description: Complete prefix of the bma-file routes for this machine, ending in /v1/machines/{machine_id}/fs (for example https://executor.example.com/v1/machines/mach_01/fs). The executor appends "/<op>" and nothing else; it does not compose the machine id itself.
-        schema:
-          type: string
-      - name: mounts
-        required: true
-        schema:
-          type: array
-          minItems: 1
-          items:
-            $ref: schemas/file.json#/$defs/FsMount
-    result:
-      name: FsMountResult
-      schema:
-        $ref: schemas/file.json#/$defs/FsMountResult
-    errors:
-      - $ref: "#/components/errors/InvalidParams"
-      - $ref: "#/components/errors/CapabilityUnavailable"
-      - $ref: "#/components/errors/ResourceUnavailable"
-      - $ref: "#/components/errors/InternalError"
-  - name: fs.unmount
-    summary: Unmount the session file views.
-    description: Harness to executor request (machine-scoped). Unmounts every view of the session and
-      drops its tokens. With flush the executor first commits pending writes (none for read-only
-      views). Idempotent by session_id, a session with nothing mounted answers "unmounted". For a view
-      placed by copying (fs.copy_views) the executor deletes that session's copied directory.
-    tags:
-      - name: fs
-    x-bma-direction: harness-to-executor
-    x-bma-kind: request
-    x-bma-channel: control
-    x-bma-since: bma.executor.v1.1
-    x-bma-capability: fs.fuse
-    x-bma-idempotent-by: session_id
-    params:
-      - name: session_id
-        required: true
-        schema:
-          type: string
-      - name: flush
-        schema:
-          type: boolean
-    result:
-      name: FsUnmountResult
-      schema:
-        $ref: schemas/file.json#/$defs/FsUnmountResult
-    errors:
-      - $ref: "#/components/errors/InvalidParams"
-      - $ref: "#/components/errors/CapabilityUnavailable"
-      - $ref: "#/components/errors/InternalError"
   - name: session_files.flush
     summary: Upload the session outputs written so far and wait for the uploads.
     description: Harness to executor request (machine-scoped, contract 1.13.0). Before the platform
@@ -1525,7 +1616,7 @@ methods:
     result:
       name: SessionFilesFlushResult
       schema:
-        $ref: schemas/file.json#/$defs/SessionFilesFlushResult
+        $ref: schemas/executor.json#/$defs/SessionFilesFlushResult
     errors:
       - $ref: "#/components/errors/CapabilityUnavailable"
       - $ref: "#/components/errors/InternalError"
@@ -1587,7 +1678,7 @@ methods:
         description: >-
           String key/value pairs the platform adds to the turn. Per-turn credentials the executor
           declared in AgentCapability.platform_credentials: model_base_url, model_token (and optionally
-          model_context_window, model_max_output_tokens) for harness_model; for brain_tools (contract 1.4.0,
+          model_context_window, model_max_output_tokens, model_input_images) for harness_model; for brain_tools (contract 1.4.0,
           only when this machine is the brain and a different machine the hands of the session)
           tools_mcp_url (https://executor.<domain>/v1/machines/{brain_machine_id}/mcp), tools_mcp_token and
           tools_mcp_token_expires_at (RFC 3339, 1 hour after turn.start). With tools_mcp_* present every tool

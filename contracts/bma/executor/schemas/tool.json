@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.bma.beeos.ai/schemas/tool.json",
+  "$id": "https://contracts.beeos.ai/schemas/tool.json",
   "title": "BMA executor tool types",
   "description": "Tool dispatch, results, cancellation, and artifact references.",
   "$defs": {
@@ -463,6 +463,391 @@
       },
       "required": [
         "canceled"
+      ],
+      "additionalProperties": true
+    },
+    "ToolResultFile": {
+      "type": "object",
+      "description": "Contract 1.26.0. A session file a tool call created (agent.tool_result.bma_files, GenerateImageResult.files). The file is readable with GET /v1/files/{file_id}/content like any session file.",
+      "properties": {
+        "file_id": {
+          "type": "string",
+          "pattern": "^file_[a-z0-9]+$",
+          "description": "Public file id."
+        },
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "description": "File name (last segment of its output path)."
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "MIME type, for example image/png."
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Image width in pixels (images only)."
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Image height in pixels (images only)."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The model that generated the file (generated files only)."
+        }
+      },
+      "required": [
+        "file_id",
+        "filename",
+        "media_type",
+        "size_bytes"
+      ],
+      "additionalProperties": true
+    },
+    "GenerateImageInput": {
+      "type": "object",
+      "description": "Contract 1.26.0. Input of the platform tool generate_image. The platform offers it with model as an enum of the turn's available image models (contracts/bma/platform-tool-image.vectors.json); format (PNG) and count (1) are the platform's; the platform requests resolution 2K, which only models that declare a resolution parameter honor (OpenAI gpt-image-* output follows aspect_ratio, 1024x1024 for 1:1).",
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000,
+          "description": "What to create or how to change the input image: subject, style, composition, lighting, exact text in quotes; for an edit, what must stay the same."
+        },
+        "images": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Input images: absolute paths in the session's uploads or outputs directory, or file ids (file_…). The first is the image to edit, the others are references. Each at most 20 MB and 16,777,216 pixels."
+        },
+        "aspect_ratio": {
+          "type": "string",
+          "pattern": "^(auto|1:1|16:9|9:16|4:3|3:4|3:2|2:3)$",
+          "description": "Width:height of the image; auto lets the model choose. The platform offers these values as an enum."
+        },
+        "background": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "transparent",
+            "opaque"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Image model id; one of the turn's available image models. Absent: the default image model."
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+          "description": "File name stem, for example hero-banner."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "One line telling the user what is being made."
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "additionalProperties": false
+    },
+    "GenerateImageResult": {
+      "type": "object",
+      "description": "Contract 1.26.0. structuredContent of a generate_image answer (its outputSchema). The answer's content is a text (paths, file ids, sizes, model, revised prompt) and, per image, a preview image (at most 1024 px, annotations.audience [assistant]) plus this object serialized as text.",
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "executed",
+            "not_forwarded",
+            "unknown"
+          ]
+        },
+        "replayed": {
+          "type": "boolean"
+        },
+        "error_code": {
+          "type": "string",
+          "description": "Open set: content_policy_violation, invalid_image_input, rate_limited, image_model_unavailable, image_model_not_allowed, billing_suspended and the platform tool codes (permission_denied, approval_required, approval_invalid, in_progress, idempotency_key_reused)."
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "tool.json#/$defs/ToolResultFile"
+          },
+          "description": "The generated images: session output files at output_path generated/<name>.png, also mounted at <session root>/uploads/generated/<name>.png."
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "tool.json#/$defs/GenerateImageInputRef"
+          },
+          "description": "The input images as sent."
+        },
+        "model": {
+          "type": "string",
+          "description": "The image model used."
+        },
+        "revised_prompt": {
+          "type": "string"
+        },
+        "upstream_request_id": {
+          "type": "string"
+        },
+        "cost_usd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "The provider-reported cost (usage.cost) when it reported one."
+        },
+        "available_models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "With image_model_not_allowed: the models the call may name."
+        }
+      },
+      "required": [
+        "outcome",
+        "replayed"
+      ],
+      "additionalProperties": true
+    },
+    "GenerateImageInputRef": {
+      "type": "object",
+      "properties": {
+        "file_id": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "file_id",
+        "sha256"
+      ],
+      "additionalProperties": true,
+      "description": "Contract 1.26.0. An input image of a generate_image call as sent: its file and content digest."
+    },
+    "WebSearchInput": {
+      "type": "object",
+      "description": "Contract 2.1.0. Input of the platform tool web_search (agent_toolset_20260401): a web search the platform runs with its own provider. The turn offers exactly this schema.",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400
+        },
+        "num_results": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Default 5."
+        },
+        "recency": {
+          "type": "string",
+          "enum": [
+            "day",
+            "week",
+            "month",
+            "year"
+          ],
+          "description": "Only results published within this period."
+        },
+        "allowed_domains": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Only results from these domains and their subdomains; not with blocked_domains."
+        },
+        "blocked_domains": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "No results from these domains and their subdomains; not with allowed_domains."
+        },
+        "locale": {
+          "type": "string",
+          "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$",
+          "description": "Language and country to favor (zh-CN, en-US)."
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    },
+    "WebSearchResultItem": {
+      "type": "object",
+      "description": "Contract 2.1.0. One ranked web_search result.",
+      "properties": {
+        "rank": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "snippet": {
+          "type": "string",
+          "description": "At most 600 characters of the page's text."
+        },
+        "published_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the page was published, when the provider knows it."
+        }
+      },
+      "required": [
+        "rank",
+        "url",
+        "title"
+      ],
+      "additionalProperties": true
+    },
+    "WebSearchResult": {
+      "type": "object",
+      "description": "Contract 2.1.0. structuredContent of a web_search answer. The answer's text lists the same results as [n] title — url (published date) and snippet, inside <untrusted_web_content source=\"web_search\"> … </untrusted_web_content> (the tag escaped inside the results), after a line telling the model the block is external data and to cite sources as markdown links.",
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "executed",
+            "not_forwarded",
+            "unknown"
+          ]
+        },
+        "replayed": {
+          "type": "boolean"
+        },
+        "error_code": {
+          "type": "string",
+          "description": "Open set: url_not_allowed, unsupported_content_type, content_too_large, fetch_failed, search_unavailable, rate_limited, max_uses_exceeded, billing_suspended and the platform tool codes (permission_denied, approval_required, approval_invalid, in_progress, idempotency_key_reused)."
+        },
+        "query": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string",
+          "description": "The search provider that answered (exa, bocha, brave, exa-keyless)."
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "tool.json#/$defs/WebSearchResultItem"
+          }
+        },
+        "provider_request_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "outcome",
+        "replayed"
+      ],
+      "additionalProperties": true
+    },
+    "WebFetchInput": {
+      "type": "object",
+      "description": "Contract 2.1.0. Input of the platform tool web_fetch (agent_toolset_20260401): a public page the platform fetches through its SSRF guard (every connection and redirect hop to a public address only; at most 5 redirects; robots.txt respected; no cookies or credentials; 5 MB and 20 s at most; HTML, text, markdown, JSON and XML only; no JavaScript).",
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "description": "An http or https URL without credentials."
+        },
+        "max_chars": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 100000,
+          "description": "Default 20000."
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "markdown",
+            "text"
+          ],
+          "description": "Default markdown."
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "additionalProperties": false
+    },
+    "WebFetchResult": {
+      "type": "object",
+      "description": "Contract 2.1.0. structuredContent of a web_fetch answer. The answer's text names the final URL, title and content type and carries the extracted content inside <untrusted_web_content source=\"<final_url>\"> … </untrusted_web_content> (the tag escaped inside the content).",
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "executed",
+            "not_forwarded",
+            "unknown"
+          ]
+        },
+        "replayed": {
+          "type": "boolean"
+        },
+        "error_code": {
+          "type": "string",
+          "description": "Open set: url_not_allowed, unsupported_content_type, content_too_large, fetch_failed, search_unavailable, rate_limited, max_uses_exceeded, billing_suspended and the platform tool codes (permission_denied, approval_required, approval_invalid, in_progress, idempotency_key_reused)."
+        },
+        "url": {
+          "type": "string"
+        },
+        "final_url": {
+          "type": "string",
+          "description": "The URL after redirects."
+        },
+        "title": {
+          "type": "string"
+        },
+        "content_type": {
+          "type": "string",
+          "description": "The media type served."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "The content was cut at max_chars."
+        },
+        "content_chars": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "outcome",
+        "replayed"
       ],
       "additionalProperties": true
     }

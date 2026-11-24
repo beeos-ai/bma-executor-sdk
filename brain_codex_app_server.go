@@ -211,6 +211,8 @@ func (a *codexAdapter) Start(ctx context.Context, env BrainEnv) (BrainCapabiliti
 		InputSkills:      true,
 		// turn/steer: an input joins the running turn before its next model request.
 		Steering: true,
+		// A new thread starts from the session's past (codexHistory).
+		HistoryRebuild: true,
 	}, nil
 }
 
@@ -552,7 +554,7 @@ func (a *codexAdapter) Open(ctx context.Context, req BrainOpen) (BrainSession, e
 			p.stop(a.env.KillGrace)
 			return nil, err
 		}
-	} else if err := c.start(ctx); err != nil {
+	} else if err := c.start(ctx, req.History); err != nil {
 		p.stop(a.env.KillGrace)
 		return nil, err
 	}
@@ -570,25 +572,38 @@ func (c *codexConv) threadParams() map[string]any {
 	return map[string]any{"cwd": c.cwd, "baseInstructions": c.system, "approvalPolicy": "untrusted", "sandbox": "read-only"}
 }
 
-func (c *codexConv) start(ctx context.Context) error {
-	params := c.threadParams()
+func (c *codexConv) start(ctx context.Context, history []SessionHistoryEvent) error {
 	specs := codexToolSpecs(c.tools)
-	params["dynamicTools"] = specs
-	var r struct {
-		Thread struct {
-			ID string `json:"id"`
-		} `json:"thread"`
-	}
-	if err := c.proc.call(ctx, "thread/start", params, &r); err != nil {
-		return err
-	}
 	names := make([]string, 0, len(specs))
 	for _, s := range specs {
 		names = append(names, s["name"].(string))
 	}
 	slices.Sort(names)
-	c.thread = codexThread{Thread: r.Thread.ID, Tools: names}
-	c.proc.setThread(r.Thread.ID)
+	if len(history) > 0 {
+		// A thread of the session's past: codex resumes the rollout the
+		// adapter writes for it, with the turn's tools.
+		thread, err := c.a.writeRollout(c.cwd, c.system, specs, codexHistory(history))
+		if err != nil {
+			return &AgentError{Code: AgentErrorCodeAgentError, Message: "write the codex thread of the session's history: " + err.Error()}
+		}
+		c.thread = codexThread{Thread: thread, Tools: names}
+		if err := c.resume(ctx); err != nil {
+			return err
+		}
+	} else {
+		params := c.threadParams()
+		params["dynamicTools"] = specs
+		var r struct {
+			Thread struct {
+				ID string `json:"id"`
+			} `json:"thread"`
+		}
+		if err := c.proc.call(ctx, "thread/start", params, &r); err != nil {
+			return err
+		}
+		c.thread = codexThread{Thread: r.Thread.ID, Tools: names}
+		c.proc.setThread(r.Thread.ID)
+	}
 	if err := c.a.saveThread(c.ref, c.thread); err != nil {
 		return &AgentError{Code: AgentErrorCodeAgentError, Message: "record the codex thread: " + err.Error()}
 	}
@@ -1543,4 +1558,72 @@ func codexToolSpecs(tools []BrainTool) []map[string]any {
 		specs = append(specs, map[string]any{"type": "function", "name": t.Name, "description": t.Description, "inputSchema": t.Parameters})
 	}
 	return specs
+}
+
+// codexHistory is a session's past as the Responses API items of a codex
+// thread: messages, function calls and their outputs.
+func codexHistory(events []SessionHistoryEvent) []map[string]any {
+	items := historyItems(events)
+	out := make([]map[string]any, 0, len(items))
+	for _, it := range items {
+		switch it.Kind {
+		case historyUser:
+			out = append(out, map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": it.Text}}})
+		case historyAssistant:
+			out = append(out, map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": it.Text}}})
+		case historyCall:
+			out = append(out, map[string]any{"type": "function_call", "name": it.Name, "arguments": historyArguments(it.Input), "call_id": it.CallID})
+		case historyResult:
+			out = append(out, map[string]any{"type": "function_call_output", "call_id": it.CallID, "output": it.Text})
+		}
+	}
+	return out
+}
+
+// writeRollout writes a new codex thread whose conversation is items, in
+// codex's own rollout format (legacy history mode: the session's metadata,
+// then its Responses API items) under the BMA Codex home, where
+// thread/resume loads it: sessions/YYYY/MM/DD/rollout-<time>-<thread>.jsonl.
+// It returns the thread id.
+func (a *codexAdapter) writeRollout(cwd, system string, tools []map[string]any, items []map[string]any) (string, error) {
+	thread, err := newUUIDv7()
+	if err != nil {
+		return "", err
+	}
+	now := time.Now().UTC()
+	stamp := now.Format("2006-01-02T15:04:05.000Z")
+	lines := []any{map[string]any{"timestamp": stamp, "type": "session_meta", "payload": map[string]any{
+		"id": thread, "session_id": thread, "timestamp": stamp, "cwd": cwd, "originator": "bma-executor-sdk",
+		"cli_version": a.pin.Version, "model_provider": a.modelProvider(), "base_instructions": map[string]any{"text": system}, "dynamic_tools": tools,
+	}}}
+	for _, item := range items {
+		lines = append(lines, map[string]any{"timestamp": stamp, "type": "response_item", "payload": item})
+	}
+	var buf strings.Builder
+	for _, line := range lines {
+		raw, err := json.Marshal(line)
+		if err != nil {
+			return "", err
+		}
+		buf.Write(raw)
+		buf.WriteByte('\n')
+	}
+	dir := filepath.Join(a.home, "sessions", now.Format("2006"), now.Format("01"), now.Format("02"))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "rollout-"+now.Format("2006-01-02T15-04-05")+"-"+thread+".jsonl")
+	return thread, os.WriteFile(path, []byte(buf.String()), 0o600)
+}
+
+// modelProvider is the id of the model provider codex runs with: the owner's
+// model_provider setting, else codex's default (openai).
+func (a *codexAdapter) modelProvider() string {
+	provider := "openai"
+	for i := 1; i < len(a.owner); i += 2 {
+		if v, ok := strings.CutPrefix(a.owner[i], "model_provider="); ok {
+			provider = strings.Trim(v, `"'`)
+		}
+	}
+	return provider
 }

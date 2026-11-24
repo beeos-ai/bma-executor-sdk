@@ -4,7 +4,6 @@ package bmaexecutor
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -359,8 +358,8 @@ func TestACPAgentSessionFilesRoot(t *testing.T) {
 }
 
 // ACPAgentOptions.SessionMounts: with only the skills view the turn reaches
-// skills and nothing else, the note names only skills, and the files copied
-// by SkillViews are the ones the file tools read.
+// skills and nothing else, the note names only skills, and the skill files on
+// disk are the ones the file tools read.
 func TestACPAgentSessionMountsSkillsOnly(t *testing.T) {
 	self, err := os.Executable()
 	noErr(t, err)
@@ -375,13 +374,9 @@ func TestACPAgentSessionMountsSkillsOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	root := filepath.Join(t.TempDir(), "session")
-	t.Cleanup(func() { chmodWritable(root) })
-	f := newFakeBmaFile(t, testSkills)
-	views, err := NewSkillViews(SkillViewsOptions{Root: root})
-	noErr(t, err)
-	raw, _ := json.Marshal(mountParams(f, root, rigSession, "tok-1"))
-	got, err := views.Capability().Methods[MethodFsMount](ctx, Request{Params: raw})
-	wantMounted(t, got, err)
+	skillDir := filepath.Join(root, rigSession, "skills", "cu-finder")
+	noErr(t, os.MkdirAll(skillDir, 0o755))
+	noErr(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("Open Finder with open_app.\n"), 0o644))
 
 	a := startACPFixture(t, ctx, ACPAgentOptions{SessionFilesRoot: root, SessionMounts: []string{SessionMountSkills}})
 	a.start(t, ctx, rigSession, "turn_1", "hello")

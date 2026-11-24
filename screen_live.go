@@ -32,10 +32,6 @@ type ScreenLiveCommand struct {
 	Width  uint16 `json:"width,omitempty"`
 	Height uint16 `json:"height,omitempty"`
 }
-type ScreenLiveResult struct {
-	Published bool `json:"published"`
-	Accepted  bool `json:"accepted"`
-}
 type ScreenLiveHandler func(context.Context, ScreenLiveCommand) (ScreenLiveResult, error)
 
 // ServeScreenLive must be configured before Start. It is deliberately limited

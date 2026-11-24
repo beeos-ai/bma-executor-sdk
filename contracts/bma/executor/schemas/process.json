@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.bma.beeos.ai/schemas/process.json",
+  "$id": "https://contracts.beeos.ai/schemas/process.json",
   "title": "BMA executor process types",
   "description": "v1.1 process.* streaming (v1.1 §3) and its additive file transfer, package install, PTY and Git credential modes.",
   "$defs": {

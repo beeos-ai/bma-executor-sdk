@@ -7,6 +7,8 @@ package bmaexecutor
 var Requests = struct {
 	ScreenStart           RequestMethod[ScreenStartParams, ScreenStartResult]
 	ScreenStop            RequestMethod[ScreenStopParams, ScreenStopResult]
+	ScreenLive            RequestMethod[ScreenLiveParams, ScreenLiveResult]
+	ScreenControl         RequestMethod[ScreenControlParams, ScreenControlResult]
 	ProcessStart          RequestMethod[ProcessStartParams, ProcessState]
 	ProcessRead           RequestMethod[ProcessReadParams, ProcessReadResult]
 	ProcessWrite          RequestMethod[ProcessWriteParams, ProcessWriteResult]
@@ -20,8 +22,6 @@ var Requests = struct {
 	DesktopWallpaper      RequestMethod[DesktopWallpaperParams, DesktopWallpaperResult]
 	SkillInstall          RequestMethod[SkillInstallParams, SkillInstallResult]
 	WorkspaceBackup       RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]
-	FsMount               RequestMethod[FsMountParams, FsMountResult]
-	FsUnmount             RequestMethod[FsUnmountParams, FsUnmountResult]
 	SessionFilesFlush     RequestMethod[SessionFilesFlushParams, SessionFilesFlushResult]
 	SessionCompact        RequestMethod[SessionCompactParams, SessionCompactResult]
 	SessionCompactCancel  RequestMethod[SessionCompactCancelParams, SessionCompactCancelResult]
@@ -29,6 +29,8 @@ var Requests = struct {
 }{
 	ScreenStart:           RequestMethod[ScreenStartParams, ScreenStartResult]{Method: "screen.start"},
 	ScreenStop:            RequestMethod[ScreenStopParams, ScreenStopResult]{Method: "screen.stop"},
+	ScreenLive:            RequestMethod[ScreenLiveParams, ScreenLiveResult]{Method: "screen.live"},
+	ScreenControl:         RequestMethod[ScreenControlParams, ScreenControlResult]{Method: "screen.control"},
 	ProcessStart:          RequestMethod[ProcessStartParams, ProcessState]{Method: "process.start"},
 	ProcessRead:           RequestMethod[ProcessReadParams, ProcessReadResult]{Method: "process.read"},
 	ProcessWrite:          RequestMethod[ProcessWriteParams, ProcessWriteResult]{Method: "process.write"},
@@ -42,8 +44,6 @@ var Requests = struct {
 	DesktopWallpaper:      RequestMethod[DesktopWallpaperParams, DesktopWallpaperResult]{Method: "desktop.wallpaper"},
 	SkillInstall:          RequestMethod[SkillInstallParams, SkillInstallResult]{Method: "skill.install"},
 	WorkspaceBackup:       RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]{Method: "workspace.backup"},
-	FsMount:               RequestMethod[FsMountParams, FsMountResult]{Method: "fs.mount"},
-	FsUnmount:             RequestMethod[FsUnmountParams, FsUnmountResult]{Method: "fs.unmount"},
 	SessionFilesFlush:     RequestMethod[SessionFilesFlushParams, SessionFilesFlushResult]{Method: "session_files.flush"},
 	SessionCompact:        RequestMethod[SessionCompactParams, SessionCompactResult]{Method: "session.compact"},
 	SessionCompactCancel:  RequestMethod[SessionCompactCancelParams, SessionCompactCancelResult]{Method: "session.compact_cancel"},

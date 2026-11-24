@@ -225,6 +225,11 @@ type BrainCapabilities struct {
 	// Steering: BrainSession.Steer hands a running Prompt its input at the
 	// brain's next step boundary; the host declares agent.steering.
 	Steering bool
+	// HistoryRebuild: a new conversation opened with BrainOpen.History
+	// starts from that conversation (the brain's own transcript of it), so
+	// the host rebuilds a session it holds no conversation for from the
+	// platform's log and declares agent.history_rebuild.
+	HistoryRebuild bool
 }
 
 // BrainOpen is what a turn asks the conversation to be.
@@ -253,6 +258,11 @@ type BrainOpen struct {
 	Metadata map[string]string
 	// Tools are the turn's tools besides the six (host tools, custom tools).
 	Tools []BrainTool
+	// History is the session's conversation before this turn, from the
+	// platform's log (session.history), for a new conversation (Ref empty)
+	// of a brain with BrainCapabilities.HistoryRebuild; nil otherwise. The
+	// new conversation starts with it.
+	History []SessionHistoryEvent
 }
 
 // BrainInput is one input of a turn.

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.bma.beeos.ai/schemas/agent.json",
+  "$id": "https://contracts.beeos.ai/schemas/agent.json",
   "title": "BMA agent executor types",
   "description": "Agent executor capability: the platform sends natural-language turns to an executor that runs a complete agent (model loop and tools) locally, and the executor streams Anthropic Managed Agents events back. See docs/architecture/executor-agent-capability.zh-CN.md.",
   "$defs": {
@@ -42,7 +42,11 @@
         },
         "steering": {
           "type": "boolean",
-          "description": "Contract 1.25.0. The local agent takes a turn.input at the running turn's next step boundary: after the results of the tool calls of its current step and before its next model request, so the input can change what the agent does next in the same turn. When the model answers without a tool call, the agent reads an input that arrived meanwhile before it ends the turn; once it ends the turn it answers a later turn.input -32013 conflict. The platform admits a steering user.message (bma_delivery_mode steering) only for a brain that declares it. Absent means false: turn.input is taken after the running prompt ends."
+          "description": "Contract 1.25.0. The local agent takes a turn.input at the running turn's next step boundary: after the results of the tool calls of its current step and before its next model request, so the input can change what the agent does next in the same turn. When the model answers without a tool call, the agent reads an input that arrived meanwhile before it ends the turn; once it ends the turn it answers a later turn.input -32013 conflict. The platform hands a steering user.message (bma_delivery_mode steering) to the running turn as turn.input only when its brain declares it; otherwise it re-files the message as queued (bma_delivery_reason harness_no_steering) and runs it as a turn of its own. Absent means false."
+        },
+        "history_rebuild": {
+          "type": "boolean",
+          "description": "Contract 2.2.0. When the agent opens a session it has no local state for, it reads the conversation with session.history and rebuilds its context from it before running the turn (answering turn.start with context_rebuilt true when there was a past); it never runs such a turn without that context. The platform forks a session (POST /v1/sessions/{session_id}/fork: a new session that starts with a copy of the conversation) only when the session's brain runs on an executor that declares it, else 400 fork_unsupported; the fork's first turn reaches the brain with no local state and the copied conversation in session.history. Absent means false."
         },
         "max_sessions": {
           "type": "integer",
@@ -63,7 +67,7 @@
               "harness_model"
             ]
           },
-          "description": "Per-turn credentials the executor asks the platform to hand it in turn.start metadata: brain_tools (tools_mcp_url, tools_mcp_token: the session's tools endpoint) and harness_model (model_base_url, model_token: the session's model endpoint; optionally model_context_window and model_max_output_tokens, positive integer strings: the resolved model's context window and output ceiling, absent when the platform has no catalog entry for the model, in which case the executor uses its own defaults). A declaration only states what the executor can use; the platform decides by the executor's identity: a platform service executor gets what it declares; on a platform-managed pool machine an ACP harness turn gets harness_model by default, without a declaration; a BYO machine gets harness_model only when it declares it, and an undeclared BYO machine gets nothing, so it keeps using the model endpoint configured on it and the platform never overrides that upstream. brain_tools (contract 1.4.0) is handed to a tenant executor only when the session binds this machine as the brain machine and a different machine as the hands machine (brain and hands apart, ADR-0029) and the executor declared brain_tools; the token is bound to the org, the session, the turn, this machine and the brain epoch of the turn (the event epoch of the turn.start that carries it), so a turn started again in a new epoch gets a new token and calls made with the previous epoch's token are refused. When one machine is both brain and hands nothing is handed (the executor runs its tools itself); a platform service executor and an executor that did not declare brain_tools never get it. Until contract 1.4.0 brain_tools was never handed to a tenant executor. The harness_model token is a bma-model token bound to the turn's org, session, turn and machine (model_base_url is the machine's proxy path). Tokens are computed for each turn.start, are valid until the turn ends, and are never stored."
+          "description": "Per-turn credentials the executor asks the platform to hand it in turn.start metadata: brain_tools (tools_mcp_url, tools_mcp_token: the session's tools endpoint) and harness_model (model_base_url, model_token: the session's model endpoint; optionally model_context_window and model_max_output_tokens, positive integer strings: the resolved model's context window and output ceiling, absent when the platform has no catalog entry for the model, in which case the executor uses its own defaults; contract 1.27.0: model_input_images, true or false (strings): whether the turn's model accepts images, from its provider's model list, absent when unknown; with false the brain sends the model no image of a tool result (screenshots, generate_image previews), only their text). A declaration only states what the executor can use; the platform decides by the executor's identity: a platform service executor gets what it declares; on a platform-managed pool machine an ACP harness turn gets harness_model by default, without a declaration; a BYO machine gets harness_model only when it declares it, and an undeclared BYO machine gets nothing, so it keeps using the model endpoint configured on it and the platform never overrides that upstream. brain_tools (contract 1.4.0) is handed to a tenant executor only when the session binds this machine as the brain machine and a different machine as the hands machine (brain and hands apart, ADR-0029) and the executor declared brain_tools; the token is bound to the org, the session, the turn, this machine and the brain epoch of the turn (the event epoch of the turn.start that carries it), so a turn started again in a new epoch gets a new token and calls made with the previous epoch's token are refused. When one machine is both brain and hands nothing is handed (the executor runs its tools itself); a platform service executor and an executor that did not declare brain_tools never get it. Until contract 1.4.0 brain_tools was never handed to a tenant executor. The harness_model token is a bma-model token bound to the turn's org, session, turn and machine (model_base_url is the machine's proxy path). Tokens are computed for each turn.start, are valid until the turn ends, and are never stored."
         },
         "custom_tools": {
           "type": "boolean",
@@ -76,6 +80,10 @@
         "mcp_tools": {
           "type": "boolean",
           "description": "Contract 1.14.0. The executor's brain offers the model the MCP tools a turn.start declares (AgentTurnConfig.mcp_tools), runs them through the turn's tools endpoint under their name, and reports each call as agent.mcp_tool_use and agent.mcp_tool_result (not agent.tool_use). Without it the platform does not send mcp_tools, and a turn of an agent whose mcp_toolset enables tools, sent with tools_mcp_* to this executor, ends failed with session.error (bma_error_code mcp_tools_unsupported), never with the tools silently dropped. An executor that runs its tools itself (no tools_mcp_* in turn.start) is never sent the agent's MCP tools, declared or not, and its turns run without them. Absent means false."
+        },
+        "platform_tools": {
+          "type": "boolean",
+          "description": "Contract 1.26.0. The executor's brain offers the model the platform tools a turn.start declares (AgentTurnConfig.platform_tools), runs them through the turn's tools endpoint under their name, reports each call as agent.tool_use and agent.tool_result, and copies the files of the answer's structuredContent.files into agent.tool_result.bma_files. Without it the platform does not send platform_tools and the turn runs without them (they are added by the platform, not declared tools of the executor). Absent means false."
         },
         "harness": {
           "$ref": "agent.json#/$defs/AgentHarnessCapability",
@@ -264,6 +272,14 @@
           },
           "description": "Contract 1.14.0. Requested only, sent only to an executor that declared agent.mcp_tools and only with tools_mcp_* in metadata (omitted when the turn has none). The enabled tools of the MCP servers of the turn's agent version (official mcp_servers with an mcp_toolset): the platform connects each server with its credential (the server's bma_auth, else the session's vaults), lists its tools when the turn starts and evaluates the mcp_toolset permission of each. The brain offers every entry to the model under name with input_schema exactly, next to its own tools, and runs a call like its other tools through tools_mcp_url under that name; the brain never connects an MCP server itself and never sees its credential. A server that could not be listed contributes no entry; the platform reports it as session.error (mcp_connection_failed_error or mcp_authentication_failed_error) and the turn goes on. A name that collides with one of the brain's own tools answers -32602 invalid params. The set may differ from turn to turn; a turn sees the set of its own turn.start."
         },
+        "platform_tools": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "agent.json#/$defs/PlatformTool"
+          },
+          "description": "Contract 1.26.0. Requested only, sent only to an executor that declared agent.platform_tools and only with tools_mcp_* in metadata (omitted when the turn has none). Tools the platform runs itself, on no machine, that the turn's agent enables (generate_image: agent tools entry bma_image_generation_20261201 and a session model route that lists image models). The brain offers every entry to the model under name with input_schema exactly (the platform fills turn-specific values such as the generate_image model enum), next to its own tools, and runs a call like its other tools through tools_mcp_url under that name, with the same _meta approval, idempotency key and sync_wait_ms; ask is asked once per call (interaction kind permission). A result image (an image content block of the answer, the preview of a generated image) reaches the model with that result only when the model accepts images and is never written to a session event; the brain copies structuredContent.files of the answer into agent.tool_result.bma_files. A name that collides with one of the brain's own tools answers -32602 invalid params. The set may differ from turn to turn; a turn sees the set of its own turn.start."
+        },
         "harness": {
           "type": "string",
           "description": "Id of the hosted agent (one of the capability harnesses[].id) the turn runs on. Omitted: the executor's only harness. An id the executor does not host answers -32012 capability_unavailable."
@@ -332,6 +348,44 @@
         "description",
         "input_schema",
         "read_only"
+      ],
+      "additionalProperties": true
+    },
+    "PlatformTool": {
+      "type": "object",
+      "description": "Contract 1.26.0. One tool of AgentTurnConfig.platform_tools: a tool the platform runs on no machine (x-bma-platform-tools platform-tools).",
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": [
+            "generate_image"
+          ],
+          "description": "Tool name the model sees and the tools endpoint runs. generate_image: input tool.json GenerateImageInput (with the turn's model enum), structuredContent tool.json GenerateImageResult."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool description the model sees."
+        },
+        "input_schema": {
+          "type": "object",
+          "description": "JSON Schema of the input object (type object), offered to the model as is.",
+          "additionalProperties": true
+        },
+        "permission": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "ask"
+          ],
+          "description": "The agent's permission policy of the tool (always_allow: allow, always_ask: ask), used when turn.start metadata tool_policy does not name it; the tools endpoint evaluates the same policy again."
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "input_schema",
+        "permission"
       ],
       "additionalProperties": true
     },
@@ -736,6 +790,14 @@
         },
         "is_error": {
           "type": "boolean"
+        },
+        "bma_files": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "tool.json#/$defs/ToolResultFile"
+          },
+          "description": "Contract 1.26.0. Session files the call created (a platform tool's structuredContent.files, for example the images of generate_image), so a client shows them with the call. Absent: none."
         }
       },
       "required": [

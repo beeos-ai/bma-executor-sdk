@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.bma.beeos.ai/schemas/mcp.json",
+  "$id": "https://contracts.beeos.ai/schemas/mcp.json",
   "title": "BMA executor MCP types",
   "description": "Local MCP server configuration and raw MCP JSON-RPC payloads carried by the mcp channel.",
   "$defs": {

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.bma.beeos.ai/schemas/terminal.json",
+  "$id": "https://contracts.beeos.ai/schemas/terminal.json",
   "title": "BMA executor terminal types",
   "description": "v1.1 terminal.* control methods (machine-scoped executors). PTY bytes never cross the control channel: each terminal.attach makes the executor dial one outbound host WebSocket (subprotocol bma.terminal.v1) that carries exactly one attachment. Frames on that socket (and on the browser relay socket, which carries the same frames plus attach) are the TerminalFrame* types below: UTF-8 JSON text messages, one frame per message, discriminated by type (contract 1.6.0, additive).",
   "$defs": {

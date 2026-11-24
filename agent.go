@@ -678,7 +678,7 @@ func (r *agentRuntime) turnStart(ctx context.Context, params TurnStartParams) (T
 	slot = false // the turn owns it now, see finishTurn
 	r.suspendSurplus(ctx, s)
 
-	result, err := r.handler.OpenTurn(ctx, params)
+	result, err := r.handler.OpenTurn(context.WithValue(ctx, agentClientKey{}, r.client), params)
 	if err == nil && !result.Accepted {
 		err = &RPCError{Code: CodeExecutorBusy, Message: "turn not accepted"}
 	}
