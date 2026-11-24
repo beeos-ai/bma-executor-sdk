@@ -75,3 +75,43 @@ func TestRequiredIdempotencyKeyMarksTheOperation(t *testing.T) {
 		t.Fatalf("an operation without the header is marked:\n%s", s)
 	}
 }
+
+const exampleSpec = `
+servers: [{url: https://api.example.com}]
+paths:
+  /v1/things/{thing_id}/notes:
+    post:
+      operationId: notes.create
+      parameters:
+        - {name: thing_id, in: path, required: true, schema: {type: string}, example: thg_01}
+      requestBody:
+        content:
+          application/json:
+            schema: {properties: {text: {type: string}, tags: {type: array}, due: {type: string}}}
+            example: {text: "it's done", tags: [a, b], due: 2026-11-24T06:00:00Z, extra: {x: 1}}
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: {type: object}
+              example: {type: note, id: nte_01, done: true}
+`
+
+// The example is the documented call in key order: path examples as
+// arguments, body fields as flags (quoted for a shell, JSON when not a
+// string), fields without a flag in --body; the output keeps key order.
+func TestExampleAndOutputFromTheDocumentedExamples(t *testing.T) {
+	src, err := generate([]byte(exampleSpec), "spec.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	for _, want := range []string{
+		`Example: "bma things notes thg_01 --text 'it'\\''s done' --tags '[\"a\",\"b\"]' --due 2026-11-24T06:00:00Z --body '{\"extra\":{\"x\":1}}'"`,
+		`Output:  "{\n  \"type\": \"note\",\n  \"id\": \"nte_01\",\n  \"done\": true\n}"`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %s in\n%s", want, s)
+		}
+	}
+}
