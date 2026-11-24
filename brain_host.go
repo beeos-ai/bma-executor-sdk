@@ -78,6 +78,12 @@ const (
 	// per-turn tools endpoint and token (turn.start metadata tools_mcp_url,
 	// tools_mcp_token, tools_mcp_token_expires_at), contract 1.4.0.
 	PlatformCredentialBrainTools = "brain_tools"
+	// PlatformCredentialPlatformTools is the platform_credentials entry for
+	// the platform's web tools of a brain that runs its tools here (turn.start
+	// config.platform_tools with metadata platform_tools_mcp_url,
+	// platform_tools_mcp_token, platform_tools_mcp_token_expires_at),
+	// contract 2.4.0.
+	PlatformCredentialPlatformTools = "platform_tools"
 
 	// acpModelTokenRefreshWindow: a platform model token with at most this
 	// much time left is replaced through model_token.refresh before the
@@ -390,6 +396,10 @@ type acpTurn struct {
 	// local is this machine's route (the hands are here), nil for a turn with
 	// remote hands. It decides the fate of a bash command left in the background.
 	local *LocalToolRoute
+	// platform are the turn's platform tools and platformRoute their route
+	// (the platform's tools endpoint, platform_tools_mcp_*).
+	platform      map[string]bool
+	platformRoute ToolRoute
 	// policy is the effective permission of each tool (see acpEffectivePolicy);
 	// the executor enforces it, whatever the brain does.
 	policy map[string]string
@@ -547,6 +557,11 @@ func (a *BrainHost) Capability() AgentCapability {
 	}
 	if a.opts.PlatformTools {
 		c.PlatformCredentials = append(c.PlatformCredentials, PlatformCredentialBrainTools)
+	} else {
+		// The platform's web tools, run on the platform (agent_acp_platform_tools.go).
+		// A host whose hands may be elsewhere (PlatformTools) does not take them.
+		c.PlatformTools = true
+		c.PlatformCredentials = append(c.PlatformCredentials, PlatformCredentialPlatformTools)
 	}
 	if a.opts.PlatformModel {
 		c.PlatformCredentials = append(c.PlatformCredentials, PlatformCredentialHarnessModel)
@@ -785,17 +800,22 @@ func (a *BrainHost) RunTurn(ctx context.Context, turn *AgentTurn) error {
 	a.mu.Unlock()
 	effective := acpEffectivePolicy(mode, overrides)
 	hostAsk := map[string]bool{}
-	custom := map[string]bool{}
+	custom, platform := map[string]bool{}, map[string]bool{}
 	for _, tool := range plan.tools {
 		_, named := effective[tool.Name]
 		_, capped := a.opts.ToolPolicy[tool.Name]
 		hostAsk[tool.Name] = tool.Permission == "ask" && !named && !capped
 		custom[tool.Name] = tool.Custom
+		platform[tool.Name] = tool.Platform
 	}
 	policy := acpCapPolicy(withTurnTools(effective, plan.tools), a.opts.ToolPolicy)
 	a.mu.Lock()
 	t := &acpTurn{agent: a, turn: turn, ctx: ctx, ledger: ledger, route: route, turnID: params.TurnID, policy: policy, hostAsk: hostAsk, custom: custom, hostAllowed: map[string]bool{}, computerChecks: map[string]computerChecks{}, effort: plan.effort, model: plan.model,
 		messages: map[string]string{}, index: map[string]int64{}, tools: map[string]string{}, questions: map[string]string{}}
+	t.platform = platform
+	if slices.ContainsFunc(plan.tools, func(t BrainTool) bool { return t.Platform }) {
+		t.platformRoute = platformToolsRoute(a, turn, ledger)
+	}
 	if remoteRoute != nil {
 		t.toolRoute = remoteRoute(ledger)
 	} else {
@@ -1435,7 +1455,12 @@ func (t *acpTurn) Call(ctx context.Context, call BrainCall) *RouteResult {
 		ctx = withComputerChecks(ctx, checks.Refusal)
 	}
 	ctx = context.WithValue(ctx, computerModelKey{}, t.model)
-	return t.toolRoute.Call(ctx, RouteCall{ID: call.ID, ToolUseID: toolUseID, Name: call.Name, Input: call.Input})
+	route := t.toolRoute
+	if t.platform[call.Name] {
+		// A platform tool runs on the platform, whatever runs the others.
+		route = t.platformRoute
+	}
+	return route.Call(ctx, RouteCall{ID: call.ID, ToolUseID: toolUseID, Name: call.Name, Input: call.Input})
 }
 
 // recover settles the tool calls of an interrupted input that have no

@@ -120,7 +120,7 @@ func TestACPAgentPlatformModelAsksForTheHarnessModelCredential(t *testing.T) {
 	platform := newRecordingPlatform()
 	f := startACPFixtureOn(t, ctx, ACPAgentOptions{PlatformModel: true}, platform)
 	capability, err := f.executor.AgentCapability()
-	if err != nil || !slices.Equal(capability.PlatformCredentials, []string{PlatformCredentialHarnessModel}) {
+	if err != nil || !slices.Equal(capability.PlatformCredentials, []string{PlatformCredentialPlatformTools, PlatformCredentialHarnessModel}) {
 		t.Fatalf("platform_credentials = %+v (%v)", capability, err)
 	}
 	// No node-owner upstream: a turn without the credential fails visibly.
@@ -150,7 +150,8 @@ func TestACPAgentWithoutPlatformModelDeclaresNoCredential(t *testing.T) {
 	defer cancel()
 	f := startACPFixture(t, ctx, ACPAgentOptions{})
 	capability, err := f.executor.AgentCapability()
-	if err != nil || len(capability.PlatformCredentials) != 0 {
+	// Only the platform's web tools credential (agent_acp_platform_tools.go), no model credential.
+	if err != nil || !slices.Equal(capability.PlatformCredentials, []string{PlatformCredentialPlatformTools}) {
 		t.Fatalf("platform_credentials = %+v (%v)", capability, err)
 	}
 	core, err := NewCore(CoreOptions{WorkRoot: t.TempDir()})

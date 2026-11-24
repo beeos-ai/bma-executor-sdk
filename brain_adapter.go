@@ -174,6 +174,9 @@ type BrainTool struct {
 	// Custom marks a custom tool of the agent: the user's application
 	// answers it (agent.custom_tool_use); it is never approved.
 	Custom bool `json:"-"`
+	// Platform marks a platform tool (web_search, web_fetch): the platform
+	// runs it through the turn's platform tools endpoint.
+	Platform bool `json:"-"`
 }
 
 // brainToolNames are the names of the six platform tools and of tools.
