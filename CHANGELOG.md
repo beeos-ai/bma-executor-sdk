@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- CLI: `bma search [query]` (`POST /v1/web_searches`: `--num-results`, `--recency`, `--allowed-domains`, `--blocked-domains`, `--locale`) and `bma fetch [url]` (`POST /v1/web_fetches`: `--max-chars`, `--format`) search the web and fetch a public page. Each run sends an Idempotency-Key (`--idempotency-key` to choose it), so a retried call is not charged twice. They are top-level commands (no `bma web-searches create`). The CLI's contract snapshot is beeos-managed-agents 11d26ec64.
+
 ## 1.16.0
 
 - Go: the DSH brain rebuilds a session it holds no conversation for from its past on the platform (`agent.history_rebuild`, `session.history`) when bma-dsh-acp does (initialize `_meta.bma.historyRebuild`, bma-dsh-acp >= 0.3.5): `session/new` carries `BrainOpen.History` as `_meta.bma.history` (the events as `session.history` answered them) and the turn answers `context_rebuilt: true`. An older bma-dsh-acp is not declared to rebuild.

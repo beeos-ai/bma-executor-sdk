@@ -5,7 +5,7 @@
 package main
 
 // contractSource is the OpenAPI document the commands were generated from.
-const contractSource = "contracts/bma-api/bma.openapi.yaml sha256:3b3e84d88b6d253401862722bfc6528a9299255cb01ab47465edfce39c72936d"
+const contractSource = "contracts/bma-api/bma.openapi.yaml sha256:a3102b4a89f171bf6364bec7d92296ad51f21d672affb40e0e85bc3161171f47"
 
 // apiOperations are the operations of the public BMA API, one command each.
 var apiOperations = []apiOp{
@@ -86,6 +86,7 @@ var apiOperations = []apiOp{
 			{Name: "lease_seconds", Flag: "lease-seconds", In: "body", Type: "integer", Required: false},
 			{Name: "machine_id", Flag: "machine-id", In: "body", Type: "string", Required: true},
 			{Name: "read_only", Flag: "read-only", In: "body", Type: "boolean", Required: false},
+			{Name: "ticket", Flag: "ticket", In: "body", Type: "json", Required: false, Description: "Body of a desktop ticket. purpose is optional and must be watch."},
 		},
 	},
 	{ID: "getDesktopSession", Method: "GET", Path: "/v1/desktop_sessions/{desktop_session_id}", Group: []string{"desktop-sessions"}, Verb: "get", Summary: "Retrieve a desktop session (control state in `control`)",
@@ -193,7 +194,7 @@ var apiOperations = []apiOp{
 			{Name: "scope", Flag: "scope", In: "body", Type: "string", Required: false, Description: "The visibility scope for this environment. 'organization' makes the environment visible to all accounts. 'account' restricts visibility to the owning account only. API organizations support only 'organization'; 'account' is rejected. If not specified, defaults based on organization type.", Enum: []string{"organization", "account"}},
 			{Name: "bma_desktop", Flag: "bma-desktop", In: "body", Type: "json", Required: false, Description: "Desktop defaults of the environment, such as the wallpaper of new desktops."},
 			{Name: "bma_harness", Flag: "bma-harness", In: "body", Type: "json", Required: false, Description: "The brain of the environment's sessions whose session and agent name none. Omitted keeps the current value on update; null or kind default clears it (the platform default applies); rejected on an environment projected from a machine. A change only affects sessions created after it."},
-			{Name: "bma_placement", Flag: "bma-placement", In: "body", Type: "json", Required: false, Description: "Where the environment puts the brain and where the hands come from, and the scheduling timeouts. Omitted keeps the current value on update, null clears it (the derivation of ADR-0002 applies); rejected on an environment projected from a machine."},
+			{Name: "bma_placement", Flag: "bma-placement", In: "body", Type: "json", Required: false, Description: "Where the environment puts the brain and where the hands come from, and the scheduling timeouts. Omitted keeps the current value on update, null clears it (the brain location is then derived again); rejected on an environment projected from a machine."},
 		},
 	},
 	{ID: "environments.retrieve", Method: "GET", Path: "/v1/environments/{environment_id}", Group: []string{"environments"}, Verb: "get", Summary: "Retrieve a specific environment by ID.",
@@ -212,7 +213,7 @@ var apiOperations = []apiOp{
 			{Name: "scope", Flag: "scope", In: "body", Type: "string", Required: false, Description: "The visibility scope for this environment. 'organization' makes the environment visible to all accounts. 'account' restricts visibility to the owning account only.", Enum: []string{"organization", "account"}},
 			{Name: "bma_desktop", Flag: "bma-desktop", In: "body", Type: "json", Required: false, Description: "Desktop defaults of the environment, such as the wallpaper of new desktops."},
 			{Name: "bma_harness", Flag: "bma-harness", In: "body", Type: "json", Required: false, Description: "The brain of the environment's sessions whose session and agent name none. Omitted keeps the current value on update; null or kind default clears it (the platform default applies); rejected on an environment projected from a machine. A change only affects sessions created after it."},
-			{Name: "bma_placement", Flag: "bma-placement", In: "body", Type: "json", Required: false, Description: "Where the environment puts the brain and where the hands come from, and the scheduling timeouts. Omitted keeps the current value on update, null clears it (the derivation of ADR-0002 applies); rejected on an environment projected from a machine."},
+			{Name: "bma_placement", Flag: "bma-placement", In: "body", Type: "json", Required: false, Description: "Where the environment puts the brain and where the hands come from, and the scheduling timeouts. Omitted keeps the current value on update, null clears it (the brain location is then derived again); rejected on an environment projected from a machine."},
 		},
 	},
 	{ID: "environments.delete", Method: "DELETE", Path: "/v1/environments/{environment_id}", Group: []string{"environments"}, Verb: "delete", Summary: "Delete an environment by ID. Returns a confirmation of the deletion.",
@@ -406,14 +407,14 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "addMachineAgent", Method: "PUT", Path: "/v1/machines/{machine_id}/agents/{agent_id}", Group: []string{"machines", "agents"}, Verb: "update", Summary: "Bind an agent to a machine",
-		Description: "Adds one agent to a persistent pool machine's `agent_ids` (ADR-0085), atomically against concurrent agent changes of the machine; an agent already bound is a no-op (200). No request body. On a machine bound to no agent it narrows the machine from every agent of its workspace to this one. 404 when the agent is not an agent of the machine's workspace; 400 `validation_failed` for a machine that is not a persistent pool machine or already has 100 agents. The managers of the workspace that owns the machine may change it.",
+		Description: "Adds one agent to a persistent pool machine's `agent_ids`, atomically against concurrent agent changes of the machine; an agent already bound is a no-op (200). No request body. On a machine bound to no agent it narrows the machine from every agent of its workspace to this one. 404 when the agent is not an agent of the machine's workspace; 400 `validation_failed` for a machine that is not a persistent pool machine or already has 100 agents. The managers of the workspace that owns the machine may change it.",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "agent_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "removeMachineAgent", Method: "DELETE", Path: "/v1/machines/{machine_id}/agents/{agent_id}", Group: []string{"machines", "agents"}, Verb: "delete", Summary: "Unbind an agent from a machine",
-		Description: "Removes one agent from a machine's `agent_ids` (ADR-0085), atomically against concurrent agent changes of the machine; an agent not bound is a no-op (200). Removing the last agent is refused with 400 `validation_failed`: an empty `agent_ids` opens the machine to every agent of its workspace, which only an explicit `agent_ids: []` (updateMachine) does. The managers of the workspace that owns the machine may change it.",
+		Description: "Removes one agent from a machine's `agent_ids`, atomically against concurrent agent changes of the machine; an agent not bound is a no-op (200). Removing the last agent is refused with 400 `validation_failed`: an empty `agent_ids` opens the machine to every agent of its workspace, which only an explicit `agent_ids: []` (updateMachine) does. The managers of the workspace that owns the machine may change it.",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "agent_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -643,7 +644,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "listModelProviders", Method: "GET", Path: "/v1/model_providers", Group: []string{"model-providers"}, Verb: "list", Summary: "List model providers",
-		Description: "The organization's own model providers (ADR-0088), by id. Organization owners and admins only; keys are never returned.",
+		Description: "The organization's own model providers, by id. Organization owners and admins only; keys are never returned.",
 		Body:        false, List: true, Raw: false, HandWritten: false,
 	},
 	{ID: "createModelProvider", Method: "POST", Path: "/v1/model_providers", Group: []string{"model-providers"}, Verb: "create", Summary: "Create a model provider",
@@ -1030,7 +1031,7 @@ var apiOperations = []apiOp{
 			{Name: "resources", Flag: "resources", In: "body", Type: "json", Required: false, Description: "Resources (e.g. repositories, files) to mount into the session's container."},
 			{Name: "title", Flag: "title", In: "body", Type: "string", Required: false, Description: "Human-readable session title."},
 			{Name: "vault_ids", Flag: "vault-ids", In: "body", Type: "json", Required: false, Description: "Vault IDs for stored credentials the agent can use during the session."},
-			{Name: "bma_model_override", Flag: "bma-model-override", In: "body", Type: "json", Required: false, Description: "The one shape of a session model override. On create it needs model and lasts for the session (expires_with_session defaults to true unless ttl_seconds is sent); it replaces the deprecated agent.model.api_url/api_key/api_format/context_window_tokens/max_output_tokens/auto_compact_window_tokens, which are still accepted (answered with Deprecation and a Link ... rel=\"successor-version\" header) but cannot be combined with it. On update, an object with model replaces the override (native PutAgentSessionModelOverride); an object without model patches it (PatchAgentSessionModelOverride); null revokes it (DeleteAgentSessionModelOverride). api_key is write-only."},
+			{Name: "bma_model_override", Flag: "bma-model-override", In: "body", Type: "json", Required: false, Description: "The one shape of a session model override. On create it needs model and lasts for the session (expires_with_session defaults to true unless ttl_seconds is sent); it replaces the deprecated agent.model.api_url/api_key/api_format/context_window_tokens/max_output_tokens/auto_compact_window_tokens, which are still accepted (answered with Deprecation and a Link ... rel=\"successor-version\" header) but cannot be combined with it. On update, an object with model replaces the override; an object without model patches it; null revokes it. api_key is write-only."},
 			{Name: "bma_executor_config", Flag: "bma-executor-config", In: "body", Type: "json", Required: false, Description: "The session's executor turn settings (cwd, thinking_level, BYO-only model), passed as they are in the config of every turn of a brain that runs in an executor. Omitted keeps them on update, an object replaces them as a whole, null clears them."},
 			{Name: "bma_harness", Flag: "bma-harness", In: "body", Type: "json", Required: false, Description: "Overrides the brain for this session; omitted, null or kind default inherits (the agent's, else the environment's, else the platform default). placement is derived from the environment and is not accepted."},
 			{Name: "bma_placement", Flag: "bma-placement", In: "body", Type: "json", Required: false, Description: "Chooses the brain and hands machine for this session among the environment's candidates; omitted lets the scheduler choose."},
@@ -1050,7 +1051,7 @@ var apiOperations = []apiOp{
 			{Name: "metadata", Flag: "metadata", In: "body", Type: "json", Required: false, Description: "Metadata patch. Set a key to a string to upsert it, or to null to delete it. Omit the field to preserve."},
 			{Name: "title", Flag: "title", In: "body", Type: "string", Required: false, Description: "Human-readable session title."},
 			{Name: "vault_ids", Flag: "vault-ids", In: "body", Type: "json", Required: false, Description: "Vault IDs (vlt_*) to attach to the session. Not yet supported; requests setting this field are rejected. Reserved for future use."},
-			{Name: "bma_model_override", Flag: "bma-model-override", In: "body", Type: "json", Required: false, Description: "The one shape of a session model override. On create it needs model and lasts for the session (expires_with_session defaults to true unless ttl_seconds is sent); it replaces the deprecated agent.model.api_url/api_key/api_format/context_window_tokens/max_output_tokens/auto_compact_window_tokens, which are still accepted (answered with Deprecation and a Link ... rel=\"successor-version\" header) but cannot be combined with it. On update, an object with model replaces the override (native PutAgentSessionModelOverride); an object without model patches it (PatchAgentSessionModelOverride); null revokes it (DeleteAgentSessionModelOverride). api_key is write-only."},
+			{Name: "bma_model_override", Flag: "bma-model-override", In: "body", Type: "json", Required: false, Description: "The one shape of a session model override. On create it needs model and lasts for the session (expires_with_session defaults to true unless ttl_seconds is sent); it replaces the deprecated agent.model.api_url/api_key/api_format/context_window_tokens/max_output_tokens/auto_compact_window_tokens, which are still accepted (answered with Deprecation and a Link ... rel=\"successor-version\" header) but cannot be combined with it. On update, an object with model replaces the override; an object without model patches it; null revokes it. api_key is write-only."},
 			{Name: "bma_executor_config", Flag: "bma-executor-config", In: "body", Type: "json", Required: false, Description: "The session's executor turn settings (cwd, thinking_level, BYO-only model), passed as they are in the config of every turn of a brain that runs in an executor. Omitted keeps them on update, an object replaces them as a whole, null clears them."},
 		},
 	},
@@ -1247,7 +1248,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "closeTerminalSession", Method: "POST", Path: "/v1/terminal_sessions/{terminal_session_id}/close", Group: []string{"terminal-sessions"}, Verb: "close", Summary: "Close a terminal session",
-		Description: "Native answers 204; the facade returns the session.",
+		Description: "Closes the terminal session and returns it.",
 		Params: []apiParam{
 			{Name: "terminal_session_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
@@ -1399,6 +1400,27 @@ var apiOperations = []apiOp{
 		Params: []apiParam{
 			{Name: "vault_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "credential_id", Flag: "", In: "path", Type: "string", Required: true},
+		},
+	},
+	{ID: "createWebFetch", Method: "POST", Path: "/v1/web_fetches", Group: []string{"web-fetches"}, Verb: "create", Summary: "Fetch a web page",
+		Description: "Fetches one public page and answers its main content as markdown or text. Only public addresses are reached (checked on every connection and redirect, at most 5 redirects); robots.txt is respected; no cookies or credentials are sent; at most 5 MB and 20 seconds; HTML, text, markdown, JSON, XML and CSV only; no JavaScript and no PDF. With an `Idempotency-Key`, the same key and body within 24 hours replays the first answer without a second charge. Errors: 400 `invalid_request`, `url_not_allowed` (not http(s), credentials in the URL, a non-public address or disallowed by robots.txt), `unsupported_content_type`, `content_too_large`; 403 `insufficient_credits`; 429 `rate_limited`; 500 `fetch_failed` (the site failed, timed out or answered an error).\n\n**Authorization:** An organization API key, a personal access token or OAuth access token, or a dashboard session. Any workspace role may call; the workspace is the credential's own or `bma-workspace-id`.\n\n**Limits:**\n\n- Each organization may run 120 fetches per minute (all callers, sessions included); past it 429 `rate_limited` with `Retry-After`.\n- At most 5 MB and 20 seconds per page, 5 redirects; `max_chars` 1000 to 100000.\n- USD 1 per 1,000 fetched pages (model `web-fetch` in the usage and cost reports); failures are not charged.\n- Rate limit: one request of the organization's write budget ([Rate limits](https://docs.beeos.ai/guides/limits)).\n\n**Errors** (besides the [common errors](https://docs.beeos.ai/api-reference/errors) (401 authentication, 429 `rate_limited`, 500)):\n\n| Status | `error.type` | `error.code` | Cause | Fix |\n| --- | --- | --- | --- | --- |\n| 400 | `invalid_request_error` | `content_too_large` | The page is larger than 5 MB. | Fetch a smaller page or another URL. |\n| 400 | `invalid_request_error` | `idempotency_key_reused` | The Idempotency-Key was used with another body within 24 hours. | Correct the request as the message describes and send it again; the same request will keep failing. |\n| 400 | `invalid_request_error` | `invalid_request` | The body does not match the schema or its limits. | Send a body of the schema. |\n| 400 | `invalid_request_error` | `unsupported_content_type` | The page is not HTML, text, markdown, JSON, XML or CSV. | Fetch a page of a supported type. |\n| 400 | `invalid_request_error` | `url_not_allowed` | The URL is not http(s), carries credentials, reaches a non-public address or robots.txt disallows it. | Fetch a public http(s) URL that robots.txt allows. |\n| 403 | `permission_error` | `insufficient_credits` | The organization's billing does not admit new paid work. | Use a credential with the required role or access; retrying with the same credential will not help. |\n| 409 | `conflict_error` | `idempotency_key_in_use` | A call with the same Idempotency-Key is still running. | Retry the same request after a short delay. |\n| 429 | `rate_limit_error` | `rate_limited` | The organization used up its fetches of this minute. | Wait for the retry-after delay, then retry. |\n| 500 | `api_error` | `fetch_failed` | The site failed, timed out, did not resolve or answered an error. | Retry later or fetch another URL. |",
+		Body:        true, List: false, Raw: false, HandWritten: true,
+		Params: []apiParam{
+			{Name: "format", Flag: "format", In: "body", Type: "string", Required: false, Description: "Default markdown.", Enum: []string{"markdown", "text"}},
+			{Name: "max_chars", Flag: "max-chars", In: "body", Type: "integer", Required: false, Description: "Default 20000."},
+			{Name: "url", Flag: "url", In: "body", Type: "string", Required: true, Description: "An http or https URL without credentials."},
+		},
+	},
+	{ID: "createWebSearch", Method: "POST", Path: "/v1/web_searches", Group: []string{"web-searches"}, Verb: "create", Summary: "Search the web",
+		Description: "Runs one web search with the platform's providers and answers the ranked results (title, URL, snippet, publication time). A query mostly in CJK script or a `zh` locale is answered by a provider that serves Chinese first. With an `Idempotency-Key`, the same key and body within 24 hours replays the first answer without a second charge. Errors: 400 `invalid_request`; 403 `insufficient_credits`; 429 `rate_limited`; 529 `search_unavailable` (every provider failed; retry later).\n\n**Authorization:** An organization API key, a personal access token or OAuth access token, or a dashboard session. Any workspace role may call; the workspace is the credential's own or `bma-workspace-id`.\n\n**Limits:**\n\n- Each organization may run 120 searches per minute (all callers, sessions included); past it 429 `rate_limited` with `Retry-After`.\n- `query` at most 400 characters; `num_results` 1 to 10; at most 20 domains.\n- USD 10 per 1,000 answered searches (model `web-search` in the usage and cost reports); failures are not charged.\n- Rate limit: one request of the organization's write budget ([Rate limits](https://docs.beeos.ai/guides/limits)).\n\n**Errors** (besides the [common errors](https://docs.beeos.ai/api-reference/errors) (401 authentication, 429 `rate_limited`, 500)):\n\n| Status | `error.type` | `error.code` | Cause | Fix |\n| --- | --- | --- | --- | --- |\n| 400 | `invalid_request_error` | `idempotency_key_reused` | The Idempotency-Key was used with another body within 24 hours. | Correct the request as the message describes and send it again; the same request will keep failing. |\n| 400 | `invalid_request_error` | `invalid_request` | The body does not match the schema or its limits. | Send a body of the schema. |\n| 403 | `permission_error` | `insufficient_credits` | The organization's billing does not admit new paid work. | Use a credential with the required role or access; retrying with the same credential will not help. |\n| 409 | `conflict_error` | `idempotency_key_in_use` | A call with the same Idempotency-Key is still running. | Retry the same request after a short delay. |\n| 429 | `rate_limit_error` | `rate_limited` | The organization used up its searches of this minute. | Wait for the retry-after delay, then retry. |\n| 529 | `overloaded_error` | `search_unavailable` | Every search provider failed or is throttled. | Retry with exponential backoff. |",
+		Body:        true, List: false, Raw: false, HandWritten: true,
+		Params: []apiParam{
+			{Name: "allowed_domains", Flag: "allowed-domains", In: "body", Type: "json", Required: false, Description: "Only results from these domains and their subdomains; not with blocked_domains."},
+			{Name: "blocked_domains", Flag: "blocked-domains", In: "body", Type: "json", Required: false, Description: "No results from these domains and their subdomains; not with allowed_domains."},
+			{Name: "locale", Flag: "locale", In: "body", Type: "string", Required: false, Description: "Language and country to favor (zh-CN, en-US)."},
+			{Name: "num_results", Flag: "num-results", In: "body", Type: "integer", Required: false, Description: "Default 5."},
+			{Name: "query", Flag: "query", In: "body", Type: "string", Required: true, Description: "What to search for, keywords or a question."},
+			{Name: "recency", Flag: "recency", In: "body", Type: "string", Required: false, Description: "Only results published within this period.", Enum: []string{"day", "week", "month", "year"}},
 		},
 	},
 }

@@ -65,6 +65,7 @@ func addHandWritten(root *cobra.Command) {
 		}
 	}
 	group(root, []string{"skills"}).AddCommand(pushCmd())
+	addWeb(root)
 }
 
 func uploadCmd() *cobra.Command {
