@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.15.1
+
+- Go: a claude-code stream that stalls after content ends the turn `model_stream_idle` before the CLI's own watchdog fires (no stream event for nine tenths of its idle limit). The watchdog abandons the stream and sends the CLI's non-streaming request at once, so the interrupt that followed could lose the race and the turn made a second model request.
+
 ## 1.15.0
 
 - Go: the claude-code and codex brains rebuild a session they hold no conversation for from its past on the platform (contract 2.2.0 `agent.history_rebuild`, `session.history`): a fork's first turn, or a session whose local state is gone, continues with the earlier conversation and answers `context_rebuilt: true` instead of starting without it. The Claude adapter writes the past as the CLI's own transcript and resumes it; the Codex adapter writes it as a codex rollout of a new thread with the turn's tools and resumes it. Past images and files are named in a line of text. `BrainCapabilities.HistoryRebuild`, `BrainOpen.History`, `ReadSessionHistory` (inside `OpenTurn`) and, for a harness, `AgentSessionHistory`. The DSH brain does not declare it yet.

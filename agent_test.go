@@ -104,7 +104,12 @@ func (p *recordingPlatform) snapshot() []AgentEventRecord {
 
 func (p *recordingPlatform) waitFor(t *testing.T, what string, done func() bool) {
 	t.Helper()
-	deadline := time.After(5 * time.Second)
+	p.waitForWithin(t, 5*time.Second, what, done)
+}
+
+func (p *recordingPlatform) waitForWithin(t *testing.T, within time.Duration, what string, done func() bool) {
+	t.Helper()
+	deadline := time.After(within)
 	for {
 		p.mu.Lock()
 		ok := done()
@@ -123,8 +128,13 @@ func (p *recordingPlatform) waitFor(t *testing.T, what string, done func() bool)
 
 func (p *recordingPlatform) waitIdle(t *testing.T, turnID string) AgentEventRecord {
 	t.Helper()
+	return p.waitIdleWithin(t, 5*time.Second, turnID)
+}
+
+func (p *recordingPlatform) waitIdleWithin(t *testing.T, within time.Duration, turnID string) AgentEventRecord {
+	t.Helper()
 	var idle AgentEventRecord
-	p.waitFor(t, "idle of "+turnID, func() bool {
+	p.waitForWithin(t, within, "idle of "+turnID, func() bool {
 		for _, event := range p.events {
 			if event.TurnID == turnID && event.Type == AgentEventTypeSessionStatusIdle {
 				idle = event
