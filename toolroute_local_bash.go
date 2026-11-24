@@ -170,24 +170,33 @@ func (r *LocalToolRoute) runBash(ctx context.Context, callID string, in map[stri
 	if err != nil {
 		return "spawn bash: " + err.Error(), true, nil
 	}
-	defer func() { _ = out.Close() }()
 	if runAs := r.core.opts.RunAs; runAs != nil {
 		if err := os.Chown(output, int(runAs.UID), int(runAs.GID)); err != nil {
+			_ = out.Close()
 			return "spawn bash: " + err.Error(), true, nil
 		}
 	}
 	// The command is not tied to the call's ctx: it may outlive the call.
 	cmd := toolCommand(context.Background(), plan.launch.argv)
 	setCredential(cmd, r.core.opts.RunAs)
-	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = plan.launch.dir, plan.launch.env, out, out
+	// The command writes to a pipe, never to the output file: a sandbox that
+	// denies the file's path breaks programs that check their stdout (on
+	// macOS raw cat and dd fail with "stdout: Operation not permitted").
+	// exec copies the pipe into the file until the command and what it left
+	// behind close it, or WaitDelay after the command exits. One writer for
+	// both streams keeps them in one pipe, in order.
+	sink := outputSink{out}
+	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = plan.launch.dir, plan.launch.env, sink, sink
 	tree, err := startCommand(cmd)
 	if err != nil {
+		_ = out.Close()
 		return "spawn bash: " + err.Error(), true, nil
 	}
 	proc := &acpBackgroundProc{tree: tree, done: make(chan struct{}), output: output}
 	var waitErr error
 	go func() {
-		waitErr = cmd.Wait()
+		waitErr = cmd.Wait() // returns once the output is copied
+		_ = out.Close()
 		tree.release() // what the command left behind keeps running, as with a POSIX process group
 		close(proc.done)
 	}()
@@ -214,6 +223,12 @@ func (r *LocalToolRoute) runBash(ctx context.Context, callID string, in map[stri
 	text := fmt.Sprintf("running in the background (pid %d), output in %s", cmd.Process.Pid, output)
 	return text, false, &RouteBackground{PID: cmd.Process.Pid, OutputFile: output}
 }
+
+// outputSink is the output file as a plain writer, so exec gives the command
+// a pipe instead of the file itself.
+type outputSink struct{ f *os.File }
+
+func (s outputSink) Write(p []byte) (int, error) { return s.f.Write(p) }
 
 // superviseBackground ends a command left in the background when its turn is
 // canceled or runs out of time, or after acpBashLifetime. A turn that
