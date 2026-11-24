@@ -454,7 +454,7 @@ func TestTypeReadBack(t *testing.T) {
 // plain text or the host keeps the clipboard out; an unreadable window counts
 // as web content.
 func TestTypeRoute(t *testing.T) {
-	text := "老婆仔，今天下雨☔️"
+	text := "今天下雨，记得带伞☔️"
 	req := ComputerActionRequest{Action: "type", Text: text, PID: 38989, WindowID: 133461}
 	modifier := "cmd"
 	if runtime.GOOS != "darwin" {

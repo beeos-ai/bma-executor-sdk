@@ -86,7 +86,7 @@ var acpAskUserQuestion = BrainTool{
 // tools: what a client shows as the step's title. The tools do not read it,
 // and a call without it still runs.
 var computerStepDescription = map[string]any{"type": "string", "description": "What this step does, in one sentence in the user's language, " +
-	`naming the app and the object, for example "在飞书里搜索联系人 Q". At most 40 characters; no coordinates.`}
+	`naming the app and the object, for example "Search for contact Q in Slack". At most 40 characters; no coordinates.`}
 
 // acpComputerActions are the actions of the local brain's computer_action.
 var acpComputerActions = []string{ComputerActionClick, ComputerActionType, ComputerActionKey, ComputerActionScroll, ComputerActionDrag,

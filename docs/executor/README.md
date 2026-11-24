@@ -1,6 +1,6 @@
 # BMA executor integration guide (overview)
 
-[中文](README.zh-CN.md) · [Repository README](../../README.md)
+[Repository README](../../README.md)
 
 Connect your machine (hands) or your own agent (brain) to BMA — the executor, harness and agent ends of the `bma.executor` protocol. [`bma-sdk`](https://github.com/beeos-ai/bma-sdk) drives and uses agents (REST / façade client); `bma-executor-sdk` connects hands or brains to BMA.
 
