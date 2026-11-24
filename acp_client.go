@@ -78,6 +78,9 @@ type acpInitializeResponse struct {
 			ReasoningEfforts []string `json:"reasoningEfforts"`
 			// Steering: _bma/session/steer is served (bma-dsh-acp >= 0.3.4).
 			Steering bool `json:"steering"`
+			// HistoryRebuild: session/new takes _meta.bma.history, the session's
+			// past to start the conversation from (bma-dsh-acp >= 0.3.5).
+			HistoryRebuild bool `json:"historyRebuild"`
 		} `json:"bma"`
 	} `json:"_meta"`
 }

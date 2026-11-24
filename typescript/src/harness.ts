@@ -51,6 +51,8 @@ import {
   type ToolResultParams,
   type WorkingLogAppendParams,
   type WorkingLogAppendResult,
+  type SessionHistoryParams,
+  type SessionHistoryResult,
   type WorkingLogReadParams,
   type WorkingLogReadResult,
   type TurnCancelParams,
@@ -114,6 +116,12 @@ export interface AgentPlatform {
   workingLogRead?(executor: HarnessExecutor, params: WorkingLogReadParams): Promise<WorkingLogReadResult>
   /** Serves working_log.append: resolves once the entries are stored; an entry whose key the log has is skipped. */
   workingLogAppend?(executor: HarnessExecutor, params: WorkingLogAppendParams): Promise<WorkingLogAppendResult>
+  /**
+   * Serves session.history (contract 2.2.0): a page of the session's conversation before the turn's opening input,
+   * which an executor's agent without local state rebuilds the conversation from. Omitted: method not found (the
+   * agent has no history to rebuild from). Throw an RpcError to refuse.
+   */
+  sessionHistory?(executor: HarnessExecutor, params: SessionHistoryParams): Promise<SessionHistoryResult>
 }
 
 export interface HarnessOptions {
@@ -921,6 +929,12 @@ class HarnessConn {
         if (!platform.workingLogRead) return undefined
         if (!read?.session_id) return Promise.reject(rpcError(JsonRpcErrorCode.InvalidParams, 'invalid working_log.read params', false))
         return platformCall(() => platform.workingLogRead!(executor, read))
+      }
+      case 'session.history': {
+        const read = params as SessionHistoryParams
+        if (!platform.sessionHistory) return undefined
+        if (!read?.session_id || !read.turn_id) return Promise.reject(rpcError(JsonRpcErrorCode.InvalidParams, 'invalid session.history params', false))
+        return platformCall(() => platform.sessionHistory!(executor, read))
       }
       case 'working_log.append': {
         const append = params as WorkingLogAppendParams

@@ -5,6 +5,7 @@ package bmaexecutor
 //
 //	BrainHost / BrainSink                 DSH adapter                       bma-dsh-acp (ACP)
 //	Open                                  open/load the session             session/new | session/load (_meta.bma, customTools)
+//	BrainOpen.History                     a new conversation's past         session/new _meta.bma.history (initialize _meta.bma.historyRebuild)
 //	                                      permission mode                   session/set_mode
 //	Prompt                                prompt                            session/prompt (_meta.bma.inputId, toolPolicy, reasoningEffort,
 //	                                                                        hostTools, inputSkills)
@@ -134,6 +135,7 @@ func (a *dshAdapter) Start(ctx context.Context, env BrainEnv) (BrainCapabilities
 		CustomTools:      true,
 		InputSkills:      true,
 		Steering:         init.Meta.Bma.Steering,
+		HistoryRebuild:   init.Meta.Bma.HistoryRebuild,
 	}, nil
 }
 
@@ -215,6 +217,9 @@ func (a *dshAdapter) Open(ctx context.Context, req BrainOpen) (BrainSession, err
 				return nil, fmt.Errorf("agent conversation %s: %w", req.Ref, ErrConversationLost)
 			}
 		} else {
+			if len(req.History) > 0 {
+				meta["history"] = req.History
+			}
 			err = proc.call(ctx, "session/new", map[string]any{"cwd": req.Cwd, "mcpServers": []any{}, "_meta": map[string]any{acpMetaKey: meta}}, &res)
 		}
 		if err != nil {
