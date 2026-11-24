@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.16.0
+
+- Go: the DSH brain rebuilds a session it holds no conversation for from its past on the platform (`agent.history_rebuild`, `session.history`) when bma-dsh-acp does (initialize `_meta.bma.historyRebuild`, bma-dsh-acp >= 0.3.5): `session/new` carries `BrainOpen.History` as `_meta.bma.history` (the events as `session.history` answered them) and the turn answers `context_rebuilt: true`. An older bma-dsh-acp is not declared to rebuild.
+- TypeScript: a `Harness` serves `session.history` through `AgentPlatform.sessionHistory` (omitted: method not found, as before).
+
 ## 1.15.2
 
 - Go: the local tool route's bash command (`LocalToolRoute`, the ACP agent's own bash) writes its stdout and stderr to one pipe; the SDK copies it into the output file. Before, the output file itself was the command's stdout and stderr: under a sandbox that denies the file's path (BeeWork Local's Seatbelt profile denies its data directory, where `CoreOptions.ToolOutputDir` is), macOS raw `cat` and `dd` failed with `stdout: Operation not permitted`. The answer, the output file and a command left in the background behave as before; a command's leftovers that keep the pipe open are cut off 2 s after it exits.

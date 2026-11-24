@@ -17,6 +17,7 @@ import {
   type HarnessExecutor,
   type InteractionRequestParams,
   type SessionEventDeltaParams,
+  type SessionHistoryParams,
   type WorkingLogAppendParams,
   type WorkingLogEntry,
   type WorkingLogReadParams,
@@ -396,6 +397,36 @@ test('working_log.read/append reach the platform hooks; a refusal keeps its code
       assert.deepEqual(read.entries.map((e) => [e.sequence, e.id]), [[1, 'e1']])
       await assert.rejects(client.call('working_log.read', { session_id: 'as_other' }),
         (error: unknown) => error instanceof RpcError && error.code === JsonRpcErrorCode.Forbidden)
+    } finally {
+      client.stop()
+    }
+  }
+})
+
+test('session.history reaches the platform hook; invalid params are refused; without the hook method not found', async () => {
+  const asked: SessionHistoryParams[] = []
+  const platform = Object.assign(new MemoryPlatform(), {
+    async sessionHistory(_e: HarnessExecutor, p: SessionHistoryParams) {
+      asked.push(p)
+      return { events: [{ bma_sequence: 1, id: 'sevt_u1', type: 'user.message' as const, payload: { content: [{ type: 'text', text: 'hi' }] } }], has_more: false }
+    },
+  })
+  for (const [hooks, harness] of [[true, new Harness({ agent: platform })], [false, new Harness({ agent: new MemoryPlatform() })]] as const) {
+    const client = new ExecutorClient({ environmentId: 'env_test', executor: executorInfo, dialer: harness.inProcessDialer() })
+    await client.start()
+    try {
+      await harness.waitExecutor()
+      const params = { session_id: 'as_fork', turn_id: 't_1', after: 0, limit: 500 }
+      if (!hooks) {
+        await assert.rejects(client.call('session.history', params),
+          (error: unknown) => error instanceof RpcError && error.code === JsonRpcErrorCode.MethodNotFound)
+        continue
+      }
+      const page = await client.call('session.history', params)
+      assert.deepEqual(page.events.map((e) => [e.bma_sequence, e.id, e.type]), [[1, 'sevt_u1', 'user.message']])
+      assert.deepEqual(asked, [params])
+      await assert.rejects(client.call('session.history', { session_id: 'as_fork' } as never),
+        (error: unknown) => error instanceof RpcError && error.code === JsonRpcErrorCode.InvalidParams)
     } finally {
       client.stop()
     }

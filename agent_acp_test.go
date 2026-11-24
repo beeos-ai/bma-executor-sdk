@@ -710,6 +710,9 @@ func fakeHandle(c *fakeConn, method string, raw json.RawMessage) (any, map[strin
 		if os.Getenv("BMA_ACP_FAKE_NO_EFFORTS") == "" { // BMA_ACP_FAKE_NO_EFFORTS: an agent before bma-dsh-acp 0.2.2
 			bma["reasoningEfforts"] = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 		}
+		if os.Getenv("BMA_ACP_FAKE_NO_HISTORY") == "" { // BMA_ACP_FAKE_NO_HISTORY: an agent before bma-dsh-acp 0.3.5
+			bma["historyRebuild"] = true
+		}
 		// BMA_ACP_FAKE_IMAGE=1: an agent that takes image prompts (promptCapabilities.image).
 		prompts := map[string]any{"image": os.Getenv("BMA_ACP_FAKE_IMAGE") == "1", "audio": false, "embeddedContext": false}
 		return map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": true, "promptCapabilities": prompts},
@@ -739,6 +742,14 @@ func fakeHandle(c *fakeConn, method string, raw json.RawMessage) (any, map[strin
 		c.open[sid] = true
 		c.mu.Unlock()
 		fakeLog(strings.TrimPrefix(method, "session/") + " " + sid)
+		if past, ok := p.Meta.Bma["history"].([]any); ok {
+			ids := make([]string, 0, len(past))
+			for _, e := range past {
+				id, _ := e.(map[string]any)["id"].(string)
+				ids = append(ids, id)
+			}
+			fakeLog("history " + sid + " " + strings.Join(ids, ","))
+		}
 		return map[string]any{"sessionId": sid, "_meta": map[string]any{"bma": map[string]any{"toolCatalog": fakeTools}}}, nil
 	case "session/set_mode":
 		return map[string]any{}, nil

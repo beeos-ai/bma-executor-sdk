@@ -122,3 +122,44 @@ func TestCodexRebuildsASessionFromItsHistory(t *testing.T) {
 		t.Fatal("the rebuilt thread offers no tools")
 	}
 }
+
+// The DSH brain hands a new conversation the session's past (session/new
+// _meta.bma.history, the events as session.history answered them) when
+// bma-dsh-acp rebuilds one (initialize _meta.bma.historyRebuild).
+func TestDSHRebuildsASessionFromItsHistory(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	f := startACPFixture(t, ctx, ACPAgentOptions{})
+	if capability, err := f.executor.AgentCapability(); err != nil || !capability.HistoryRebuild {
+		t.Fatalf("capability = %+v, %v: want history_rebuild", capability, err)
+	}
+	f.platform.mu.Lock()
+	f.platform.history = map[string][]SessionHistoryEvent{"sesn_fork": pastOfFork}
+	f.platform.mu.Unlock()
+	res := f.start(t, ctx, "sesn_fork", "turn_1", "hello")
+	if !res.ContextRebuilt || res.Resumed {
+		t.Fatalf("turn.start = %+v, want context_rebuilt, not resumed", res)
+	}
+	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
+	plain := f.start(t, ctx, "sesn_new", "turn_2", "hello")
+	if plain.ContextRebuilt {
+		t.Fatalf("turn.start of a new session = %+v", plain)
+	}
+	assertIdle(t, f.platform.waitIdle(t, "turn_2"), TurnOutcomeCompleted)
+	got := callsOf(t, f, "history")
+	want := []string{dshWireID(res.ExecutorSessionRef) + " sevt_u1,sevt_c1,sevt_r1,sevt_a1,sevt_u2,sevt_c2,sevt_r9"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("session/new history = %q, want %q", got, want)
+	}
+}
+
+// An agent that does not rebuild (bma-dsh-acp before 0.3.5) is not declared
+// to: such a session starts without its past, as before.
+func TestDSHWithoutHistoryRebuild(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	f := startACPFixture(t, ctx, ACPAgentOptions{Env: []string{"BMA_ACP_FAKE_NO_HISTORY=1"}})
+	if capability, err := f.executor.AgentCapability(); err != nil || capability.HistoryRebuild {
+		t.Fatalf("capability = %+v, %v: want no history_rebuild", capability, err)
+	}
+}
