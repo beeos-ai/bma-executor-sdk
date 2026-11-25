@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.18.0
 
 - bma: the CLI's contract snapshot is beeos-managed-agents 4956ce415, where every operation has its reference docs: each API command's help describes its flags, and its example and documented answer come from the contract's examples (organization admin, memory stores, models, webhooks, vaults, skills, desktop and terminal commands gain flags for their documented parameters and body members).
 
