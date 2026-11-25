@@ -34,6 +34,9 @@ type apiOp struct {
 	// sends --idempotency-key, else a new key per run (the SDK's retries of
 	// that run reuse it).
 	Idempotent bool
+	// Example is the command line of the operation's documented example;
+	// Output its documented JSON answer.
+	Example, Output string
 }
 
 // apiParam is a path parameter (positional), a query parameter or a
@@ -91,10 +94,14 @@ func apiCommand(op *apiOp) *cobra.Command {
 		long += ".\n\n" + op.Description
 	}
 	long += fmt.Sprintf("\n\n%s %s", op.Method, op.Path)
+	if op.Output != "" {
+		long += "\n\nExample output (--format json):\n\n" + indent(op.Output, "    ")
+	}
 	cmd := &cobra.Command{
 		Use:         strings.TrimSpace(op.Verb + " " + strings.Join(positional, " ")),
 		Short:       op.Summary,
 		Long:        long,
+		Example:     indent(op.Example, "  "),
 		Args:        args(len(positional)),
 		Annotations: map[string]string{"operation": op.ID},
 	}
@@ -385,4 +392,12 @@ func writeContent(r io.Reader, output string) error {
 		return err
 	}
 	return os.Rename(tmp, output)
+}
+
+// indent prefixes every line of s with pad ("" stays "").
+func indent(s, pad string) string {
+	if s == "" {
+		return ""
+	}
+	return pad + strings.ReplaceAll(s, "\n", "\n"+pad)
 }

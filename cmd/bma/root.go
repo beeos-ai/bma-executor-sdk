@@ -42,7 +42,22 @@ func newRoot() *cobra.Command {
 
 Sign in with "bma login" (or set BMA_API_KEY), then use a command per API
 operation, e.g. "bma sessions list", "bma machines get <id>". Connect this
-computer as a BYO executor with "bma up".`,
+computer as a BYO executor with "bma up".
+
+Output: an API command prints the API's JSON answer, indented. --format yaml
+prints YAML; --format jsonl prints it on one line. A list prints one page
+(the page object with data and next_page); on a terminal it prints the
+page's items as a table, and --format table does so everywhere. --all fetches
+every page and prints the items (with --format jsonl, one item per line).
+--query applies a jq expression first and prints each result, a string
+result as raw text. A command that downloads content writes it to stdout or
+to --output.
+
+Exit codes: 0 success; 1 other failure; 2 usage error; 3 not signed in, or
+the API answered 401 or 403; 4 not found (404); 5 conflict or failed
+precondition (409, 412); 6 rate limited (429), server error (5xx) or network
+failure after the retries; 130 interrupted. An error is written to stderr:
+one line, or with --json the API's error envelope as it answered.`,
 		Version:       version,
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -85,7 +100,59 @@ computer as a BYO executor with "bma up".`,
 		root.AddCommand(c)
 	}
 	root.AddCommand(versionCmd(), docsCmd())
+	addExamples(root)
 	return root
+}
+
+// handExamples are the examples of the hand-written commands, by command
+// path (the generated API commands carry their own, from the contract).
+var handExamples = map[string]string{
+	"bma login": `bma login
+bma login --no-browser
+printf '%s' "$BMA_API_KEY" | bma login --with-token`,
+	"bma logout": `bma logout
+bma logout --profile work`,
+	"bma auth status":     "bma auth status",
+	"bma auth token":      `curl -sS "$BMA_BASE_URL/v1/agents" -H "x-api-key: $(bma auth token)"`,
+	"bma profiles list":   "bma profiles list",
+	"bma profiles use":    "bma profiles use work",
+	"bma profiles set":    "bma profiles set work --api https://api.beeos.ai --workspace-id <workspace_id>",
+	"bma profiles delete": "bma profiles delete work",
+	"bma up": `bma up
+bma up --harness claude-code --labels office,gpu
+bma up --reauth --no-browser`,
+	"bma status": `bma status
+bma status --json`,
+	"bma harness": `bma harness list
+bma harness add claude-code
+bma harness login claude-code`,
+	"bma disconnect": "bma disconnect",
+	"bma upgrade": `bma upgrade --check
+bma upgrade`,
+	"bma uninstall": "bma uninstall --yes",
+	"bma version": `bma version
+bma version --json`,
+	"bma sessions send": `bma sessions send <session_id> "Summarize the open issues" --wait
+echo "Next step" | bma sessions send <session_id> - --stream`,
+	"bma sessions events stream": "bma sessions events stream <session_id> --until-idle",
+	"bma files upload": `bma files upload ./report.pdf
+bma files upload ./report.pdf --expires-in-seconds 86400`,
+	"bma skills push": `bma skills push ./my-skill
+bma skills push ./my-skill --skill <skill_id>`,
+}
+
+// addExamples sets the hand-written commands' examples.
+func addExamples(root *cobra.Command) {
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		if ex, ok := handExamples[c.CommandPath()]; ok {
+			c.Example = indent(ex, "  ")
+		}
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+	}
+	walk(root)
 }
 
 // usageErr is a usage error (exit 2).
