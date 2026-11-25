@@ -16,7 +16,8 @@
 // Operations a generic request cannot express are marked HandWritten and
 // covered by hand-written commands that name the operation in their
 // "operation" annotation: event streams (text/event-stream) and multipart
-// uploads. cmd/bma's parity test checks that every operation has exactly one
+// uploads; and the operations with a top-level command of their own
+// (topLevel). cmd/bma's parity test checks that every operation has exactly one
 // command and every generated command an operation.
 package main
 
@@ -133,6 +134,10 @@ func main() {
 		log.Fatal(err)
 	}
 }
+
+// topLevel are the operations served by a top-level hand-written command
+// instead of a resource group (`bma search`, `bma fetch`).
+var topLevel = map[string]bool{"createWebSearch": true, "createWebFetch": true}
 
 // op is one generated entry (mirrors cmd/bma apiOp).
 type op struct {
@@ -297,6 +302,9 @@ func (d *doc) build(prefix, path, method string, o operation, ext []extField) (o
 		}
 	}
 	g.List = d.isList(o)
+	if topLevel[o.OperationID] {
+		g.HandWritten = true
+	}
 	if r, ok := o.Responses["200"]; ok {
 		if m, ok := d.response(r).Content["application/json"]; ok && m.Example.Kind != 0 {
 			out, err := jsonOf(&m.Example, "  ", "")
