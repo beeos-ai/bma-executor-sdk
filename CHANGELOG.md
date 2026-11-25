@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- bma: the CLI's contract snapshot is beeos-managed-agents 4956ce415, where every operation has its reference docs: each API command's help describes its flags, and its example and documented answer come from the contract's examples (organization admin, memory stores, models, webhooks, vaults, skills, desktop and terminal commands gain flags for their documented parameters and body members).
+
 ## 1.17.0
 
 - Go: a brain whose tools run on this machine (a `BrainHost` / `ACPAgent` without `PlatformTools`: DSH, Claude Code, Codex on a local app, `bma up`, a sandbox machine) gets the platform's web tools (executor contract 2.4.0, `agent.platform_tools` and `platform_credentials` `platform_tools`): turn.start `config.platform_tools` offers `web_search` and `web_fetch`, which the brain offers its model like its other tools under the turn's policy and approvals; each call goes to the platform tools endpoint of turn.start metadata `platform_tools_mcp_url` with `platform_tools_mcp_token` (renewed through `tools_token.refresh`), never to this machine, and is reported as `agent.tool_use` / `agent.tool_result`. Without the credential a call is refused (`tools_unavailable`). The brains' own web search and fetch stay off (Claude Code starts without built-in tools, Codex with `web_search` disabled), so search is the platform's, metered and governed. A host with `PlatformTools` (hands possibly elsewhere) does not declare it.
