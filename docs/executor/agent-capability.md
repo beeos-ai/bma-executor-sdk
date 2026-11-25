@@ -1,6 +1,6 @@
 # Agent capability
 
-[中文](agent-capability.zh-CN.md) · [Overview](README.md) · [Protocol reference](protocol-reference.md)
+[Overview](README.md) · [Protocol reference](protocol-reference.md)
 
 Status: contract and SDK **[Available]**, platform **[Preview]** (text input only).
 

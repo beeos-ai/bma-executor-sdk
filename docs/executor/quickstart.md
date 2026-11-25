@@ -1,6 +1,6 @@
 # Quick start and examples
 
-[中文](quickstart.zh-CN.md) · [Overview](README.md)
+[Overview](README.md)
 
 | Example | What it does | Needs | Status |
 | --- | --- | --- | --- |

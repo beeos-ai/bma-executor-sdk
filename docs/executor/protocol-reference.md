@@ -1,6 +1,6 @@
 # Executor Protocol reference (v1 + v1.1)
 
-[中文](protocol-reference.zh-CN.md) · [Overview](README.md)
+[Overview](README.md)
 
 The complete reference for `bma.executor.v1` and `bma.executor.v1.1` as served by the BMA platform and implemented by bma-executor-sdk 1.0.0. Where older documents disagree, this page and the contract win. Labels: **[Available]** shipped or live; **[Preview]** live on the platform with stated limits; **[Coming]** defined in the contract, capability-gated, not served yet; **[Design]** not implemented.
 

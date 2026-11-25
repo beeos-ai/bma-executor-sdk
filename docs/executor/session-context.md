@@ -1,7 +1,5 @@
 # Session context, launch hook, session files and refusal reasons (1.1)
 
-[中文](session-context.zh-CN.md)
-
 A machine-scoped executor (machine daemon token in `EnvironmentKey` / `environmentKey` / `environment_key`, empty environment id) can decide per session where and how a process runs, and refuse with a machine-readable reason. The platform never stores a local path: the session creator puts opaque references in the session `metadata` (as Claude Managed Agents passes file references in session metadata), and the executor resolves them with its own local table.
 
 ## Session context
