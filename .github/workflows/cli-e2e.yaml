@@ -22,6 +22,8 @@ permissions:
 jobs:
   staging:
     name: bma CLI against staging
+    # Staging dormant (repository variable STAGING_ENABLED=false): no staging to run against; restore = set it to true.
+    if: vars.STAGING_ENABLED != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: staging-e2e
