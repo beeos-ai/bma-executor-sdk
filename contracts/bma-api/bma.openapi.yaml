@@ -4,16 +4,16 @@ info:
   title: BMA API
   version: 1.0.0
   description: "The public REST API of the BMA api host. Operations in the official Anthropic Managed Agents and Admin API
-    shapes carry `x-bma-extension: false`; BMA extensions carry `x-bma-extension: true` and follow the Anthropic style
-    (ADR 0023 1.3.3): top-level `/v1/<plural_snake>` paths, POST updates and actions, `{data, next_page}` lists, the
-    Anthropic error envelope (BMA reasons in `error.bma_error_code`), `Idempotency-Key` on creates and the
-    `bma-workspace-id` scope header. Extension fields on official objects are top-level `bma_*` properties."
+    shapes carry `x-bma-extension: false`; BMA extensions carry `x-bma-extension: true` and follow the Anthropic style:
+    top-level `/v1/<plural_snake>` paths, POST updates and actions, `{data, next_page}` lists, the Anthropic error
+    envelope (BMA reasons in `error.bma_error_code`), `Idempotency-Key` on creates and the `bma-workspace-id` scope
+    header. Extension fields on official objects are top-level `bma_*` properties."
   x-bma-official-sdk: "@anthropic-ai/sdk 1.6.0"
 servers:
   - url: https://api.beeos.ai
     description: Production
-  - url: https://api.staging.beeos.ai
-    description: Staging
+  - url: http://127.0.0.1:58080
+    description: Self-hosted (docker compose quickstart)
 security:
   - apiKey: []
   - bearer: []
@@ -41,19 +41,27 @@ tags:
       free-form label (1-255 characters, not unique; the SKILL.md `name` until one is set, which stays `bma_name`) and
       `latest_version_id` its latest revision."
   - name: Model providers
-    description: An organization's own model upstreams, their models and those models' workspace grants (ADR-0088), for
-      organizations on the new stack. Organization owners and admins write; keys are write-only. Calls naming such a
-      model go to the tenant's endpoint with the tenant's key and are paid by the tenant.
+    description: An organization's own model upstreams, their models and those models' workspace grants, for organizations
+      on the new stack. Organization owners and admins write; keys are write-only. Calls naming such a model go to the
+      tenant's endpoint with the tenant's key and are paid by the tenant.
   - name: Machine backups
     description: Backups of a machine's working directory and the rebuild of a machine from one.
   - name: Session tool grants
-    description: The standing tool permissions a session's user granted (ADR-0068).
+    description: The standing tool permissions a session's user granted.
   - name: MCP OAuth
     description: The OAuth authorization flow that stores an MCP server credential in a vault.
   - name: Me
     description: The calling user's own personal access tokens and organization invites.
   - name: Organization reports
     description: The Admin API usage and cost reports of the organization (owner and admin credentials).
+  - name: Web
+    description: "Web search and page fetch run by the platform, the same search and fetch the agent toolset's web_search
+      and web_fetch tools use: the platform holds the search providers' keys and fetches through an SSRF guard (public
+      addresses only, every redirect hop checked, robots.txt respected, no cookies or credentials). The request bodies
+      are the tools' input schemas. Answers carry third-party content: mark it as untrusted when you give it to a model.
+      A search is USD 10 per 1,000 and a fetch USD 1 per 1,000, recorded as usage of the models `web-search` and
+      `web-fetch`; failed calls are not charged. Each organization has its own per-minute limit for each operation (429
+      `rate_limited` with `Retry-After`)."
   - name: agents
     description: Official `agents` resource (Anthropic SDK `agents`).
   - name: environments
@@ -220,12 +228,14 @@ paths:
                 properties:
                   data:
                     type: array
+                    description: The items of this page, in the list's order.
                     items:
                       $ref: "#/components/schemas/BetaManagedAgentsAgent"
                   next_page:
                     type:
                       - string
                       - "null"
+                    description: "Cursor of the next page: send it as `page` to continue. null on the last page."
         4XX:
           $ref: "#/components/responses/Error"
         5XX:
@@ -870,12 +880,14 @@ paths:
                 properties:
                   data:
                     type: array
+                    description: The items of this page, in the list's order.
                     items:
                       $ref: "#/components/schemas/BetaEnvironment"
                   next_page:
                     type:
                       - string
                       - "null"
+                    description: "Cursor of the next page: send it as `page` to continue. null on the last page."
         4XX:
           $ref: "#/components/responses/Error"
         5XX:
@@ -1061,12 +1073,14 @@ paths:
                 properties:
                   data:
                     type: array
+                    description: The items of this page, in the list's order.
                     items:
                       $ref: "#/components/schemas/FileMetadata"
                   next_page:
                     type:
                       - string
                       - "null"
+                    description: "Cursor of the next page: send it as `page` to continue. null on the last page."
         4XX:
           $ref: "#/components/responses/Error"
         5XX:
@@ -1548,11 +1562,11 @@ paths:
       tags:
         - Machines
       summary: Bind an agent to a machine
-      description: Adds one agent to a persistent pool machine's `agent_ids` (ADR-0085), atomically against concurrent agent
-        changes of the machine; an agent already bound is a no-op (200). No request body. On a machine bound to no agent
-        it narrows the machine from every agent of its workspace to this one. 404 when the agent is not an agent of the
-        machine's workspace; 400 `validation_failed` for a machine that is not a persistent pool machine or already has
-        100 agents. The managers of the workspace that owns the machine may change it.
+      description: Adds one agent to a persistent pool machine's `agent_ids`, atomically against concurrent agent changes of
+        the machine; an agent already bound is a no-op (200). No request body. On a machine bound to no agent it narrows
+        the machine from every agent of its workspace to this one. 404 when the agent is not an agent of the machine's
+        workspace; 400 `validation_failed` for a machine that is not a persistent pool machine or already has 100
+        agents. The managers of the workspace that owns the machine may change it.
       parameters:
         - name: machine_id
           in: path
@@ -1581,11 +1595,10 @@ paths:
       tags:
         - Machines
       summary: Unbind an agent from a machine
-      description: "Removes one agent from a machine's `agent_ids` (ADR-0085), atomically against concurrent agent changes of
-        the machine; an agent not bound is a no-op (200). Removing the last agent is refused with 400
-        `validation_failed`: an empty `agent_ids` opens the machine to every agent of its workspace, which only an
-        explicit `agent_ids: []` (updateMachine) does. The managers of the workspace that owns the machine may change
-        it."
+      description: "Removes one agent from a machine's `agent_ids`, atomically against concurrent agent changes of the
+        machine; an agent not bound is a no-op (200). Removing the last agent is refused with 400 `validation_failed`:
+        an empty `agent_ids` opens the machine to every agent of its workspace, which only an explicit `agent_ids: []`
+        (updateMachine) does. The managers of the workspace that owns the machine may change it."
       parameters:
         - name: machine_id
           in: path
@@ -2264,12 +2277,14 @@ paths:
                 properties:
                   data:
                     type: array
+                    description: The items of this page, in the list's order.
                     items:
                       $ref: "#/components/schemas/BetaManagedAgentsMemoryStore"
                   next_page:
                     type:
                       - string
                       - "null"
+                    description: "Cursor of the next page: send it as `page` to continue. null on the last page."
         4XX:
           $ref: "#/components/responses/Error"
         5XX:
@@ -2524,12 +2539,14 @@ paths:
                 properties:
                   data:
                     type: array
+                    description: The items of this page, in the list's order.
                     items:
                       $ref: "#/components/schemas/BetaManagedAgentsMemoryListItem"
                   next_page:
                     type:
                       - string
                       - "null"
+                    description: "Cursor of the next page: send it as `page` to continue. null on the last page."
         4XX:
           $ref: "#/components/responses/Error"
         5XX:
@@ -2782,8 +2799,7 @@ paths:
       tags:
         - Model providers
       summary: List model providers
-      description: The organization's own model providers (ADR-0088), by id. Organization owners and admins only; keys are
-        never returned.
+      description: The organization's own model providers, by id. Organization owners and admins only; keys are never returned.
       responses:
         "200":
           description: Success.
@@ -3106,18 +3122,22 @@ paths:
                 properties:
                   data:
                     type: array
+                    description: The items of this page, in the list's order.
                     items:
                       $ref: "#/components/schemas/ModelInfo"
                   has_more:
                     type: boolean
+                    description: Whether more items follow this page.
                   first_id:
                     type:
                       - string
                       - "null"
+                    description: ID of the first item of this page; null when the page is empty.
                   last_id:
                     type:
                       - string
                       - "null"
+                    description: ID of the last item of this page; null when the page is empty.
         4XX:
           $ref: "#/components/responses/Error"
         5XX:
@@ -3347,18 +3367,22 @@ paths:
                 properties:
                   data:
                     type: array
+                    description: The items of this page, in the list's order.
                     items:
                       $ref: "#/components/schemas/APIKey"
                   has_more:
                     type: boolean
+                    description: Whether more items follow this page.
                   first_id:
                     type:
                       - string
                       - "null"
+                    description: ID of the first item of this page; null when the page is empty.
                   last_id:
                     type:
                       - string
                       - "null"
+                    description: ID of the last item of this page; null when the page is empty.
         4XX:
           $ref: "#/components/responses/Error"
         5XX:
@@ -3533,18 +3557,22 @@ paths:
                 properties:
                   data:
                     type: array
+                    description: The items of this page, in the list's order.
                     items:
                       $ref: "#/components/schemas/OrganizationInvite"
                   has_more:
                     type: boolean
+                    description: Whether more items follow this page.
                   first_id:
                     type:
                       - string
                       - "null"
+                    description: ID of the first item of this page; null when the page is empty.
                   last_id:
                     type:
                       - string
                       - "null"
+                    description: ID of the last item of this page; null when the page is empty.
         4XX:
           $ref: "#/components/responses/Error"
         5XX:
@@ -3755,18 +3783,22 @@ paths:
                 properties:
                   data:
                     type: array
+                    description: The items of this page, in the list's order.
                     items:
                       $ref: "#/components/schemas/OrganizationUser"
                   has_more:
                     type: boolean
+                    description: Whether more items follow this page.
                   first_id:
                     type:
                       - string
                       - "null"
+                    description: ID of the first item of this page; null when the page is empty.
                   last_id:
                     type:
                       - string
                       - "null"
+                    description: ID of the last item of this page; null when the page is empty.
         4XX:
           $ref: "#/components/responses/Error"
         5XX:
@@ -4099,18 +4131,22 @@ paths:
                 properties:
                   data:
                     type: array
+                    description: The items of this page, in the list's order.
                     items:
                       $ref: "#/components/schemas/Workspace"
                   has_more:
                     type: boolean
+                    description: Whether more items follow this page.
                   first_id:
                     type:
                       - string
                       - "null"
+                    description: ID of the first item of this page; null when the page is empty.
                   last_id:
                     type:
                       - string
                       - "null"
+                    description: ID of the last item of this page; null when the page is empty.
         4XX:
           $ref: "#/components/responses/Error"
         5XX:
@@ -4341,18 +4377,22 @@ paths:
                 properties:
                   data:
                     type: array
+                    description: The items of this page, in the list's order.
                     items:
                       $ref: "#/components/schemas/WorkspaceMember"
                   has_more:
                     type: boolean
+                    description: Whether more items follow this page.
                   first_id:
                     type:
                       - string
                       - "null"
+                    description: ID of the first item of this page; null when the page is empty.
                   last_id:
                     type:
                       - string
                       - "null"
+                    description: ID of the last item of this page; null when the page is empty.
         4XX:
           $ref: "#/components/responses/Error"
         5XX:
@@ -4678,16 +4718,19 @@ paths:
                 properties:
                   data:
                     type: array
+                    description: The items of this page, in the list's order.
                     items:
                       $ref: "#/components/schemas/BetaManagedAgentsSession"
                   next_page:
                     type:
                       - string
                       - "null"
+                    description: "Cursor of the next page: send it as `page` to continue. null on the last page."
                   prev_page:
                     type:
                       - string
                       - "null"
+                    description: "Cursor of the previous page: send it as `page` to go back. null on the first page."
         4XX:
           $ref: "#/components/responses/Error"
         5XX:
@@ -4934,12 +4977,14 @@ paths:
                 properties:
                   data:
                     type: array
+                    description: The items of this page, in the list's order.
                     items:
                       $ref: "#/components/schemas/BetaManagedAgentsSessionEvent"
                   next_page:
                     type:
                       - string
                       - "null"
+                    description: "Cursor of the next page: send it as `page` to continue. null on the last page."
         4XX:
           $ref: "#/components/responses/Error"
         5XX:
@@ -5122,12 +5167,14 @@ paths:
                 properties:
                   data:
                     type: array
+                    description: The items of this page, in the list's order.
                     items:
                       $ref: "#/components/schemas/BetaManagedAgentsSessionResource"
                   next_page:
                     type:
                       - string
                       - "null"
+                    description: "Cursor of the next page: send it as `page` to continue. null on the last page."
         4XX:
           $ref: "#/components/responses/Error"
         5XX:
@@ -5706,7 +5753,7 @@ paths:
           required: true
           schema:
             type: string
-      description: Native answers 204; the facade returns the session.
+      description: Closes the terminal session and returns it.
       responses:
         "200":
           description: Success.
@@ -6290,6 +6337,268 @@ paths:
         5XX:
           $ref: "#/components/responses/Error"
       x-bma-extension: false
+  /v1/web_fetches:
+    post:
+      operationId: createWebFetch
+      tags:
+        - Web
+      summary: Fetch a web page
+      description: >-
+        Fetches one public page and answers its main content as markdown or text. Only public addresses are reached
+        (checked on every connection and redirect, at most 5 redirects); robots.txt is respected; no cookies or
+        credentials are sent; at most 5 MB and 20 seconds; HTML, text, markdown, JSON, XML and CSV only; no JavaScript
+        and no PDF. With an `Idempotency-Key`, the same key and body within 24 hours replays the first answer without a
+        second charge. Errors: 400 `invalid_request`, `url_not_allowed` (not http(s), credentials in the URL, a
+        non-public address or disallowed by robots.txt), `unsupported_content_type`, `content_too_large`; 403
+        `insufficient_credits`; 429 `rate_limited`; 500 `fetch_failed` (the site failed, timed out or answered an
+        error).
+
+
+        **Authorization:** An organization API key, a personal access token or OAuth access token, or a dashboard
+        session. Any workspace role may call; the workspace is the credential's own or `bma-workspace-id`.
+
+
+        **Limits:**
+
+
+        - Each organization may run 120 fetches per minute (all callers, sessions included); past it 429 `rate_limited`
+        with `Retry-After`.
+
+        - At most 5 MB and 20 seconds per page, 5 redirects; `max_chars` 1000 to 100000.
+
+        - USD 1 per 1,000 fetched pages (model `web-fetch` in the usage and cost reports); failures are not charged.
+
+        - Rate limit: one request of the organization's write budget ([Rate
+        limits](https://docs.beeos.ai/guides/limits)).
+
+
+        **Errors** (besides the [common errors](https://docs.beeos.ai/api-reference/errors) (401 authentication, 429
+        `rate_limited`, 500)):
+
+
+        | Status | `error.type` | `error.code` | Cause | Fix |
+
+        | --- | --- | --- | --- | --- |
+
+        | 400 | `invalid_request_error` | `content_too_large` | The page is larger than 5 MB. | Fetch a smaller page or
+        another URL. |
+
+        | 400 | `invalid_request_error` | `idempotency_key_reused` | The Idempotency-Key was used with another body
+        within 24 hours. | Correct the request as the message describes and send it again; the same request will keep
+        failing. |
+
+        | 400 | `invalid_request_error` | `invalid_request` | The body does not match the schema or its limits. | Send a
+        body of the schema. |
+
+        | 400 | `invalid_request_error` | `unsupported_content_type` | The page is not HTML, text, markdown, JSON, XML
+        or CSV. | Fetch a page of a supported type. |
+
+        | 400 | `invalid_request_error` | `url_not_allowed` | The URL is not http(s), carries credentials, reaches a
+        non-public address or robots.txt disallows it. | Fetch a public http(s) URL that robots.txt allows. |
+
+        | 403 | `permission_error` | `insufficient_credits` | The organization's billing does not admit new paid work. |
+        Use a credential with the required role or access; retrying with the same credential will not help. |
+
+        | 409 | `conflict_error` | `idempotency_key_in_use` | A call with the same Idempotency-Key is still running. |
+        Retry the same request after a short delay. |
+
+        | 429 | `rate_limit_error` | `rate_limited` | The organization used up its fetches of this minute. | Wait for
+        the retry-after delay, then retry. |
+
+        | 500 | `api_error` | `fetch_failed` | The site failed, timed out, did not resolve or answered an error. | Retry
+        later or fetch another URL. |
+      x-bma-auth: An organization API key, a personal access token or OAuth access token, or a dashboard session. Any
+        workspace role may call; the workspace is the credential's own or `bma-workspace-id`.
+      x-bma-limits:
+        - Each organization may run 120 fetches per minute (all callers, sessions included); past it 429 `rate_limited`
+          with `Retry-After`.
+        - At most 5 MB and 20 seconds per page, 5 redirects; `max_chars` 1000 to 100000.
+        - USD 1 per 1,000 fetched pages (model `web-fetch` in the usage and cost reports); failures are not charged.
+      x-bma-errors:
+        - code: invalid_request
+          when: The body does not match the schema or its limits.
+          fix: Send a body of the schema.
+        - code: url_not_allowed
+          when: The URL is not http(s), carries credentials, reaches a non-public address or robots.txt disallows it.
+        - code: unsupported_content_type
+          when: The page is not HTML, text, markdown, JSON, XML or CSV.
+        - code: content_too_large
+          when: The page is larger than 5 MB.
+        - code: insufficient_credits
+          when: The organization's billing does not admit new paid work.
+        - code: rate_limited
+          when: The organization used up its fetches of this minute.
+        - code: idempotency_key_reused
+          when: The Idempotency-Key was used with another body within 24 hours.
+        - code: idempotency_key_in_use
+          when: A call with the same Idempotency-Key is still running.
+        - code: fetch_failed
+          when: The site failed, timed out, did not resolve or answered an error.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ProjectHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWebFetchRequest"
+            example:
+              url: https://example.com/
+              max_chars: 2000
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebFetch"
+              example:
+                id: wfetch_agq7b3l2m4n5p6q7r8s9t0u1v2
+                type: web_fetch
+                created_at: 2026-11-24T08:00:00Z
+                url: https://example.com/
+                final_url: https://example.com/
+                title: Example Domain
+                content_type: text/html
+                format: markdown
+                content: |-
+                  # Example Domain
+
+                  This domain is for use in illustrative examples in documents.
+                truncated: false
+                content_chars: 84
+                usage:
+                  web_fetch_requests: 1
+        4XX:
+          $ref: "#/components/responses/Error"
+        5XX:
+          $ref: "#/components/responses/Error"
+      x-bma-extension: true
+  /v1/web_searches:
+    post:
+      operationId: createWebSearch
+      tags:
+        - Web
+      summary: Search the web
+      description: >-
+        Runs one web search with the platform's providers and answers the ranked results (title, URL, snippet,
+        publication time). A query mostly in CJK script or a `zh` locale is answered by a provider that serves Chinese
+        first. With an `Idempotency-Key`, the same key and body within 24 hours replays the first answer without a
+        second charge. Errors: 400 `invalid_request`; 403 `insufficient_credits`; 429 `rate_limited`; 529
+        `search_unavailable` (every provider failed; retry later).
+
+
+        **Authorization:** An organization API key, a personal access token or OAuth access token, or a dashboard
+        session. Any workspace role may call; the workspace is the credential's own or `bma-workspace-id`.
+
+
+        **Limits:**
+
+
+        - Each organization may run 120 searches per minute (all callers, sessions included); past it 429 `rate_limited`
+        with `Retry-After`.
+
+        - `query` at most 400 characters; `num_results` 1 to 10; at most 20 domains.
+
+        - USD 10 per 1,000 answered searches (model `web-search` in the usage and cost reports); failures are not
+        charged.
+
+        - Rate limit: one request of the organization's write budget ([Rate
+        limits](https://docs.beeos.ai/guides/limits)).
+
+
+        **Errors** (besides the [common errors](https://docs.beeos.ai/api-reference/errors) (401 authentication, 429
+        `rate_limited`, 500)):
+
+
+        | Status | `error.type` | `error.code` | Cause | Fix |
+
+        | --- | --- | --- | --- | --- |
+
+        | 400 | `invalid_request_error` | `idempotency_key_reused` | The Idempotency-Key was used with another body
+        within 24 hours. | Correct the request as the message describes and send it again; the same request will keep
+        failing. |
+
+        | 400 | `invalid_request_error` | `invalid_request` | The body does not match the schema or its limits. | Send a
+        body of the schema. |
+
+        | 403 | `permission_error` | `insufficient_credits` | The organization's billing does not admit new paid work. |
+        Use a credential with the required role or access; retrying with the same credential will not help. |
+
+        | 409 | `conflict_error` | `idempotency_key_in_use` | A call with the same Idempotency-Key is still running. |
+        Retry the same request after a short delay. |
+
+        | 429 | `rate_limit_error` | `rate_limited` | The organization used up its searches of this minute. | Wait for
+        the retry-after delay, then retry. |
+
+        | 529 | `overloaded_error` | `search_unavailable` | Every search provider failed or is throttled. | Retry with
+        exponential backoff. |
+      x-bma-auth: An organization API key, a personal access token or OAuth access token, or a dashboard session. Any
+        workspace role may call; the workspace is the credential's own or `bma-workspace-id`.
+      x-bma-limits:
+        - Each organization may run 120 searches per minute (all callers, sessions included); past it 429 `rate_limited`
+          with `Retry-After`.
+        - "`query` at most 400 characters; `num_results` 1 to 10; at most 20 domains."
+        - USD 10 per 1,000 answered searches (model `web-search` in the usage and cost reports); failures are not
+          charged.
+      x-bma-errors:
+        - code: invalid_request
+          when: The body does not match the schema or its limits.
+          fix: Send a body of the schema.
+        - code: insufficient_credits
+          when: The organization's billing does not admit new paid work.
+        - code: rate_limited
+          when: The organization used up its searches of this minute.
+        - code: idempotency_key_reused
+          when: The Idempotency-Key was used with another body within 24 hours.
+        - code: idempotency_key_in_use
+          when: A call with the same Idempotency-Key is still running.
+        - code: search_unavailable
+          when: Every search provider failed or is throttled.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ProjectHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWebSearchRequest"
+            example:
+              query: Model Context Protocol authorization
+              num_results: 2
+              recency: year
+      responses:
+        "200":
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebSearch"
+              example:
+                id: wsrch_agq7b3l2m4n5p6q7r8s9t0u1v2
+                type: web_search
+                created_at: 2026-11-24T08:00:00Z
+                query: Model Context Protocol authorization
+                provider: tavily
+                results:
+                  - rank: 1
+                    url: https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization
+                    title: Authorization - Model Context Protocol
+                    snippet: Authorization is optional for MCP implementations. When supported, HTTP transports should conform to this
+                      specification.
+                    published_at: 2025-11-25T00:00:00Z
+                  - rank: 2
+                    url: https://datatracker.ietf.org/doc/html/rfc9728
+                    title: "RFC 9728: OAuth 2.0 Protected Resource Metadata"
+                usage:
+                  web_search_requests: 1
+        4XX:
+          $ref: "#/components/responses/Error"
+        5XX:
+          $ref: "#/components/responses/Error"
+      x-bma-extension: true
 components:
   securitySchemes:
     apiKey:
@@ -6603,6 +6912,7 @@ components:
         type:
           type: string
           const: agent
+          description: Always `agent`.
         name:
           type: string
         description:
@@ -6983,6 +7293,7 @@ components:
         type:
           type: string
           const: advisor
+          description: Always `advisor`.
       required:
         - model
         - type
@@ -6996,6 +7307,7 @@ components:
         type:
           type: string
           const: advisor
+          description: Always `advisor`.
       required:
         - model
         - type
@@ -7060,6 +7372,7 @@ components:
         type:
           type: string
           const: agent
+          description: Always `agent`.
         updated_at:
           type: string
           description: A timestamp in RFC 3339 format
@@ -7097,6 +7410,7 @@ components:
         type:
           type: string
           const: allow
+          description: Always `allow`.
       required:
         - type
       description: The server judged the invocation safe to execute without client approval.
@@ -7111,6 +7425,7 @@ components:
         type:
           type: string
           const: ask
+          description: Always `ask`.
       required:
         - reason_code
         - type
@@ -7125,6 +7440,7 @@ components:
         type:
           type: string
           const: deny
+          description: Always `deny`.
       required:
         - reason_code
         - type
@@ -7148,6 +7464,7 @@ components:
         type:
           type: string
           const: agent.custom_tool_use
+          description: Always `agent.custom_tool_use`.
         session_thread_id:
           type:
             - string
@@ -7185,6 +7502,7 @@ components:
         type:
           type: string
           const: agent.mcp_tool_result
+          description: Always `agent.mcp_tool_result`.
         content:
           type: array
           items:
@@ -7227,6 +7545,7 @@ components:
         type:
           type: string
           const: agent.mcp_tool_use
+          description: Always `agent.mcp_tool_use`.
         evaluated_permission:
           $ref: "#/components/schemas/BetaManagedAgentsAgentEvaluatedPermission"
           description: The evaluated permission policy for this tool invocation.
@@ -7271,6 +7590,7 @@ components:
         type:
           type: string
           const: agent.message
+          description: Always `agent.message`.
       required:
         - id
         - content
@@ -7287,6 +7607,7 @@ components:
         type:
           type: string
           const: agent.message
+          description: Always `agent.message`.
       required:
         - id
         - type
@@ -7299,6 +7620,7 @@ components:
         type:
           type: string
           const: agent
+          description: Always `agent`.
         version:
           type: number
           description: The specific `agent` version to use. Omit to use the latest version. Must be at least 1 if specified.
@@ -7315,6 +7637,7 @@ components:
         type:
           type: string
           const: agent
+          description: Always `agent`.
         version:
           type: number
       required:
@@ -7334,6 +7657,7 @@ components:
         type:
           type: string
           const: agent.thinking
+          description: Always `agent.thinking`.
       required:
         - id
         - processed_at
@@ -7348,6 +7672,7 @@ components:
         type:
           type: string
           const: agent.thinking
+          description: Always `agent.thinking`.
       required:
         - id
         - type
@@ -7363,6 +7688,7 @@ components:
         type:
           type: string
           const: agent.thread_context_compacted
+          description: Always `agent.thread_context_compacted`.
       required:
         - id
         - processed_at
@@ -7392,6 +7718,7 @@ components:
         type:
           type: string
           const: agent.thread_message_received
+          description: Always `agent.thread_message_received`.
         from_agent_name:
           type:
             - string
@@ -7428,6 +7755,7 @@ components:
         type:
           type: string
           const: agent.thread_message_sent
+          description: Always `agent.thread_message_sent`.
         to_agent_name:
           type:
             - string
@@ -7475,6 +7803,7 @@ components:
         type:
           type: string
           const: always_allow
+          description: Always `always_allow`.
       required:
         - type
       description: The resolved permission_policy was always_allow; accompanies evaluated_permission "allow".
@@ -7484,6 +7813,7 @@ components:
         type:
           type: string
           const: always_ask
+          description: Always `always_ask`.
       required:
         - type
       description: The resolved permission_policy was always_ask; accompanies evaluated_permission "ask".
@@ -7496,6 +7826,7 @@ components:
         type:
           type: string
           const: auto
+          description: Always `auto`.
       required:
         - evaluated_permission
         - type
@@ -7515,6 +7846,7 @@ components:
         type:
           type: string
           const: agent.tool_result
+          description: Always `agent.tool_result`.
         content:
           type: array
           items:
@@ -7548,6 +7880,7 @@ components:
         type:
           type: string
           const: agent_toolset_20260401
+          description: Always `agent_toolset_20260401`.
       required:
         - configs
         - default_config
@@ -7558,6 +7891,7 @@ components:
         type:
           type: string
           const: agent_toolset_20260401
+          description: Always `agent_toolset_20260401`.
         configs:
           type: array
           items:
@@ -7621,6 +7955,7 @@ components:
         type:
           type: string
           const: agent.tool_use
+          description: Always `agent.tool_use`.
         evaluated_permission:
           $ref: "#/components/schemas/BetaManagedAgentsAgentEvaluatedPermission"
           description: The evaluated permission policy for this tool invocation.
@@ -7654,6 +7989,7 @@ components:
         type:
           type: string
           const: agent_with_overrides
+          description: Always `agent_with_overrides`.
         mcp_servers:
           type: array
           items:
@@ -7701,6 +8037,7 @@ components:
         type:
           type: string
           const: always_allow
+          description: Always `always_allow`.
       required:
         - type
       description: Tool calls are automatically approved without user confirmation.
@@ -7710,6 +8047,7 @@ components:
         type:
           type: string
           const: always_ask
+          description: Always `always_ask`.
       required:
         - type
       description: Tool calls require user confirmation before execution.
@@ -7721,6 +8059,7 @@ components:
         type:
           type: string
           const: anthropic
+          description: Always `anthropic`.
         version:
           type: string
       required:
@@ -7737,6 +8076,7 @@ components:
         type:
           type: string
           const: anthropic
+          description: Always `anthropic`.
         version:
           type:
             - string
@@ -7752,6 +8092,7 @@ components:
         type:
           type: string
           const: auto
+          description: Always `auto`.
       required:
         - type
       description: "The server decides each tool call individually: it judges, from the tool, its input, and the session
@@ -7766,6 +8107,7 @@ components:
         type:
           type: string
           const: aws_role
+          description: Always `aws_role`.
       required:
         - role_arn
         - type
@@ -7779,6 +8121,7 @@ components:
         type:
           type: string
           const: aws_role
+          description: Always `aws_role`.
       required:
         - role_arn
         - type
@@ -7795,6 +8138,7 @@ components:
         type:
           type: string
           const: base64
+          description: Always `base64`.
       required:
         - data
         - media_type
@@ -7812,6 +8156,7 @@ components:
         type:
           type: string
           const: base64
+          description: Always `base64`.
       required:
         - data
         - media_type
@@ -7834,6 +8179,7 @@ components:
         type:
           type: string
           const: bash
+          description: Always `bash`.
       required:
         - enabled
         - name
@@ -7862,6 +8208,7 @@ components:
         type:
           type: string
           const: bash
+          description: Always `bash`.
       required:
         - name
       description: Configuration override for the bash tool.
@@ -7880,6 +8227,7 @@ components:
         type:
           type: string
           const: billing_error
+          description: Always `billing_error`.
       required:
         - message
         - retry_status
@@ -7895,6 +8243,7 @@ components:
         type:
           type: string
           const: branch
+          description: Always `branch`.
       required:
         - name
         - type
@@ -7908,6 +8257,7 @@ components:
         type:
           type: string
           const: limit
+          description: Always `limit`.
       required:
         - max_list_cost
         - type
@@ -7932,6 +8282,7 @@ components:
         type:
           type: string
           const: commit
+          description: Always `commit`.
       required:
         - sha
         - type
@@ -7950,6 +8301,7 @@ components:
         type:
           type: string
           const: compaction_limit_reached_error
+          description: Always `compaction_limit_reached_error`.
       required:
         - message
         - retry_status
@@ -7975,6 +8327,7 @@ components:
         type:
           type: string
           const: credential_host_unreachable_error
+          description: Always `credential_host_unreachable_error`.
         vault_id:
           type: string
           description: ID of the vault containing the affected credential.
@@ -7994,6 +8347,7 @@ components:
         type:
           type: string
           const: custom
+          description: Always `custom`.
         version:
           type: string
       required:
@@ -8010,6 +8364,7 @@ components:
         type:
           type: string
           const: custom
+          description: Always `custom`.
         version:
           type:
             - string
@@ -8032,6 +8387,7 @@ components:
         type:
           type: string
           const: custom
+          description: Always `custom`.
       required:
         - description
         - input_schema
@@ -8044,6 +8400,7 @@ components:
         type:
           type: string
           const: object
+          description: Always `object`.
         properties:
           anyOf:
             - type: object
@@ -8074,6 +8431,7 @@ components:
         type:
           type: string
           const: custom
+          description: Always `custom`.
       required:
         - description
         - input_schema
@@ -8091,6 +8449,7 @@ components:
         type:
           type: string
           const: memory_deleted
+          description: Always `memory_deleted`.
       required:
         - id
         - type
@@ -8117,6 +8476,7 @@ components:
         type:
           type: string
           const: memory_store_deleted
+          description: Always `memory_store_deleted`.
       required:
         - id
         - type
@@ -8129,6 +8489,7 @@ components:
         type:
           type: string
           const: session_deleted
+          description: Always `session_deleted`.
       required:
         - id
         - type
@@ -8141,6 +8502,7 @@ components:
         type:
           type: string
           const: session_resource_deleted
+          description: Always `session_resource_deleted`.
       required:
         - id
         - type
@@ -8155,6 +8517,7 @@ components:
         type:
           type: string
           const: content_delta
+          description: Always `content_delta`.
         index:
           type: number
           description: Which entry in the previewed event's content array this fragment lands in. Insert content as that entry
@@ -8176,6 +8539,7 @@ components:
         type:
           type: string
           const: event_delta
+          description: Always `event_delta`.
       required:
         - delta
         - event_id
@@ -8202,6 +8566,7 @@ components:
         type:
           type: string
           const: document
+          description: Always `document`.
         context:
           type:
             - string
@@ -8233,6 +8598,7 @@ components:
         type:
           type: string
           const: edit
+          description: Always `edit`.
       required:
         - enabled
         - name
@@ -8261,6 +8627,7 @@ components:
         type:
           type: string
           const: edit
+          description: Always `edit`.
       required:
         - name
       description: Configuration override for the edit tool.
@@ -8270,6 +8637,7 @@ components:
         type:
           type: string
           const: high
+          description: Always `high`.
       required:
         - type
       description: High effort. Favors reasoning depth.
@@ -8279,6 +8647,7 @@ components:
         type:
           type: string
           const: low
+          description: Always `low`.
       required:
         - type
       description: Low effort. Favors latency over reasoning depth.
@@ -8288,6 +8657,7 @@ components:
         type:
           type: string
           const: max
+          description: Always `max`.
       required:
         - type
       description: Maximum effort. Favors reasoning depth over latency.
@@ -8297,6 +8667,7 @@ components:
         type:
           type: string
           const: medium
+          description: Always `medium`.
       required:
         - type
       description: Medium effort. Balances latency and reasoning depth.
@@ -8306,6 +8677,7 @@ components:
         type:
           type: string
           const: xhigh
+          description: Always `xhigh`.
       required:
         - type
       description: Extra-high effort. Not all models accept this level.
@@ -8338,6 +8710,7 @@ components:
         type:
           type: string
           const: file
+          description: Always `file`.
       required:
         - file_id
         - type
@@ -8351,6 +8724,7 @@ components:
         type:
           type: string
           const: file
+          description: Always `file`.
       required:
         - file_id
         - type
@@ -8370,6 +8744,7 @@ components:
         type:
           type: string
           const: file
+          description: Always `file`.
         updated_at:
           type: string
           description: A timestamp in RFC 3339 format
@@ -8389,6 +8764,7 @@ components:
         type:
           type: string
           const: file
+          description: Always `file`.
         mount_path:
           type:
             - string
@@ -8407,6 +8783,7 @@ components:
         type:
           type: string
           const: file
+          description: Always `file`.
       required:
         - file_id
         - type
@@ -8420,6 +8797,7 @@ components:
         type:
           type: string
           const: file
+          description: Always `file`.
       required:
         - file_id
         - type
@@ -8437,6 +8815,7 @@ components:
         type:
           type: string
           const: github_repository
+          description: Always `github_repository`.
         updated_at:
           type: string
           description: A timestamp in RFC 3339 format
@@ -8460,6 +8839,7 @@ components:
         type:
           type: string
           const: github_repository
+          description: Always `github_repository`.
         url:
           type: string
           description: Github URL of the repository
@@ -8499,6 +8879,7 @@ components:
         type:
           type: string
           const: glob
+          description: Always `glob`.
       required:
         - enabled
         - name
@@ -8527,6 +8908,7 @@ components:
         type:
           type: string
           const: glob
+          description: Always `glob`.
       required:
         - name
       description: Configuration override for the glob tool.
@@ -8547,6 +8929,7 @@ components:
         type:
           type: string
           const: grep
+          description: Always `grep`.
       required:
         - enabled
         - name
@@ -8575,6 +8958,7 @@ components:
         type:
           type: string
           const: grep
+          description: Always `grep`.
       required:
         - name
       description: Configuration override for the grep tool.
@@ -8590,6 +8974,7 @@ components:
         type:
           type: string
           const: image
+          description: Always `image`.
       required:
         - source
         - type
@@ -8603,6 +8988,7 @@ components:
         type:
           type: string
           const: max_workflow_runs_error
+          description: Always `max_workflow_runs_error`.
       required:
         - message
         - type
@@ -8626,6 +9012,7 @@ components:
         type:
           type: string
           const: mcp_authentication_failed_error
+          description: Always `mcp_authentication_failed_error`.
       required:
         - mcp_server_name
         - message
@@ -8650,6 +9037,7 @@ components:
         type:
           type: string
           const: mcp_connection_failed_error
+          description: Always `mcp_connection_failed_error`.
       required:
         - mcp_server_name
         - message
@@ -8664,6 +9052,7 @@ components:
         type:
           type: string
           const: url
+          description: Always `url`.
         url:
           type: string
       required:
@@ -8725,6 +9114,7 @@ components:
         type:
           type: string
           const: mcp_toolset
+          description: Always `mcp_toolset`.
       required:
         - configs
         - default_config
@@ -8770,6 +9160,7 @@ components:
         type:
           type: string
           const: mcp_toolset
+          description: Always `mcp_toolset`.
         configs:
           type: array
           items:
@@ -8825,6 +9216,7 @@ components:
         type:
           type: string
           const: memory
+          description: Always `memory`.
         updated_at:
           type: string
           description: >-
@@ -8878,6 +9270,7 @@ components:
         type:
           type: string
           const: memory_prefix
+          description: Always `memory_prefix`.
       required:
         - path
         - type
@@ -8934,6 +9327,7 @@ components:
         type:
           type: string
           const: memory_store
+          description: Always `memory_store`.
         updated_at:
           type: string
           description: >-
@@ -8962,6 +9356,7 @@ components:
         type:
           type: string
           const: memory_store
+          description: Always `memory_store`.
         access:
           type:
             - string
@@ -9007,6 +9402,7 @@ components:
         type:
           type: string
           const: memory_store
+          description: Always `memory_store`.
         access:
           type:
             - string
@@ -9146,6 +9542,7 @@ components:
         type:
           type: string
           const: model_overloaded_error
+          description: Always `model_overloaded_error`.
       required:
         - message
         - retry_status
@@ -9166,6 +9563,7 @@ components:
         type:
           type: string
           const: model_rate_limited_error
+          description: Always `model_rate_limited_error`.
       required:
         - message
         - retry_status
@@ -9186,6 +9584,7 @@ components:
         type:
           type: string
           const: model_request_failed_error
+          description: Always `model_request_failed_error`.
       required:
         - message
         - retry_status
@@ -9208,6 +9607,7 @@ components:
         type:
           type: string
           const: multiagent_20261001
+          description: Always `multiagent_20261001`.
         workflows:
           $ref: "#/components/schemas/BetaManagedAgentsMultiagentWorkflows"
           description: Whether the agent can start workflow runs.
@@ -9223,6 +9623,7 @@ components:
         type:
           type: string
           const: multiagent_20261001
+          description: Always `multiagent_20261001`.
         advisor:
           anyOf:
             - $ref: "#/components/schemas/BetaManagedAgentsMultiagentAdvisorParams"
@@ -9258,6 +9659,7 @@ components:
         type:
           type: string
           const: disabled
+          description: Always `disabled`.
       required:
         - type
       description: The agent has no advisor.
@@ -9267,6 +9669,7 @@ components:
         type:
           type: string
           const: disabled
+          description: Always `disabled`.
       required:
         - type
       description: The agent has no advisor.
@@ -9279,6 +9682,7 @@ components:
         type:
           type: string
           const: enabled
+          description: Always `enabled`.
       required:
         - model
         - type
@@ -9292,6 +9696,7 @@ components:
         type:
           type: string
           const: enabled
+          description: Always `enabled`.
       required:
         - model
         - type
@@ -9314,6 +9719,7 @@ components:
         type:
           type: string
           const: coordinator
+          description: Always `coordinator`.
       required:
         - agents
         - type
@@ -9333,6 +9739,7 @@ components:
         type:
           type: string
           const: coordinator
+          description: Always `coordinator`.
       required:
         - agents
         - type
@@ -9350,6 +9757,7 @@ components:
         type:
           type: string
           const: disabled
+          description: Always `disabled`.
       required:
         - type
       description: The agent cannot define inline agents.
@@ -9359,6 +9767,7 @@ components:
         type:
           type: string
           const: disabled
+          description: Always `disabled`.
       required:
         - type
       description: The agent cannot define inline agents.
@@ -9368,6 +9777,7 @@ components:
         type:
           type: string
           const: enabled
+          description: Always `enabled`.
       required:
         - type
       description: The agent can define inline agents.
@@ -9377,6 +9787,7 @@ components:
         type:
           type: string
           const: enabled
+          description: Always `enabled`.
       required:
         - type
       description: The agent can define inline agents.
@@ -9411,6 +9822,7 @@ components:
         type:
           type: string
           const: self
+          description: Always `self`.
       required:
         - type
       description: Sentinel roster entry meaning "the agent that owns this configuration". Resolved server-side to a concrete
@@ -9426,6 +9838,7 @@ components:
         type:
           type: string
           const: disabled
+          description: Always `disabled`.
       required:
         - type
       description: The agent cannot spawn session threads.
@@ -9435,6 +9848,7 @@ components:
         type:
           type: string
           const: disabled
+          description: Always `disabled`.
       required:
         - type
       description: The agent cannot spawn session threads.
@@ -9453,6 +9867,7 @@ components:
         type:
           type: string
           const: enabled
+          description: Always `enabled`.
       required:
         - inline_agents
         - predefined_agents
@@ -9464,6 +9879,7 @@ components:
         type:
           type: string
           const: enabled
+          description: Always `enabled`.
         inline_agents:
           anyOf:
             - $ref: "#/components/schemas/BetaManagedAgentsMultiagentInlineAgentsParams"
@@ -9499,6 +9915,7 @@ components:
         type:
           type: string
           const: disabled
+          description: Always `disabled`.
       required:
         - type
       description: The agent cannot start workflow runs.
@@ -9508,6 +9925,7 @@ components:
         type:
           type: string
           const: disabled
+          description: Always `disabled`.
       required:
         - type
       description: The agent cannot start workflow runs.
@@ -9525,6 +9943,7 @@ components:
         type:
           type: string
           const: enabled
+          description: Always `enabled`.
       required:
         - inline_agents
         - predefined_agents
@@ -9536,6 +9955,7 @@ components:
         type:
           type: string
           const: enabled
+          description: Always `enabled`.
         inline_agents:
           anyOf:
             - $ref: "#/components/schemas/BetaManagedAgentsMultiagentInlineAgentsParams"
@@ -9591,6 +10011,7 @@ components:
         type:
           type: string
           const: outcome_evaluation
+          description: Always `outcome_evaluation`.
       required:
         - completed_at
         - description
@@ -9613,6 +10034,7 @@ components:
         type:
           type: string
           const: text
+          description: Always `text`.
       required:
         - data
         - media_type
@@ -9624,6 +10046,7 @@ components:
         type:
           type: string
           const: content_sha256
+          description: Always `content_sha256`.
         content_sha256:
           type: string
           description: Expected `content_sha256` of the stored memory (64 lowercase hexadecimal characters). Typically the
@@ -9644,6 +10067,7 @@ components:
         type:
           type: string
           const: program_error
+          description: Always `program_error`.
       required:
         - message
         - type
@@ -9665,6 +10089,7 @@ components:
         type:
           type: string
           const: read
+          description: Always `read`.
       required:
         - enabled
         - name
@@ -9693,6 +10118,7 @@ components:
         type:
           type: string
           const: read
+          description: Always `read`.
       required:
         - name
       description: Configuration override for the read tool.
@@ -9702,6 +10128,7 @@ components:
         type:
           type: string
           const: redacted
+          description: Always `redacted`.
       required:
         - type
       description: Placeholder for content withheld by Anthropic model policy.
@@ -9725,6 +10152,7 @@ components:
         type:
           type: string
           const: repository_authentication_error
+          description: Always `repository_authentication_error`.
       required:
         - message
         - repository_url
@@ -9751,6 +10179,7 @@ components:
         type:
           type: string
           const: repository_checkout_error
+          description: Always `repository_checkout_error`.
       required:
         - message
         - repository_url
@@ -9777,6 +10206,7 @@ components:
         type:
           type: string
           const: repository_clone_error
+          description: Always `repository_clone_error`.
       required:
         - message
         - repository_url
@@ -9803,6 +10233,7 @@ components:
         type:
           type: string
           const: repository_forbidden_error
+          description: Always `repository_forbidden_error`.
       required:
         - message
         - repository_url
@@ -9829,6 +10260,7 @@ components:
         type:
           type: string
           const: repository_not_found_error
+          description: Always `repository_not_found_error`.
       required:
         - message
         - repository_url
@@ -9841,6 +10273,7 @@ components:
         type:
           type: string
           const: exhausted
+          description: Always `exhausted`.
       required:
         - type
       description: This turn is dead; queued inputs are flushed and the session returns to idle. Client may send a new prompt.
@@ -9850,6 +10283,7 @@ components:
         type:
           type: string
           const: retrying
+          description: Always `retrying`.
       required:
         - type
       description: The server is retrying automatically. Client should wait; the same error type may fire again as retrying,
@@ -9860,6 +10294,7 @@ components:
         type:
           type: string
           const: terminal
+          description: Always `terminal`.
       required:
         - type
       description: The session encountered a terminal error and will transition to `terminated` state.
@@ -9883,6 +10318,7 @@ components:
         type:
           type: string
           const: search_result
+          description: Always `search_result`.
       required:
         - citations
         - content
@@ -9908,6 +10344,7 @@ components:
         type:
           type: string
           const: text
+          description: Always `text`.
       required:
         - text
         - type
@@ -9944,6 +10381,7 @@ components:
         type:
           type: string
           const: service_account
+          description: Always `service_account`.
       required:
         - type
       description: The Anthropic-managed service account as returned in API responses.
@@ -9953,6 +10391,7 @@ components:
         type:
           type: string
           const: service_account
+          description: Always `service_account`.
       required:
         - type
       description: The Anthropic-managed service account — the default execution principal. Carries no identifier.
@@ -10018,6 +10457,7 @@ components:
         type:
           type: string
           const: session
+          description: Always `session`.
         updated_at:
           type: string
           description: A timestamp in RFC 3339 format
@@ -10099,6 +10539,7 @@ components:
         type:
           type: string
           const: agent
+          description: Always `agent`.
         version:
           type: number
       required:
@@ -10142,6 +10583,7 @@ components:
         type:
           type: string
           const: budget_reached
+          description: Always `budget_reached`.
       required:
         - type
       description: The agent stopped because the session's tracked list cost reached its budget, or because its usage includes
@@ -10159,6 +10601,7 @@ components:
         type:
           type: string
           const: session.deleted
+          description: Always `session.deleted`.
       required:
         - id
         - processed_at
@@ -10171,6 +10614,7 @@ components:
         type:
           type: string
           const: end_turn
+          description: Always `end_turn`.
       required:
         - type
       description: The agent completed its turn naturally and is ready for the next user message.
@@ -10203,6 +10647,7 @@ components:
         type:
           type: string
           const: session.error
+          description: Always `session.error`.
       required:
         - id
         - error
@@ -10316,6 +10761,7 @@ components:
         type:
           type: string
           const: multiagent_20261001
+          description: Always `multiagent_20261001`.
         workflows:
           $ref: "#/components/schemas/BetaManagedAgentsSessionMultiagentWorkflows"
           description: Whether the agent can start workflow runs.
@@ -10338,6 +10784,7 @@ components:
         type:
           type: string
           const: coordinator
+          description: Always `coordinator`.
       required:
         - agents
         - type
@@ -10362,6 +10809,7 @@ components:
         type:
           type: string
           const: enabled
+          description: Always `enabled`.
       required:
         - inline_agents
         - predefined_agents
@@ -10386,6 +10834,7 @@ components:
         type:
           type: string
           const: enabled
+          description: Always `enabled`.
       required:
         - inline_agents
         - predefined_agents
@@ -10397,6 +10846,7 @@ components:
         type:
           type: string
           const: refusal
+          description: Always `refusal`.
       required:
         - type
       description: The turn ended because the model's response was refused, for example by a safety classifier.
@@ -10425,6 +10875,7 @@ components:
         type:
           type: string
           const: refusal
+          description: Always `refusal`.
       required:
         - category
         - explanation
@@ -10442,6 +10893,7 @@ components:
         type:
           type: string
           const: requires_action
+          description: Always `requires_action`.
       required:
         - event_ids
         - type
@@ -10458,6 +10910,7 @@ components:
         type:
           type: string
           const: retries_exhausted
+          description: Always `retries_exhausted`.
       required:
         - type
       description: "The turn ended because repeated errors exhausted the retry budget or an error escalated to `retry_status:
@@ -10496,6 +10949,7 @@ components:
         type:
           type: string
           const: session.status_idle
+          description: Always `session.status_idle`.
       required:
         - id
         - processed_at
@@ -10515,6 +10969,7 @@ components:
         type:
           type: string
           const: session.status_rescheduled
+          description: Always `session.status_rescheduled`.
       required:
         - id
         - processed_at
@@ -10532,6 +10987,7 @@ components:
         type:
           type: string
           const: session.status_running
+          description: Always `session.status_running`.
       required:
         - id
         - processed_at
@@ -10549,6 +11005,7 @@ components:
         type:
           type: string
           const: session.status_terminated
+          description: Always `session.status_terminated`.
       required:
         - id
         - processed_at
@@ -10596,6 +11053,7 @@ components:
         type:
           type: string
           const: agent
+          description: Always `agent`.
         version:
           type: number
       required:
@@ -10630,6 +11088,7 @@ components:
         type:
           type: string
           const: session.thread_created
+          description: Always `session.thread_created`.
         workflow_run_id:
           type:
             - string
@@ -10674,6 +11133,7 @@ components:
         type:
           type: string
           const: session.thread_status_idle
+          description: Always `session.thread_status_idle`.
       required:
         - id
         - agent_name
@@ -10702,6 +11162,7 @@ components:
         type:
           type: string
           const: session.thread_status_rescheduled
+          description: Always `session.thread_status_rescheduled`.
       required:
         - id
         - agent_name
@@ -10728,6 +11189,7 @@ components:
         type:
           type: string
           const: session.thread_status_running
+          description: Always `session.thread_status_running`.
       required:
         - id
         - agent_name
@@ -10754,6 +11216,7 @@ components:
         type:
           type: string
           const: session.thread_status_terminated
+          description: Always `session.thread_status_terminated`.
       required:
         - id
         - agent_name
@@ -10774,6 +11237,7 @@ components:
         type:
           type: string
           const: session.updated
+          description: Always `session.updated`.
         agent:
           anyOf:
             - $ref: "#/components/schemas/BetaManagedAgentsSessionAgent"
@@ -10848,6 +11312,7 @@ components:
         type:
           type: string
           const: session.usage
+          description: Always `session.usage`.
         usage:
           $ref: "#/components/schemas/BetaManagedAgentsSessionUsageSnapshot"
           description: The session's cumulative usage at the snapshot time.
@@ -10917,6 +11382,7 @@ components:
         type:
           type: string
           const: span.model_request_end
+          description: Always `span.model_request_end`.
       required:
         - id
         - is_error
@@ -10937,6 +11403,7 @@ components:
         type:
           type: string
           const: span.model_request_start
+          description: Always `span.model_request_start`.
       required:
         - id
         - processed_at
@@ -11004,6 +11471,7 @@ components:
         type:
           type: string
           const: span.outcome_evaluation_end
+          description: Always `span.outcome_evaluation_end`.
         usage:
           $ref: "#/components/schemas/BetaManagedAgentsSpanModelUsage"
           description: Aggregate token usage for this evaluation cycle. Sums across all grader model requests within the cycle.
@@ -11038,6 +11506,7 @@ components:
         type:
           type: string
           const: span.outcome_evaluation_ongoing
+          description: Always `span.outcome_evaluation_ongoing`.
       required:
         - id
         - iteration
@@ -11065,6 +11534,7 @@ components:
         type:
           type: string
           const: span.outcome_evaluation_start
+          description: Always `span.outcome_evaluation_start`.
       required:
         - id
         - iteration
@@ -11083,6 +11553,7 @@ components:
         type:
           type: string
           const: event_start
+          description: Always `event_start`.
       required:
         - event
         - type
@@ -11151,6 +11622,7 @@ components:
         type:
           type: string
           const: text
+          description: Always `text`.
       required:
         - text
         - type
@@ -11169,6 +11641,7 @@ components:
         type:
           type: string
           const: system.message
+          description: Always `system.message`.
         processed_at:
           type:
             - string
@@ -11191,6 +11664,7 @@ components:
         type:
           type: string
           const: system.message
+          description: Always `system.message`.
       required:
         - content
         - type
@@ -11208,6 +11682,7 @@ components:
         type:
           type: string
           const: text
+          description: Always `text`.
       required:
         - text
         - type
@@ -11221,6 +11696,7 @@ components:
         type:
           type: string
           const: text
+          description: Always `text`.
       required:
         - content
         - type
@@ -11234,6 +11710,7 @@ components:
         type:
           type: string
           const: text
+          description: Always `text`.
       required:
         - content
         - type
@@ -11247,6 +11724,7 @@ components:
         type:
           type: string
           const: thread_limit_error
+          description: Always `thread_limit_error`.
       required:
         - message
         - type
@@ -11260,6 +11738,7 @@ components:
         type:
           type: string
           const: timeout_error
+          description: Always `timeout_error`.
       required:
         - message
         - type
@@ -11279,6 +11758,7 @@ components:
         type:
           type: string
           const: tool_use_limit_reached_error
+          description: Always `tool_use_limit_reached_error`.
       required:
         - message
         - retry_status
@@ -11301,6 +11781,7 @@ components:
         type:
           type: string
           const: unknown_error
+          description: Always `unknown_error`.
       required:
         - message
         - retry_status
@@ -11316,6 +11797,7 @@ components:
         type:
           type: string
           const: unknown_error
+          description: Always `unknown_error`.
       required:
         - message
         - type
@@ -11326,6 +11808,7 @@ components:
         type:
           type: string
           const: url
+          description: Always `url`.
         url:
           type: string
           description: URL of the document to fetch.
@@ -11339,6 +11822,7 @@ components:
         type:
           type: string
           const: url
+          description: Always `url`.
         url:
           type: string
           description: URL of the image to fetch.
@@ -11355,6 +11839,7 @@ components:
         type:
           type: string
           const: url
+          description: Always `url`.
         url:
           type: string
           description: Endpoint URL for the MCP server.
@@ -11378,6 +11863,7 @@ components:
         type:
           type: string
           const: user.custom_tool_result
+          description: Always `user.custom_tool_result`.
         content:
           type: array
           items:
@@ -11420,6 +11906,7 @@ components:
         type:
           type: string
           const: user.custom_tool_result
+          description: Always `user.custom_tool_result`.
         content:
           type: array
           items:
@@ -11468,6 +11955,7 @@ components:
         type:
           type: string
           const: user.define_outcome
+          description: Always `user.define_outcome`.
       required:
         - id
         - description
@@ -11492,6 +11980,7 @@ components:
         type:
           type: string
           const: user.define_outcome
+          description: Always `user.define_outcome`.
         max_iterations:
           type:
             - number
@@ -11511,6 +12000,7 @@ components:
         type:
           type: string
           const: user.interrupt
+          description: Always `user.interrupt`.
         processed_at:
           type:
             - string
@@ -11532,6 +12022,7 @@ components:
         type:
           type: string
           const: user.interrupt
+          description: Always `user.interrupt`.
         session_thread_id:
           type:
             - string
@@ -11589,6 +12080,7 @@ components:
         type:
           type: string
           const: user.message
+          description: Always `user.message`.
         processed_at:
           type:
             - string
@@ -11614,6 +12106,7 @@ components:
         type:
           type: string
           const: user.message
+          description: Always `user.message`.
       required:
         - content
         - type
@@ -11639,6 +12132,7 @@ components:
         type:
           type: string
           const: user.tool_confirmation
+          description: Always `user.tool_confirmation`.
         deny_message:
           type:
             - string
@@ -11679,6 +12173,7 @@ components:
         type:
           type: string
           const: user.tool_confirmation
+          description: Always `user.tool_confirmation`.
         deny_message:
           type:
             - string
@@ -11704,6 +12199,7 @@ components:
         type:
           type: string
           const: user.tool_result
+          description: Always `user.tool_result`.
         content:
           type: array
           items:
@@ -11747,6 +12243,7 @@ components:
         type:
           type: string
           const: user.tool_result
+          description: Always `user.tool_result`.
         content:
           type: array
           items:
@@ -11783,6 +12280,7 @@ components:
         type:
           type: string
           const: web_fetch
+          description: Always `web_fetch`.
         url_sources:
           anyOf:
             - $ref: "#/components/schemas/BetaManagedAgentsWebFetchURLSources"
@@ -11850,6 +12348,7 @@ components:
         type:
           type: string
           const: web_fetch
+          description: Always `web_fetch`.
         url_sources:
           anyOf:
             - $ref: "#/components/schemas/BetaManagedAgentsWebFetchURLSourcesParams"
@@ -11864,6 +12363,7 @@ components:
         type:
           type: string
           const: all
+          description: Always `all`.
       required:
         - type
       description: Every URL from this source may be fetched. This is the default.
@@ -11879,6 +12379,7 @@ components:
         type:
           type: string
           const: except
+          description: Always `except`.
       required:
         - tools
         - type
@@ -11889,6 +12390,7 @@ components:
         type:
           type: string
           const: none
+          description: Always `none`.
       required:
         - type
       description: This source contributes no URLs that may be fetched.
@@ -11904,6 +12406,7 @@ components:
         type:
           type: string
           const: only
+          description: Always `only`.
       required:
         - tools
         - type
@@ -12020,6 +12523,7 @@ components:
         type:
           type: string
           const: web_search
+          description: Always `web_search`.
         allowed_domains:
           type: array
           items:
@@ -12075,6 +12579,7 @@ components:
         type:
           type: string
           const: web_search
+          description: Always `web_search`.
         user_location:
           anyOf:
             - $ref: "#/components/schemas/BetaManagedAgentsUserLocation"
@@ -12108,6 +12613,7 @@ components:
         type:
           type: string
           const: workflow_run.created
+          description: Always `workflow_run.created`.
         workflow_run_id:
           type: string
           description: Identifier of the run. The same value is on all of the run's `workflow_run.*` events.
@@ -12145,6 +12651,7 @@ components:
         type:
           type: string
           const: workflow_run.error
+          description: Always `workflow_run.error`.
         workflow_run_id:
           type:
             - string
@@ -12192,6 +12699,7 @@ components:
         type:
           type: string
           const: workflow_run.phase_ended
+          description: Always `workflow_run.phase_ended`.
         workflow_run_id:
           type: string
           description: Identifier of the run. The same value is on all of the run's `workflow_run.*` events.
@@ -12220,6 +12728,7 @@ components:
         type:
           type: string
           const: workflow_run.phase_started
+          description: Always `workflow_run.phase_started`.
         workflow_run_id:
           type: string
           description: Identifier of the run. The same value is on all of the run's `workflow_run.*` events.
@@ -12245,6 +12754,7 @@ components:
         type:
           type: string
           const: completed
+          description: Always `completed`.
       required:
         - type
       description: The run's plan, a program that the agent wrote, finished. This does not say whether the work succeeded.
@@ -12257,6 +12767,7 @@ components:
         type:
           type: string
           const: error
+          description: Always `error`.
       required:
         - error
         - type
@@ -12267,6 +12778,7 @@ components:
         type:
           type: string
           const: stopped
+          description: Always `stopped`.
       required:
         - type
       description: The agent stopped the run.
@@ -12285,6 +12797,7 @@ components:
         type:
           type: string
           const: workflow_run.status_ended
+          description: Always `workflow_run.status_ended`.
         workflow_run_id:
           type: string
           description: Identifier of the run. The same value is on all of the run's `workflow_run.*` events.
@@ -12307,6 +12820,7 @@ components:
         type:
           type: string
           const: workflow_run.status_idle
+          description: Always `workflow_run.status_idle`.
         workflow_run_id:
           type: string
           description: Identifier of the run. The same value is on all of the run's `workflow_run.*` events.
@@ -12329,6 +12843,7 @@ components:
         type:
           type: string
           const: workflow_run.status_running
+          description: Always `workflow_run.status_running`.
         workflow_run_id:
           type: string
           description: Identifier of the run. The same value is on all of the run's `workflow_run.*` events.
@@ -12356,6 +12871,7 @@ components:
         type:
           type: string
           const: write
+          description: Always `write`.
       required:
         - enabled
         - name
@@ -12384,6 +12900,7 @@ components:
         type:
           type: string
           const: write
+          description: Always `write`.
       required:
         - name
       description: Configuration override for the write tool.
@@ -12582,9 +13099,8 @@ components:
             - machine
           description: "`server` runs the brain on the platform and fits only a `default` or `embedded` brain; `colocated` runs it
             on the machine that is the hands and `machine` on a machine chosen with `machines`; both fit only an `acp`
-            brain. Omitted: derived from the environment and the agent's brain (ADR-0002). A brain that does not fit the
-            location is 400 `invalid_request_error` with `bma_error_code` `harness_unavailable` when a session is
-            created."
+            brain. Omitted: derived from the environment and the agent's brain. A brain that does not fit the location
+            is 400 `invalid_request_error` with `bma_error_code` `harness_unavailable` when a session is created."
         machines:
           $ref: "#/components/schemas/BmaPlacementMachineSelector"
         prefer:
@@ -12614,10 +13130,10 @@ components:
       additionalProperties: false
     BmaEnvironmentHarness:
       type: object
-      description: "The brain of an environment (`bma_harness`, ADR-0058): it runs the environment's sessions whose session
-        and agent name no brain. Same shape and values as the agent's, without `executor`. A session's brain is resolved
-        when it is created: the session's `bma_harness`, else the agent's, else the environment's, else the platform
-        default; an omitted, null or `default` value names none (it inherits) and is never stored as a brain."
+      description: "The brain of an environment (`bma_harness`): it runs the environment's sessions whose session and agent
+        name no brain. Same shape and values as the agent's, without `executor`. A session's brain is resolved when it
+        is created: the session's `bma_harness`, else the agent's, else the environment's, else the platform default; an
+        omitted, null or `default` value names none (it inherits) and is never stored as a brain."
       required:
         - kind
       properties:
@@ -12855,10 +13371,10 @@ components:
           description: Model name for a BYO executor using its own model credentials. The executor validates it against its
             declared model catalog. Ignored on managed pool machines and executors declaring harness_model, whose
             platform-issued credentials remain bound to the session model. For a brain on its machine owner's own
-            credentials (harness `model_credentials` `owner`, for example Claude Code; ADR-0068) it is the only model
-            the brain runs (the agent's model is never sent; omitted runs the owner's default) and, with
-            `thinking_level`, must be one the machine's brain offers, else the create or update is 400 `bma_error_code`
-            `model_not_available` naming the offered models.
+            credentials (harness `model_credentials` `owner`, for example Claude Code) it is the only model the brain
+            runs (the agent's model is never sent; omitted runs the owner's default) and, with `thinking_level`, must be
+            one the machine's brain offers, else the create or update is 400 `bma_error_code` `model_not_available`
+            naming the offered models.
         cwd:
           type: string
           minLength: 1
@@ -13204,6 +13720,11 @@ components:
           $ref: "#/components/schemas/DesktopCapabilitiesRequest"
         machine_id:
           type: string
+        ticket:
+          $ref: "#/components/schemas/CreateDesktopTicketRequest"
+          description: Also mint the session's first ticket (as POST /v1/desktop_sessions/{desktop_session_id}/tickets with this
+            body) and return it in the response's `ticket`, saving the viewer a second round trip. A retry with the same
+            Idempotency-Key answers the same session with a newly minted ticket.
       additionalProperties: false
     CreateDesktopTicketRequest:
       description: Body of a desktop ticket. `purpose` is optional and must be `watch`.
@@ -13242,6 +13763,7 @@ components:
         type:
           type: string
           const: executor_token
+          description: Always `executor_token`.
         id:
           $ref: "#/components/schemas/MachineDaemonTokenID"
         machine_id:
@@ -13589,6 +14111,72 @@ components:
           type: integer
           minimum: 15
           maximum: 120
+    CreateWebFetchRequest:
+      type: object
+      description: A page fetch. The same schema as the input of the web_fetch tool (contracts tool.json WebFetchInput).
+      required:
+        - url
+      additionalProperties: false
+      properties:
+        url:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          description: An http or https URL without credentials.
+        max_chars:
+          type: integer
+          minimum: 1000
+          maximum: 100000
+          description: Default 20000.
+        format:
+          type: string
+          enum:
+            - markdown
+            - text
+          description: Default markdown.
+    CreateWebSearchRequest:
+      type: object
+      description: A web search. The same schema as the input of the web_search tool (contracts tool.json WebSearchInput).
+      required:
+        - query
+      additionalProperties: false
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 400
+          description: What to search for, keywords or a question.
+        num_results:
+          type: integer
+          minimum: 1
+          maximum: 10
+          description: Default 5.
+        recency:
+          type: string
+          enum:
+            - day
+            - week
+            - month
+            - year
+          description: Only results published within this period.
+        allowed_domains:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+          description: Only results from these domains and their subdomains; not with blocked_domains.
+        blocked_domains:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+          description: No results from these domains and their subdomains; not with allowed_domains.
+        locale:
+          type: string
+          pattern: ^[a-z]{2,3}(-[A-Z]{2})?$
+          description: Language and country to favor (zh-CN, en-US).
     CredentialAuth:
       oneOf:
         - $ref: "#/components/schemas/StaticBearerAuth"
@@ -13660,6 +14248,7 @@ components:
         type:
           type: string
           const: limited
+          description: Always `limited`.
         allowed_hosts:
           type: array
           minItems: 1
@@ -13676,6 +14265,7 @@ components:
         type:
           type: string
           const: unrestricted
+          description: Always `unrestricted`.
       additionalProperties: false
     CredentialRefreshInput:
       type: object
@@ -13893,6 +14483,7 @@ components:
         type:
           type: string
           const: desktop_action_result
+          description: Always `desktop_action_result`.
         seq:
           type: integer
           format: int64
@@ -14033,6 +14624,7 @@ components:
         type:
           type: string
           const: desktop_control_status
+          description: Always `desktop_control_status`.
         mode:
           type: string
           enum:
@@ -14078,6 +14670,7 @@ components:
         type:
           type: string
           const: desktop_screenshot
+          description: Always `desktop_screenshot`.
         content_type:
           type: string
         width:
@@ -14112,6 +14705,7 @@ components:
         type:
           type: string
           const: desktop_session
+          description: Always `desktop_session`.
         id:
           $ref: "#/components/schemas/DesktopSessionID"
         org_id:
@@ -14152,6 +14746,9 @@ components:
           $ref: "#/components/schemas/DesktopCapabilities"
         control:
           $ref: "#/components/schemas/EmbeddedDesktopControlStatus"
+        ticket:
+          $ref: "#/components/schemas/Ticket"
+          description: The first ticket, only in the answer of a create request that asked for one (`ticket`).
         close_reason:
           type: string
           enum:
@@ -14179,6 +14776,7 @@ components:
         type:
           type: string
           const: desktop_session_closed
+          description: Always `desktop_session_closed`.
         state:
           type: string
           enum:
@@ -14214,6 +14812,7 @@ components:
         type:
           type: string
           const: desktop_session_media
+          description: Always `desktop_session_media`.
         desktop_session_id:
           $ref: "#/components/schemas/DesktopSessionID"
         state:
@@ -14335,8 +14934,8 @@ components:
         harnesses:
           type: array
           description: Ids of the hosted agents the machine's executor declared at its latest executor.register (for example dsh,
-            claude-code), in declaration order, kept while the machine is offline (BMA extension, Experimental,
-            ADR-0029). Omitted when it declared none.
+            claude-code), in declaration order, kept while the machine is offline (BMA extension, Experimental). Omitted
+            when it declared none.
           items:
             type: string
     EmbeddedMachinePool:
@@ -14534,6 +15133,7 @@ components:
         type:
           type: string
           const: environment_variable
+          description: Always `environment_variable`.
         secret_name:
           type: string
         networking:
@@ -14552,6 +15152,7 @@ components:
         type:
           type: string
           const: environment_variable
+          description: Always `environment_variable`.
         secret_name:
           type: string
         secret_value:
@@ -14569,6 +15170,7 @@ components:
         type:
           type: string
           const: environment_variable
+          description: Always `environment_variable`.
         secret_value:
           type:
             - string
@@ -14588,6 +15190,7 @@ components:
       properties:
         type:
           const: error
+          description: Always `error`.
         error:
           type: object
           required:
@@ -14626,6 +15229,7 @@ components:
         type:
           type: string
           const: executor_token
+          description: Always `executor_token`.
         id:
           $ref: "#/components/schemas/MachineDaemonTokenID"
         machine_id:
@@ -15001,6 +15605,7 @@ components:
         type:
           type: string
           const: machine
+          description: Always `machine`.
         id:
           $ref: "#/components/schemas/MachineID"
         org_id:
@@ -15096,7 +15701,7 @@ components:
           oneOf:
             - $ref: "#/components/schemas/EmbeddedMachineCapabilities"
             - type: "null"
-          description: Single read and create only; null when the project cannot use the machine. The native MachineCapabilities,
+          description: Single read and create only; null when the project cannot use the machine. The machine's capabilities,
             without the type that GET /v1/machines/{machine_id}/capabilities adds.
         token:
           type: string
@@ -15196,6 +15801,7 @@ components:
         type:
           type: string
           const: machine_capabilities
+          description: Always `machine_capabilities`.
         machine_id:
           $ref: "#/components/schemas/MachineID"
         terminal:
@@ -15211,8 +15817,8 @@ components:
         harnesses:
           type: array
           description: Ids of the hosted agents the machine's executor declared at its latest executor.register (for example dsh,
-            claude-code), in declaration order, kept while the machine is offline (BMA extension, Experimental,
-            ADR-0029). Omitted when it declared none.
+            claude-code), in declaration order, kept while the machine is offline (BMA extension, Experimental). Omitted
+            when it declared none.
           items:
             type: string
       additionalProperties: false
@@ -15271,6 +15877,7 @@ components:
           type: string
         type:
           const: machine_deleted
+          description: Always `machine_deleted`.
     MachineDesktopCapability:
       type: object
       additionalProperties: false
@@ -15415,6 +16022,7 @@ components:
         type:
           type: string
           const: machine_pool
+          description: Always `machine_pool`.
         id:
           $ref: "#/components/schemas/MachinePoolID"
         org_id:
@@ -15576,6 +16184,7 @@ components:
           type: string
         type:
           const: machine_pool_deleted
+          description: Always `machine_pool_deleted`.
     MachinePoolGrant:
       type: object
       required:
@@ -15606,6 +16215,7 @@ components:
         type:
           type: string
           const: machine_pool_grant
+          description: Always `machine_pool_grant`.
         id:
           $ref: "#/components/schemas/ProjectMachinePoolGrantID"
         org_id:
@@ -15729,8 +16339,7 @@ components:
     MachinePoolID:
       type: string
       pattern: ^(mpo|env)_[a-z2-7]{26}$
-      description: Machine pool ID (mpo_...), or env_... for a cloud environment's own pool, which shares the environment's ID
-        (ADR-0061).
+      description: Machine pool ID (mpo_...), or env_... for a cloud environment's own pool, which shares the environment's ID.
     MachinePoolUsage:
       type: object
       additionalProperties: false
@@ -15774,6 +16383,7 @@ components:
         type:
           type: string
           const: machine_power_status
+          description: Always `machine_power_status`.
         machine_id:
           $ref: "#/components/schemas/MachineID"
         connection_state:
@@ -15839,6 +16449,7 @@ components:
         type:
           type: string
           const: mcp_oauth
+          description: Always `mcp_oauth`.
         mcp_server_url:
           type: string
         expires_at:
@@ -15863,6 +16474,7 @@ components:
         type:
           type: string
           const: mcp_oauth_authorization
+          description: Always `mcp_oauth_authorization`.
         status:
           type: string
           enum:
@@ -15900,6 +16512,7 @@ components:
         type:
           type: string
           const: mcp_oauth
+          description: Always `mcp_oauth`.
         access_token:
           type: string
         mcp_server_url:
@@ -15924,6 +16537,7 @@ components:
         type:
           type: string
           const: mcp_oauth
+          description: Always `mcp_oauth`.
         access_token:
           type:
             - string
@@ -15973,6 +16587,7 @@ components:
         type:
           type: string
           const: memory_store
+          description: Always `memory_store`.
         name:
           type: string
         description:
@@ -16013,6 +16628,7 @@ components:
         type:
           type: string
           const: memory_version
+          description: Always `memory_version`.
         created_at:
           type: string
           format: date-time
@@ -16222,6 +16838,7 @@ components:
       properties:
         type:
           const: model_grant
+          description: Always `model_grant`.
         model_id:
           type: string
         workspace_id:
@@ -16244,6 +16861,7 @@ components:
       properties:
         type:
           const: model_grant_deleted
+          description: Always `model_grant_deleted`.
         model_id:
           type: string
         workspace_id:
@@ -16344,7 +16962,7 @@ components:
       description: A Claude model line, such as `opus` or `sonnet`. More lines may be added as new values.
     ModelProvider:
       type: object
-      description: An organization's own model upstream (ADR-0088). The key is write-only.
+      description: An organization's own model upstream. The key is write-only.
       required:
         - type
         - id
@@ -16358,6 +16976,7 @@ components:
       properties:
         type:
           const: model_provider
+          description: Always `model_provider`.
         id:
           type: string
         api_format:
@@ -16422,6 +17041,7 @@ components:
           type: string
         type:
           const: model_provider_deleted
+          description: Always `model_provider_deleted`.
       additionalProperties: false
     ModelProviderModel:
       type: object
@@ -16438,6 +17058,7 @@ components:
       properties:
         type:
           const: model_provider_model
+          description: Always `model_provider_model`.
         id:
           type: string
         provider_id:
@@ -16489,6 +17110,7 @@ components:
           type: string
         type:
           const: model_provider_model_deleted
+          description: Always `model_provider_model_deleted`.
       additionalProperties: false
     ModelProviderModelUpdateRequest:
       type: object
@@ -16739,6 +17361,7 @@ components:
         type:
           type: string
           const: personal_access_token
+          description: Always `personal_access_token`.
         id:
           type: string
         name:
@@ -16867,6 +17490,7 @@ components:
           type: string
           enum:
             - session.bma_placement
+          description: Always `session.bma_placement`.
         id:
           type: string
         processed_at:
@@ -16952,6 +17576,7 @@ components:
         type:
           type: string
           const: skill
+          description: Always `skill`.
         display_name:
           type: string
         latest_version_id:
@@ -16994,6 +17619,7 @@ components:
         type:
           type: string
           const: skill_deleted
+          description: Always `skill_deleted`.
       additionalProperties: false
     SkillFile:
       type: object
@@ -17035,7 +17661,7 @@ components:
               type: string
               const: user
           additionalProperties: false
-      description: Who owns the skill (native SkillOwner).
+      description: Who owns the skill.
     SkillSource:
       type: object
       required:
@@ -17044,6 +17670,7 @@ components:
         type:
           type: string
           const: custom
+          description: Always `custom`.
       additionalProperties: false
     SkillUploadRequest:
       x-bma-official-shape: BetaSkillCreateParams
@@ -17097,6 +17724,7 @@ components:
         type:
           type: string
           const: skill_version
+          description: Always `skill_version`.
         skill_id:
           type: string
         name:
@@ -17120,6 +17748,7 @@ components:
         type:
           type: string
           const: skill_version_deleted
+          description: Always `skill_version_deleted`.
       additionalProperties: false
     StaticBearerAuth:
       type: object
@@ -17130,6 +17759,7 @@ components:
         type:
           type: string
           const: static_bearer
+          description: Always `static_bearer`.
         mcp_server_url:
           type: string
       additionalProperties: false
@@ -17143,6 +17773,7 @@ components:
         type:
           type: string
           const: static_bearer
+          description: Always `static_bearer`.
         token:
           type: string
         mcp_server_url:
@@ -17156,6 +17787,7 @@ components:
         type:
           type: string
           const: static_bearer
+          description: Always `static_bearer`.
         token:
           type:
             - string
@@ -17175,6 +17807,7 @@ components:
         type:
           type: string
           const: terminal_session
+          description: Always `terminal_session`.
         id:
           $ref: "#/components/schemas/TerminalSessionID"
         org_id:
@@ -17272,6 +17905,7 @@ components:
           properties:
             type:
               const: ticket
+              description: Always `ticket`.
             purpose:
               type: string
               enum:
@@ -17335,6 +17969,7 @@ components:
         type:
           type: string
           const: none
+          description: Always `none`.
       additionalProperties: false
     TokenEndpointAuthResponse:
       type: object
@@ -17377,6 +18012,7 @@ components:
         type:
           type: string
           const: tool_grant
+          description: Always `tool_grant`.
         id:
           type: string
         session_id:
@@ -17685,6 +18321,7 @@ components:
         type:
           type: string
           const: user_profile
+          description: Always `user_profile`.
         name:
           type:
             - string
@@ -17734,6 +18371,7 @@ components:
         type:
           type: string
           const: user_profile_deleted
+          description: Always `user_profile_deleted`.
       additionalProperties: false
     UserProfileDetails:
       type: object
@@ -17867,6 +18505,7 @@ components:
         type:
           type: string
           const: vault
+          description: Always `vault`.
         display_name:
           type: string
         metadata:
@@ -17917,6 +18556,7 @@ components:
         type:
           type: string
           const: vault_credential
+          description: Always `vault_credential`.
         vault_id:
           type: string
         display_name:
@@ -17969,6 +18609,7 @@ components:
         type:
           type: string
           const: vault_credential_deleted
+          description: Always `vault_credential_deleted`.
       additionalProperties: false
     VaultCredentialHTTPResponse:
       type: object
@@ -18055,6 +18696,7 @@ components:
         type:
           type: string
           const: vault_credential_validation
+          description: Always `vault_credential_validation`.
         credential_id:
           type: string
         vault_id:
@@ -18090,6 +18732,7 @@ components:
         type:
           type: string
           const: vault_deleted
+          description: Always `vault_deleted`.
       additionalProperties: false
     VaultUpdateRequest:
       type: object
@@ -18110,6 +18753,71 @@ components:
               - "null"
           description: "Patch: a key set to a string is upserted, to null deleted."
       additionalProperties: false
+    WebFetch:
+      type: object
+      description: The answer of one page fetch.
+      required:
+        - id
+        - type
+        - created_at
+        - url
+        - final_url
+        - content_type
+        - format
+        - content
+        - truncated
+        - content_chars
+        - usage
+      properties:
+        id:
+          type: string
+          description: wfetch_ id of this fetch.
+        type:
+          const: web_fetch
+          description: Always `web_fetch`.
+        created_at:
+          type: string
+          format: date-time
+          description: When the page was fetched.
+        url:
+          type: string
+          description: The URL asked for.
+        final_url:
+          type: string
+          description: The URL after redirects.
+        title:
+          type: string
+          description: The page's title ("" when it has none).
+        content_type:
+          type: string
+          description: The media type served.
+        format:
+          type: string
+          enum:
+            - markdown
+            - text
+          description: The format of content, as asked.
+        content:
+          type: string
+          description: The page's main content (main, article or body without scripts, styles, navigation, footers and hidden
+            elements), at most max_chars characters.
+        truncated:
+          type: boolean
+          description: The content was cut at max_chars.
+        content_chars:
+          type: integer
+          minimum: 0
+          description: Characters in content.
+        usage:
+          type: object
+          description: What this answer is charged for.
+          required:
+            - web_fetch_requests
+          properties:
+            web_fetch_requests:
+              type: integer
+              minimum: 0
+              description: Fetches charged for this answer (1). A replay returns the first answer unchanged and is not charged again.
     WebhookEndpoint:
       x-bma-official-shape: BetaOrganizationWebhookEndpoint
       x-bma-official-fields:
@@ -18205,6 +18913,7 @@ components:
         type:
           type: string
           const: webhook_endpoint_deleted
+          description: Always `webhook_endpoint_deleted`.
     WebhookEndpointSigningSecret:
       type: object
       required:
@@ -18242,6 +18951,77 @@ components:
           enum:
             - enabled
             - disabled
+    WebSearch:
+      type: object
+      description: The answer of one web search.
+      required:
+        - id
+        - type
+        - created_at
+        - query
+        - provider
+        - results
+        - usage
+      properties:
+        id:
+          type: string
+          description: wsrch_ id of this search.
+        type:
+          const: web_search
+          description: Always `web_search`.
+        created_at:
+          type: string
+          format: date-time
+          description: When the search ran.
+        query:
+          type: string
+          description: The query searched, trimmed.
+        provider:
+          type: string
+          description: The search provider that answered (exa, bocha, brave, tavily, exa-keyless; open set).
+        provider_request_id:
+          type: string
+          description: The provider's own request id, when it reports one.
+        results:
+          type: array
+          description: The results, best first, at most num_results.
+          items:
+            $ref: "#/components/schemas/WebSearchResult"
+        usage:
+          type: object
+          description: What this answer is charged for.
+          required:
+            - web_search_requests
+          properties:
+            web_search_requests:
+              type: integer
+              minimum: 0
+              description: Searches charged for this answer (1). A replay returns the first answer unchanged and is not charged again.
+    WebSearchResult:
+      type: object
+      description: One ranked search result, deduplicated by URL.
+      required:
+        - rank
+        - url
+        - title
+      properties:
+        rank:
+          type: integer
+          minimum: 1
+          description: Position of the result, from 1.
+        url:
+          type: string
+          description: The page's URL.
+        title:
+          type: string
+          description: The page's title.
+        snippet:
+          type: string
+          description: At most 600 characters of the page's text.
+        published_at:
+          type: string
+          format: date-time
+          description: When the page was published, when the provider knows it.
     Workspace:
       type: object
       properties:
@@ -18359,9 +19139,8 @@ x-bma-extension-fields:
       (`expires_with_session` defaults to true unless `ttl_seconds` is sent); it replaces the deprecated
       `agent.model.api_url/api_key/api_format/context_window_tokens/max_output_tokens/auto_compact_window_tokens`, which
       are still accepted (answered with `Deprecation` and a `Link ... rel="successor-version"` header) but cannot be
-      combined with it. On update, an object with `model` replaces the override (native PutAgentSessionModelOverride);
-      an object without `model` patches it (PatchAgentSessionModelOverride); null revokes it
-      (DeleteAgentSessionModelOverride). `api_key` is write-only.
+      combined with it. On update, an object with `model` replaces the override; an object without `model` patches it;
+      null revokes it. `api_key` is write-only.
     schema:
       oneOf:
         - $ref: "#/components/schemas/AgentModelOverrideInput"
@@ -18370,8 +19149,8 @@ x-bma-extension-fields:
   - operation: GET /v1/sessions/{session_id}, POST /v1/sessions, POST /v1/sessions/{session_id}
     direction: response
     field: bma_model_override
-    description: The active override metadata (native AgentModelOverride, no key) or null; omitted by list and by
-      deployments that cannot read overrides.
+    description: The active override metadata (without the key) or null; omitted by list and by deployments that cannot read
+      overrides.
     schema:
       oneOf:
         - $ref: "#/components/schemas/AgentModelOverride"
@@ -18494,8 +19273,8 @@ x-bma-extension-fields:
     direction: request
     field: bma_placement
     description: Where the environment puts the brain and where the hands come from, and the scheduling timeouts. Omitted
-      keeps the current value on update, null clears it (the derivation of ADR-0002 applies); rejected on an environment
-      projected from a machine.
+      keeps the current value on update, null clears it (the brain location is then derived again); rejected on an
+      environment projected from a machine.
     schema:
       oneOf:
         - $ref: "#/components/schemas/BmaEnvironmentPlacement"
@@ -18772,8 +19551,8 @@ x-bma-extension-fields:
     direction: response
     field: bma_delivered
     description: "On the session outputs of a list with scope_id: true when the final reply of a turn that ended after the
-      output was written names it by its path or file name, false otherwise (docs/architecture/session-deliverables.md).
-      Omitted on other files and on lists without scope_id."
+      output was written names it by its path or file name, false otherwise. Omitted on other files and on lists without
+      scope_id."
     schema:
       type: boolean
   - operation: GET /v1/files, GET /v1/files/{file_id}, POST /v1/files
@@ -18795,7 +19574,7 @@ x-bma-extension-fields:
     direction: response
     field: bma_files
     description: Property of an `agent.tool_result` event. The session files the call created (the images of the platform
-      tool `generate_image`, ADR-0101), so a client shows them with the call. Absent when it created none.
+      tool `generate_image`), so a client shows them with the call. Absent when it created none.
     schema:
       type: array
       items:

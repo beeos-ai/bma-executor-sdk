@@ -5,12 +5,13 @@
 package main
 
 // contractSource is the OpenAPI document the commands were generated from.
-const contractSource = "contracts/bma-api/bma.openapi.yaml sha256:3b3e84d88b6d253401862722bfc6528a9299255cb01ab47465edfce39c72936d"
+const contractSource = "contracts/bma-api/bma.openapi.yaml sha256:a3102b4a89f171bf6364bec7d92296ad51f21d672affb40e0e85bc3161171f47"
 
 // apiOperations are the operations of the public BMA API, one command each.
 var apiOperations = []apiOp{
 	{ID: "agents.list", Method: "GET", Path: "/v1/agents", Group: []string{"agents"}, Verb: "list", Summary: "List Agents",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma agents list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "number", Required: false, Description: "Number of items per page."},
 			{Name: "page", Flag: "page", In: "query", Type: "string", Required: false},
@@ -21,6 +22,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "agents.create", Method: "POST", Path: "/v1/agents", Group: []string{"agents"}, Verb: "create", Summary: "Create Agent",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma agents create",
 		Params: []apiParam{
 			{Name: "description", Flag: "description", In: "body", Type: "string", Required: false, Description: "Description of what the agent does."},
 			{Name: "execution_identity", Flag: "execution-identity", In: "body", Type: "json", Required: false, Description: "Execution principal for runs of this agent. Omitting it, sending null, or sending {\"type\": \"service_account\"} stores the default."},
@@ -38,6 +40,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "agents.retrieve", Method: "GET", Path: "/v1/agents/{agent_id}", Group: []string{"agents"}, Verb: "get", Summary: "Get Agent",
+		Example: "bma agents get <agent_id>",
 		Params: []apiParam{
 			{Name: "agent_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "version", Flag: "version", In: "query", Type: "number", Required: false, Description: "Agent version. Omit for the most recent version. Must be at least 1 if specified."},
@@ -45,6 +48,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "agents.update", Method: "POST", Path: "/v1/agents/{agent_id}", Group: []string{"agents"}, Verb: "update", Summary: "Update Agent",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma agents update <agent_id>",
 		Params: []apiParam{
 			{Name: "agent_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "description", Flag: "description", In: "body", Type: "string", Required: false, Description: "Description. Omit to preserve; send empty string or null to clear."},
@@ -64,6 +68,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "agents.archive", Method: "POST", Path: "/v1/agents/{agent_id}/archive", Group: []string{"agents"}, Verb: "archive", Summary: "Archive Agent",
+		Example: "bma agents archive <agent_id>",
 		Params: []apiParam{
 			{Name: "agent_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
@@ -71,6 +76,7 @@ var apiOperations = []apiOp{
 	{ID: "listAgentVersions", Method: "GET", Path: "/v1/agents/{agent_id}/versions", Group: []string{"agents", "versions"}, Verb: "list", Summary: "List agent versions",
 		Description: "Newest first; each item is the agent as it was at that version.",
 		Body:        false, List: true, Raw: false, HandWritten: false,
+		Example: "bma agents versions list <agent_id>",
 		Params: []apiParam{
 			{Name: "agent_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "limit", Flag: "limit", In: "query", Type: "integer", Required: false},
@@ -79,6 +85,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "createDesktopSession", Method: "POST", Path: "/v1/desktop_sessions", Group: []string{"desktop-sessions"}, Verb: "create", Summary: "Create a desktop session",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma desktop-sessions create",
 		Params: []apiParam{
 			{Name: "agent_id", Flag: "agent-id", In: "body", Type: "string", Required: false, Description: "The id /v1/agents uses."},
 			{Name: "capabilities", Flag: "capabilities", In: "body", Type: "json", Required: false},
@@ -86,15 +93,18 @@ var apiOperations = []apiOp{
 			{Name: "lease_seconds", Flag: "lease-seconds", In: "body", Type: "integer", Required: false},
 			{Name: "machine_id", Flag: "machine-id", In: "body", Type: "string", Required: true},
 			{Name: "read_only", Flag: "read-only", In: "body", Type: "boolean", Required: false},
+			{Name: "ticket", Flag: "ticket", In: "body", Type: "json", Required: false, Description: "Body of a desktop ticket. purpose is optional and must be watch."},
 		},
 	},
 	{ID: "getDesktopSession", Method: "GET", Path: "/v1/desktop_sessions/{desktop_session_id}", Group: []string{"desktop-sessions"}, Verb: "get", Summary: "Retrieve a desktop session (control state in `control`)",
+		Example: "bma desktop-sessions get <desktop_session_id>",
 		Params: []apiParam{
 			{Name: "desktop_session_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "acquireDesktopControl", Method: "POST", Path: "/v1/desktop_sessions/{desktop_session_id}/acquire_control", Group: []string{"desktop-sessions"}, Verb: "acquire-control", Summary: "Take input control",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma desktop-sessions acquire-control <desktop_session_id>",
 		Params: []apiParam{
 			{Name: "desktop_session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "holder", Flag: "holder", In: "body", Type: "string", Required: false, Description: "Opaque viewer identifier owned by the tenant, distinct from the SFU participant identity."},
@@ -106,6 +116,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "sendDesktopActions", Method: "POST", Path: "/v1/desktop_sessions/{desktop_session_id}/actions", Group: []string{"desktop-sessions"}, Verb: "actions", Summary: "Send input actions",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma desktop-sessions actions <desktop_session_id>",
 		Params: []apiParam{
 			{Name: "desktop_session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "action", Flag: "action", In: "body", Type: "json", Required: true},
@@ -113,12 +124,14 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "closeDesktopSession", Method: "POST", Path: "/v1/desktop_sessions/{desktop_session_id}/close", Group: []string{"desktop-sessions"}, Verb: "close", Summary: "Close a desktop session",
+		Example: "bma desktop-sessions close <desktop_session_id>",
 		Params: []apiParam{
 			{Name: "desktop_session_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "handbackDesktopControl", Method: "POST", Path: "/v1/desktop_sessions/{desktop_session_id}/handback_control", Group: []string{"desktop-sessions"}, Verb: "handback-control", Summary: "Hand control back to the agent",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma desktop-sessions handback-control <desktop_session_id>",
 		Params: []apiParam{
 			{Name: "desktop_session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "holder", Flag: "holder", In: "body", Type: "string", Required: false, Description: "Opaque viewer identifier owned by the tenant, distinct from the SFU participant identity."},
@@ -127,6 +140,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "keepaliveDesktopSession", Method: "POST", Path: "/v1/desktop_sessions/{desktop_session_id}/keepalive", Group: []string{"desktop-sessions"}, Verb: "keepalive", Summary: "Extend the running screen capture's keepalive deadline",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma desktop-sessions keepalive <desktop_session_id>",
 		Params: []apiParam{
 			{Name: "desktop_session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "keepalive_seconds", Flag: "keepalive-seconds", In: "body", Type: "integer", Required: false, Description: "Keepalive duration; 300 seconds when omitted."},
@@ -134,6 +148,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "releaseDesktopControl", Method: "POST", Path: "/v1/desktop_sessions/{desktop_session_id}/release_control", Group: []string{"desktop-sessions"}, Verb: "release-control", Summary: "Release control",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma desktop-sessions release-control <desktop_session_id>",
 		Params: []apiParam{
 			{Name: "desktop_session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "holder", Flag: "holder", In: "body", Type: "string", Required: false, Description: "Opaque viewer identifier owned by the tenant, distinct from the SFU participant identity."},
@@ -142,6 +157,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "renewDesktopControl", Method: "POST", Path: "/v1/desktop_sessions/{desktop_session_id}/renew_control", Group: []string{"desktop-sessions"}, Verb: "renew-control", Summary: "Renew the control lease",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma desktop-sessions renew-control <desktop_session_id>",
 		Params: []apiParam{
 			{Name: "desktop_session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "holder", Flag: "holder", In: "body", Type: "string", Required: false, Description: "Opaque viewer identifier owned by the tenant, distinct from the SFU participant identity."},
@@ -153,6 +169,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "captureDesktopScreenshot", Method: "POST", Path: "/v1/desktop_sessions/{desktop_session_id}/screenshot", Group: []string{"desktop-sessions"}, Verb: "screenshot", Summary: "Capture a screenshot",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma desktop-sessions screenshot <desktop_session_id>",
 		Params: []apiParam{
 			{Name: "desktop_session_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
@@ -160,6 +177,7 @@ var apiOperations = []apiOp{
 	{ID: "createDesktopSessionTicket", Method: "POST", Path: "/v1/desktop_sessions/{desktop_session_id}/tickets", Group: []string{"desktop-sessions"}, Verb: "tickets", Summary: "Mint a desktop watch credential",
 		Description: "D-7 unified ticket endpoint. `purpose` defaults to and must be `watch`; the response is a `ticket` object. `watch_tickets` is the deprecated alias that answers `desktop_watch_ticket`.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma desktop-sessions tickets <desktop_session_id>",
 		Params: []apiParam{
 			{Name: "desktop_session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "origin", Flag: "origin", In: "body", Type: "string", Required: false},
@@ -170,6 +188,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "revokeDesktopViewer", Method: "POST", Path: "/v1/desktop_sessions/{desktop_session_id}/viewers/{viewer}/revoke", Group: []string{"desktop-sessions", "viewers"}, Verb: "revoke", Summary: "Revoke a screen capture viewer and confirm its connections are closed",
+		Example: "bma desktop-sessions viewers revoke <desktop_session_id> <viewer>",
 		Params: []apiParam{
 			{Name: "desktop_session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "viewer", Flag: "", In: "path", Type: "string", Required: true},
@@ -177,6 +196,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "environments.list", Method: "GET", Path: "/v1/environments", Group: []string{"environments"}, Verb: "list", Summary: "List environments with pagination support.",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma environments list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "number", Required: false, Description: "Number of items per page."},
 			{Name: "page", Flag: "page", In: "query", Type: "string", Required: false},
@@ -185,6 +205,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "environments.create", Method: "POST", Path: "/v1/environments", Group: []string{"environments"}, Verb: "create", Summary: "Create a new environment with the specified configuration.",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma environments create",
 		Params: []apiParam{
 			{Name: "config", Flag: "config", In: "body", Type: "json", Required: false, Description: "Environment configuration"},
 			{Name: "description", Flag: "description", In: "body", Type: "string", Required: false, Description: "Optional description of the environment"},
@@ -193,16 +214,18 @@ var apiOperations = []apiOp{
 			{Name: "scope", Flag: "scope", In: "body", Type: "string", Required: false, Description: "The visibility scope for this environment. 'organization' makes the environment visible to all accounts. 'account' restricts visibility to the owning account only. API organizations support only 'organization'; 'account' is rejected. If not specified, defaults based on organization type.", Enum: []string{"organization", "account"}},
 			{Name: "bma_desktop", Flag: "bma-desktop", In: "body", Type: "json", Required: false, Description: "Desktop defaults of the environment, such as the wallpaper of new desktops."},
 			{Name: "bma_harness", Flag: "bma-harness", In: "body", Type: "json", Required: false, Description: "The brain of the environment's sessions whose session and agent name none. Omitted keeps the current value on update; null or kind default clears it (the platform default applies); rejected on an environment projected from a machine. A change only affects sessions created after it."},
-			{Name: "bma_placement", Flag: "bma-placement", In: "body", Type: "json", Required: false, Description: "Where the environment puts the brain and where the hands come from, and the scheduling timeouts. Omitted keeps the current value on update, null clears it (the derivation of ADR-0002 applies); rejected on an environment projected from a machine."},
+			{Name: "bma_placement", Flag: "bma-placement", In: "body", Type: "json", Required: false, Description: "Where the environment puts the brain and where the hands come from, and the scheduling timeouts. Omitted keeps the current value on update, null clears it (the brain location is then derived again); rejected on an environment projected from a machine."},
 		},
 	},
 	{ID: "environments.retrieve", Method: "GET", Path: "/v1/environments/{environment_id}", Group: []string{"environments"}, Verb: "get", Summary: "Retrieve a specific environment by ID.",
+		Example: "bma environments get <environment_id>",
 		Params: []apiParam{
 			{Name: "environment_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "environments.update", Method: "POST", Path: "/v1/environments/{environment_id}", Group: []string{"environments"}, Verb: "update", Summary: "Update an existing environment's configuration.",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma environments update <environment_id>",
 		Params: []apiParam{
 			{Name: "environment_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "config", Flag: "config", In: "body", Type: "json", Required: false, Description: "Updated environment configuration"},
@@ -212,21 +235,24 @@ var apiOperations = []apiOp{
 			{Name: "scope", Flag: "scope", In: "body", Type: "string", Required: false, Description: "The visibility scope for this environment. 'organization' makes the environment visible to all accounts. 'account' restricts visibility to the owning account only.", Enum: []string{"organization", "account"}},
 			{Name: "bma_desktop", Flag: "bma-desktop", In: "body", Type: "json", Required: false, Description: "Desktop defaults of the environment, such as the wallpaper of new desktops."},
 			{Name: "bma_harness", Flag: "bma-harness", In: "body", Type: "json", Required: false, Description: "The brain of the environment's sessions whose session and agent name none. Omitted keeps the current value on update; null or kind default clears it (the platform default applies); rejected on an environment projected from a machine. A change only affects sessions created after it."},
-			{Name: "bma_placement", Flag: "bma-placement", In: "body", Type: "json", Required: false, Description: "Where the environment puts the brain and where the hands come from, and the scheduling timeouts. Omitted keeps the current value on update, null clears it (the derivation of ADR-0002 applies); rejected on an environment projected from a machine."},
+			{Name: "bma_placement", Flag: "bma-placement", In: "body", Type: "json", Required: false, Description: "Where the environment puts the brain and where the hands come from, and the scheduling timeouts. Omitted keeps the current value on update, null clears it (the brain location is then derived again); rejected on an environment projected from a machine."},
 		},
 	},
 	{ID: "environments.delete", Method: "DELETE", Path: "/v1/environments/{environment_id}", Group: []string{"environments"}, Verb: "delete", Summary: "Delete an environment by ID. Returns a confirmation of the deletion.",
+		Example: "bma environments delete <environment_id>",
 		Params: []apiParam{
 			{Name: "environment_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "environments.archive", Method: "POST", Path: "/v1/environments/{environment_id}/archive", Group: []string{"environments"}, Verb: "archive", Summary: "Archive an environment by ID. Archived environments cannot be used to create new",
+		Example: "bma environments archive <environment_id>",
 		Params: []apiParam{
 			{Name: "environment_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "files.list", Method: "GET", Path: "/v1/files", Group: []string{"files"}, Verb: "list", Summary: "List Files",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma files list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "number", Required: false, Description: "Number of items per page."},
 			{Name: "page", Flag: "page", In: "query", Type: "string", Required: false},
@@ -237,23 +263,27 @@ var apiOperations = []apiOp{
 		Body: false, List: false, Raw: false, HandWritten: true,
 	},
 	{ID: "files.retrieve_metadata", Method: "GET", Path: "/v1/files/{file_id}", Group: []string{"files"}, Verb: "get", Summary: "Get File Metadata",
+		Example: "bma files get <file_id>",
 		Params: []apiParam{
 			{Name: "file_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "files.delete", Method: "DELETE", Path: "/v1/files/{file_id}", Group: []string{"files"}, Verb: "delete", Summary: "Delete File",
+		Example: "bma files delete <file_id>",
 		Params: []apiParam{
 			{Name: "file_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "files.download", Method: "GET", Path: "/v1/files/{file_id}/content", Group: []string{"files"}, Verb: "content", Summary: "Download File",
 		Body: false, List: false, Raw: true, HandWritten: false,
+		Example: "bma files content <file_id>",
 		Params: []apiParam{
 			{Name: "file_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "listMachinePools", Method: "GET", Path: "/v1/machine_pools", Group: []string{"machine-pools"}, Verb: "list", Summary: "List machine pools",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma machine-pools list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "integer", Required: false},
 			{Name: "page", Flag: "page", In: "query", Type: "string", Required: false, Description: "Opaque cursor from next_page."},
@@ -262,6 +292,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "createMachinePool", Method: "POST", Path: "/v1/machine_pools", Group: []string{"machine-pools"}, Verb: "create", Summary: "Create a machine pool",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma machine-pools create",
 		Params: []apiParam{
 			{Name: "archive_after_paused_days", Flag: "archive-after-paused-days", In: "body", Type: "integer", Required: false, Description: "Days a machine stays paused before it is archived. An archived machine is restored on the next access. Requires pause_after_idle_minutes."},
 			{Name: "default_cwd", Flag: "default-cwd", In: "body", Type: "string", Required: false},
@@ -291,12 +322,14 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "getMachinePool", Method: "GET", Path: "/v1/machine_pools/{pool_id}", Group: []string{"machine-pools"}, Verb: "get", Summary: "Retrieve a machine pool",
+		Example: "bma machine-pools get <pool_id>",
 		Params: []apiParam{
 			{Name: "pool_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "updateMachinePool", Method: "POST", Path: "/v1/machine_pools/{pool_id}", Group: []string{"machine-pools"}, Verb: "update", Summary: "Update a machine pool",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma machine-pools update <pool_id>",
 		Params: []apiParam{
 			{Name: "pool_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "archive_after_paused_days", Flag: "archive-after-paused-days", In: "body", Type: "integer", Required: false, Description: "Days a machine stays paused before it is archived. Null clears it; omitted leaves it unchanged. Requires pause_after_idle_minutes."},
@@ -325,6 +358,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "deleteMachinePool", Method: "DELETE", Path: "/v1/machine_pools/{pool_id}", Group: []string{"machine-pools"}, Verb: "delete", Summary: "Delete a machine pool",
+		Example: "bma machine-pools delete <pool_id>",
 		Params: []apiParam{
 			{Name: "pool_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
@@ -332,6 +366,7 @@ var apiOperations = []apiOp{
 	{ID: "listMachinePoolGrants", Method: "GET", Path: "/v1/machine_pools/{pool_id}/grants", Group: []string{"machine-pools", "grants"}, Verb: "list", Summary: "List the pool grants of a project",
 		Description: "The project is the `project_id` query parameter or `bma-workspace-id`.",
 		Body:        false, List: true, Raw: false, HandWritten: false,
+		Example: "bma machine-pools grants list <pool_id>",
 		Params: []apiParam{
 			{Name: "pool_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "limit", Flag: "limit", In: "query", Type: "integer", Required: false},
@@ -341,6 +376,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "getMachinePoolGrant", Method: "GET", Path: "/v1/machine_pools/{pool_id}/grants/{grant_id}", Group: []string{"machine-pools", "grants"}, Verb: "get", Summary: "Retrieve a pool grant",
+		Example: "bma machine-pools grants get <pool_id> <grant_id>",
 		Params: []apiParam{
 			{Name: "pool_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "grant_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -350,6 +386,7 @@ var apiOperations = []apiOp{
 	{ID: "listMachines", Method: "GET", Path: "/v1/machines", Group: []string{"machines"}, Verb: "list", Summary: "List machines",
 		Description: "`persistent=true` lists only persistent machines (the workspace's computers). Deprecated: `agent_id` lists that agent's machines (project scope, native listAgentMachines).",
 		Body:        false, List: true, Raw: false, HandWritten: false,
+		Example: "bma machines list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "integer", Required: false},
 			{Name: "page", Flag: "page", In: "query", Type: "string", Required: false, Description: "Opaque cursor from next_page."},
@@ -364,6 +401,7 @@ var apiOperations = []apiOp{
 	{ID: "createMachine", Method: "POST", Path: "/v1/machines", Group: []string{"machines"}, Verb: "create", Summary: "Create a machine",
 		Description: "`persistent: true` + `machine_pool_id` (+ `template`, `display_name`, `agent_ids`) creates a persistent machine owned by the workspace (createWorkspacePersistentMachine): the pool starts its sandbox, no agent is needed, the sessions of `agent_ids` (every agent of the workspace when empty) may use it and the workspace deletes it; `source: byo` connects a BYO machine (connectBYOMachine) and returns the one-time `token`; otherwise createMachine. Deprecated: `agent_id` + `persistent: true` creates an agent persistent machine (createAgentPersistentMachine).",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma machines create",
 		Params: []apiParam{
 			{Name: "agent_id", Flag: "agent-id", In: "body", Type: "string", Required: false, Description: "Deprecated. The id /v1/agents uses; with persistent true and template, creates a persistent machine of that agent."},
 			{Name: "agent_ids", Flag: "agent-ids", In: "body", Type: "json", Required: false, Description: "The agents bound to a persistent machine (an agent may be bound to several). On a persistent pool machine they are also the only agents whose sessions may use it; empty, every agent of the owning workspace may. Each must be an agent of that workspace (404 otherwise). Replaced as a whole; only a persistent pool machine accepts a non-empty list."},
@@ -383,6 +421,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "getMachine", Method: "GET", Path: "/v1/machines/{machine_id}", Group: []string{"machines"}, Verb: "get", Summary: "Retrieve a machine",
 		Description: "Adds `capabilities` (getMachineCapabilities), null when the project cannot use the machine.",
+		Example:     "bma machines get <machine_id>",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
@@ -390,6 +429,7 @@ var apiOperations = []apiOp{
 	{ID: "updateMachine", Method: "POST", Path: "/v1/machines/{machine_id}", Group: []string{"machines"}, Verb: "update", Summary: "Update a machine",
 		Description: "`agent_ids` replaces the agents bound to a persistent machine as a whole (`[]` opens a persistent pool machine to every agent of its workspace); the managers of the workspace that owns the machine may change it. To add or remove one agent without overwriting concurrent changes use addMachineAgent / removeMachineAgent.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma machines update <machine_id>",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "agent_ids", Flag: "agent-ids", In: "body", Type: "json", Required: false, Description: "The agents bound to a persistent machine (an agent may be bound to several). On a persistent pool machine they are also the only agents whose sessions may use it; empty, every agent of the owning workspace may. Each must be an agent of that workspace (404 otherwise). Replaced as a whole; only a persistent pool machine accepts a non-empty list."},
@@ -400,20 +440,23 @@ var apiOperations = []apiOp{
 	},
 	{ID: "deleteMachine", Method: "DELETE", Path: "/v1/machines/{machine_id}", Group: []string{"machines"}, Verb: "delete", Summary: "Delete a machine",
 		Description: "Deletes a persistent or BYO machine the workspace owns. Deprecated: with `agent_id` it deletes that agent's persistent machine (deleteAgentMachine).",
+		Example:     "bma machines delete <machine_id>",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "agent_id", Flag: "agent-id", In: "query", Type: "string", Required: false},
 		},
 	},
 	{ID: "addMachineAgent", Method: "PUT", Path: "/v1/machines/{machine_id}/agents/{agent_id}", Group: []string{"machines", "agents"}, Verb: "update", Summary: "Bind an agent to a machine",
-		Description: "Adds one agent to a persistent pool machine's `agent_ids` (ADR-0085), atomically against concurrent agent changes of the machine; an agent already bound is a no-op (200). No request body. On a machine bound to no agent it narrows the machine from every agent of its workspace to this one. 404 when the agent is not an agent of the machine's workspace; 400 `validation_failed` for a machine that is not a persistent pool machine or already has 100 agents. The managers of the workspace that owns the machine may change it.",
+		Description: "Adds one agent to a persistent pool machine's `agent_ids`, atomically against concurrent agent changes of the machine; an agent already bound is a no-op (200). No request body. On a machine bound to no agent it narrows the machine from every agent of its workspace to this one. 404 when the agent is not an agent of the machine's workspace; 400 `validation_failed` for a machine that is not a persistent pool machine or already has 100 agents. The managers of the workspace that owns the machine may change it.",
+		Example:     "bma machines agents update <machine_id> <agent_id>",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "agent_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "removeMachineAgent", Method: "DELETE", Path: "/v1/machines/{machine_id}/agents/{agent_id}", Group: []string{"machines", "agents"}, Verb: "delete", Summary: "Unbind an agent from a machine",
-		Description: "Removes one agent from a machine's `agent_ids` (ADR-0085), atomically against concurrent agent changes of the machine; an agent not bound is a no-op (200). Removing the last agent is refused with 400 `validation_failed`: an empty `agent_ids` opens the machine to every agent of its workspace, which only an explicit `agent_ids: []` (updateMachine) does. The managers of the workspace that owns the machine may change it.",
+		Description: "Removes one agent from a machine's `agent_ids`, atomically against concurrent agent changes of the machine; an agent not bound is a no-op (200). Removing the last agent is refused with 400 `validation_failed`: an empty `agent_ids` opens the machine to every agent of its workspace, which only an explicit `agent_ids: []` (updateMachine) does. The managers of the workspace that owns the machine may change it.",
+		Example:     "bma machines agents delete <machine_id> <agent_id>",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "agent_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -421,11 +464,13 @@ var apiOperations = []apiOp{
 	},
 	{ID: "listMachineBackups", Method: "GET", Path: "/v1/machines/{machine_id}/backups", Group: []string{"machines", "backups"}, Verb: "list", Summary: "List a machine's backups",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma machines backups list <machine_id>",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "getMachineCapabilities", Method: "GET", Path: "/v1/machines/{machine_id}/capabilities", Group: []string{"machines"}, Verb: "capabilities", Summary: "Machine interaction capabilities",
+		Example: "bma machines capabilities <machine_id>",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "project_id", Flag: "project-id", In: "query", Type: "string", Required: false},
@@ -434,6 +479,7 @@ var apiOperations = []apiOp{
 	{ID: "listExecutorTokens", Method: "GET", Path: "/v1/machines/{machine_id}/executor_tokens", Group: []string{"machines", "executor-tokens"}, Verb: "list", Summary: "List executor tokens",
 		Description: "Newest first, revoked tokens included. Token values are never listed.",
 		Body:        false, List: true, Raw: false, HandWritten: false,
+		Example: "bma machines executor-tokens list <machine_id>",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "limit", Flag: "limit", In: "query", Type: "integer", Required: false},
@@ -443,6 +489,7 @@ var apiOperations = []apiOp{
 	{ID: "createExecutorToken", Method: "POST", Path: "/v1/machines/{machine_id}/executor_tokens", Group: []string{"machines", "executor-tokens"}, Verb: "create", Summary: "Create an executor token",
 		Description: "Issues one more long-lived credential of a BYO machine; its executor exchanges it at `executor.<env>/v1/machines/{machine_id}/token`. `token` is shown only in this response.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma machines executor-tokens create <machine_id>",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "name", Flag: "name", In: "body", Type: "string", Required: false, Description: "Human-readable name. Spaces and punctuation are allowed; leading or trailing whitespace and invisible or control characters are not."},
@@ -450,12 +497,14 @@ var apiOperations = []apiOp{
 	},
 	{ID: "revokeExecutorToken", Method: "POST", Path: "/v1/machines/{machine_id}/executor_tokens/{token_id}/revoke", Group: []string{"machines", "executor-tokens"}, Verb: "revoke", Summary: "Revoke an executor token",
 		Description: "The executor's next token exchange with it fails with 401. A token that is already revoked is not found.",
+		Example:     "bma machines executor-tokens revoke <machine_id> <token_id>",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "token_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "pauseMachine", Method: "POST", Path: "/v1/machines/{machine_id}/pause", Group: []string{"machines"}, Verb: "pause", Summary: "Pause a running machine",
+		Example: "bma machines pause <machine_id>",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "project_id", Flag: "project-id", In: "query", Type: "string", Required: false},
@@ -464,12 +513,14 @@ var apiOperations = []apiOp{
 	{ID: "restoreMachine", Method: "POST", Path: "/v1/machines/{machine_id}/restore", Group: []string{"machines"}, Verb: "restore", Summary: "Rebuild a machine from a backup",
 		Description: "Rebuilds the machine from `backup_id`, or from its latest ready backup when omitted. Answers 202 with the backup the rebuild restores.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma machines restore <machine_id>",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "backup_id", Flag: "backup-id", In: "body", Type: "string", Required: false, Description: "A machine backup ID (mbk_…)."},
 		},
 	},
 	{ID: "resumeMachine", Method: "POST", Path: "/v1/machines/{machine_id}/resume", Group: []string{"machines"}, Verb: "resume", Summary: "Resume a paused machine",
+		Example: "bma machines resume <machine_id>",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "project_id", Flag: "project-id", In: "query", Type: "string", Required: false},
@@ -478,6 +529,7 @@ var apiOperations = []apiOp{
 	{ID: "completeMCPOAuthAuthorization", Method: "POST", Path: "/v1/mcp_oauth/callback", Group: []string{"mcp-oauth", "callback"}, Verb: "create", Summary: "Complete an MCP OAuth authorization",
 		Description: "The authorization server's redirect parameters, relayed by the page the user returned to.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma mcp-oauth callback create",
 		Params: []apiParam{
 			{Name: "code", Flag: "code", In: "body", Type: "string", Required: false},
 			{Name: "error", Flag: "error", In: "body", Type: "string", Required: false},
@@ -489,6 +541,7 @@ var apiOperations = []apiOp{
 	{ID: "createMCPOAuthAuthorization", Method: "POST", Path: "/v1/mcp_oauth_authorizations", Group: []string{"mcp-oauth-authorizations"}, Verb: "create", Summary: "Start an MCP OAuth authorization",
 		Description: "Starts the flow for `mcp_server_url`; the user opens `authorization_url`, and the completed flow stores the credential in `vault_id`.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma mcp-oauth-authorizations create",
 		Params: []apiParam{
 			{Name: "client_id", Flag: "client-id", In: "body", Type: "string", Required: false},
 			{Name: "display_name", Flag: "display-name", In: "body", Type: "string", Required: false},
@@ -498,41 +551,49 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "getMCPOAuthAuthorization", Method: "GET", Path: "/v1/mcp_oauth_authorizations/{authorization_id}", Group: []string{"mcp-oauth-authorizations"}, Verb: "get", Summary: "Get an MCP OAuth authorization",
+		Example: "bma mcp-oauth-authorizations get <authorization_id>",
 		Params: []apiParam{
 			{Name: "authorization_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "listMyInvites", Method: "GET", Path: "/v1/me/invites", Group: []string{"me", "invites"}, Verb: "list", Summary: "List the invites sent to me",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma me invites list",
 	},
 	{ID: "acceptMyInvite", Method: "POST", Path: "/v1/me/invites/{invite_id}/accept", Group: []string{"me", "invites"}, Verb: "accept", Summary: "Accept an invite",
+		Example: "bma me invites accept <invite_id>",
 		Params: []apiParam{
 			{Name: "invite_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "declineMyInvite", Method: "POST", Path: "/v1/me/invites/{invite_id}/decline", Group: []string{"me", "invites"}, Verb: "decline", Summary: "Decline an invite",
+		Example: "bma me invites decline <invite_id>",
 		Params: []apiParam{
 			{Name: "invite_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "listPersonalAccessTokens", Method: "GET", Path: "/v1/me/personal_access_tokens", Group: []string{"me", "personal-access-tokens"}, Verb: "list", Summary: "List my personal access tokens",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma me personal-access-tokens list",
 	},
 	{ID: "createPersonalAccessToken", Method: "POST", Path: "/v1/me/personal_access_tokens", Group: []string{"me", "personal-access-tokens"}, Verb: "create", Summary: "Create a personal access token",
 		Description: "The answer carries the token in `value`, the only time it is returned.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma me personal-access-tokens create",
 		Params: []apiParam{
 			{Name: "expires_at", Flag: "expires-at", In: "body", Type: "string", Required: false},
 			{Name: "name", Flag: "name", In: "body", Type: "string", Required: true},
 		},
 	},
 	{ID: "revokePersonalAccessToken", Method: "POST", Path: "/v1/me/personal_access_tokens/{token_id}/revoke", Group: []string{"me", "personal-access-tokens"}, Verb: "revoke", Summary: "Revoke a personal access token",
+		Example: "bma me personal-access-tokens revoke <token_id>",
 		Params: []apiParam{
 			{Name: "token_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "memory_stores.list", Method: "GET", Path: "/v1/memory_stores", Group: []string{"memory-stores"}, Verb: "list", Summary: "List Memory Stores",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma memory-stores list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "number", Required: false, Description: "Number of items per page."},
 			{Name: "page", Flag: "page", In: "query", Type: "string", Required: false},
@@ -543,6 +604,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "memory_stores.create", Method: "POST", Path: "/v1/memory_stores", Group: []string{"memory-stores"}, Verb: "create", Summary: "Create a Memory Store",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma memory-stores create",
 		Params: []apiParam{
 			{Name: "description", Flag: "description", In: "body", Type: "string", Required: false, Description: "Free-text description of what the store contains, up to 1,024 characters. Included in the agent's system prompt when the store is attached, so word it to be useful to the agent."},
 			{Name: "metadata", Flag: "metadata", In: "body", Type: "json", Required: false, Description: "Key-value pairs for your own use, such as the end user that the store belongs to. The agent doesn't see them."},
@@ -550,12 +612,14 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "memory_stores.retrieve", Method: "GET", Path: "/v1/memory_stores/{memory_store_id}", Group: []string{"memory-stores"}, Verb: "get", Summary: "Retrieve a Memory Store",
+		Example: "bma memory-stores get <memory_store_id>",
 		Params: []apiParam{
 			{Name: "memory_store_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "memory_stores.update", Method: "POST", Path: "/v1/memory_stores/{memory_store_id}", Group: []string{"memory-stores"}, Verb: "update", Summary: "Update a Memory Store",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma memory-stores update <memory_store_id>",
 		Params: []apiParam{
 			{Name: "memory_store_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "description", Flag: "description", In: "body", Type: "string", Required: false, Description: "New description for the store, up to 1,024 characters. Pass an empty string to clear it."},
@@ -564,18 +628,21 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "memory_stores.delete", Method: "DELETE", Path: "/v1/memory_stores/{memory_store_id}", Group: []string{"memory-stores"}, Verb: "delete", Summary: "Delete a Memory Store",
+		Example: "bma memory-stores delete <memory_store_id>",
 		Params: []apiParam{
 			{Name: "memory_store_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "archiveMemoryStore", Method: "POST", Path: "/v1/memory_stores/{memory_store_id}/archive", Group: []string{"memory-stores"}, Verb: "archive", Summary: "Archive a memory store",
 		Description: "Makes the store read-only; the response is the memory_store resource with archived_at set.",
+		Example:     "bma memory-stores archive <memory_store_id>",
 		Params: []apiParam{
 			{Name: "memory_store_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "memory_stores.memories.list", Method: "GET", Path: "/v1/memory_stores/{memory_store_id}/memories", Group: []string{"memory-stores", "memories"}, Verb: "list", Summary: "List Memories",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma memory-stores memories list <memory_store_id>",
 		Params: []apiParam{
 			{Name: "memory_store_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "limit", Flag: "limit", In: "query", Type: "number", Required: false, Description: "Number of items per page."},
@@ -587,6 +654,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "memory_stores.memories.create", Method: "POST", Path: "/v1/memory_stores/{memory_store_id}/memories", Group: []string{"memory-stores", "memories"}, Verb: "create", Summary: "Create a Memory",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma memory-stores memories create <memory_store_id>",
 		Params: []apiParam{
 			{Name: "memory_store_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "content", Flag: "content", In: "body", Type: "string", Required: true, Description: "The UTF-8 text content of the new memory. Pass \"\" to create an empty memory."},
@@ -594,6 +662,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "memory_stores.memories.retrieve", Method: "GET", Path: "/v1/memory_stores/{memory_store_id}/memories/{memory_id}", Group: []string{"memory-stores", "memories"}, Verb: "get", Summary: "Retrieve a Memory",
+		Example: "bma memory-stores memories get <memory_store_id> <memory_id>",
 		Params: []apiParam{
 			{Name: "memory_store_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "memory_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -602,6 +671,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "memory_stores.memories.update", Method: "POST", Path: "/v1/memory_stores/{memory_store_id}/memories/{memory_id}", Group: []string{"memory-stores", "memories"}, Verb: "update", Summary: "Update a Memory",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma memory-stores memories update <memory_store_id> <memory_id>",
 		Params: []apiParam{
 			{Name: "memory_store_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "memory_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -611,6 +681,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "memory_stores.memories.delete", Method: "DELETE", Path: "/v1/memory_stores/{memory_store_id}/memories/{memory_id}", Group: []string{"memory-stores", "memories"}, Verb: "delete", Summary: "Delete a Memory",
+		Example: "bma memory-stores memories delete <memory_store_id> <memory_id>",
 		Params: []apiParam{
 			{Name: "memory_store_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "memory_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -619,6 +690,7 @@ var apiOperations = []apiOp{
 	{ID: "listMemoryVersions", Method: "GET", Path: "/v1/memory_stores/{memory_store_id}/memory_versions", Group: []string{"memory-stores", "memory-versions"}, Verb: "list", Summary: "List memory versions",
 		Description: "Newest first. created_at[gte] and created_at[lte] bound the creation time. service_account_id is refused.",
 		Body:        false, List: true, Raw: false, HandWritten: false,
+		Example: "bma memory-stores memory-versions list <memory_store_id>",
 		Params: []apiParam{
 			{Name: "memory_store_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "limit", Flag: "limit", In: "query", Type: "integer", Required: false},
@@ -631,24 +703,28 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "getMemoryVersion", Method: "GET", Path: "/v1/memory_stores/{memory_store_id}/memory_versions/{memory_version_id}", Group: []string{"memory-stores", "memory-versions"}, Verb: "get", Summary: "Retrieve a memory version",
+		Example: "bma memory-stores memory-versions get <memory_store_id> <memory_version_id>",
 		Params: []apiParam{
 			{Name: "memory_store_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "memory_version_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "redactMemoryVersion", Method: "POST", Path: "/v1/memory_stores/{memory_store_id}/memory_versions/{memory_version_id}/redact", Group: []string{"memory-stores", "memory-versions"}, Verb: "redact", Summary: "Redact a memory version",
+		Example: "bma memory-stores memory-versions redact <memory_store_id> <memory_version_id>",
 		Params: []apiParam{
 			{Name: "memory_store_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "memory_version_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "listModelProviders", Method: "GET", Path: "/v1/model_providers", Group: []string{"model-providers"}, Verb: "list", Summary: "List model providers",
-		Description: "The organization's own model providers (ADR-0088), by id. Organization owners and admins only; keys are never returned.",
+		Description: "The organization's own model providers, by id. Organization owners and admins only; keys are never returned.",
 		Body:        false, List: true, Raw: false, HandWritten: false,
+		Example: "bma model-providers list",
 	},
 	{ID: "createModelProvider", Method: "POST", Path: "/v1/model_providers", Group: []string{"model-providers"}, Verb: "create", Summary: "Create a model provider",
 		Description: "Adds an upstream of the organization's own (an HTTPS base URL, its endpoint path and key), whose models the organization then declares. The tenant pays its calls. 409 `provider_id_taken` for an id the organization or the platform catalog already has.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma model-providers create",
 		Params: []apiParam{
 			{Name: "api_format", Flag: "api-format", In: "body", Type: "string", Required: true, Description: "The upstream protocol: openai-chat-completions or anthropic-messages (the protocol identifiers of session model overrides and the data migration, kept as they are)."},
 			{Name: "api_key", Flag: "api-key", In: "body", Type: "string", Required: true, Description: "Sent as Authorization Bearer (chat completions) or x-api-key (messages)."},
@@ -659,6 +735,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "getModelProvider", Method: "GET", Path: "/v1/model_providers/{provider_id}", Group: []string{"model-providers"}, Verb: "get", Summary: "Get a model provider",
 		Description: "One of the organization's model providers.",
+		Example:     "bma model-providers get <provider_id>",
 		Params: []apiParam{
 			{Name: "provider_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
@@ -666,6 +743,7 @@ var apiOperations = []apiOp{
 	{ID: "updateModelProvider", Method: "POST", Path: "/v1/model_providers/{provider_id}", Group: []string{"model-providers"}, Verb: "update", Summary: "Update a model provider",
 		Description: "Changes the base URL or endpoint path, or replaces the key (the old key is deleted). Members not sent keep their value; id and api_format never change.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma model-providers update <provider_id>",
 		Params: []apiParam{
 			{Name: "provider_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "api_key", Flag: "api-key", In: "body", Type: "string", Required: false},
@@ -675,6 +753,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "deleteModelProvider", Method: "DELETE", Path: "/v1/model_providers/{provider_id}", Group: []string{"model-providers"}, Verb: "delete", Summary: "Delete a model provider",
 		Description: "Deletes a provider without models, and its key; 409 `provider_in_use` while it has models.",
+		Example:     "bma model-providers delete <provider_id>",
 		Params: []apiParam{
 			{Name: "provider_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
@@ -682,6 +761,7 @@ var apiOperations = []apiOp{
 	{ID: "listModelProviderModels", Method: "GET", Path: "/v1/model_providers/{provider_id}/models", Group: []string{"model-providers", "models"}, Verb: "list", Summary: "List a provider's models",
 		Description: "The models declared on the provider, by id.",
 		Body:        false, List: true, Raw: false, HandWritten: false,
+		Example: "bma model-providers models list <provider_id>",
 		Params: []apiParam{
 			{Name: "provider_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
@@ -689,6 +769,7 @@ var apiOperations = []apiOp{
 	{ID: "createModelProviderModel", Method: "POST", Path: "/v1/model_providers/{provider_id}/models", Group: []string{"model-providers", "models"}, Verb: "create", Summary: "Create a model",
 		Description: "Declares a model of the provider: `id` is the name agents and calls use (unique in the organization, 409 `model_id_taken` also for a platform model's id), `upstream_model` the name sent upstream (default: `id`). It appears in `GET /v1/models` of the workspaces it is granted to.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma model-providers models create <provider_id>",
 		Params: []apiParam{
 			{Name: "provider_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "context_window_tokens", Flag: "context-window-tokens", In: "body", Type: "integer", Required: true},
@@ -699,6 +780,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "getModelProviderModel", Method: "GET", Path: "/v1/model_providers/{provider_id}/models/{model_id}", Group: []string{"model-providers", "models"}, Verb: "get", Summary: "Get a model",
 		Description: "One model of the provider.",
+		Example:     "bma model-providers models get <provider_id> <model_id>",
 		Params: []apiParam{
 			{Name: "provider_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "model_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -707,6 +789,7 @@ var apiOperations = []apiOp{
 	{ID: "updateModelProviderModel", Method: "POST", Path: "/v1/model_providers/{provider_id}/models/{model_id}", Group: []string{"model-providers", "models"}, Verb: "update", Summary: "Update a model",
 		Description: "Changes the upstream name or limits; `max_output_tokens` null clears the limit.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma model-providers models update <provider_id> <model_id>",
 		Params: []apiParam{
 			{Name: "provider_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "model_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -717,6 +800,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "deleteModelProviderModel", Method: "DELETE", Path: "/v1/model_providers/{provider_id}/models/{model_id}", Group: []string{"model-providers", "models"}, Verb: "delete", Summary: "Delete a model",
 		Description: "Deletes a model no workspace is granted; 409 `model_in_use` otherwise.",
+		Example:     "bma model-providers models delete <provider_id> <model_id>",
 		Params: []apiParam{
 			{Name: "provider_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "model_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -724,6 +808,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "models.list", Method: "GET", Path: "/v1/models", Group: []string{"models"}, Verb: "list", Summary: "List available models.",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma models list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "number", Required: false, Description: "Number of items per page."},
 			{Name: "before_id", Flag: "before-id", In: "query", Type: "string", Required: false},
@@ -732,6 +817,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "models.retrieve", Method: "GET", Path: "/v1/models/{model_id}", Group: []string{"models"}, Verb: "get", Summary: "Get a specific model.",
+		Example: "bma models get <model_id>",
 		Params: []apiParam{
 			{Name: "model_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
@@ -739,6 +825,7 @@ var apiOperations = []apiOp{
 	{ID: "listModelGrants", Method: "GET", Path: "/v1/models/{model_id}/grants", Group: []string{"models", "grants"}, Verb: "list", Summary: "List a model's grants",
 		Description: "The workspaces granted one of the organization's own models.",
 		Body:        false, List: true, Raw: false, HandWritten: false,
+		Example: "bma models grants list <model_id>",
 		Params: []apiParam{
 			{Name: "model_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
@@ -746,6 +833,7 @@ var apiOperations = []apiOp{
 	{ID: "createModelGrant", Method: "POST", Path: "/v1/models/{model_id}/grants", Group: []string{"models", "grants"}, Verb: "create", Summary: "Grant a model to a workspace",
 		Description: "Grants one of the organization's own models to one of its workspaces (granting it again changes nothing). Platform catalog models are granted by the operator, not here: 404 `model_not_found`.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma models grants create <model_id>",
 		Params: []apiParam{
 			{Name: "model_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "workspace_id", Flag: "workspace-id", In: "body", Type: "string", Required: true},
@@ -753,6 +841,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "deleteModelGrant", Method: "DELETE", Path: "/v1/models/{model_id}/grants/{workspace_id}", Group: []string{"models", "grants"}, Verb: "delete", Summary: "Revoke a model grant",
 		Description: "Revokes the workspace's grant of the model.",
+		Example:     "bma models grants delete <model_id> <workspace_id>",
 		Params: []apiParam{
 			{Name: "model_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "workspace_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -760,6 +849,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "organization.api_keys.list", Method: "GET", Path: "/v1/organizations/api_keys", Group: []string{"organizations", "api-keys"}, Verb: "list", Summary: "List API Keys",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma organizations api-keys list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "number", Required: false, Description: "Number of items per page."},
 			{Name: "before_id", Flag: "before-id", In: "query", Type: "string", Required: false},
@@ -772,6 +862,7 @@ var apiOperations = []apiOp{
 	{ID: "createOrganizationAPIKey", Method: "POST", Path: "/v1/organizations/api_keys", Group: []string{"organizations", "api-keys"}, Verb: "create", Summary: "Create an API key",
 		Description: "`bma_role` `member` (the default) creates a key of `workspace_id`; `admin` an admin key of the organization (omit `workspace_id`). The answer carries the key in `bma_value`, the only time it is returned.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma organizations api-keys create",
 		Params: []apiParam{
 			{Name: "bma_role", Flag: "bma-role", In: "body", Type: "string", Required: false, Enum: []string{"admin", "member"}},
 			{Name: "name", Flag: "name", In: "body", Type: "string", Required: true},
@@ -779,12 +870,14 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "organization.api_keys.retrieve", Method: "GET", Path: "/v1/organizations/api_keys/{api_key_id}", Group: []string{"organizations", "api-keys"}, Verb: "get", Summary: "Get API Key",
+		Example: "bma organizations api-keys get <api_key_id>",
 		Params: []apiParam{
 			{Name: "api_key_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "organization.api_keys.update", Method: "POST", Path: "/v1/organizations/api_keys/{api_key_id}", Group: []string{"organizations", "api-keys"}, Verb: "update", Summary: "Update API Key",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma organizations api-keys update <api_key_id>",
 		Params: []apiParam{
 			{Name: "api_key_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "name", Flag: "name", In: "body", Type: "string", Required: false, Description: "Name of the API key."},
@@ -794,6 +887,7 @@ var apiOperations = []apiOp{
 	{ID: "getCostReport", Method: "GET", Path: "/v1/organizations/cost_report", Group: []string{"organizations", "cost-report"}, Verb: "list", Summary: "Get the cost report",
 		Description: "The official Admin API report. Token costs are one row per model (`token_type` null).",
 		Body:        false, List: true, Raw: false, HandWritten: false,
+		Example: "bma organizations cost-report list",
 		Params: []apiParam{
 			{Name: "starting_at", Flag: "starting-at", In: "query", Type: "string", Required: false},
 			{Name: "ending_at", Flag: "ending-at", In: "query", Type: "string", Required: false},
@@ -807,6 +901,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "organization.invites.list", Method: "GET", Path: "/v1/organizations/invites", Group: []string{"organizations", "invites"}, Verb: "list", Summary: "List the organization's invites.",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma organizations invites list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "number", Required: false, Description: "Number of items per page."},
 			{Name: "before_id", Flag: "before-id", In: "query", Type: "string", Required: false},
@@ -818,6 +913,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "organization.invites.create", Method: "POST", Path: "/v1/organizations/invites", Group: []string{"organizations", "invites"}, Verb: "create", Summary: "Invite a user to join the organization by email.",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma organizations invites create",
 		Params: []apiParam{
 			{Name: "email", Flag: "email", In: "body", Type: "string", Required: true, Description: "Email of the User."},
 			{Name: "rbac_group_ids", Flag: "rbac-group-ids", In: "body", Type: "json", Required: false, Description: "RBAC group IDs to assign to the User when the Invite is accepted. A non-empty array is accepted only for a Claude Enterprise organization with RBAC groups, and requires the key to carry the write:rbac_groups scope."},
@@ -825,19 +921,24 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "organization.invites.retrieve", Method: "GET", Path: "/v1/organizations/invites/{invite_id}", Group: []string{"organizations", "invites"}, Verb: "get", Summary: "Retrieve an invite by ID.",
+		Example: "bma organizations invites get <invite_id>",
 		Params: []apiParam{
 			{Name: "invite_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "organization.invites.delete", Method: "DELETE", Path: "/v1/organizations/invites/{invite_id}", Group: []string{"organizations", "invites"}, Verb: "delete", Summary: "Delete a pending invite.",
+		Example: "bma organizations invites delete <invite_id>",
 		Params: []apiParam{
 			{Name: "invite_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
-	{ID: "organization.retrieve", Method: "GET", Path: "/v1/organizations/me", Group: []string{"organizations", "me"}, Verb: "get", Summary: "Retrieve information about the organization associated with the authenticated"},
+	{ID: "organization.retrieve", Method: "GET", Path: "/v1/organizations/me", Group: []string{"organizations", "me"}, Verb: "get", Summary: "Retrieve information about the organization associated with the authenticated",
+		Example: "bma organizations me get",
+	},
 	{ID: "getMessagesUsageReport", Method: "GET", Path: "/v1/organizations/usage_report/messages", Group: []string{"organizations", "usage-report", "messages"}, Verb: "list", Summary: "Get the messages usage report",
 		Description: "The official Admin API report. What BMA does not record (user accounts, API keys, context window, geography, service account, tier, speed) is null; server-side web search is 0.",
 		Body:        false, List: true, Raw: false, HandWritten: false,
+		Example: "bma organizations usage-report messages list",
 		Params: []apiParam{
 			{Name: "starting_at", Flag: "starting-at", In: "query", Type: "string", Required: false},
 			{Name: "ending_at", Flag: "ending-at", In: "query", Type: "string", Required: false},
@@ -851,6 +952,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "organization.users.list", Method: "GET", Path: "/v1/organizations/users", Group: []string{"organizations", "users"}, Verb: "list", Summary: "List the organization's members.",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma organizations users list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "number", Required: false, Description: "Number of items per page."},
 			{Name: "before_id", Flag: "before-id", In: "query", Type: "string", Required: false},
@@ -860,24 +962,28 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "organization.users.retrieve", Method: "GET", Path: "/v1/organizations/users/{user_id}", Group: []string{"organizations", "users"}, Verb: "get", Summary: "Retrieve a member of the organization by user ID.",
+		Example: "bma organizations users get <user_id>",
 		Params: []apiParam{
 			{Name: "user_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "organization.users.update", Method: "POST", Path: "/v1/organizations/users/{user_id}", Group: []string{"organizations", "users"}, Verb: "update", Summary: "Update a member's organization role.",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma organizations users update <user_id>",
 		Params: []apiParam{
 			{Name: "user_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "role", Flag: "role", In: "body", Type: "string", Required: true, Description: "New role for the User.", Enum: []string{"billing", "claude_code_user", "developer", "managed", "user"}},
 		},
 	},
 	{ID: "organization.users.remove", Method: "DELETE", Path: "/v1/organizations/users/{user_id}", Group: []string{"organizations", "users"}, Verb: "delete", Summary: "Remove a member from the organization.",
+		Example: "bma organizations users delete <user_id>",
 		Params: []apiParam{
 			{Name: "user_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "listWebhookEndpoints", Method: "GET", Path: "/v1/organizations/webhooks", Group: []string{"organizations", "webhooks"}, Verb: "list", Summary: "List webhook endpoints",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma organizations webhooks list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "integer", Required: false, Description: "Up to 100; 0 means 20."},
 			{Name: "after_id", Flag: "after-id", In: "query", Type: "string", Required: false},
@@ -887,6 +993,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "createWebhookEndpoint", Method: "POST", Path: "/v1/organizations/webhooks", Group: []string{"organizations", "webhooks"}, Verb: "create", Summary: "Create a webhook endpoint (the response carries the signing secret once)",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma organizations webhooks create",
 		Params: []apiParam{
 			{Name: "description", Flag: "description", In: "body", Type: "string", Required: false},
 			{Name: "enabled_events", Flag: "enabled-events", In: "body", Type: "json", Required: true},
@@ -895,12 +1002,14 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "getWebhookEndpoint", Method: "GET", Path: "/v1/organizations/webhooks/{webhook_endpoint_id}", Group: []string{"organizations", "webhooks"}, Verb: "get", Summary: "Retrieve a webhook endpoint",
+		Example: "bma organizations webhooks get <webhook_endpoint_id>",
 		Params: []apiParam{
 			{Name: "webhook_endpoint_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "updateWebhookEndpoint", Method: "POST", Path: "/v1/organizations/webhooks/{webhook_endpoint_id}", Group: []string{"organizations", "webhooks"}, Verb: "update", Summary: "Update a webhook endpoint",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma organizations webhooks update <webhook_endpoint_id>",
 		Params: []apiParam{
 			{Name: "webhook_endpoint_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "description", Flag: "description", In: "body", Type: "string", Required: false},
@@ -911,17 +1020,20 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "deleteWebhookEndpoint", Method: "DELETE", Path: "/v1/organizations/webhooks/{webhook_endpoint_id}", Group: []string{"organizations", "webhooks"}, Verb: "delete", Summary: "Delete a webhook endpoint",
+		Example: "bma organizations webhooks delete <webhook_endpoint_id>",
 		Params: []apiParam{
 			{Name: "webhook_endpoint_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "regenerateWebhookEndpointSigningSecret", Method: "POST", Path: "/v1/organizations/webhooks/{webhook_endpoint_id}/regenerate_signing_secret", Group: []string{"organizations", "webhooks"}, Verb: "regenerate-signing-secret", Summary: "Replace the signing secret (the response carries it once)",
+		Example: "bma organizations webhooks regenerate-signing-secret <webhook_endpoint_id>",
 		Params: []apiParam{
 			{Name: "webhook_endpoint_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "organization.workspaces.list", Method: "GET", Path: "/v1/organizations/workspaces", Group: []string{"organizations", "workspaces"}, Verb: "list", Summary: "List Workspaces",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma organizations workspaces list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "number", Required: false, Description: "Number of items per page."},
 			{Name: "before_id", Flag: "before-id", In: "query", Type: "string", Required: false},
@@ -933,6 +1045,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "organization.workspaces.create", Method: "POST", Path: "/v1/organizations/workspaces", Group: []string{"organizations", "workspaces"}, Verb: "create", Summary: "Create Workspace",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma organizations workspaces create",
 		Params: []apiParam{
 			{Name: "data_residency", Flag: "data-residency", In: "body", Type: "json", Required: false, Description: "Data residency configuration for the workspace. If omitted, defaults to workspace_geo: \"us\", allowed_inference_geos: \"unrestricted\", and default_inference_geo: \"global\"."},
 			{Name: "display_color", Flag: "display-color", In: "body", Type: "string", Required: false, Description: "Hex color code representing the Workspace in the Anthropic Console."},
@@ -943,12 +1056,14 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "organization.workspaces.retrieve", Method: "GET", Path: "/v1/organizations/workspaces/{workspace_id}", Group: []string{"organizations", "workspaces"}, Verb: "get", Summary: "Get Workspace",
+		Example: "bma organizations workspaces get <workspace_id>",
 		Params: []apiParam{
 			{Name: "workspace_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "organization.workspaces.update", Method: "POST", Path: "/v1/organizations/workspaces/{workspace_id}", Group: []string{"organizations", "workspaces"}, Verb: "update", Summary: "Update Workspace",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma organizations workspaces update <workspace_id>",
 		Params: []apiParam{
 			{Name: "workspace_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "data_residency", Flag: "data-residency", In: "body", Type: "json", Required: false, Description: "Data residency configuration for the workspace."},
@@ -960,12 +1075,14 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "organization.workspaces.archive", Method: "POST", Path: "/v1/organizations/workspaces/{workspace_id}/archive", Group: []string{"organizations", "workspaces"}, Verb: "archive", Summary: "Archive Workspace",
+		Example: "bma organizations workspaces archive <workspace_id>",
 		Params: []apiParam{
 			{Name: "workspace_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "organization.workspaces.members.list", Method: "GET", Path: "/v1/organizations/workspaces/{workspace_id}/members", Group: []string{"organizations", "workspaces", "members"}, Verb: "list", Summary: "List Workspace Members",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma organizations workspaces members list <workspace_id>",
 		Params: []apiParam{
 			{Name: "workspace_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "limit", Flag: "limit", In: "query", Type: "number", Required: false, Description: "Number of items per page."},
@@ -975,6 +1092,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "organization.workspaces.members.add", Method: "POST", Path: "/v1/organizations/workspaces/{workspace_id}/members", Group: []string{"organizations", "workspaces", "members"}, Verb: "create", Summary: "Create Workspace Member",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma organizations workspaces members create <workspace_id>",
 		Params: []apiParam{
 			{Name: "workspace_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "user_id", Flag: "user-id", In: "body", Type: "string", Required: true, Description: "ID of the User."},
@@ -982,6 +1100,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "organization.workspaces.members.retrieve", Method: "GET", Path: "/v1/organizations/workspaces/{workspace_id}/members/{user_id}", Group: []string{"organizations", "workspaces", "members"}, Verb: "get", Summary: "Get Workspace Member",
+		Example: "bma organizations workspaces members get <workspace_id> <user_id>",
 		Params: []apiParam{
 			{Name: "workspace_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "user_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -989,6 +1108,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "organization.workspaces.members.update", Method: "POST", Path: "/v1/organizations/workspaces/{workspace_id}/members/{user_id}", Group: []string{"organizations", "workspaces", "members"}, Verb: "update", Summary: "Update Workspace Member",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma organizations workspaces members update <workspace_id> <user_id>",
 		Params: []apiParam{
 			{Name: "workspace_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "user_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -996,6 +1116,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "organization.workspaces.members.remove", Method: "DELETE", Path: "/v1/organizations/workspaces/{workspace_id}/members/{user_id}", Group: []string{"organizations", "workspaces", "members"}, Verb: "delete", Summary: "Delete Workspace Member",
+		Example: "bma organizations workspaces members delete <workspace_id> <user_id>",
 		Params: []apiParam{
 			{Name: "workspace_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "user_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -1003,6 +1124,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "sessions.list", Method: "GET", Path: "/v1/sessions", Group: []string{"sessions"}, Verb: "list", Summary: "List Sessions",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma sessions list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "number", Required: false, Description: "Number of items per page."},
 			{Name: "page", Flag: "page", In: "query", Type: "string", Required: false},
@@ -1021,6 +1143,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "sessions.create", Method: "POST", Path: "/v1/sessions", Group: []string{"sessions"}, Verb: "create", Summary: "Create Session",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma sessions create",
 		Params: []apiParam{
 			{Name: "agent", Flag: "agent", In: "body", Type: "json", Required: true, Description: "Agent identifier. Accepts the agent ID string, which pins the latest version for the session, or an agent object with both id and version specified."},
 			{Name: "budget", Flag: "budget", In: "body", Type: "json", Required: false, Description: "A hard spend ceiling. The session stops issuing new model requests once the tracked list cost reaches max_list_cost."},
@@ -1030,19 +1153,21 @@ var apiOperations = []apiOp{
 			{Name: "resources", Flag: "resources", In: "body", Type: "json", Required: false, Description: "Resources (e.g. repositories, files) to mount into the session's container."},
 			{Name: "title", Flag: "title", In: "body", Type: "string", Required: false, Description: "Human-readable session title."},
 			{Name: "vault_ids", Flag: "vault-ids", In: "body", Type: "json", Required: false, Description: "Vault IDs for stored credentials the agent can use during the session."},
-			{Name: "bma_model_override", Flag: "bma-model-override", In: "body", Type: "json", Required: false, Description: "The one shape of a session model override. On create it needs model and lasts for the session (expires_with_session defaults to true unless ttl_seconds is sent); it replaces the deprecated agent.model.api_url/api_key/api_format/context_window_tokens/max_output_tokens/auto_compact_window_tokens, which are still accepted (answered with Deprecation and a Link ... rel=\"successor-version\" header) but cannot be combined with it. On update, an object with model replaces the override (native PutAgentSessionModelOverride); an object without model patches it (PatchAgentSessionModelOverride); null revokes it (DeleteAgentSessionModelOverride). api_key is write-only."},
+			{Name: "bma_model_override", Flag: "bma-model-override", In: "body", Type: "json", Required: false, Description: "The one shape of a session model override. On create it needs model and lasts for the session (expires_with_session defaults to true unless ttl_seconds is sent); it replaces the deprecated agent.model.api_url/api_key/api_format/context_window_tokens/max_output_tokens/auto_compact_window_tokens, which are still accepted (answered with Deprecation and a Link ... rel=\"successor-version\" header) but cannot be combined with it. On update, an object with model replaces the override; an object without model patches it; null revokes it. api_key is write-only."},
 			{Name: "bma_executor_config", Flag: "bma-executor-config", In: "body", Type: "json", Required: false, Description: "The session's executor turn settings (cwd, thinking_level, BYO-only model), passed as they are in the config of every turn of a brain that runs in an executor. Omitted keeps them on update, an object replaces them as a whole, null clears them."},
 			{Name: "bma_harness", Flag: "bma-harness", In: "body", Type: "json", Required: false, Description: "Overrides the brain for this session; omitted, null or kind default inherits (the agent's, else the environment's, else the platform default). placement is derived from the environment and is not accepted."},
 			{Name: "bma_placement", Flag: "bma-placement", In: "body", Type: "json", Required: false, Description: "Chooses the brain and hands machine for this session among the environment's candidates; omitted lets the scheduler choose."},
 		},
 	},
 	{ID: "sessions.retrieve", Method: "GET", Path: "/v1/sessions/{session_id}", Group: []string{"sessions"}, Verb: "get", Summary: "Get Session",
+		Example: "bma sessions get <session_id>",
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "sessions.update", Method: "POST", Path: "/v1/sessions/{session_id}", Group: []string{"sessions"}, Verb: "update", Summary: "Update Session",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma sessions update <session_id>",
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "agent", Flag: "agent", In: "body", Type: "json", Required: false, Description: "Mid-session agent configuration update. Only tools and mcp_servers are updatable. Full replacement: the provided array becomes the new value. To preserve existing entries, GET the session, modify the array, and POST it back."},
@@ -1050,28 +1175,32 @@ var apiOperations = []apiOp{
 			{Name: "metadata", Flag: "metadata", In: "body", Type: "json", Required: false, Description: "Metadata patch. Set a key to a string to upsert it, or to null to delete it. Omit the field to preserve."},
 			{Name: "title", Flag: "title", In: "body", Type: "string", Required: false, Description: "Human-readable session title."},
 			{Name: "vault_ids", Flag: "vault-ids", In: "body", Type: "json", Required: false, Description: "Vault IDs (vlt_*) to attach to the session. Not yet supported; requests setting this field are rejected. Reserved for future use."},
-			{Name: "bma_model_override", Flag: "bma-model-override", In: "body", Type: "json", Required: false, Description: "The one shape of a session model override. On create it needs model and lasts for the session (expires_with_session defaults to true unless ttl_seconds is sent); it replaces the deprecated agent.model.api_url/api_key/api_format/context_window_tokens/max_output_tokens/auto_compact_window_tokens, which are still accepted (answered with Deprecation and a Link ... rel=\"successor-version\" header) but cannot be combined with it. On update, an object with model replaces the override (native PutAgentSessionModelOverride); an object without model patches it (PatchAgentSessionModelOverride); null revokes it (DeleteAgentSessionModelOverride). api_key is write-only."},
+			{Name: "bma_model_override", Flag: "bma-model-override", In: "body", Type: "json", Required: false, Description: "The one shape of a session model override. On create it needs model and lasts for the session (expires_with_session defaults to true unless ttl_seconds is sent); it replaces the deprecated agent.model.api_url/api_key/api_format/context_window_tokens/max_output_tokens/auto_compact_window_tokens, which are still accepted (answered with Deprecation and a Link ... rel=\"successor-version\" header) but cannot be combined with it. On update, an object with model replaces the override; an object without model patches it; null revokes it. api_key is write-only."},
 			{Name: "bma_executor_config", Flag: "bma-executor-config", In: "body", Type: "json", Required: false, Description: "The session's executor turn settings (cwd, thinking_level, BYO-only model), passed as they are in the config of every turn of a brain that runs in an executor. Omitted keeps them on update, an object replaces them as a whole, null clears them."},
 		},
 	},
 	{ID: "sessions.delete", Method: "DELETE", Path: "/v1/sessions/{session_id}", Group: []string{"sessions"}, Verb: "delete", Summary: "Delete Session",
+		Example: "bma sessions delete <session_id>",
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "sessions.archive", Method: "POST", Path: "/v1/sessions/{session_id}/archive", Group: []string{"sessions"}, Verb: "archive", Summary: "Archive Session",
+		Example: "bma sessions archive <session_id>",
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "revokeSessionExecutor", Method: "POST", Path: "/v1/sessions/{session_id}/bma_executor_revocation", Group: []string{"sessions"}, Verb: "bma-executor-revocation", Summary: "Revoke an archived session's executor",
 		Description: "Idempotent. Succeeds once the executor of the archived session confirmed its fence and stop; until then 409 `executor_revocation_pending`, and the request may be retried.",
+		Example:     "bma sessions bma-executor-revocation <session_id>",
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "sessions.events.list", Method: "GET", Path: "/v1/sessions/{session_id}/events", Group: []string{"sessions", "events"}, Verb: "list", Summary: "List Events",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma sessions events list <session_id>",
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "limit", Flag: "limit", In: "query", Type: "number", Required: false, Description: "Number of items per page."},
@@ -1086,6 +1215,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "sessions.events.send", Method: "POST", Path: "/v1/sessions/{session_id}/events", Group: []string{"sessions", "events"}, Verb: "create", Summary: "Send Events",
 		Body: true, List: true, Raw: false, HandWritten: false,
+		Example: "bma sessions events create <session_id>",
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "events", Flag: "events", In: "body", Type: "json", Required: true, Description: "Events to send to the session."},
@@ -1104,6 +1234,7 @@ var apiOperations = []apiOp{
 		Description: "Creates a new session in the source session's workspace that starts with a copy of the source's conversation up to a turn boundary, and returns it (idle). The source is unchanged. Copied: the conversation events `session.history` hands a brain (`user.message`, `agent.message`, `agent.tool_use`, `agent.tool_result`, `agent.custom_tool_use`, `user.custom_tool_result`, `agent.mcp_tool_use`, `agent.mcp_tool_result`; platform notices left out) in order, each under a new event id, every `user.message` under a new `bma_input_id`, and the members naming another copied event or input (`tool_use_id`, `mcp_tool_use_id`, `custom_tool_use_id`, `bma_steering_target_input_id`) rewritten to the new ids; `bma_sequence` restarts at 1, `occurred_at` and `processed_at` are kept. Inherited: the frozen agent snapshot (agent version, session overrides, frozen skills), `bma_harness`, `environment_id`, the `bma_placement` request, resources, `bma_executor_config` and `vault_ids` (re-checked for the caller; see the request). Not inherited: session tool grants, queued or running inputs, the executor binding and working log, usage, `bma_model_override`, `metadata`. A fork copies the conversation only: no file is copied, snapshotted or rolled back. The new session uses the same environment and gets its machine by the usual rules: on the same persistent or BYO machine it shares that machine's workspace as it is now; a pool machine is a new, clean one. Its first turn rebuilds the context from the copied events without a runtime notice. Only a session whose brain rebuilds context from session events (executor capability `agent.history_rebuild`) can be forked, else 400 `fork_unsupported` (529 `brain_offline`, retryable, while no instance of the brain is connected to say). `fork_point_invalid` (400): the input is unknown or not the opening input of a turn, both points are given, or a turn opened before the cut has not ended (a turn in progress at the cut point). A source in another workspace is 404. The source may be archived. The fork and its source have independent lifecycles: archiving or deleting the source leaves the fork as it is, and the other way round; a compliance purge of a source finds its forks (and theirs) by `bma_forked_from.session_id` and purges them too. Limits (v1): at most 10000 copied events and 67108864 bytes (64 MiB) of copied payload, else 400 `fork_too_large`. Idempotency-Key is required (400 `idempotency_key_required`); a replay returns the same new session. The path carries no `bma_` prefix by a documented naming exception (aligned with an official fork if Claude Managed Agents ships one).",
 		Body:        true, List: false, Raw: false, HandWritten: false,
 		Idempotent: true,
+		Example:    "bma sessions fork <session_id>",
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "before_input_id", Flag: "before-input-id", In: "body", Type: "string", Required: false, Description: "The bma_input_id of the user.message that opened a turn; the fork ends before that turn (ask again from there)."},
@@ -1115,6 +1246,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "sessions.resources.list", Method: "GET", Path: "/v1/sessions/{session_id}/resources", Group: []string{"sessions", "resources"}, Verb: "list", Summary: "List Session Resources",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma sessions resources list <session_id>",
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "limit", Flag: "limit", In: "query", Type: "number", Required: false, Description: "Number of items per page."},
@@ -1123,6 +1255,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "sessions.resources.add", Method: "POST", Path: "/v1/sessions/{session_id}/resources", Group: []string{"sessions", "resources"}, Verb: "create", Summary: "Add Session Resource",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma sessions resources create <session_id>",
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "file_id", Flag: "file-id", In: "body", Type: "string", Required: true, Description: "ID of a previously uploaded file."},
@@ -1131,6 +1264,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "sessions.resources.retrieve", Method: "GET", Path: "/v1/sessions/{session_id}/resources/{resource_id}", Group: []string{"sessions", "resources"}, Verb: "get", Summary: "Get Session Resource",
+		Example: "bma sessions resources get <session_id> <resource_id>",
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "resource_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -1138,6 +1272,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "sessions.resources.update", Method: "POST", Path: "/v1/sessions/{session_id}/resources/{resource_id}", Group: []string{"sessions", "resources"}, Verb: "update", Summary: "Update Session Resource",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma sessions resources update <session_id> <resource_id>",
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "resource_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -1145,6 +1280,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "sessions.resources.delete", Method: "DELETE", Path: "/v1/sessions/{session_id}/resources/{resource_id}", Group: []string{"sessions", "resources"}, Verb: "delete", Summary: "Delete Session Resource",
+		Example: "bma sessions resources delete <session_id> <resource_id>",
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "resource_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -1152,11 +1288,13 @@ var apiOperations = []apiOp{
 	},
 	{ID: "listSessionToolGrants", Method: "GET", Path: "/v1/sessions/{session_id}/tool_grants", Group: []string{"sessions", "tool-grants"}, Verb: "list", Summary: "List a session's tool grants",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma sessions tool-grants list <session_id>",
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "revokeSessionToolGrant", Method: "POST", Path: "/v1/sessions/{session_id}/tool_grants/{grant_id}/revoke", Group: []string{"sessions", "tool-grants"}, Verb: "revoke", Summary: "Revoke a session's tool grant",
+		Example: "bma sessions tool-grants revoke <session_id> <grant_id>",
 		Params: []apiParam{
 			{Name: "session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "grant_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -1165,6 +1303,7 @@ var apiOperations = []apiOp{
 	{ID: "listSkills", Method: "GET", Path: "/v1/skills", Group: []string{"skills"}, Verb: "list", Summary: "List skills",
 		Description: "The skills the request project owns or that were granted to it.",
 		Body:        false, List: true, Raw: false, HandWritten: false,
+		Example: "bma skills list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "integer", Required: false},
 			{Name: "page", Flag: "page", In: "query", Type: "string", Required: false, Description: "Opaque cursor from next_page."},
@@ -1183,17 +1322,20 @@ var apiOperations = []apiOp{
 	},
 	{ID: "getSkill", Method: "GET", Path: "/v1/skills/{skill_id}", Group: []string{"skills"}, Verb: "get", Summary: "Retrieve a skill",
 		Description: "A 404 unless the request project owns the skill or it was granted to the project.",
+		Example:     "bma skills get <skill_id>",
 		Params: []apiParam{
 			{Name: "skill_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "deleteSkill", Method: "DELETE", Path: "/v1/skills/{skill_id}", Group: []string{"skills"}, Verb: "delete", Summary: "Delete a skill",
+		Example: "bma skills delete <skill_id>",
 		Params: []apiParam{
 			{Name: "skill_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "listSkillVersions", Method: "GET", Path: "/v1/skills/{skill_id}/versions", Group: []string{"skills", "versions"}, Verb: "list", Summary: "List skill versions",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma skills versions list <skill_id>",
 		Params: []apiParam{
 			{Name: "skill_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "limit", Flag: "limit", In: "query", Type: "integer", Required: false},
@@ -1207,12 +1349,14 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "getSkillVersion", Method: "GET", Path: "/v1/skills/{skill_id}/versions/{version}", Group: []string{"skills", "versions"}, Verb: "get", Summary: "Retrieve a skill version",
+		Example: "bma skills versions get <skill_id> <version>",
 		Params: []apiParam{
 			{Name: "skill_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "version", Flag: "", In: "path", Type: "string", Required: true, Description: "A version id, or latest."},
 		},
 	},
 	{ID: "deleteSkillVersion", Method: "DELETE", Path: "/v1/skills/{skill_id}/versions/{version}", Group: []string{"skills", "versions"}, Verb: "delete", Summary: "Delete a skill version",
+		Example: "bma skills versions delete <skill_id> <version>",
 		Params: []apiParam{
 			{Name: "skill_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "version", Flag: "", In: "path", Type: "string", Required: true, Description: "A version id, or latest."},
@@ -1220,6 +1364,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "getSkillVersionContent", Method: "GET", Path: "/v1/skills/{skill_id}/versions/{version}/content", Group: []string{"skills", "versions"}, Verb: "content", Summary: "Download a skill version",
 		Body: false, List: false, Raw: true, HandWritten: false,
+		Example: "bma skills versions content <skill_id> <version>",
 		Params: []apiParam{
 			{Name: "skill_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "version", Flag: "", In: "path", Type: "string", Required: true, Description: "A version id, or latest."},
@@ -1227,12 +1372,14 @@ var apiOperations = []apiOp{
 	},
 	{ID: "listTerminalSessions", Method: "GET", Path: "/v1/terminal_sessions", Group: []string{"terminal-sessions"}, Verb: "list", Summary: "List the terminal sessions of a machine",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma terminal-sessions list",
 		Params: []apiParam{
 			{Name: "machine_id", Flag: "machine-id", In: "query", Type: "string", Required: false},
 		},
 	},
 	{ID: "createTerminalSession", Method: "POST", Path: "/v1/terminal_sessions", Group: []string{"terminal-sessions"}, Verb: "create", Summary: "Open a terminal session (body machine_id)",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma terminal-sessions create",
 		Params: []apiParam{
 			{Name: "cols", Flag: "cols", In: "body", Type: "integer", Required: false},
 			{Name: "cwd", Flag: "cwd", In: "body", Type: "string", Required: false},
@@ -1242,12 +1389,14 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "getTerminalSession", Method: "GET", Path: "/v1/terminal_sessions/{terminal_session_id}", Group: []string{"terminal-sessions"}, Verb: "get", Summary: "Retrieve a terminal session",
+		Example: "bma terminal-sessions get <terminal_session_id>",
 		Params: []apiParam{
 			{Name: "terminal_session_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "closeTerminalSession", Method: "POST", Path: "/v1/terminal_sessions/{terminal_session_id}/close", Group: []string{"terminal-sessions"}, Verb: "close", Summary: "Close a terminal session",
-		Description: "Native answers 204; the facade returns the session.",
+		Description: "Closes the terminal session and returns it.",
+		Example:     "bma terminal-sessions close <terminal_session_id>",
 		Params: []apiParam{
 			{Name: "terminal_session_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
@@ -1255,6 +1404,7 @@ var apiOperations = []apiOp{
 	{ID: "createTerminalSessionTicket", Method: "POST", Path: "/v1/terminal_sessions/{terminal_session_id}/tickets", Group: []string{"terminal-sessions"}, Verb: "tickets", Summary: "Mint a single-use ticket (purpose connect)",
 		Description: "D-7 unified ticket endpoint. `purpose` defaults to and must be `connect`; the response is a `ticket` object. `connection_tickets` is the deprecated alias that answers `terminal_connection_ticket`.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma terminal-sessions tickets <terminal_session_id>",
 		Params: []apiParam{
 			{Name: "terminal_session_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "purpose", Flag: "purpose", In: "body", Type: "string", Required: false, Enum: []string{"connect"}},
@@ -1263,6 +1413,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "listUserProfiles", Method: "GET", Path: "/v1/user_profiles", Group: []string{"user-profiles"}, Verb: "list", Summary: "List user profiles",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma user-profiles list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "integer", Required: false},
 			{Name: "page", Flag: "page", In: "query", Type: "string", Required: false, Description: "Opaque cursor from next_page."},
@@ -1272,6 +1423,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "createUserProfile", Method: "POST", Path: "/v1/user_profiles", Group: []string{"user-profiles"}, Verb: "create", Summary: "Create a user profile",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma user-profiles create",
 		Params: []apiParam{
 			{Name: "access_type", Flag: "access-type", In: "body", Type: "string", Required: false, Enum: []string{"application", "passthrough"}},
 			{Name: "external_id", Flag: "external-id", In: "body", Type: "string", Required: false},
@@ -1282,12 +1434,14 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "getUserProfile", Method: "GET", Path: "/v1/user_profiles/{user_profile_id}", Group: []string{"user-profiles"}, Verb: "get", Summary: "Retrieve a user profile",
+		Example: "bma user-profiles get <user_profile_id>",
 		Params: []apiParam{
 			{Name: "user_profile_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "updateUserProfile", Method: "POST", Path: "/v1/user_profiles/{user_profile_id}", Group: []string{"user-profiles"}, Verb: "update", Summary: "Update a user profile",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma user-profiles update <user_profile_id>",
 		Params: []apiParam{
 			{Name: "user_profile_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "access_type", Flag: "access-type", In: "body", Type: "string", Required: false, Enum: []string{"application", "passthrough"}},
@@ -1299,6 +1453,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "deleteUserProfile", Method: "DELETE", Path: "/v1/user_profiles/{user_profile_id}", Group: []string{"user-profiles"}, Verb: "delete", Summary: "Delete a user profile",
+		Example: "bma user-profiles delete <user_profile_id>",
 		Params: []apiParam{
 			{Name: "user_profile_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
@@ -1306,6 +1461,7 @@ var apiOperations = []apiOp{
 	{ID: "listVaults", Method: "GET", Path: "/v1/vaults", Group: []string{"vaults"}, Verb: "list", Summary: "List vaults",
 		Description: "Vaults of the project selected with `bma-workspace-id`, or of every project the key sees. `limit` is 1-100 (default 20).",
 		Body:        false, List: true, Raw: false, HandWritten: false,
+		Example: "bma vaults list",
 		Params: []apiParam{
 			{Name: "limit", Flag: "limit", In: "query", Type: "integer", Required: false},
 			{Name: "page", Flag: "page", In: "query", Type: "string", Required: false, Description: "Opaque cursor from next_page."},
@@ -1315,18 +1471,21 @@ var apiOperations = []apiOp{
 	{ID: "createVault", Method: "POST", Path: "/v1/vaults", Group: []string{"vaults"}, Verb: "create", Summary: "Create a vault",
 		Description: "Creates a new vault in the selected project (or the default project); it never returns an existing one.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma vaults create",
 		Params: []apiParam{
 			{Name: "display_name", Flag: "display-name", In: "body", Type: "string", Required: true},
 			{Name: "metadata", Flag: "metadata", In: "body", Type: "json", Required: false},
 		},
 	},
 	{ID: "getVault", Method: "GET", Path: "/v1/vaults/{vault_id}", Group: []string{"vaults"}, Verb: "get", Summary: "Retrieve a vault",
+		Example: "bma vaults get <vault_id>",
 		Params: []apiParam{
 			{Name: "vault_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "updateVault", Method: "POST", Path: "/v1/vaults/{vault_id}", Group: []string{"vaults"}, Verb: "update", Summary: "Update a vault",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma vaults update <vault_id>",
 		Params: []apiParam{
 			{Name: "vault_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "display_name", Flag: "display-name", In: "body", Type: "string", Required: false},
@@ -1335,18 +1494,21 @@ var apiOperations = []apiOp{
 	},
 	{ID: "deleteVault", Method: "DELETE", Path: "/v1/vaults/{vault_id}", Group: []string{"vaults"}, Verb: "delete", Summary: "Delete a vault",
 		Description: "Deletes the vault and every credential in it.",
+		Example:     "bma vaults delete <vault_id>",
 		Params: []apiParam{
 			{Name: "vault_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "archiveVault", Method: "POST", Path: "/v1/vaults/{vault_id}/archive", Group: []string{"vaults"}, Verb: "archive", Summary: "Archive a vault",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma vaults archive <vault_id>",
 		Params: []apiParam{
 			{Name: "vault_id", Flag: "", In: "path", Type: "string", Required: true},
 		},
 	},
 	{ID: "listVaultCredentials", Method: "GET", Path: "/v1/vaults/{vault_id}/credentials", Group: []string{"vaults", "credentials"}, Verb: "list", Summary: "List credentials",
 		Body: false, List: true, Raw: false, HandWritten: false,
+		Example: "bma vaults credentials list <vault_id>",
 		Params: []apiParam{
 			{Name: "vault_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "limit", Flag: "limit", In: "query", Type: "integer", Required: false},
@@ -1357,6 +1519,7 @@ var apiOperations = []apiOp{
 	{ID: "createVaultCredential", Method: "POST", Path: "/v1/vaults/{vault_id}/credentials", Group: []string{"vaults", "credentials"}, Verb: "create", Summary: "Create a credential",
 		Description: "`static_bearer` and `environment_variable` store a generic secret, `mcp_oauth` an oauth_token_set. `injection_location` defaults to header only. `expires_at` and refresh settings are stored as given.",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma vaults credentials create <vault_id>",
 		Params: []apiParam{
 			{Name: "vault_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "auth", Flag: "auth", In: "body", Type: "json", Required: true},
@@ -1365,6 +1528,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "getVaultCredential", Method: "GET", Path: "/v1/vaults/{vault_id}/credentials/{credential_id}", Group: []string{"vaults", "credentials"}, Verb: "get", Summary: "Retrieve a credential",
+		Example: "bma vaults credentials get <vault_id> <credential_id>",
 		Params: []apiParam{
 			{Name: "vault_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "credential_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -1373,6 +1537,7 @@ var apiOperations = []apiOp{
 	{ID: "updateVaultCredential", Method: "POST", Path: "/v1/vaults/{vault_id}/credentials/{credential_id}", Group: []string{"vaults", "credentials"}, Verb: "update", Summary: "Update or rotate a credential",
 		Description: "A new secret value is a new native secret version; `auth.type` must match and `mcp_server_url` and `secret_name` are immutable. Changing an `mcp_oauth` credential rewrites its whole token set (see McpOAuthUpdate).",
 		Body:        true, List: false, Raw: false, HandWritten: false,
+		Example: "bma vaults credentials update <vault_id> <credential_id>",
 		Params: []apiParam{
 			{Name: "vault_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "credential_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -1382,6 +1547,7 @@ var apiOperations = []apiOp{
 		},
 	},
 	{ID: "deleteVaultCredential", Method: "DELETE", Path: "/v1/vaults/{vault_id}/credentials/{credential_id}", Group: []string{"vaults", "credentials"}, Verb: "delete", Summary: "Delete a credential",
+		Example: "bma vaults credentials delete <vault_id> <credential_id>",
 		Params: []apiParam{
 			{Name: "vault_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "credential_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -1389,6 +1555,7 @@ var apiOperations = []apiOp{
 	},
 	{ID: "archiveVaultCredential", Method: "POST", Path: "/v1/vaults/{vault_id}/credentials/{credential_id}/archive", Group: []string{"vaults", "credentials"}, Verb: "archive", Summary: "Archive a credential",
 		Body: true, List: false, Raw: false, HandWritten: false,
+		Example: "bma vaults credentials archive <vault_id> <credential_id>",
 		Params: []apiParam{
 			{Name: "vault_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "credential_id", Flag: "", In: "path", Type: "string", Required: true},
@@ -1396,9 +1563,33 @@ var apiOperations = []apiOp{
 	},
 	{ID: "validateVaultCredentialMCPOAuth", Method: "POST", Path: "/v1/vaults/{vault_id}/credentials/{credential_id}/mcp_oauth_validate", Group: []string{"vaults", "credentials"}, Verb: "mcp-oauth-validate", Summary: "Validate an MCP OAuth credential",
 		Description: "Anthropic's vaults.credentials.mcp_oauth_validate. Live-probes the credential's MCP server (initialize, tools/list); a 401 with a stored refresh token refreshes the access token and probes again. Only mcp_oauth credentials that are not archived can be validated (400 otherwise).",
+		Example:     "bma vaults credentials mcp-oauth-validate <vault_id> <credential_id>",
 		Params: []apiParam{
 			{Name: "vault_id", Flag: "", In: "path", Type: "string", Required: true},
 			{Name: "credential_id", Flag: "", In: "path", Type: "string", Required: true},
+		},
+	},
+	{ID: "createWebFetch", Method: "POST", Path: "/v1/web_fetches", Group: []string{"web-fetches"}, Verb: "create", Summary: "Fetch a web page",
+		Description: "Fetches one public page and answers its main content as markdown or text. Only public addresses are reached (checked on every connection and redirect, at most 5 redirects); robots.txt is respected; no cookies or credentials are sent; at most 5 MB and 20 seconds; HTML, text, markdown, JSON, XML and CSV only; no JavaScript and no PDF. With an `Idempotency-Key`, the same key and body within 24 hours replays the first answer without a second charge. Errors: 400 `invalid_request`, `url_not_allowed` (not http(s), credentials in the URL, a non-public address or disallowed by robots.txt), `unsupported_content_type`, `content_too_large`; 403 `insufficient_credits`; 429 `rate_limited`; 500 `fetch_failed` (the site failed, timed out or answered an error).\n\n**Authorization:** An organization API key, a personal access token or OAuth access token, or a dashboard session. Any workspace role may call; the workspace is the credential's own or `bma-workspace-id`.\n\n**Limits:**\n\n- Each organization may run 120 fetches per minute (all callers, sessions included); past it 429 `rate_limited` with `Retry-After`.\n- At most 5 MB and 20 seconds per page, 5 redirects; `max_chars` 1000 to 100000.\n- USD 1 per 1,000 fetched pages (model `web-fetch` in the usage and cost reports); failures are not charged.\n- Rate limit: one request of the organization's write budget ([Rate limits](https://docs.beeos.ai/guides/limits)).\n\n**Errors** (besides the [common errors](https://docs.beeos.ai/api-reference/errors) (401 authentication, 429 `rate_limited`, 500)):\n\n| Status | `error.type` | `error.code` | Cause | Fix |\n| --- | --- | --- | --- | --- |\n| 400 | `invalid_request_error` | `content_too_large` | The page is larger than 5 MB. | Fetch a smaller page or another URL. |\n| 400 | `invalid_request_error` | `idempotency_key_reused` | The Idempotency-Key was used with another body within 24 hours. | Correct the request as the message describes and send it again; the same request will keep failing. |\n| 400 | `invalid_request_error` | `invalid_request` | The body does not match the schema or its limits. | Send a body of the schema. |\n| 400 | `invalid_request_error` | `unsupported_content_type` | The page is not HTML, text, markdown, JSON, XML or CSV. | Fetch a page of a supported type. |\n| 400 | `invalid_request_error` | `url_not_allowed` | The URL is not http(s), carries credentials, reaches a non-public address or robots.txt disallows it. | Fetch a public http(s) URL that robots.txt allows. |\n| 403 | `permission_error` | `insufficient_credits` | The organization's billing does not admit new paid work. | Use a credential with the required role or access; retrying with the same credential will not help. |\n| 409 | `conflict_error` | `idempotency_key_in_use` | A call with the same Idempotency-Key is still running. | Retry the same request after a short delay. |\n| 429 | `rate_limit_error` | `rate_limited` | The organization used up its fetches of this minute. | Wait for the retry-after delay, then retry. |\n| 500 | `api_error` | `fetch_failed` | The site failed, timed out, did not resolve or answered an error. | Retry later or fetch another URL. |",
+		Body:        true, List: false, Raw: false, HandWritten: true,
+		Output: "{\n  \"id\": \"wfetch_agq7b3l2m4n5p6q7r8s9t0u1v2\",\n  \"type\": \"web_fetch\",\n  \"created_at\": \"2026-11-24T08:00:00Z\",\n  \"url\": \"https://example.com/\",\n  \"final_url\": \"https://example.com/\",\n  \"title\": \"Example Domain\",\n  \"content_type\": \"text/html\",\n  \"format\": \"markdown\",\n  \"content\": \"# Example Domain\\n\\nThis domain is for use in illustrative examples in documents.\",\n  \"truncated\": false,\n  \"content_chars\": 84,\n  \"usage\": {\n    \"web_fetch_requests\": 1\n  }\n}",
+		Params: []apiParam{
+			{Name: "format", Flag: "format", In: "body", Type: "string", Required: false, Description: "Default markdown.", Enum: []string{"markdown", "text"}},
+			{Name: "max_chars", Flag: "max-chars", In: "body", Type: "integer", Required: false, Description: "Default 20000."},
+			{Name: "url", Flag: "url", In: "body", Type: "string", Required: true, Description: "An http or https URL without credentials."},
+		},
+	},
+	{ID: "createWebSearch", Method: "POST", Path: "/v1/web_searches", Group: []string{"web-searches"}, Verb: "create", Summary: "Search the web",
+		Description: "Runs one web search with the platform's providers and answers the ranked results (title, URL, snippet, publication time). A query mostly in CJK script or a `zh` locale is answered by a provider that serves Chinese first. With an `Idempotency-Key`, the same key and body within 24 hours replays the first answer without a second charge. Errors: 400 `invalid_request`; 403 `insufficient_credits`; 429 `rate_limited`; 529 `search_unavailable` (every provider failed; retry later).\n\n**Authorization:** An organization API key, a personal access token or OAuth access token, or a dashboard session. Any workspace role may call; the workspace is the credential's own or `bma-workspace-id`.\n\n**Limits:**\n\n- Each organization may run 120 searches per minute (all callers, sessions included); past it 429 `rate_limited` with `Retry-After`.\n- `query` at most 400 characters; `num_results` 1 to 10; at most 20 domains.\n- USD 10 per 1,000 answered searches (model `web-search` in the usage and cost reports); failures are not charged.\n- Rate limit: one request of the organization's write budget ([Rate limits](https://docs.beeos.ai/guides/limits)).\n\n**Errors** (besides the [common errors](https://docs.beeos.ai/api-reference/errors) (401 authentication, 429 `rate_limited`, 500)):\n\n| Status | `error.type` | `error.code` | Cause | Fix |\n| --- | --- | --- | --- | --- |\n| 400 | `invalid_request_error` | `idempotency_key_reused` | The Idempotency-Key was used with another body within 24 hours. | Correct the request as the message describes and send it again; the same request will keep failing. |\n| 400 | `invalid_request_error` | `invalid_request` | The body does not match the schema or its limits. | Send a body of the schema. |\n| 403 | `permission_error` | `insufficient_credits` | The organization's billing does not admit new paid work. | Use a credential with the required role or access; retrying with the same credential will not help. |\n| 409 | `conflict_error` | `idempotency_key_in_use` | A call with the same Idempotency-Key is still running. | Retry the same request after a short delay. |\n| 429 | `rate_limit_error` | `rate_limited` | The organization used up its searches of this minute. | Wait for the retry-after delay, then retry. |\n| 529 | `overloaded_error` | `search_unavailable` | Every search provider failed or is throttled. | Retry with exponential backoff. |",
+		Body:        true, List: false, Raw: false, HandWritten: true,
+		Output: "{\n  \"id\": \"wsrch_agq7b3l2m4n5p6q7r8s9t0u1v2\",\n  \"type\": \"web_search\",\n  \"created_at\": \"2026-11-24T08:00:00Z\",\n  \"query\": \"Model Context Protocol authorization\",\n  \"provider\": \"tavily\",\n  \"results\": [\n    {\n      \"rank\": 1,\n      \"url\": \"https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization\",\n      \"title\": \"Authorization - Model Context Protocol\",\n      \"snippet\": \"Authorization is optional for MCP implementations. When supported, HTTP transports should conform to this specification.\",\n      \"published_at\": \"2025-11-25T00:00:00Z\"\n    },\n    {\n      \"rank\": 2,\n      \"url\": \"https://datatracker.ietf.org/doc/html/rfc9728\",\n      \"title\": \"RFC 9728: OAuth 2.0 Protected Resource Metadata\"\n    }\n  ],\n  \"usage\": {\n    \"web_search_requests\": 1\n  }\n}",
+		Params: []apiParam{
+			{Name: "allowed_domains", Flag: "allowed-domains", In: "body", Type: "json", Required: false, Description: "Only results from these domains and their subdomains; not with blocked_domains."},
+			{Name: "blocked_domains", Flag: "blocked-domains", In: "body", Type: "json", Required: false, Description: "No results from these domains and their subdomains; not with allowed_domains."},
+			{Name: "locale", Flag: "locale", In: "body", Type: "string", Required: false, Description: "Language and country to favor (zh-CN, en-US)."},
+			{Name: "num_results", Flag: "num-results", In: "body", Type: "integer", Required: false, Description: "Default 5."},
+			{Name: "query", Flag: "query", In: "body", Type: "string", Required: true, Description: "What to search for, keywords or a question."},
+			{Name: "recency", Flag: "recency", In: "body", Type: "string", Required: false, Description: "Only results published within this period.", Enum: []string{"day", "week", "month", "year"}},
 		},
 	},
 }
