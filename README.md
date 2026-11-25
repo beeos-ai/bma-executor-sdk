@@ -24,14 +24,14 @@ bmad is built on the Go SDK, and the BMA server speaks the same contract.
 | Version | 1.0.0 (tag `v1.0.0`, all three languages), see [CHANGELOG](CHANGELOG.md) |
 | Protocol | `bma.executor.v1.1` (the harness also accepts `v1`; contract 1.1.0, [`lock.json`](contracts/bma/executor/lock.json)) |
 | Runtimes | Go 1.24+, Node.js 20+ (ESM), Python 3.10+ |
-| Integration guide | [docs/executor](docs/executor/README.md) ([中文](docs/executor/README.zh-CN.md)) |
+| Integration guide | [docs/executor](docs/executor/README.md) |
 
 | I want to | Start here |
 | --- | --- |
-| Understand roles, deployment shapes and what is available | [Overview](docs/executor/README.md) ([中文](docs/executor/README.zh-CN.md)) |
-| Write an executor (a "hand" the BMA cloud or a local brain drives) | [Quick start](docs/executor/quickstart.md) ([中文](docs/executor/quickstart.zh-CN.md)), then the [protocol reference](docs/executor/protocol-reference.md) ([中文](docs/executor/protocol-reference.zh-CN.md)) |
-| Drive an executor (be the harness / local brain) | [Local connection and auth](docs/executor/local-connection.md) ([中文](docs/executor/local-connection.zh-CN.md)) and `Harness` below and in the [TypeScript](typescript/README.md) and [Python](python/README.md) READMEs |
-| Connect a full local agent (turns in, agent events out) | [Agent capability](docs/executor/agent-capability.md) ([中文](docs/executor/agent-capability.zh-CN.md)) |
+| Understand roles, deployment shapes and what is available | [Overview](docs/executor/README.md) |
+| Write an executor (a "hand" the BMA cloud or a local brain drives) | [Quick start](docs/executor/quickstart.md), then the [protocol reference](docs/executor/protocol-reference.md) |
+| Drive an executor (be the harness / local brain) | [Local connection and auth](docs/executor/local-connection.md) and `Harness` below and in the [TypeScript](typescript/README.md) and [Python](python/README.md) READMEs |
+| Connect a full local agent (turns in, agent events out) | [Agent capability](docs/executor/agent-capability.md) |
 
 The rest of this README is the Go module; see [`typescript/README.md`](typescript/README.md) and [`python/README.md`](python/README.md) for the other languages.
 

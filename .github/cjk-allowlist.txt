@@ -1,0 +1,7 @@
+# CJK lines allowed in this English-only repository (scripts/cjk_check.py): <path glob> | <line regex or empty> | <reason>
+agent_acp_proxy_test.go | | header-name validation rejects a non-ASCII (CJK) header name
+computer_use_test.go | | computer use: opening apps by a CJK display name
+computer_use_reliability_test.go | | computer use: typing CJK and emoji text (clipboard route for non-ASCII input)
+desktop_input_darwin_test.go | | macOS key input: CJK code points and CJK text typed as keyboard events
+desktop_input_vectors_test.go | | shared desktop input vectors: CJK text input
+testdata/desktop-input.vectors.json | | shared desktop input contract vectors: CJK text input
