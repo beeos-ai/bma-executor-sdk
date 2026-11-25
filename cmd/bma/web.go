@@ -11,7 +11,7 @@ import (
 // at the top level, with the operation's main field (query, url) also taken
 // as the argument. Each run sends an Idempotency-Key (a new one unless
 // --idempotency-key is given), so the client's retries are not charged twice.
-func webCmd(id, use, field string) *cobra.Command {
+func webCmd(id, use, field, example string) *cobra.Command {
 	var op *apiOp
 	for i := range apiOperations {
 		if apiOperations[i].ID == id {
@@ -26,6 +26,7 @@ func webCmd(id, use, field string) *cobra.Command {
 	cmd := apiCommand(op)
 	cmd.Use = use + " [" + field + "]"
 	cmd.Args = cobra.MaximumNArgs(1)
+	cmd.Example = indent(example, "  ")
 	run := cmd.RunE
 	cmd.RunE = func(cmd *cobra.Command, a []string) error {
 		if len(a) == 1 {
@@ -42,7 +43,11 @@ func webCmd(id, use, field string) *cobra.Command {
 }
 
 func addWeb(root *cobra.Command) {
-	for _, c := range []*cobra.Command{webCmd("createWebSearch", "search", "query"), webCmd("createWebFetch", "fetch", "url")} {
+	for _, c := range []*cobra.Command{
+		webCmd("createWebSearch", "search", "query",
+			`bma search "Model Context Protocol authorization" --num-results 3 --recency year`),
+		webCmd("createWebFetch", "fetch", "url", "bma fetch https://example.com/ --max-chars 5000"),
+	} {
 		if c != nil {
 			root.AddCommand(c)
 		}

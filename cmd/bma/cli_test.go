@@ -78,6 +78,31 @@ func TestEveryOperationHasExactlyOneCommand(t *testing.T) {
 	}
 }
 
+// Every command a user runs shows an example (the reference pages print
+// them); cobra's own completion and help commands and `bma docs` aside.
+func TestEveryCommandHasAnExample(t *testing.T) {
+	skip := map[string]bool{"bma docs": true}
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		path := c.CommandPath()
+		if c.Runnable() && !c.HasSubCommands() && !c.Hidden && !skip[path] && c.Name() != "help" &&
+			!strings.HasPrefix(path, "bma completion") && c.Example == "" {
+			t.Errorf("%s has no example", path)
+		}
+		for _, s := range c.Commands() {
+			walk(s)
+		}
+	}
+	root := newRoot()
+	root.InitDefaultCompletionCmd()
+	walk(root)
+	for path := range handExamples {
+		if c, _, err := root.Find(strings.Fields(path)[1:]); err != nil || c.CommandPath() != path {
+			t.Errorf("handExamples names %s, which is no command", path)
+		}
+	}
+}
+
 // api_gen.go is what tools/cligen makes of the document.
 func TestGeneratedCommandsMatchTheDocument(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "api_gen.go")

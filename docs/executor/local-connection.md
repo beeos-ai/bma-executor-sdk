@@ -1,6 +1,6 @@
 # Local connection and authentication
 
-[中文](local-connection.zh-CN.md) · [Overview](README.md)
+[Overview](README.md)
 
 A local brain and a local hand exchange the same Executor Protocol messages as the cloud; only transport and authentication differ. Everything on this page ships in bma-executor-sdk 1.0.0 unless marked otherwise.
 

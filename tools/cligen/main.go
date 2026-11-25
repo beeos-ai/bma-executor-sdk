@@ -24,6 +24,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"go/format"
@@ -69,27 +70,30 @@ type operation struct {
 }
 
 type parameter struct {
-	Ref         string  `yaml:"$ref"`
-	Name        string  `yaml:"name"`
-	In          string  `yaml:"in"`
-	Required    bool    `yaml:"required"`
-	Description string  `yaml:"description"`
-	Schema      *schema `yaml:"schema"`
+	Ref         string    `yaml:"$ref"`
+	Name        string    `yaml:"name"`
+	In          string    `yaml:"in"`
+	Required    bool      `yaml:"required"`
+	Description string    `yaml:"description"`
+	Schema      *schema   `yaml:"schema"`
+	Example     yaml.Node `yaml:"example"`
 }
 
 type body struct {
-	Ref      string `yaml:"$ref"`
-	Required bool   `yaml:"required"`
-	Content  map[string]struct {
-		Schema *schema `yaml:"schema"`
-	} `yaml:"content"`
+	Ref      string           `yaml:"$ref"`
+	Required bool             `yaml:"required"`
+	Content  map[string]media `yaml:"content"`
+}
+
+// media is one content type of a body or an answer, with its example.
+type media struct {
+	Schema  *schema   `yaml:"schema"`
+	Example yaml.Node `yaml:"example"`
 }
 
 type response struct {
-	Ref     string `yaml:"$ref"`
-	Content map[string]struct {
-		Schema *schema `yaml:"schema"`
-	} `yaml:"content"`
+	Ref     string           `yaml:"$ref"`
+	Content map[string]media `yaml:"content"`
 }
 
 type schema struct {
@@ -103,6 +107,7 @@ type schema struct {
 	OneOf       []*schema          `yaml:"oneOf"`
 	AnyOf       []*schema          `yaml:"anyOf"`
 	Items       *schema            `yaml:"items"`
+	Example     yaml.Node          `yaml:"example"`
 }
 
 var (
@@ -143,6 +148,9 @@ type op struct {
 	Body, List, Raw, HandWritten           bool
 	// Idempotent: the operation requires an Idempotency-Key header.
 	Idempotent bool
+	// Example is the command line of the operation's documented example;
+	// Output its documented JSON answer (indented), "" when it has none.
+	Example, Output string
 }
 
 type param struct {
@@ -297,6 +305,15 @@ func (d *doc) build(prefix, path, method string, o operation, ext []extField) (o
 	if topLevel[o.OperationID] {
 		g.HandWritten = true
 	}
+	if r, ok := o.Responses["200"]; ok {
+		if m, ok := d.response(r).Content["application/json"]; ok && m.Example.Kind != 0 {
+			out, err := jsonOf(&m.Example, "  ", "")
+			if err != nil {
+				return g, fmt.Errorf("200 example: %w", err)
+			}
+			g.Output = out
+		}
+	}
 	for _, r := range o.Responses {
 		r = d.response(r)
 		for ct := range r.Content {
@@ -357,7 +374,156 @@ func (d *doc) build(prefix, path, method string, o operation, ext []extField) (o
 		kept = append(kept, p)
 	}
 	g.Params = kept
+	g.Example = d.example(g, o)
 	return g, nil
+}
+
+// example is the command line of the operation's documented example: the
+// path parameters' examples as arguments, the query parameters' examples and
+// the body example's fields as flags; fields without a flag go in --body.
+// Parameters without an example are left out (a path parameter shows as
+// <name>). Hand-written commands write their own examples.
+func (d *doc) example(g op, o operation) string {
+	if g.HandWritten {
+		return ""
+	}
+	values := map[string]*yaml.Node{}
+	for _, p := range o.Parameters {
+		p = d.param(p)
+		v := &p.Example
+		if v.Kind == 0 && p.Schema != nil {
+			if s := d.resolve(p.Schema); s != nil {
+				v = &s.Example
+			}
+		}
+		if v.Kind != 0 {
+			values[p.In+" "+p.Name] = v
+		}
+	}
+	words := append([]string{"bma"}, g.Group...)
+	words = append(words, g.Verb)
+	for _, p := range g.Params {
+		if p.In == "path" {
+			if v, ok := values["path "+p.Name]; ok {
+				words = append(words, shellQuote(flagValue(v)))
+			} else {
+				words = append(words, "<"+p.Name+">")
+			}
+		}
+	}
+	var body *yaml.Node // a mapping: key and value nodes in turn
+	if o.RequestBody != nil {
+		b := *o.RequestBody
+		if b.Ref != "" {
+			b = d.Components.RequestBodies[refName(b.Ref)]
+		}
+		if m, ok := b.Content["application/json"]; ok && m.Example.Kind == yaml.MappingNode {
+			body = &m.Example
+		}
+	}
+	flags := map[string]string{}
+	for _, p := range g.Params {
+		if p.In != "path" {
+			flags[p.In+" "+p.Name] = p.Flag
+		}
+	}
+	for _, p := range g.Params {
+		if v, ok := values["query "+p.Name]; ok && p.In == "query" {
+			words = append(words, "--"+p.Flag, shellQuote(flagValue(v)))
+		}
+	}
+	rest := &yaml.Node{Kind: yaml.MappingNode}
+	if body != nil {
+		for i := 0; i+1 < len(body.Content); i += 2 {
+			k, v := body.Content[i], body.Content[i+1]
+			if f, ok := flags["body "+k.Value]; ok {
+				words = append(words, "--"+f, shellQuote(flagValue(v)))
+			} else {
+				rest.Content = append(rest.Content, k, v)
+			}
+		}
+	}
+	if len(rest.Content) > 0 {
+		words = append(words, "--body", shellQuote(flagValue(rest)))
+	}
+	return strings.Join(words, " ")
+}
+
+// flagValue is a flag's text: a string as it is, anything else compact JSON.
+func flagValue(n *yaml.Node) string {
+	if n.Kind == yaml.ScalarNode && (n.Tag == "!!str" || n.Tag == "!!timestamp") {
+		return n.Value
+	}
+	s, _ := jsonOf(n, "", "")
+	return s
+}
+
+// jsonOf writes a YAML example as JSON in its key order: compact when step
+// is "", else indented by step.
+func jsonOf(n *yaml.Node, step, indent string) (string, error) {
+	nl, sep, inner := "", ",", indent+step
+	if step != "" {
+		nl, sep = "\n", ","
+	}
+	colon := ":"
+	if step != "" {
+		colon = ": "
+	}
+	switch n.Kind {
+	case yaml.DocumentNode:
+		return jsonOf(n.Content[0], step, indent)
+	case yaml.AliasNode:
+		return jsonOf(n.Alias, step, indent)
+	case yaml.MappingNode, yaml.SequenceNode:
+		open, closing, stride := "{", "}", 2
+		if n.Kind == yaml.SequenceNode {
+			open, closing, stride = "[", "]", 1
+		}
+		if len(n.Content) == 0 {
+			return open + closing, nil
+		}
+		var parts []string
+		for i := 0; i < len(n.Content); i += stride {
+			v, err := jsonOf(n.Content[i+stride-1], step, inner)
+			if err != nil {
+				return "", err
+			}
+			if stride == 2 {
+				k, _ := json.Marshal(n.Content[i].Value)
+				v = string(k) + colon + v
+			}
+			parts = append(parts, inner+v)
+		}
+		if step == "" {
+			for i := range parts {
+				parts[i] = strings.TrimLeft(parts[i], " ")
+			}
+			return open + strings.Join(parts, sep) + closing, nil
+		}
+		return open + nl + strings.Join(parts, sep+nl) + nl + indent + closing, nil
+	case yaml.ScalarNode:
+		if n.Tag == "!!timestamp" { // a time is text in JSON
+			b, err := json.Marshal(n.Value)
+			return string(b), err
+		}
+		var v any
+		if err := n.Decode(&v); err != nil {
+			return "", err
+		}
+		b, err := json.Marshal(v)
+		return string(b), err
+	}
+	return "", fmt.Errorf("unsupported example node kind %d", n.Kind)
+}
+
+var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_./:@=,+-]+$`)
+
+// shellQuote quotes s for a POSIX shell when it needs it.
+func shellQuote(s string) string {
+	if shellSafe.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // hasCollection: the parent of a trailing non-parameter segment is itself a
@@ -518,6 +684,12 @@ func render(ops []op, source string) ([]byte, error) {
 		}
 		if o.Idempotent {
 			b.WriteString("\t\tIdempotent: true,\n")
+		}
+		if o.Example != "" {
+			fmt.Fprintf(&b, "\t\tExample: %q,\n", o.Example)
+		}
+		if o.Output != "" {
+			fmt.Fprintf(&b, "\t\tOutput: %q,\n", o.Output)
 		}
 		if len(o.Params) > 0 {
 			b.WriteString("\t\tParams: []apiParam{\n")
