@@ -487,7 +487,7 @@
     },
     "ExecutorTokenRequest": {
       "type": "object",
-      "description": "Token request body for POST /v1/machines/{machine_id}/token (bearer: machine daemon token) and POST /v1/environments/{environment_id}/token (bearer: environment key); the legacy alias POST /v1/executors/token takes either bearer. The id in the path must equal the credential's machine or environment, otherwise 404; on the new paths environment_id may be empty or absent for a machine and, when sent for an environment, must equal the path id. An empty environment_id with a machine token requests a machine-scoped executor: its executor_id is exec_<machine_id>, stable across refreshes, and the JWT carries machine_id and daemon_token_id.",
+      "description": "Token request body for POST /v1/machines/{machine_id}/token (bearer: machine daemon token) and POST /v1/environments/{environment_id}/token (bearer: environment key); the legacy aliases take one bearer each: POST /api/v1/executors/token a machine daemon token, POST /v1/executors/token an environment key (the other kind is answered 401). The id in the path must equal the credential's machine or environment, otherwise 404; on the new paths environment_id may be empty or absent for a machine and, when sent for an environment, must equal the path id. An empty environment_id with a machine token requests a machine-scoped executor: its executor_id is exec_<machine_id>, stable across refreshes, and the JWT carries machine_id and daemon_token_id.",
       "properties": {
         "environment_id": {
           "type": "string"
@@ -509,7 +509,7 @@
     },
     "ExecutorTokenResponse": {
       "type": "object",
-      "description": "Token response of POST /v1/machines/{machine_id}/token, POST /v1/environments/{environment_id}/token and the legacy alias POST /v1/executors/token.",
+      "description": "Token response of POST /v1/machines/{machine_id}/token, POST /v1/environments/{environment_id}/token and the legacy aliases POST /api/v1/executors/token and POST /v1/executors/token.",
       "properties": {
         "executor_id": {
           "type": "string"

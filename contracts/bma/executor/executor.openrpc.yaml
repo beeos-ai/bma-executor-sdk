@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 2.3.0
+  version: 2.4.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -380,7 +380,7 @@ methods:
     summary: Extend the connection with a fresh executor token.
     description: Executor to harness request. Before the current token expires the executor fetches
       a new one from POST /v1/machines/{machine_id}/token or POST /v1/environments/{environment_id}/token
-      (legacy alias POST /v1/executors/token) with its original credential and sends it on the open
+      (legacy aliases POST /api/v1/executors/token, POST /v1/executors/token) with its original credential and sends it on the open
       control channel. The harness verifies that it names the same executor, scope and machine
       credential as the connection and moves the connection's 4001 deadline to the new token's
       expiry; nothing else about the connection changes. A rejected token leaves the old deadline in
@@ -1692,6 +1692,14 @@ methods:
           applied over AgentTurnConfig.permission_mode; an executor may only make a tool stricter than its own
           ceiling, never looser, and a tool the object does not name keeps the mode's permission. Keys the
           executor does not know are ignored.
+          For platform_tools (contract 2.4.0, only when this machine runs the turn's brain and its tools
+          itself and the turn's config.platform_tools is not empty): platform_tools_mcp_url (the same endpoint,
+          https://executor.<domain>/v1/machines/{machine_id}/mcp), platform_tools_mcp_token and
+          platform_tools_mcp_token_expires_at (RFC 3339, 1 hour after turn.start). Only the calls of
+          config.platform_tools go there, as an MCP tools/call with the same _meta as with tools_mcp_*; every
+          other tool of the turn runs on this machine as before. The endpoint answers this token's tools/list
+          with the turn's platform_tools only and any other tool name with invalid params. When the endpoint
+          cannot be reached or refuses the token the platform tool call fails; it never runs on this machine.
           egress (contract 1.9.0, only to an executor that declared egress.forwarder): the JSON text of the
           session's EgressHandoff (schemas/executor.json) for an executor that runs the turn and its tools
           itself; it replaces the session's handoff as session.assign metadata egress does, and a turn.start
@@ -2321,7 +2329,10 @@ methods:
       harmless. Errors carry data.reason: turn_inactive (-32007: the turn is not active), forbidden
       (-32001: the session or turn is unknown, belongs to another executor, or this executor is not
       entitled to brain_tools), tools_token_unavailable (-32012: the platform issues no such token for
-      this turn, for example brain and hands are one machine). A harness without the method answers
+      this turn, for example brain and hands are one machine and the turn has no platform tools). A brain
+      started with platform_tools_mcp_* (contract 2.4.0) refreshes that credential the same way: the
+      result's tools_mcp_url and tools_mcp_token are its new platform_tools_mcp_url and
+      platform_tools_mcp_token. A harness without the method answers
       -32601; the executor then keeps the token it has.
     tags:
       - name: agent

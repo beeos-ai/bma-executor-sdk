@@ -221,7 +221,7 @@ func (a *BrainHost) turnTools(config AgentTurnConfig, remote bool) ([]BrainTool,
 		}
 		tools = append(tools, BrainTool{Name: c.Name, Description: c.Description, Parameters: c.InputSchema, Kind: "other", Custom: true})
 	}
-	return tools, nil
+	return a.withPlatformTools(tools, config.PlatformTools, remote)
 }
 
 // withTurnTools adds each tool's default permission to a policy that does

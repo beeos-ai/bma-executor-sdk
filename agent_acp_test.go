@@ -924,6 +924,11 @@ func fakePrompt(c *fakeConn, sid, text string) (any, map[string]any) {
 			"content": []any{map[string]any{"type": "content", "content": map[string]any{"type": "text", "text": r.Text}}}})
 		c.message(sid, "m-"+text, "message", fmt.Sprintf("%s|%v|%s|%s", r.Text, r.IsError, r.Outcome, r.ErrorCode))
 		return endTurn, nil
+	case "websearch":
+		// Calls the platform's web_search the turn offered (a platform tool).
+		r := c.toolFull(sid, "call_w", "web_search", map[string]any{"query": "bma"})
+		c.message(sid, "m-websearch", "message", fmt.Sprintf("%s|%v|%s|%s", r.Text, r.IsError, r.Outcome, r.ErrorCode))
+		return endTurn, nil
 	case "late":
 		// Ends the turn at once; calls a tool later, when the turn is over.
 		home := os.Getenv("BMA_DSH_ACP_HOME")
