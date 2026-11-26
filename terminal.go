@@ -461,18 +461,26 @@ func (s *Terminals) close(_ context.Context, req Request) (any, error) {
 	if err := json.Unmarshal(req.Params, &p); err != nil || p.TerminalID == "" {
 		return nil, &RPCError{Code: CodeInvalidParams, Message: "terminal.close needs terminal_id"}
 	}
+	return TerminalCloseResult{Closed: true, ExitCode: s.CloseTerminal(p.TerminalID, p.Reason)}, nil
+}
+
+// CloseTerminal ends one terminal the way terminal.close does, for the
+// embedding executor: its attached consumer gets a closed frame carrying
+// reason (empty: "closed"), not the exit of a shell killed behind its back.
+// Unknown ids are ignored. It returns the shell's exit code, nil when a
+// signal ended it.
+func (s *Terminals) CloseTerminal(terminalID, reason string) *int {
 	s.mu.Lock()
-	t := s.byID[p.TerminalID]
-	delete(s.byID, p.TerminalID)
+	t := s.byID[terminalID]
+	delete(s.byID, terminalID)
 	s.mu.Unlock()
 	if t == nil {
-		return TerminalCloseResult{Closed: true}, nil
+		return nil
 	}
-	reason := p.Reason
 	if reason == "" {
 		reason = "closed"
 	}
-	return TerminalCloseResult{Closed: true, ExitCode: t.terminate(reason)}, nil
+	return t.terminate(reason)
 }
 
 // terminate closes the terminal: hang up its process, kill it after the

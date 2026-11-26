@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.21.0
+
+- Go: `(*Terminals).CloseTerminal(terminal_id, reason)` ends one terminal for the embedding executor exactly as `terminal.close` does (the same code path): the attached consumer receives a `closed` frame with `reason`, instead of the `exit` of a shell the executor killed itself. Unknown ids are ignored.
+
 ## 1.20.0
 
 - Go: `NewTerminals(TerminalOptions)` serves `terminal.open`, `terminal.attach` and `terminal.close` (executor contract v1.1 `terminal`, kinds human and agent): one PTY per `terminal_id` that outlives its client, 1 MiB of output kept for a resume (`gap` when the resume point fell out), one attachment and writer lease at a time, output flow-controlled by acks, resize, exit and close, each attach over the outbound `bma.terminal.v1` host socket it names (ticket in the Authorization header only). Unix runs the shell on a pseudo-terminal in its own session (`RunAs` sets its identity); Windows runs it on a pseudo console (ConPTY) in its own Job Object, with resize. Without argv a terminal runs the requested shell, else `SHELL -l` (Unix) or `COMSPEC` (Windows), in the requested directory, else `TerminalOptions.Dir` or `HOME`, in a UTF-8 locale. `TerminalOptions.Launch` sees the command, directory and environment and may change them (a sandbox wrapper) or refuse the open; `DenyEnv` drops request variables the host keeps private. This is the implementation BMA's cloud executor ran, now shared by every executor.

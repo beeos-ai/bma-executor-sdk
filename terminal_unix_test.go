@@ -202,3 +202,20 @@ func TestTerminalLaunchHook(t *testing.T) {
 		t.Fatalf("refused open: %v", err)
 	}
 }
+
+// The host ends one terminal itself (the embedding executor withdrew what the
+// shell ran with): the attached consumer gets closed with the host's reason,
+// not an exit of a signaled shell.
+func TestTerminalCloseTerminalByHost(t *testing.T) {
+	s, h := testTerminals(t, TerminalOptions{}), newTermHost(t)
+	if _, err := termCall(t, s.open, MethodTerminalOpen, shSpec); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := termAttach(t, s, h, 1, 0)
+	a.until(func(f map[string]any) bool { return f["type"] == "attached" })
+	s.CloseTerminal("trm_1", "full_access_withdrawn")
+	if c := a.until(func(f map[string]any) bool { return f["type"] == "closed" || f["type"] == "exit" }); c["type"] != "closed" || c["reason"] != "full_access_withdrawn" {
+		t.Fatalf("frame %v", c)
+	}
+	s.CloseTerminal("trm_unknown", "x") // idempotent, no panic
+}
