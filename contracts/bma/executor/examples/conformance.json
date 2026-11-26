@@ -792,6 +792,33 @@
       }
     },
     {
+      "name": "process.read result of an ended agent-session process with session outputs",
+      "method": "process.read",
+      "kind": "result",
+      "result": {
+        "process_id": "proc_01JABC",
+        "stream": "stdout",
+        "data": "",
+        "from_cursor": 3,
+        "next_cursor": 3,
+        "earliest_cursor": 0,
+        "gap": false,
+        "truncated": false,
+        "eof": true,
+        "state": "exited",
+        "ended_at": "2026-10-31T12:00:03Z",
+        "exit_code": 0,
+        "exit_signal": null,
+        "session_outputs": [
+          {
+            "path": "report.pdf",
+            "digest": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+            "uploaded": false
+          }
+        ]
+      }
+    },
+    {
       "name": "process.write request",
       "method": "process.write",
       "kind": "request",

@@ -28,6 +28,9 @@ type fakeDaemonFiles struct {
 	processes map[string]string // process id -> agent session id
 	mounts    map[string][]fakeMount
 	outputs   []fakeOutput
+	// failUploads answers that many session-outputs uploads 503 (a
+	// transient failure) before storing any; -1 fails every one.
+	failUploads int
 }
 
 func digestOf(content []byte) string { return fmt.Sprintf("sha256:%x", sha256.Sum256(content)) }
@@ -71,6 +74,13 @@ func (f *fakeDaemonFiles) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	case r.Method == http.MethodPost && route == "session-outputs":
 		body, _ := io.ReadAll(r.Body)
+		if f.failUploads != 0 {
+			if f.failUploads > 0 {
+				f.failUploads--
+			}
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		digest := digestOf(body)
 		if r.Header.Get("X-BMA-File-Digest") != digest {
 			w.WriteHeader(http.StatusBadRequest)
