@@ -117,6 +117,50 @@ func spawnPTY(params ProcessStartParams, cmd *exec.Cmd, _ *RunAs) (*process, err
 }
 
 func startConPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
+	c, err := startOnConPTY(cmd, ptyRows, ptyCols)
+	if err != nil {
+		return nil, err
+	}
+	proc := newProcess(params.ProcessID, c.pid, c.tree, func() (int, string) {
+		code, ok := c.waitExit()
+		// The terminal ends with its process: closing it lets the output
+		// reader see EOF after the last bytes.
+		c.pty.closeAfterDrain()
+		if !ok {
+			return -1, ""
+		}
+		return c.tree.exitCode(code)
+	})
+	proc.stdin, proc.pty = c.pty.in, true
+	proc.stderrMode = StderrMerge
+	proc.stderr.eof = true
+	go proc.pump(c.pty.out, func(p *process) *stream { return &p.stdout })
+	return proc, nil
+}
+
+// conPTYStart is a process running on a new pseudo console, in its own Job
+// Object.
+type conPTYStart struct {
+	pty     *conPTY
+	tree    *processTree
+	process windows.Handle
+	pid     int
+}
+
+// waitExit waits for the process, releases its handle and returns its raw
+// exit code; ok is false when it cannot be read.
+func (c conPTYStart) waitExit() (code uint32, ok bool) {
+	defer windows.CloseHandle(c.process)
+	_, _ = windows.WaitForSingleObject(c.process, windows.INFINITE)
+	if err := windows.GetExitCodeProcess(c.process, &code); err != nil {
+		return 0, false
+	}
+	return code, true
+}
+
+// startOnConPTY runs cmd on a new rows x cols pseudo console. The process is
+// created suspended, assigned to the job, then resumed.
+func startOnConPTY(cmd *exec.Cmd, rows, cols uint16) (conPTYStart, error) {
 	line, ok := windowsCommandLine(cmd.Args)
 	if !ok {
 		parts := make([]string, len(cmd.Args))
@@ -127,55 +171,55 @@ func startConPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
 	}
 	application, err := windows.UTF16PtrFromString(cmd.Path)
 	if err != nil {
-		return nil, err
+		return conPTYStart{}, err
 	}
 	commandLine, err := windows.UTF16PtrFromString(line)
 	if err != nil {
-		return nil, err
+		return conPTYStart{}, err
 	}
 	var dir *uint16
 	if cmd.Dir != "" {
 		if dir, err = windows.UTF16PtrFromString(cmd.Dir); err != nil {
-			return nil, err
+			return conPTYStart{}, err
 		}
 	}
 	var env *uint16
 	if cmd.Env != nil {
 		block, err := environmentBlock(cmd.Env)
 		if err != nil {
-			return nil, err
+			return conPTYStart{}, err
 		}
 		env = &block[0]
 	}
 
 	var inRead, inWrite, outRead, outWrite windows.Handle
 	if err := windows.CreatePipe(&inRead, &inWrite, nil, 0); err != nil {
-		return nil, fmt.Errorf("create pty input pipe: %w", err)
+		return conPTYStart{}, fmt.Errorf("create pty input pipe: %w", err)
 	}
 	if err := windows.CreatePipe(&outRead, &outWrite, nil, 0); err != nil {
 		_ = windows.CloseHandle(inRead)
 		_ = windows.CloseHandle(inWrite)
-		return nil, fmt.Errorf("create pty output pipe: %w", err)
+		return conPTYStart{}, fmt.Errorf("create pty output pipe: %w", err)
 	}
 	var hpc windows.Handle
-	err = windows.CreatePseudoConsole(windows.Coord{X: ptyCols, Y: ptyRows}, inRead, outWrite, 0, &hpc)
+	err = windows.CreatePseudoConsole(windows.Coord{X: int16(cols), Y: int16(rows)}, inRead, outWrite, 0, &hpc)
 	// The pseudo console holds its own duplicates of its ends.
 	_ = windows.CloseHandle(inRead)
 	_ = windows.CloseHandle(outWrite)
 	if err != nil {
 		_ = windows.CloseHandle(inWrite)
 		_ = windows.CloseHandle(outRead)
-		return nil, fmt.Errorf("create pseudo console: %w", err)
+		return conPTYStart{}, fmt.Errorf("create pseudo console: %w", err)
 	}
 	pty := &conPTY{
 		hpc: hpc,
 		in:  os.NewFile(uintptr(inWrite), "conpty-in"),
 		out: &activityFile{File: os.NewFile(uintptr(outRead), "conpty-out")},
 	}
-	fail := func(err error) (*process, error) {
+	fail := func(err error) (conPTYStart, error) {
 		pty.closeAsync()
 		_ = pty.out.Close()
-		return nil, err
+		return conPTYStart{}, err
 	}
 
 	attributes, err := windows.NewProcThreadAttributeList(1)
@@ -210,43 +254,24 @@ func startConPTY(params ProcessStartParams, cmd *exec.Cmd) (*process, error) {
 	if err := windows.CreateProcess(application, commandLine, nil, nil, false, flags, env, dir, &startup.StartupInfo, &info); err != nil {
 		tree.close()
 		_ = pty.out.Close()
-		return nil, err
+		return conPTYStart{}, err
+	}
+	abort := func(err error) (conPTYStart, error) {
+		_ = windows.TerminateProcess(info.Process, 1)
+		_ = windows.CloseHandle(info.Process)
+		_ = windows.CloseHandle(info.Thread)
+		tree.close()
+		_ = pty.out.Close()
+		return conPTYStart{}, err
 	}
 	if err := tree.assign(info.Process, int(info.ProcessId)); err != nil {
-		_ = windows.TerminateProcess(info.Process, 1)
-		_ = windows.CloseHandle(info.Process)
-		_ = windows.CloseHandle(info.Thread)
-		tree.close()
-		_ = pty.out.Close()
-		return nil, err
+		return abort(err)
 	}
 	if _, err := windows.ResumeThread(info.Thread); err != nil {
-		_ = windows.TerminateProcess(info.Process, 1)
-		_ = windows.CloseHandle(info.Process)
-		_ = windows.CloseHandle(info.Thread)
-		tree.close()
-		_ = pty.out.Close()
-		return nil, fmt.Errorf("resume process: %w", err)
+		return abort(fmt.Errorf("resume process: %w", err))
 	}
 	_ = windows.CloseHandle(info.Thread)
-
-	proc := newProcess(params.ProcessID, int(info.ProcessId), tree, func() (int, string) {
-		defer windows.CloseHandle(info.Process)
-		_, _ = windows.WaitForSingleObject(info.Process, windows.INFINITE)
-		var code uint32
-		if err := windows.GetExitCodeProcess(info.Process, &code); err != nil {
-			return -1, ""
-		}
-		// The terminal ends with its process: closing it lets the output
-		// reader see EOF after the last bytes.
-		pty.closeAfterDrain()
-		return tree.exitCode(code)
-	})
-	proc.stdin, proc.pty = pty.in, true
-	proc.stderrMode = StderrMerge
-	proc.stderr.eof = true
-	go proc.pump(pty.out, func(p *process) *stream { return &p.stdout })
-	return proc, nil
+	return conPTYStart{pty: pty, tree: tree, process: info.Process, pid: int(info.ProcessId)}, nil
 }
 
 // environmentBlock is the UTF-16 environment CreateProcess takes: NAME=value

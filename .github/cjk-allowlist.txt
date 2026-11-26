@@ -5,3 +5,4 @@ computer_use_reliability_test.go | | computer use: typing CJK and emoji text (cl
 desktop_input_darwin_test.go | | macOS key input: CJK code points and CJK text typed as keyboard events
 desktop_input_vectors_test.go | | shared desktop input vectors: CJK text input
 testdata/desktop-input.vectors.json | | shared desktop input contract vectors: CJK text input
+terminal_unix_test.go | | terminals: a CJK file name round-trips through the UTF-8 locale of a PTY
