@@ -1064,8 +1064,10 @@ func (p *processes) read(ctx context.Context, req Request) (any, error) {
 	if err == nil && proc.filesSession != "" && endedProcessState(result.State) {
 		// process.read is the authoritative end-of-process signal and the
 		// turn may go idle after the tool result it produces, so the
-		// session's outputs are uploaded before answering.
-		p.opts.SessionFiles.flush(ctx, proc.filesSession)
+		// session's outputs are uploaded before answering and listed with
+		// whether each upload went through: a failed upload is never a
+		// silent success (the platform reads again while one is pending).
+		result.SessionOutputs = p.opts.SessionFiles.flush(ctx, proc.filesSession)
 	}
 	return result, err
 }

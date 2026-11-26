@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.19.0
+
+- Go: the `process.read` that reports an ended process of an agent session (`SessionFiles`) retries a failed output upload for up to 10 s before it answers, and lists the session outputs it found changed in `session_outputs` (executor contract 2.5.0: `path`, sha256 `digest` of the content on the machine, `uploaded`). A failed upload is no longer a silent success: the platform reads the ended process again while one is pending, tells the agent which outputs are still uploading, and delivers the version the turn left even when its upload lands after the turn's final reply. Reading the ended process again retries what is still pending.
+- Go, TypeScript, Python: the contract snapshot is executor contract 2.5.0.
+
 ## 1.18.0
 
 - bma: the CLI's contract snapshot is beeos-managed-agents 4956ce415, where every operation has its reference docs: each API command's help describes its flags, and its example and documented answer come from the contract's examples (organization admin, memory stores, models, webhooks, vaults, skills, desktop and terminal commands gain flags for their documented parameters and body members).

@@ -34,7 +34,9 @@ import (
 //     deliverables. Run walks it every 2 s without following symlinks and
 //     uploads each regular file whose size and mtime stayed the same for one
 //     interval and changed since its last upload; the process.read that
-//     reports an ended process uploads its session's outputs at once.
+//     reports an ended process uploads its session's outputs at once,
+//     retrying failed uploads for up to sessionFilesFlushTimeout, and lists
+//     them with whether each went through (ProcessReadResult.session_outputs).
 //
 // Every operation goes through os.Root, so ".." and symlinks that leave the
 // directory fail instead of being followed; only regular files are uploaded.
@@ -43,7 +45,9 @@ import (
 // .../session-files/{resource_id}/content, .../session-outputs?path=).
 const (
 	sessionFilesScanInterval = 2 * time.Second
-	sessionFilesFlushTimeout = 10 * time.Second
+	// sessionFilesFlushRetry is the pause before a flush retries the uploads
+	// that failed.
+	sessionFilesFlushRetry = 500 * time.Millisecond
 	// sessionFilesPrepareTimeout bounds syncing mounts before a process
 	// starts (a 1 GiB mount included).
 	sessionFilesPrepareTimeout = 10 * time.Minute
@@ -58,6 +62,10 @@ const (
 	sessionUploadsMountRoot  = "/mnt/session/uploads"
 	fileDigestHeader         = "X-BMA-File-Digest"
 )
+
+// sessionFilesFlushTimeout bounds one flush of a session's outputs (a
+// variable for tests).
+var sessionFilesFlushTimeout = 10 * time.Second
 
 // sessionIDPattern is one safe directory name.
 var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
@@ -268,17 +276,81 @@ func (f *SessionFiles) prepare(ctx context.Context, client *Client, sessionID, p
 	return nil
 }
 
-// flush uploads the outputs of sessionID now (a process of it ended).
-func (f *SessionFiles) flush(ctx context.Context, sessionID string) {
+// flush uploads the outputs of sessionID now (a process of it ended) and
+// reports every output it found changed since its last upload: its digest on
+// the machine and whether the upload went through. A failed upload is retried
+// until it succeeds or sessionFilesFlushTimeout passes; what is still
+// pending then is reported uploaded=false (the periodic scan keeps trying).
+func (f *SessionFiles) flush(ctx context.Context, sessionID string) []SessionOutputReport {
 	f.mu.Lock()
 	session := f.sessions[sessionID]
 	f.mu.Unlock()
 	if session == nil {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sessionFilesFlushTimeout)
 	defer cancel()
-	session.scan(ctx, f, true)
+	reports := map[string]outputAttempt{}
+	var order []string
+	for {
+		for _, a := range session.scan(ctx, f, true) {
+			if _, seen := reports[a.rel]; !seen {
+				order = append(order, a.rel)
+			}
+			reports[a.rel] = a
+		}
+		if !session.pending(reports) {
+			break
+		}
+		retry := time.NewTimer(sessionFilesFlushRetry)
+		select {
+		case <-ctx.Done():
+			retry.Stop()
+		case <-retry.C:
+			continue
+		}
+		break
+	}
+	out := make([]SessionOutputReport, 0, len(order))
+	for _, rel := range order {
+		if a := reports[rel]; a.digest != "" {
+			out = append(out, SessionOutputReport{Path: rel, Digest: a.digest, Uploaded: a.done})
+		}
+	}
+	return out
+}
+
+// outputAttempt is one output a scan tried to upload: digest is the content
+// it read ("" when the file changed while it was read), done that the
+// platform stored it or refused it for good.
+type outputAttempt struct {
+	rel, digest string
+	done        bool
+}
+
+// pending reports whether an attempt still waits for its upload, settling
+// those the periodic scan uploaded meanwhile and dropping those whose file
+// is gone.
+func (s *fileSession) pending(reports map[string]outputAttempt) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	waiting := false
+	for rel, a := range reports {
+		if a.done {
+			continue
+		}
+		state := s.outputFile[rel]
+		switch {
+		case state == nil:
+			continue // deleted: nothing left to upload
+		case a.digest != "" && state.digest == a.digest:
+			a.done = true
+			reports[rel] = a
+		default:
+			waiting = true
+		}
+	}
+	return waiting
 }
 
 // uploadsPath maps a server mount path to a clean path relative to uploads.
@@ -449,22 +521,24 @@ func (s *fileSession) download(ctx context.Context, root *os.Root, rel string, f
 	return nil
 }
 
-// scan uploads changed outputs; force uploads files not yet seen stable.
-func (s *fileSession) scan(ctx context.Context, f *SessionFiles, force bool) {
+// scan uploads changed outputs; force uploads files not yet seen stable. It
+// returns the outputs it tried to upload.
+func (s *fileSession) scan(ctx context.Context, f *SessionFiles, force bool) []outputAttempt {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.client == nil {
-		return
+		return nil
 	}
 	root, err := os.OpenRoot(s.outputs)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			f.log(LogWarn, "session outputs unavailable: "+s.id, err)
 		}
-		return
+		return nil
 	}
 	defer func() { _ = root.Close() }()
 	present := map[string]bool{}
+	var attempts []outputAttempt
 	// fs.WalkDir reports symlinks as entries and does not descend them. A
 	// vanished or unreadable entry is skipped and retried next scan.
 	walkErr := fs.WalkDir(root.FS(), ".", func(rel string, entry fs.DirEntry, walkErr error) error {
@@ -476,7 +550,9 @@ func (s *fileSession) scan(ctx context.Context, f *SessionFiles, force bool) {
 		}
 		if info, err := entry.Info(); err == nil {
 			present[rel] = true
-			s.observeOutput(ctx, f, root, rel, observe(info), force)
+			if a, tried := s.observeOutput(ctx, f, root, rel, observe(info), force); tried {
+				attempts = append(attempts, a)
+			}
 		}
 		return nil
 	})
@@ -488,46 +564,54 @@ func (s *fileSession) scan(ctx context.Context, f *SessionFiles, force bool) {
 			delete(s.outputFile, rel)
 		}
 	}
+	return attempts
 }
 
-func (s *fileSession) observeOutput(ctx context.Context, f *SessionFiles, root *os.Root, rel string, observed fileObservation, force bool) {
+// observeOutput uploads rel when it changed (and, without force, stayed the
+// same since the previous scan); tried reports an upload attempt.
+func (s *fileSession) observeOutput(ctx context.Context, f *SessionFiles, root *os.Root, rel string,
+	observed fileObservation, force bool) (attempt outputAttempt, tried bool) {
 	state := s.outputFile[rel]
 	if state == nil {
 		state = &outputFile{}
 		s.outputFile[rel] = state
 	}
 	if state.uploaded == observed {
-		return
+		return outputAttempt{}, false
 	}
 	stable := state.seen == observed
 	state.seen = observed
 	if !stable && !force {
-		return
+		return outputAttempt{}, false
 	}
 	switch {
 	case len(rel) > maxSessionOutputPath:
 		f.log(LogError, fmt.Sprintf("session output %s of %s not uploaded: path exceeds %d bytes", rel, s.id, maxSessionOutputPath), nil)
 		state.uploaded = observed
-		return
+		return outputAttempt{}, false
 	case observed.size == 0:
-		return // an empty file is not a deliverable yet
+		return outputAttempt{}, false // an empty file is not a deliverable yet
 	case observed.size > f.maxOutputBytes:
 		f.log(LogError, fmt.Sprintf("session output %s of %s not uploaded: %d bytes exceed %d", rel, s.id, observed.size, f.maxOutputBytes), nil)
 		state.uploaded = observed
-		return
+		return outputAttempt{}, false
 	}
 	digest, err := s.uploadOutput(ctx, root, rel, observed, state.digest)
+	attempt = outputAttempt{rel: rel, digest: digest}
 	var status *DaemonHTTPError
 	switch {
 	case errors.As(err, &status) && status.permanent():
 		f.log(LogError, fmt.Sprintf("session output %s of %s rejected; retried once it changes", rel, s.id), err)
 		state.uploaded = observed
+		attempt.done = true
 	case err != nil:
-		f.log(LogWarn, fmt.Sprintf("session output %s of %s upload failed; retrying next scan", rel, s.id), err)
+		f.log(LogWarn, fmt.Sprintf("session output %s of %s upload failed; retrying", rel, s.id), err)
 		state.seen = fileObservation{}
 	default:
 		state.uploaded, state.digest = observed, digest
+		attempt.done = true
 	}
+	return attempt, true
 }
 
 func (s *fileSession) uploadOutput(ctx context.Context, root *os.Root, rel string, observed fileObservation, previousDigest string) (string, error) {
@@ -551,24 +635,25 @@ func (s *fileSession) uploadOutput(ctx context.Context, root *os.Root, rel strin
 	if digest == previousDigest {
 		return digest, nil // touched, not changed
 	}
+	// From here on the digest is the content read, whatever the upload's fate.
 	response, err := s.client.daemonDo(ctx, http.MethodPost,
 		"/processes/"+url.PathEscape(s.anchor)+"/session-outputs?path="+url.QueryEscape(rel),
 		io.NewSectionReader(handle, 0, observed.size), observed.size,
 		http.Header{fileDigestHeader: {digest}, "Accept": {"application/json"}})
 	if err != nil {
-		return "", err
+		return digest, err
 	}
 	defer func() { _ = response.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxSessionUploadResponse))
 	if err != nil {
-		return "", err
+		return digest, err
 	}
 	var result sessionOutputResult
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return "", fmt.Errorf("decode session output response: %w", err)
+		return digest, fmt.Errorf("decode session output response: %w", err)
 	}
 	if result.Digest != digest {
-		return "", fmt.Errorf("session output digest mismatch: sent %s, stored %s", digest, result.Digest)
+		return digest, fmt.Errorf("session output digest mismatch: sent %s, stored %s", digest, result.Digest)
 	}
 	return digest, nil
 }

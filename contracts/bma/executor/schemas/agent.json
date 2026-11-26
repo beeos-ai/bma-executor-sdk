@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.beeos.ai/schemas/agent.json",
   "title": "BMA agent executor types",
-  "description": "Agent executor capability: the platform sends natural-language turns to an executor that runs a complete agent (model loop and tools) locally, and the executor streams Anthropic Managed Agents events back. See docs/architecture/executor-agent-capability.zh-CN.md.",
+  "description": "Agent executor capability: the platform sends natural-language turns to an executor that runs a complete agent (model loop and tools) locally, and the executor streams Anthropic Managed Agents events back. See docs/architecture/executor-agent-capability.md.",
   "$defs": {
     "AgentCapability": {
       "type": "object",
