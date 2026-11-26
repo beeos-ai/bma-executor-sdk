@@ -2,7 +2,7 @@ asyncapi: 3.0.0
 id: https://contracts.beeos.ai/executor.asyncapi
 info:
   title: BMA Executor Protocol channels
-  version: 2.901.0
+  version: 2.5.0
   description: "WebSocket channels for bma.executor.v1 and bma.executor.v1.1. The control channel carries JSON-RPC 2.0 requests, notifications, and responses. The mcp channel carries raw MCP JSON-RPC with no BMA wrapper. PTY bytes travel on per-attach outbound host sockets (subprotocol bma.terminal.v1), not on these channels. Contract 1.4.0 adds the platform tools endpoint (x-bma-platform-tools): the HTTP MCP endpoint a brain on one machine calls to run its tools on the session's hands machine."
   license:
     name: Apache-2.0
@@ -1541,7 +1541,7 @@ components:
       name: process.read
       title: process.read
       summary: Read process output from a cursor.
-      description: Harness to executor request (v1.1 §3.4). Long-polls up to wait_ms for new bytes. gap=true when bytes before earliest_cursor were dropped from the ring buffer. A read that reports an ended process of an agent session uploads that session's changed outputs before it answers, retrying transient upload failures for at most 10 s, and lists them in session_outputs (contract 2.901.0) with whether each upload went through; reading the ended process again retries what is still pending.
+      description: Harness to executor request (v1.1 §3.4). Long-polls up to wait_ms for new bytes. gap=true when bytes before earliest_cursor were dropped from the ring buffer. A read that reports an ended process of an agent session uploads that session's changed outputs before it answers, retrying transient upload failures for at most 10 s, and lists them in session_outputs (contract 2.5.0) with whether each upload went through; reading the ended process again retries what is still pending.
       contentType: application/json
       payload:
         type: object
