@@ -35,14 +35,14 @@ func TestProcessEndRetriesAFailedOutputUploadAndReportsIt(t *testing.T) {
 	h, files, _ := newSessionFilesHarness(t, daemon)
 	_, outputs := files.Dirs("sesn_w")
 	h.mustStart(t, ProcessStartParams{ProcessID: "proc_w",
-		Argv:     []string{"sh", "-c", fmt.Sprintf(`printf report > %q`, filepath.Join(outputs, "报告.pdf"))},
+		Argv:     []string{"sh", "-c", fmt.Sprintf(`printf report > %q`, filepath.Join(outputs, "report.pdf"))},
 		Metadata: map[string]string{MetadataAgentSessionID: "sesn_w"}})
 	read := endRead(t, h, "proc_w")
-	want := []SessionOutputReport{{Path: "报告.pdf", Digest: digestOf([]byte("report")), Uploaded: true}}
+	want := []SessionOutputReport{{Path: "report.pdf", Digest: digestOf([]byte("report")), Uploaded: true}}
 	if fmt.Sprint(read.SessionOutputs) != fmt.Sprint(want) {
 		t.Fatalf("session_outputs = %+v, want %+v", read.SessionOutputs, want)
 	}
-	if got := daemon.uploaded(); len(got) != 1 || got[0].path != "报告.pdf" {
+	if got := daemon.uploaded(); len(got) != 1 || got[0].path != "report.pdf" {
 		t.Fatalf("uploaded before the read answered: %+v", got)
 	}
 	// Reading the ended process again finds nothing pending.
@@ -63,7 +63,7 @@ func TestProcessEndReportsAnOutputUploadStillFailing(t *testing.T) {
 	h, files, _ := newSessionFilesHarness(t, daemon)
 	_, outputs := files.Dirs("sesn_f")
 	h.mustStart(t, ProcessStartParams{ProcessID: "proc_f",
-		Argv:     []string{"sh", "-c", fmt.Sprintf(`printf final > %q && printf draft > %q`, filepath.Join(outputs, "报告.pdf"), filepath.Join(outputs, "draft.md"))},
+		Argv:     []string{"sh", "-c", fmt.Sprintf(`printf final > %q && printf draft > %q`, filepath.Join(outputs, "report.pdf"), filepath.Join(outputs, "draft.md"))},
 		Metadata: map[string]string{MetadataAgentSessionID: "sesn_f"}})
 	started := time.Now()
 	read := endRead(t, h, "proc_f")
@@ -74,7 +74,7 @@ func TestProcessEndReportsAnOutputUploadStillFailing(t *testing.T) {
 	for _, o := range read.SessionOutputs {
 		got[o.Path] = o
 	}
-	if len(got) != 2 || got["报告.pdf"] != (SessionOutputReport{Path: "报告.pdf", Digest: digestOf([]byte("final"))}) ||
+	if len(got) != 2 || got["report.pdf"] != (SessionOutputReport{Path: "report.pdf", Digest: digestOf([]byte("final"))}) ||
 		got["draft.md"].Uploaded {
 		t.Fatalf("session_outputs = %+v", read.SessionOutputs)
 	}
