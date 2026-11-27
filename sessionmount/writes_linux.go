@@ -254,7 +254,11 @@ type writeHandle struct {
 	mu    sync.Mutex
 	base  string // the store digest the file had when opened ("" new)
 	b     []byte
-	dirty bool
+	dirty bool // written since the last commit: committed at the next close
+	// touched: created or truncated and not written since; committed when
+	// the last descriptor closes (a shell redirection closes a duplicate
+	// before it writes, which must not save an empty version).
+	touched bool
 	// refused is a write's errno: the close fails with it and commits
 	// nothing (the store keeps its content; a new file goes).
 	refused syscall.Errno
@@ -280,8 +284,16 @@ func (h *writeHandle) opened() *writeHandle {
 	return h
 }
 
-// Release forgets h.
-func (h *writeHandle) Release(context.Context) syscall.Errno {
+// Release commits a file created or truncated and never written (touch,
+// ": > f"), then forgets h.
+func (h *writeHandle) Release(ctx context.Context) syscall.Errno {
+	h.mu.Lock()
+	touched := h.touched && h.refused == 0
+	h.mu.Unlock()
+	if touched {
+		h.dirty = true
+		_ = h.Flush(ctx)
+	}
 	v := h.n.v
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -338,7 +350,7 @@ func (h *writeHandle) Write(_ context.Context, data []byte, off int64) (uint32, 
 		h.b = append(h.b, make([]byte, end-int64(len(h.b)))...)
 	}
 	copy(h.b[off:], data)
-	h.dirty = true
+	h.dirty, h.touched = true, false
 	return uint32(len(data)), 0 //nolint:gosec // a write is at most the kernel's buffer
 }
 
@@ -354,7 +366,9 @@ func (h *writeHandle) truncate(size uint64) syscall.Errno {
 	} else {
 		h.b = append(h.b, make([]byte, s-len(h.b))...)
 	}
-	h.dirty = true
+	if !h.dirty {
+		h.touched = true
+	}
 	return 0
 }
 
@@ -371,7 +385,7 @@ func (h *writeHandle) Flush(ctx context.Context) syscall.Errno {
 	if !h.dirty {
 		return 0
 	}
-	h.dirty = false
+	h.dirty, h.touched = false, false
 	errno := h.n.v.commit(ctx, h.p, h.base, h.b)
 	if errno == 0 {
 		h.base = h.n.v.base(h.p)
@@ -386,7 +400,7 @@ func (h *writeHandle) Fsync(ctx context.Context, _ uint32) syscall.Errno { retur
 func (n *node) openWrite(ctx context.Context, p string, flags uint32) (*writeHandle, syscall.Errno) {
 	h := &writeHandle{n: n, p: p, base: n.v.base(p)}
 	if flags&syscall.O_TRUNC != 0 {
-		h.dirty = true
+		h.touched = true
 		return h.opened(), 0
 	}
 	b, _, errno := n.v.content(ctx, p)
@@ -430,7 +444,7 @@ func (n *node) Create(ctx context.Context, name string, _, _ uint32, out *fuse.E
 	defer n.v.writes.Unlock()
 	// The kernel creates only a name it did not find: a new file, committed
 	// at close.
-	h := (&writeHandle{n: n, p: p, dirty: true}).opened()
+	h := (&writeHandle{n: n, p: p, touched: true}).opened()
 	n.v.setLocal(p, nil)
 	child := &node{v: n.v, path: p}
 	inode := n.NewInode(ctx, child, fs.StableAttr{Mode: syscall.S_IFREG, Ino: inode("f", p, "")})
@@ -551,6 +565,7 @@ func (n *node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn,
 				errno = h.truncate(size)
 			}
 			if errno == 0 {
+				h.touched = false // committed here, not at its release
 				errno = n.v.commit(ctx, p, h.base, h.b)
 			}
 			if h != nil {
