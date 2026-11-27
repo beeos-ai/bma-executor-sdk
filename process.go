@@ -209,7 +209,8 @@ func NewProcessCapability(core *Core, opts ProcessOptions) Capability {
 				PackageInstall: opts.PackageInstaller != nil,
 			}
 			if opts.SessionFiles != nil {
-				capabilities.SessionFiles = &SessionFilesCapability{Root: opts.SessionFiles.Root(), Memory: true}
+				capabilities.SessionFiles = &SessionFilesCapability{Root: opts.SessionFiles.Root(), Memory: true,
+					Mount: opts.SessionFiles.opts.Mounter != nil}
 			}
 		},
 		SessionScoped:   true,
@@ -560,6 +561,9 @@ func (p *processes) start(ctx context.Context, req Request) (any, error) {
 	proc.filesSession = plan.filesSession
 	table.processes[params.ProcessID] = proc
 	table.mu.Unlock()
+	if files := p.opts.SessionFiles; files != nil && proc.filesSession != "" {
+		files.processStarted(proc.filesSession)
+	}
 	go p.watch(session, table, proc, time.Duration(params.TimeoutMS)*time.Millisecond)
 	return waitState(proc, params.WaitMS), nil
 }
@@ -1011,6 +1015,9 @@ func (p *processes) watch(session *CoreSession, table *processTable, proc *proce
 		defer timer.Stop()
 	}
 	code, signal := proc.wait()
+	if files := p.opts.SessionFiles; files != nil && proc.filesSession != "" {
+		files.processEnded(proc.filesSession)
+	}
 	if proc.onEnd != nil {
 		proc.onEnd()
 	}

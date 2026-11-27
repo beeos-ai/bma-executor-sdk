@@ -8,6 +8,7 @@ require (
 	github.com/beeos-ai/bma-sdk/v3 v3.1.0
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
+	github.com/hanwen/go-fuse/v2 v2.12.1
 	github.com/itchyny/gojq v0.12.20
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sys v0.47.0

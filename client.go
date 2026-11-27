@@ -176,6 +176,8 @@ type Options struct {
 	HeartbeatInterval time.Duration
 	// HeartbeatLoad is sampled for each heartbeat.
 	HeartbeatLoad func() *ExecutorLoad
+	// HeartbeatSessionFiles is sampled for each heartbeat (SessionFiles.Stats).
+	HeartbeatSessionFiles func() *SessionFilesStats
 	// MaxReconnectAttempts bounds consecutive failed reconnects; the client
 	// then ends with ErrReconnectExhausted (see Done and Err). Zero (the
 	// default) or a negative value reconnects until Stop.
@@ -1614,6 +1616,9 @@ func (c *Client) heartbeat() {
 	params := ExecutorHeartbeatParams{ConnectionID: c.ConnectionID(), ActiveSessions: c.ActiveSessions()}
 	if c.options.HeartbeatLoad != nil {
 		params.Load = c.options.HeartbeatLoad()
+	}
+	if c.options.HeartbeatSessionFiles != nil {
+		params.SessionFiles = c.options.HeartbeatSessionFiles()
 	}
 	conn := c.currentConn()
 	var result ExecutorHeartbeatResult

@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -83,9 +84,17 @@ type SessionFilesOptions struct {
 	// RunAs, when set, is the OS identity of an agent session's processes
 	// (the one CoreOptions.SessionRunAs gives the session): <Root>/<session>
 	// is then the executor's, group RunAs.GID, 0750, so only that identity
-	// reaches the session's files, and outputs is RunAs's, 0700. Unix only.
+	// reaches the session's files, and outputs is RunAs's, 0700; mounts
+	// answer only that identity (and root). Unix only.
 	RunAs func(sessionID string) (*RunAs, error)
 	OnLog func(LogEvent)
+	// Mounter, when set, mounts each session's uploads and memory stores
+	// instead of copying them (capabilities.session_files.mount, see
+	// SessionMounter).
+	Mounter SessionMounter
+	// MountUnavailable is why the host could not mount (its probe's error),
+	// reported with executor.heartbeat; the session files are copied.
+	MountUnavailable string
 }
 
 // SessionFiles syncs the session files of an executor that declares
@@ -98,9 +107,13 @@ type SessionFiles struct {
 	maxOutputBytes int64
 	runAs          func(sessionID string) (*RunAs, error)
 	onLog          func(LogEvent)
+	opts           SessionFilesOptions
 
 	mu       sync.Mutex
 	sessions map[string]*fileSession
+	// running counts the running processes of each agent session: a mounted
+	// session with one is never idle.
+	running map[string]int
 	// started holds the process ids whose start already synced, so a
 	// replayed process.start does not sync again.
 	started sync.Map
@@ -113,12 +126,20 @@ type fileSession struct {
 	// mu serializes syncing and scanning this session.
 	mu sync.Mutex
 	// client and anchor (the session's latest process) authorize requests.
+	// Writers hold mu and anchorMu; a mount's reads take only anchorMu.
 	client     *Client
 	anchor     string
+	anchorMu   sync.Mutex
+	anchoredAt time.Time
 	lastActive time.Time
-	mounts     map[string]mountedFile // by uploads-relative path
-	outputFile map[string]*outputFile
-	memory     map[string]*memoryMirror // by memory store id
+	// mountedAt is when the session was first mounted (zero: copied);
+	// mountedFiles and mountedStores are what its mounts show.
+	mountedAt     time.Time
+	mountedFiles  []MountedFile
+	mountedStores int
+	mounts        map[string]mountedFile // by uploads-relative path
+	outputFile    map[string]*outputFile
+	memory        map[string]*memoryMirror // by memory store id
 }
 
 type mountedFile struct {
@@ -170,8 +191,8 @@ func NewSessionFiles(opts SessionFilesOptions) (*SessionFiles, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("bmaexecutor: create session files root: %w", err)
 	}
-	return &SessionFiles{root: root, maxOutputBytes: opts.MaxOutputBytes, runAs: opts.RunAs, onLog: opts.OnLog,
-		sessions: map[string]*fileSession{}}, nil
+	return &SessionFiles{root: root, maxOutputBytes: opts.MaxOutputBytes, runAs: opts.RunAs, onLog: opts.OnLog, opts: opts,
+		sessions: map[string]*fileSession{}, running: map[string]int{}}, nil
 }
 
 // Root is the advertised capabilities.session_files.root.
@@ -194,12 +215,17 @@ func (f *SessionFiles) Run(ctx context.Context) {
 			flush, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			for _, session := range f.active(time.Time{}) {
 				session.scan(flush, f, true)
+				f.unmount(session)
 			}
 			cancel()
 			return
 		case <-ticker.C:
-			for _, session := range f.active(time.Now().Add(-sessionFilesIdle)) {
+			sessions := f.active(time.Now().Add(-sessionFilesIdle))
+			for _, session := range sessions {
 				session.scan(ctx, f, false)
+			}
+			if f.opts.Mounter != nil {
+				f.renewAnchors(ctx, sessions)
 			}
 		}
 	}
@@ -214,8 +240,12 @@ func (f *SessionFiles) active(cutoff time.Time) []*fileSession {
 	for id, session := range f.sessions {
 		session.mu.Lock()
 		last := session.lastActive
+		busy := f.running[id] > 0 || (session.client != nil && slices.Contains(session.client.ActiveSessions(), id))
+		if busy && !session.mountedAt.IsZero() {
+			session.lastActive = time.Now() // a mounted session in use stays mounted and renewed
+		}
 		session.mu.Unlock()
-		if last.Before(cutoff) {
+		if last.Before(cutoff) && !(busy && !session.mountedAt.IsZero()) {
 			delete(f.sessions, id)
 			idle = append(idle, session)
 			continue
@@ -227,8 +257,35 @@ func (f *SessionFiles) active(cutoff time.Time) []*fileSession {
 		flush, cancel := context.WithTimeout(context.Background(), sessionFilesFlushTimeout)
 		session.scan(flush, f, true)
 		cancel()
+		f.unmount(session)
 	}
 	return sessions
+}
+
+// unmount detaches a forgotten or closing session's mounts.
+func (f *SessionFiles) unmount(session *fileSession) {
+	if f.opts.Mounter == nil || session.mountedAt.IsZero() {
+		return
+	}
+	if err := f.opts.Mounter.Unmount(session.id); err != nil {
+		f.log(LogWarn, "unmount the session files of "+session.id, err)
+	}
+}
+
+// processStarted and processEnded count the running processes of an agent
+// session.
+func (f *SessionFiles) processStarted(sessionID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.running[sessionID]++
+}
+
+func (f *SessionFiles) processEnded(sessionID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.running[sessionID]--; f.running[sessionID] <= 0 {
+		delete(f.running, sessionID)
+	}
 }
 
 func (f *SessionFiles) session(id string) *fileSession {
@@ -265,7 +322,8 @@ func (f *SessionFiles) prepare(ctx context.Context, client *Client, sessionID, p
 	session := f.session(sessionID)
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	session.client, session.anchor, session.lastActive = client, processID, time.Now()
+	session.setAnchor(client, processID)
+	session.lastActive = time.Now()
 	var manifest sessionFilesManifest
 	if err := client.daemonJSON(ctx, "/processes/"+url.PathEscape(processID)+"/session-files", maxSessionManifestBytes, &manifest); err != nil {
 		return fmt.Errorf("load session files: %w", err)
@@ -275,6 +333,16 @@ func (f *SessionFiles) prepare(ctx context.Context, client *Client, sessionID, p
 	}
 	if err := f.sessionDirs(session); err != nil {
 		return err
+	}
+	if f.opts.Mounter != nil {
+		if err := session.mountLocked(ctx, f, manifest, false); err != nil {
+			return err
+		}
+		if session.mountedAt.IsZero() {
+			session.mountedAt = time.Now()
+		}
+		f.started.Store(processID, struct{}{})
+		return nil
 	}
 	if err := session.syncLocked(ctx, manifest.Files); err != nil {
 		return err

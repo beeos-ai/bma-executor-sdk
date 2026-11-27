@@ -205,7 +205,18 @@
           "connection_id": "conn_01JABD",
           "active_sessions": [
             "sess_01JABC"
-          ]
+          ],
+          "session_files": {
+            "mounts": 12,
+            "mount_failures": 0,
+            "mount_seconds": 0.84,
+            "reads_cached": 240,
+            "reads_fetched": 31,
+            "fetch_errors": 0,
+            "commits": 5,
+            "conflicts": 1,
+            "commit_failures": 0
+          }
         }
       }
     },

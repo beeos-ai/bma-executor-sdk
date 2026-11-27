@@ -119,6 +119,22 @@ func (f *SessionFiles) syncMemory(ctx context.Context, client *Client, sessionID
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	session.lastActive = time.Now()
+	if f.opts.Mounter != nil {
+		session.setAnchor(client, token)
+		if session.mountedAt.IsZero() {
+			// Not mounted yet (no process of the session ran here): the
+			// uploads are mounted too, from this manifest.
+			if err := f.sessionDirs(session); err != nil {
+				return err
+			}
+			if err := session.mountLocked(ctx, f, manifest, false); err != nil {
+				return err
+			}
+			session.mountedAt = time.Now()
+			return nil
+		}
+		return session.mountLocked(ctx, f, manifest, true)
+	}
 	if len(manifest.MemoryStores) > 0 || len(session.memory) > 0 {
 		if err := f.sessionDirs(session); err != nil {
 			return err
@@ -137,7 +153,7 @@ func (f *SessionFiles) mirrorsMemory(sessionID string) bool {
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	return len(session.memory) > 0
+	return len(session.memory) > 0 || session.mountedStores > 0
 }
 
 // syncMemoryLocked makes <session>/memory hold exactly stores, downloading
