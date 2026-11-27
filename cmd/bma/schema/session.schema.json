@@ -35,7 +35,7 @@
         "oneOf": [
           {
             "type": "object",
-            "description": "A local file, uploaded and mounted (default mount: /mnt/session/uploads/<file_id>). Relative paths start at the session file's directory.",
+            "description": "A local file, uploaded and attached to the session. mount_path is its path in the session's uploads directory (default: <file_id>); the session shows the real path, /mnt/session/<session_id>/uploads/<path>. Relative paths start at the session file's directory.",
             "required": ["path"],
             "additionalProperties": false,
             "properties": {"path": {"type": "string"}, "mount_path": {"type": "string"}}
@@ -62,6 +62,6 @@
     },
     "vault_ids": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"type": "string", "pattern": "^vlt_"}},
     "message": {"type": "string", "description": "The first user message (--message replaces it)."},
-    "files": {"type": "array", "items": {"type": "string"}, "description": "Attachments of the first message: uploaded, mounted at /mnt/session/uploads/<name> and listed in the message (--file adds more)."}
+    "files": {"type": "array", "items": {"type": "string"}, "description": "Attachments of the first message: uploaded, attached at <name> in the session's uploads directory and listed in the message with the path the session shows for it (--file adds more)."}
   }
 }
