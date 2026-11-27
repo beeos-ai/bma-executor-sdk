@@ -238,6 +238,10 @@
           "type": "string",
           "minLength": 2,
           "description": "Absolute, already-expanded, clean path on the executor host (no ~, no . or .. segments, no trailing /)."
+        },
+        "memory": {
+          "type": "boolean",
+          "description": "Contract 2.6.0. The executor materializes the session's memory stores: before every process.start of an agent session and on session_files.sync it mirrors the memory_stores of the session files manifest into <root>/<agent_session_id>/memory/<slug>/ (files 0444, platform wins, anything not in the manifest removed, marker <root>/<agent_session_id>/memory/.bma-memory.json) and exports BMA_MEMORY_DIR=<root>/<agent_session_id>/memory to that session's processes. Absent or false: the platform sends no session_files.sync, records one non-terminal session.error memory_unsupported per turn of a session with memory stores, and tells the model memory is not available there."
         }
       },
       "required": [
@@ -587,12 +591,40 @@
       "properties": {
         "stopped": {
           "type": "boolean"
+        },
+        "projection_retained": {
+          "type": "boolean",
+          "description": "Confirmed suspended capture after clean viewer detachment. The detached peer does not publish video or accept input."
+        },
+        "projection_stopped": {
+          "type": "boolean",
+          "description": "Confirmed full capture stop or confirmed absence for the exact requested session."
         }
       },
       "required": [
         "stopped"
       ],
       "additionalProperties": false
+    },
+    "SessionFilesSyncResult": {
+      "type": "object",
+      "description": "session_files.sync result (contract 2.6.0). state synced: the session's memory directory equals the manifest's memory_stores; failed: the mirror could not be completed (error names why) and the platform fails the call or turn with memory_sync_failed.",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "synced",
+            "failed"
+          ]
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "additionalProperties": true
     },
     "SessionFilesFlushResult": {
       "type": "object",

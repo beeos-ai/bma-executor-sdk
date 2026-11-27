@@ -57,7 +57,7 @@ const (
 	maxSessionFileBytes      = 1 << 30
 	maxSessionOutputPath     = 512
 	maxSessionOutputFiles    = 10000
-	maxSessionManifestBytes  = 8 * 1024 * 1024
+	maxSessionManifestBytes  = 32 * 1024 * 1024 // 10 000 memories with 1 KiB paths included
 	maxSessionUploadResponse = 64 * 1024
 	sessionUploadsMountRoot  = "/mnt/session/uploads"
 	fileDigestHeader         = "X-BMA-File-Digest"
@@ -112,6 +112,7 @@ type fileSession struct {
 	lastActive time.Time
 	mounts     map[string]mountedFile // by uploads-relative path
 	outputFile map[string]*outputFile
+	memory     map[string]*memoryMirror // by memory store id
 }
 
 type mountedFile struct {
@@ -132,8 +133,9 @@ type fileObservation struct {
 }
 
 type sessionFilesManifest struct {
-	SessionID string        `json:"session_id"`
-	Files     []sessionFile `json:"files"`
+	SessionID    string               `json:"session_id"`
+	Files        []sessionFile        `json:"files"`
+	MemoryStores []sessionMemoryStore `json:"memory_stores,omitempty"`
 }
 
 type sessionFile struct {
@@ -272,6 +274,9 @@ func (f *SessionFiles) prepare(ctx context.Context, client *Client, sessionID, p
 	if err := session.syncLocked(ctx, manifest.Files); err != nil {
 		return err
 	}
+	if err := session.syncMemoryLocked(ctx, client, processID, manifest.MemoryStores, f.log); err != nil {
+		return fmt.Errorf("memory: %w", err)
+	}
 	f.started.Store(processID, struct{}{})
 	return nil
 }
@@ -394,15 +399,19 @@ func (s *fileSession) syncLocked(ctx context.Context, files []sessionFile) error
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	if err := s.removeStale(root, want); err != nil {
+	err = pruneRoot(root, func(rel string) bool { _, ok := want[rel]; return ok }, func(rel string) { delete(s.mounts, rel) })
+	if err != nil {
 		return fmt.Errorf("remove unmounted files: %w", err)
 	}
 	for rel, file := range want {
-		if s.mountCurrent(root, rel, file) {
+		if currentIn(root, rel, file.SizeBytes, file.Digest, s.mounts) {
 			continue
 		}
 		delete(s.mounts, rel)
-		if err := s.download(ctx, root, rel, file); err != nil {
+		route := "/processes/" + url.PathEscape(s.anchor) + "/session-files/" + url.PathEscape(file.ResourceID) + "/content"
+		if _, err := fetchInto(ctx, s.client, root, rel, route, func(*http.Response) (int64, string, error) {
+			return file.SizeBytes, file.Digest, nil
+		}); err != nil {
 			return fmt.Errorf("materialize %s: %w", file.MountPath, err)
 		}
 		info, err := root.Lstat(rel)
@@ -414,9 +423,10 @@ func (s *fileSession) syncLocked(ctx context.Context, files []sessionFile) error
 	return nil
 }
 
-// removeStale deletes every entry of uploads that is not a wanted regular
-// file and the directories left empty. WalkDir does not descend symlinks.
-func (s *fileSession) removeStale(root *os.Root, want map[string]sessionFile) error {
+// pruneRoot deletes every entry of root that is not a regular file keep
+// accepts, then the directories left empty; removed is told each deleted
+// file. WalkDir does not descend symlinks.
+func pruneRoot(root *os.Root, keep func(rel string) bool, removed func(rel string)) error {
 	var stale, dirs []string
 	err := fs.WalkDir(root.FS(), ".", func(rel string, entry fs.DirEntry, err error) error {
 		switch {
@@ -426,7 +436,7 @@ func (s *fileSession) removeStale(root *os.Root, want map[string]sessionFile) er
 		case entry.IsDir():
 			dirs = append(dirs, rel)
 		default:
-			if _, ok := want[rel]; !ok || !entry.Type().IsRegular() {
+			if !entry.Type().IsRegular() || !keep(rel) {
 				stale = append(stale, rel)
 			}
 		}
@@ -439,7 +449,7 @@ func (s *fileSession) removeStale(root *os.Root, want map[string]sessionFile) er
 		if err := removeInRoot(root, rel); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		delete(s.mounts, rel)
+		removed(rel)
 	}
 	for i := len(dirs) - 1; i >= 0; i-- {
 		_ = root.Remove(dirs[i]) // fails while the directory still has files
@@ -447,13 +457,14 @@ func (s *fileSession) removeStale(root *os.Root, want map[string]sessionFile) er
 	return nil
 }
 
-// mountCurrent reports whether rel already holds the mount's content.
-func (s *fileSession) mountCurrent(root *os.Root, rel string, file sessionFile) bool {
+// currentIn reports whether rel in root already holds size bytes of digest,
+// recording a match in known.
+func currentIn(root *os.Root, rel string, size int64, digest string, known map[string]mountedFile) bool {
 	info, err := root.Lstat(rel)
-	if err != nil || !info.Mode().IsRegular() || info.Size() != file.SizeBytes {
+	if err != nil || !info.Mode().IsRegular() || info.Size() != size {
 		return false
 	}
-	if known, ok := s.mounts[rel]; ok && known.digest == file.Digest && known.observed == observe(info) {
+	if mount, ok := known[rel]; ok && mount.digest == digest && mount.observed == observe(info) {
 		return true
 	}
 	handle, err := root.OpenFile(rel, os.O_RDONLY|noFollow, 0)
@@ -462,10 +473,10 @@ func (s *fileSession) mountCurrent(root *os.Root, rel string, file sessionFile) 
 	}
 	defer func() { _ = handle.Close() }()
 	hash := sha256.New()
-	if _, err := io.Copy(hash, handle); err != nil || fmt.Sprintf("sha256:%x", hash.Sum(nil)) != file.Digest {
+	if _, err := io.Copy(hash, handle); err != nil || fmt.Sprintf("sha256:%x", hash.Sum(nil)) != digest {
 		return false
 	}
-	s.mounts[rel] = mountedFile{digest: file.Digest, observed: observe(info)}
+	known[rel] = mountedFile{digest: digest, observed: observe(info)}
 	return true
 }
 
@@ -473,15 +484,19 @@ func observe(info fs.FileInfo) fileObservation {
 	return fileObservation{size: info.Size(), modTime: info.ModTime()}
 }
 
-func (s *fileSession) download(ctx context.Context, root *os.Root, rel string, file sessionFile) error {
+// fetchInto downloads route into rel of root (0444): into a temporary file, renamed
+// into place only once its length and sha256 are what expect says of the
+// response. It returns the digest written.
+func fetchInto(ctx context.Context, client *Client, root *os.Root, rel, route string,
+	expect func(*http.Response) (size int64, digest string, err error)) (string, error) {
 	dir := path.Dir(rel)
 	if err := root.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create parent directory: %w", err)
+		return "", fmt.Errorf("create parent directory: %w", err)
 	}
 	temporary := path.Join(dir, fmt.Sprintf(".bma-upload-%d", time.Now().UnixNano()))
 	handle, err := root.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return fmt.Errorf("create temporary file: %w", err)
+		return "", fmt.Errorf("create temporary file: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -490,35 +505,37 @@ func (s *fileSession) download(ctx context.Context, root *os.Root, rel string, f
 			_ = root.Remove(temporary)
 		}
 	}()
-	response, err := s.client.daemonDo(ctx, http.MethodGet,
-		"/processes/"+url.PathEscape(s.anchor)+"/session-files/"+url.PathEscape(file.ResourceID)+"/content",
-		nil, 0, http.Header{"Accept": {"application/octet-stream"}})
+	response, err := client.daemonDo(ctx, http.MethodGet, route, nil, 0, http.Header{"Accept": {"application/octet-stream"}})
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = response.Body.Close() }()
-	hash := sha256.New()
-	written, err := io.Copy(io.MultiWriter(handle, hash), io.LimitReader(response.Body, file.SizeBytes+1))
+	size, want, err := expect(response)
 	if err != nil {
-		return fmt.Errorf("write file: %w", err)
+		return "", err
 	}
-	if digest := fmt.Sprintf("sha256:%x", hash.Sum(nil)); written != file.SizeBytes || digest != file.Digest {
-		return fmt.Errorf("download digest mismatch: got %d bytes %s, want %d bytes %s", written, digest, file.SizeBytes, file.Digest)
+	hash := sha256.New()
+	written, err := io.Copy(io.MultiWriter(handle, hash), io.LimitReader(response.Body, size+1))
+	if err != nil {
+		return "", fmt.Errorf("write file: %w", err)
+	}
+	if digest := fmt.Sprintf("sha256:%x", hash.Sum(nil)); written != size || digest != want {
+		return "", fmt.Errorf("download digest mismatch: got %d bytes %s, want %d bytes %s", written, digest, size, want)
 	}
 	if err := handle.Chmod(0o444); err != nil {
-		return err
+		return "", err
 	}
 	if err := handle.Close(); err != nil {
-		return err
+		return "", err
 	}
 	if info, err := root.Lstat(rel); err == nil && info.IsDir() {
-		return fmt.Errorf("%s is a directory", rel)
+		return "", fmt.Errorf("%s is a directory", rel)
 	}
 	if err := replaceInRoot(root, temporary, rel); err != nil {
-		return fmt.Errorf("place file: %w", err)
+		return "", fmt.Errorf("place file: %w", err)
 	}
 	committed = true
-	return nil
+	return want, nil
 }
 
 // scan uploads changed outputs; force uploads files not yet seen stable. It

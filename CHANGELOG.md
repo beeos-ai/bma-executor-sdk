@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.23.0
+
+- Go: `SessionFiles` mirrors the session's memory stores (executor contract 2.6.0, `capabilities.session_files.memory`): the `memory_stores` of the session files manifest are written read-only to `<root>/<session id>/memory/<slug>/<path>` before every process of the session and on the new `session_files.sync` request the platform sends before each turn of a session with memory (on-machine brains and read-only tool calls start no process). Unchanged files are kept by sha256, everything the agent changed or added is restored or removed, a marker `memory/.bma-memory.json` lists the stores, and processes get `BMA_MEMORY_DIR`. `files.MemoryDir(sessionID)` names the directory for sandbox profiles. Sessions without memory stores are unchanged.
+- Go: the file tools of an on-machine brain read `<root>/<session id>/memory` (read-only mount `memory`, also accepted by `ACPAgentOptions.SessionMounts`).
+- Go: `Capability.UnscopedMethods` registers methods of a session-scoped capability that name no executor session.
+
 ## 1.22.3
 
 - bma: `bma sessions send --file` and `bma sessions launch` name each attached file in the message at the `mount_path` the session shows for it (its path in the session's uploads directory, `/mnt/session/<session_id>/uploads/<name>`), not at `/mnt/session/uploads/<name>`, where the machine has no file.

@@ -9,10 +9,11 @@ import (
 )
 
 // The directories of a session's files (ADR-0021) are <root>/<session id>/
-// {uploads,skills,outputs} below the executor's capabilities.session_files.root.
-// A local brain's file tools may reach them besides the workspace, and only
-// these three of this one session: uploads and skills read-only, outputs
-// readable and writable. Each is opened as an os.Root of its own, so a "..",
+// {uploads,skills,outputs,memory} below the executor's
+// capabilities.session_files.root. A local brain's file tools may reach them
+// besides the workspace, and only these of this one session: uploads, skills
+// and memory (the mirror of its memory stores) read-only, outputs readable and
+// writable. Each is opened as an os.Root of its own, so a "..",
 // an absolute path elsewhere (another session's directory included) and a
 // symbolic link that leaves the directory are refused by the operating system
 // call, and the directory itself must be a real directory, not a link.
@@ -22,6 +23,7 @@ const (
 	SessionMountUploads = "uploads"
 	SessionMountSkills  = "skills"
 	SessionMountOutputs = "outputs"
+	SessionMountMemory  = "memory"
 )
 
 // sessionMount is one mounted directory of a session.
@@ -33,9 +35,9 @@ type sessionMount struct {
 	writable bool
 }
 
-// sessionMountsFor returns the directories of sessionID below root: uploads
-// and skills read-only, outputs writable; only those named in names, or all
-// three for nil. The session id must be a single safe directory name.
+// sessionMountsFor returns the directories of sessionID below root: uploads,
+// skills and memory read-only, outputs writable; only those named in names,
+// or all four for nil. The session id must be a single safe directory name.
 func sessionMountsFor(root, sessionID string, names []string) ([]*sessionMount, error) {
 	if !filepath.IsAbs(root) {
 		return nil, fmt.Errorf("session files root %q is not an absolute path", root)
@@ -48,7 +50,7 @@ func sessionMountsFor(root, sessionID string, names []string) ([]*sessionMount, 
 	for _, m := range []struct {
 		name     string
 		writable bool
-	}{{SessionMountUploads, false}, {SessionMountSkills, false}, {SessionMountOutputs, true}} {
+	}{{SessionMountUploads, false}, {SessionMountSkills, false}, {SessionMountOutputs, true}, {SessionMountMemory, false}} {
 		if names != nil && !slices.Contains(names, m.name) {
 			continue
 		}
