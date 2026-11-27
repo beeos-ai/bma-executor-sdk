@@ -42,7 +42,11 @@ func TestSessionRunAsKeepsSessionsApart(t *testing.T) {
 		t.Fatal(err)
 	}
 	machine := workloadUser
-	core := newTestCore(t, CoreOptions{WorkRoot: root, RunAs: &machine,
+	alias := filepath.Join(root, "machine-home")
+	if err := os.Mkdir(alias, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	core := newTestCore(t, CoreOptions{WorkRoot: root, WorkRootAliases: []string{alias}, RunAs: &machine,
 		SessionRunAs: func(_ string, p SessionAssignParams) (*RunAs, error) { return sessionUser(p.SessionID) }})
 	if err := core.Register(NewProcessCapability(core, ProcessOptions{PackageInstaller: identityInstaller{}})); err != nil {
 		t.Fatal(err)
@@ -62,6 +66,15 @@ func TestSessionRunAsKeepsSessionsApart(t *testing.T) {
 	}
 	if got := strings.TrimSpace(readAll(t, b.executor, bs.ID(), "id")); got != "61002" {
 		t.Fatalf("session b process uid = %q", got)
+	}
+	// A cwd equal to a work root alias (the machine's configured cwd) is the session's workspace.
+	if err := b.executor.Call(ctx, MethodProcessStart, ProcessStartParams{
+		SessionID: bs.ID(), ProcessID: "pwd", Argv: []string{"pwd"}, Cwd: alias, WaitMS: 5000,
+	}, &state); err != nil || state.State != ProcessExited {
+		t.Fatalf("pwd = %+v err %v", state, err)
+	}
+	if got := strings.TrimSpace(readAll(t, b.executor, bs.ID(), "pwd")); got != core.workspace("local", "sess_b") {
+		t.Fatalf("cwd alias resolves to %q", got)
 	}
 	// A user-level install runs as the session with the session's HOME.
 	if err := b.executor.Call(ctx, MethodProcessStart, ProcessStartParams{

@@ -71,6 +71,11 @@ func mcpBaseEnv() []string {
 type CoreOptions struct {
 	// WorkRoot holds every session workspace: WorkRoot/<brain>/<session>.
 	WorkRoot string
+	// WorkRootAliases are absolute directories that, as a session's cwd,
+	// mean the session's workspace as WorkRoot does: for example the workload
+	// user's home, the machine's configured cwd, when the work root is
+	// elsewhere.
+	WorkRootAliases []string
 	// Workspace overrides the per-session directory (for example a machine
 	// executor whose sessions all share one directory, or a desktop app
 	// mapping a brain to a project folder). Tools are confined to it.
@@ -268,9 +273,9 @@ type coreKey struct{ brain, session string }
 type CoreSession struct {
 	key       coreKey
 	workspace string
-	// workRoot is CoreOptions.WorkRoot: a cwd equal to it means "the
-	// session's workspace" (see ResolveCwd).
-	workRoot string
+	// workRoots are CoreOptions.WorkRoot and WorkRootAliases: a cwd equal to
+	// one means "the session's workspace" (see ResolveCwd).
+	workRoots []string
 	// runAs is the session's OS identity (CoreOptions.SessionRunAs, else
 	// RunAs); nil runs as the executor.
 	runAs  *RunAs
@@ -380,6 +385,11 @@ func NewCore(opts CoreOptions) (*Core, error) {
 	}
 	if (opts.RunAs != nil || opts.SessionRunAs != nil) && runtime.GOOS == "windows" {
 		return nil, errors.New("bmaexecutor: CoreOptions.RunAs is not supported on windows")
+	}
+	for _, alias := range opts.WorkRootAliases {
+		if !filepath.IsAbs(alias) {
+			return nil, fmt.Errorf("bmaexecutor: CoreOptions.WorkRootAliases %q is not absolute", alias)
+		}
 	}
 	for key := range opts.Env {
 		if opts.DenyEnv(key) {
@@ -642,7 +652,7 @@ func (c *Core) assign(brain string, client *Client, params SessionAssignParams) 
 	// Sessions outlive one connection: their context is not the request's.
 	ctx, cancel := context.WithCancel(context.Background())
 	session := &CoreSession{
-		key: key, workspace: c.workspace(brain, params.SessionID), workRoot: c.opts.WorkRoot, client: client, params: params,
+		key: key, workspace: c.workspace(brain, params.SessionID), workRoots: append([]string{c.opts.WorkRoot}, c.opts.WorkRootAliases...), client: client, params: params,
 		ctx: ctx, cancel: cancel, values: map[any]any{}, outside: c.opts.OutsideFiles, runAs: runAs,
 	}
 	c.sessions[key] = session
@@ -994,7 +1004,7 @@ func (s *CoreSession) resolve(path string) (string, error) {
 // symlinks) under it. An absolute cwd that is exactly the executor work root
 // (what a machine's configured cwd is, for example C:\bma\work) is the
 // session's workspace, since the work root holds every session's workspace
-// and is no place to run a command.
+// and is no place to run a command; so is a CoreOptions.WorkRootAliases one.
 func (s *CoreSession) ResolveCwd(cwd string) (string, error) {
 	if cwd != "" && filepath.IsAbs(cwd) && s.isWorkRoot(cwd) {
 		cwd = ""
@@ -1022,18 +1032,12 @@ func (s *CoreSession) ResolveCwd(cwd string) (string, error) {
 	return targetReal, nil
 }
 
-// isWorkRoot reports whether the absolute path names the work root itself,
+// isWorkRoot reports whether the absolute path names the work root itself
+// (or one of its aliases),
 // compared on real paths (symlinks, 8.3 short names and drive-letter or file
 // name case resolve alike on Windows).
 func (s *CoreSession) isWorkRoot(path string) bool {
-	if s.workRoot == "" {
-		return false
-	}
 	target, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return false
-	}
-	root, err := filepath.EvalSymlinks(s.workRoot)
 	if err != nil {
 		return false
 	}
@@ -1041,8 +1045,16 @@ func (s *CoreSession) isWorkRoot(path string) bool {
 	if err != nil {
 		return false
 	}
-	rootInfo, err := os.Stat(root)
-	return err == nil && os.SameFile(targetInfo, rootInfo)
+	for _, workRoot := range s.workRoots {
+		root, err := filepath.EvalSymlinks(workRoot)
+		if err != nil {
+			continue
+		}
+		if rootInfo, err := os.Stat(root); err == nil && os.SameFile(targetInfo, rootInfo) {
+			return true
+		}
+	}
+	return false
 }
 
 // Env builds a bash or process environment: baseEnv from the executor, the
