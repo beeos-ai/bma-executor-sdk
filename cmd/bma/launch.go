@@ -132,7 +132,8 @@ definition with "model") is created, or updated to a new version only when
 its definition changed, as "bma agents apply" does. "machine_pool" runs the
 session on a machine of that pool. Local "resources" paths and "files"
 (attachments of the first message) are uploaded and mounted in the session
-at /mnt/session/uploads/<name>; relative paths start at the file's directory.
+as <name> in its uploads directory, and the message lists the mount paths the
+session shows; relative paths start at the file's directory.
 
 Launching is idempotent: the launch key, a digest of the file and of every
 local file it uploads (or --idempotency-key), is stored in the session's
@@ -267,9 +268,9 @@ func (l *launcher) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	text := withAttachments(l.spec.Message, att)
 	if found != nil {
 		l.session, l.sid = found, found["id"].(string)
+		text := withAttachments(l.spec.Message, shownMounts(found, att))
 		fmt.Fprintf(os.Stderr, "✓ session %s was launched from this file before (%s %s); not creating another\n",
 			l.sid, launchKeyLabel, l.key)
 		if text != "" {
@@ -298,7 +299,7 @@ func (l *launcher) run(ctx context.Context) error {
 	l.session, _ = v.(map[string]any)
 	l.sid, _ = l.session["id"].(string)
 	fmt.Fprintf(os.Stderr, "✓ session %s created\n", l.sid)
-	if text != "" {
+	if text := withAttachments(l.spec.Message, shownMounts(l.session, att)); text != "" {
 		l.message = userMessage(text)
 	}
 	return nil

@@ -312,6 +312,13 @@ func (f *fakeBMA) serve(w http.ResponseWriter, r *http.Request) {
 			for k, v := range in {
 				s[k] = v
 			}
+			if rs, ok := in["resources"].([]any); ok {
+				for _, r := range rs {
+					if m, _ := r.(map[string]any); m["type"] == "file" {
+						m["mount_path"] = fakeMountPath(s["id"].(string), m)
+					}
+				}
+			}
 			f.sessions = append(f.sessions, s)
 			return s
 		})
@@ -328,8 +335,10 @@ func (f *fakeBMA) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		s := f.session(parts[1])
 		res, _ := s["resources"].([]any)
-		s["resources"] = append(res, map[string]any{"type": "file", "file_id": in["file_id"], "mount_path": in["mount_path"]})
-		writeJSONAnswer(w, 200, map[string]any{"type": "file", "id": "sesrsc_1"})
+		added := map[string]any{"type": "file", "id": "sesrsc_1", "file_id": in["file_id"],
+			"mount_path": fakeMountPath(parts[1], in)}
+		s["resources"] = append(res, added)
+		writeJSONAnswer(w, 200, added)
 	case len(parts) == 3 && parts[2] == "events" && r.Method == "POST":
 		sid := parts[1]
 		f.idempotent(w, r, string(b), func() any {
@@ -451,11 +460,12 @@ func TestLaunchWaitPrintsTheReplyAndARerunCreatesNoSecondSession(t *testing.T) {
 		t.Fatalf("metadata %v", md)
 	}
 	mounts := fmt.Sprint(s["resources"])
-	if !strings.Contains(mounts, "/mnt/session/uploads/input/data.csv") || !strings.Contains(mounts, "/mnt/session/uploads/notes.txt") {
+	uploads := "/mnt/session/" + fmt.Sprint(s["id"]) + "/uploads/"
+	if !strings.Contains(mounts, uploads+"input/data.csv") || !strings.Contains(mounts, uploads+"notes.txt") {
 		t.Fatalf("resources %s", mounts)
 	}
 	msg := f.events[fmt.Sprint(s["id"])][0]
-	if !strings.Contains(messageText(msg), "Attached files:\n- /mnt/session/uploads/notes.txt") {
+	if !strings.Contains(messageText(msg), "Attached files:\n- "+uploads+"notes.txt") {
 		t.Fatalf("first message %q", messageText(msg))
 	}
 
@@ -576,6 +586,18 @@ func TestAgentsApplyCreatesThenUpdatesOnlyOnChange(t *testing.T) {
 	}
 }
 
+// fakeMountPath is where BMA shows a file resource of session sid: in the
+// session's uploads directory, at the requested path relative to
+// /mnt/session/uploads/ (or below it), else at the file id.
+func fakeMountPath(sid string, r map[string]any) string {
+	rel, _ := r["mount_path"].(string)
+	rel = strings.TrimPrefix(strings.TrimPrefix(rel, "/mnt/session/uploads/"), "/")
+	if rel == "" {
+		rel, _ = r["file_id"].(string)
+	}
+	return "/mnt/session/" + sid + "/uploads/" + rel
+}
+
 func TestSendWithAFileMountsItAndWaitPrintsTheDeliverables(t *testing.T) {
 	f, url := newFakeBMA(t)
 	f.sessions = []map[string]any{{"id": "ses_1", "status": "idle"}}
@@ -584,8 +606,12 @@ func TestSendWithAFileMountsItAndWaitPrintsTheDeliverables(t *testing.T) {
 	if code != 0 || out != "reply: write a review\n\nDeliverables:\n  file_out  report.md  (bma files download file_out -o report.md)\n" {
 		t.Fatalf("code %d out %q", code, out)
 	}
-	if res := fmt.Sprint(f.sessions[0]["resources"]); !strings.Contains(res, "/mnt/session/uploads/draft.md") {
+	if res := fmt.Sprint(f.sessions[0]["resources"]); !strings.Contains(res, "/mnt/session/ses_1/uploads/draft.md") {
 		t.Fatalf("resources %s", res)
+	}
+	// The message names the file where the session shows it.
+	if msg := messageText(f.events["ses_1"][0]); !strings.Contains(msg, "Attached files:\n- /mnt/session/ses_1/uploads/draft.md") {
+		t.Fatalf("message %q", msg)
 	}
 }
 
