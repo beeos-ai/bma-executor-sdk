@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=../schema/agent.schema.json
+# bma agents apply -f agent.yaml
+name: release-notes-writer
+model: claude-sonnet-4-5
+description: Writes release notes from a changelog.
+system: |
+  You write concise release notes for end users.
+  Group changes by feature; skip internal refactors.
+tools:
+  - type: agent_toolset_20260401
+metadata:
+  team: docs

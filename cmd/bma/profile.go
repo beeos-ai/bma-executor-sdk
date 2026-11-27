@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -225,20 +227,46 @@ func profilesCmd() *cobra.Command {
 			return printValue(items, true)
 		},
 	})
-	cmd.AddCommand(&cobra.Command{
-		Use: "use <name>", Short: "Make a profile the current one", Args: args(1),
-		RunE: func(_ *cobra.Command, a []string) error {
+	var interactive bool
+	useCmd := &cobra.Command{
+		Use:   "use [<name>]",
+		Short: "Make a profile the current one; --interactive picks the profile and its workspace from lists",
+		Long: "Make a profile the current one. With --interactive, choose the profile from a list (when no name " +
+			"is given and there are several), then the workspace of its organization from the organization's " +
+			"workspaces; the workspace is saved in the profile. The organization is the one the profile's " +
+			"credential belongs to: sign in again (`bma login`) to use another organization.",
+		RunE: func(cmd *cobra.Command, a []string) error {
+			if len(a) > 1 || len(a) == 0 && !interactive {
+				return usageError("usage: bma profiles use <name> | bma profiles use [<name>] --interactive")
+			}
 			c, err := loadCLIConfig()
 			if err != nil {
 				return err
 			}
-			if _, ok := c.Profiles[a[0]]; !ok {
-				return fmt.Errorf("no profile %q (see `bma profiles list`)", a[0])
+			name := ""
+			if len(a) == 1 {
+				name = a[0]
+			} else {
+				if name, err = pickProfile(c); err != nil {
+					return err
+				}
 			}
-			c.Current = a[0]
+			if _, ok := c.Profiles[name]; !ok {
+				return fmt.Errorf("no profile %q (see `bma profiles list`)", name)
+			}
+			c.Current = name
+			if interactive {
+				p, err := pickWorkspace(cmd.Context(), name, c.Profiles[name])
+				if err != nil {
+					return err
+				}
+				c.Profiles[name] = p
+			}
 			return c.save()
 		},
-	})
+	}
+	useCmd.Flags().BoolVar(&interactive, "interactive", false, "choose the profile and the workspace from lists")
+	cmd.AddCommand(useCmd)
 	var set profile
 	setCmd := &cobra.Command{
 		Use: "set <name>", Short: "Create or change a profile (only the flags given)", Args: args(1),
@@ -298,4 +326,80 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// choose prints the numbered options on stderr and reads the choice.
+func choose(what string, options []string) (int, error) {
+	for i, o := range options {
+		fmt.Fprintf(os.Stderr, "  %d) %s\n", i+1, o)
+	}
+	for {
+		fmt.Fprintf(os.Stderr, "? %s [1-%d] ", what, len(options))
+		line, err := stdin.ReadString('\n')
+		if n, convErr := strconv.Atoi(strings.TrimSpace(line)); convErr == nil && n >= 1 && n <= len(options) {
+			return n - 1, nil
+		}
+		if err != nil {
+			return 0, usageError("no " + what + " chosen")
+		}
+	}
+}
+
+func pickProfile(c cliConfig) (string, error) {
+	names := make([]string, 0, len(c.Profiles))
+	for n := range c.Profiles {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	switch len(names) {
+	case 0:
+		return "", fmt.Errorf("no profiles yet: run `bma login`")
+	case 1:
+		return names[0], nil
+	}
+	i, err := choose("profile", names)
+	if err != nil {
+		return "", err
+	}
+	return names[i], nil
+}
+
+// pickWorkspace lets the user choose one of the workspaces of the
+// profile's organization.
+func pickWorkspace(ctx context.Context, name string, p profile) (profile, error) {
+	opts.Profile = name
+	s, err := apiSession()
+	if err != nil {
+		return p, err
+	}
+	if org, err := s.json(ctx, "GET", "v1/organizations/me", nil, nil); err == nil {
+		if m, ok := org.(map[string]any); ok {
+			fmt.Fprintf(os.Stderr, "Organization: %v (%v)\n", m["name"], m["id"])
+			if id, _ := m["id"].(string); id != "" && p.Organization == "" {
+				p.Organization = id
+			}
+		}
+	}
+	items, err := listAll(ctx, s, "v1/organizations/workspaces", nil)
+	if err != nil {
+		return p, fmt.Errorf("listing the organization's workspaces: %w", err)
+	}
+	if len(items) == 0 {
+		return p, fmt.Errorf("the organization has no workspace the credential can use")
+	}
+	var labels []string
+	for _, it := range items {
+		label := fmt.Sprintf("%v  %v", it["name"], it["id"])
+		if it["id"] == p.Workspace {
+			label += "  (current)"
+		}
+		labels = append(labels, label)
+	}
+	i, err := choose("workspace", labels)
+	if err != nil {
+		return p, err
+	}
+	p.Workspace, _ = items[i]["id"].(string)
+	fmt.Fprintf(os.Stderr, "✓ profile %s uses workspace %v (%s)\n", name, items[i]["name"], p.Workspace)
+	return p, nil
 }

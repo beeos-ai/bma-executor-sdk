@@ -76,7 +76,10 @@ public OpenAPI document (`contracts/bma-api/bma.openapi.yaml`) by
 bma login                                   # approve in the dashboard; or: bma login --with-token < key
 bma machines list                           # a table on a terminal, JSON otherwise
 bma machines get mch_123 --query .status    # --json, --format json|jsonl|yaml|table, --query <jq>
-bma sessions send sesn_123 "hello" --wait   # send a message, print the agent's reply
+bma agents apply -f agent.yaml              # create the agent, or a new version only when the file changed
+bma sessions launch -f session.yaml --wait  # a session from a file: agent, environment, files, first message
+bma sessions send sesn_123 "hello" --wait   # send a message (--file to attach), print the reply and deliverables
+bma sessions chat sesn_123                  # talk in the terminal; answer tool approvals; Ctrl-C interrupts
 bma sessions events stream sesn_123         # follow events; resumes with Last-Event-ID
 bma files upload ./report.pdf
 bma skills push ./my-skill                  # a new skill, or --skill <id> for a new version
@@ -88,8 +91,10 @@ keychain on macOS, else `~/.config/bma/credentials.json`, 0600). Profiles
 live in `~/.config/bma/config.yaml` (`bma profiles list|use|set|delete`,
 `--profile`, `BMA_PROFILE`; `BMA_BASE_URL` and `BMA_WORKSPACE_ID` override one
 setting). Exit codes: 0 success, 1 failure, 2 usage, 3 not authenticated or
-permitted, 4 not found, 5 conflict, 6 rate limited/server/network, 130
-interrupted. `bma docs <dir>` writes the full command reference as Markdown.
+permitted, 4 not found, 5 conflict, 6 rate limited/server/network, 7 the
+followed turn waits for input, 8 the turn failed, 124 timeout, 130
+interrupted. The session and agent files are described by
+`cmd/bma/schema/*.schema.json` (examples in `cmd/bma/examples/`). `bma docs <dir>` writes the full command reference as Markdown.
 
 Regenerate the commands after refreshing the document:
 `go run ./tools/cligen -spec contracts/bma-api/bma.openapi.yaml -out cmd/bma/api_gen.go`

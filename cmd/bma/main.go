@@ -6,7 +6,9 @@
 // API: `bma login`, then a command per operation of the public API, generated
 // from the OpenAPI document (`bma sessions list`, `bma machines get <id>`,
 // ...), plus `bma sessions events stream`, `bma sessions send`,
-// `bma files upload|download`, `bma skills push`. Every command takes
+// `bma files upload|download`, `bma skills push`, `bma sessions launch -f`
+// (a session from a YAML file), `bma sessions chat|wait|interrupt`,
+// `bma agents apply -f`. Every command takes
 // --json / --format json|jsonl|yaml|table and --query <jq>.
 //
 // BYO executor: `bma up` signs this computer in through the dashboard
@@ -24,8 +26,9 @@
 //
 // Exit codes: 0 success, 1 other failure, 2 usage, 3 not authenticated or
 // not permitted (401/403), 4 not found (404), 5 conflict or precondition
-// (409/412), 6 rate limited, server error or network after retries, 130
-// interrupted.
+// (409/412), 6 rate limited, server error or network after retries, 7 the
+// followed turn waits for input (requires_action), 8 the turn failed or the
+// session ended, 124 a --timeout passed, 130 interrupted.
 package main
 
 import (

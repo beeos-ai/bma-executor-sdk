@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.22.0
+
+- bma: `bma sessions launch -f session.yaml` starts a session from a file in one step: the agent (a name or ID, a pinned version, or an inline definition applied like `bma agents apply`), the environment or machine pool (by name or ID; a name must match exactly one item, an ambiguous name exits 2 and an unknown one 4, each listing the candidates), title, metadata, resources (local files are uploaded and mounted), vault IDs and the first message with its attachments (`--message`, `--file`). The launch is idempotent: its key (a digest of the file and of every file it uploads, or `--idempotency-key`) is the Idempotency-Key of every create and is stored in the session's metadata as `bma_cli_launch_key`, so a rerun finds that session instead of creating another and does not send the message twice. `--wait` prints the agent's reply and the deliverables, `--stream` the turn's events, `--interactive` continues as `bma sessions chat`. Schema: `cmd/bma/schema/session.schema.json`; examples in `cmd/bma/examples/`.
+- bma: `bma agents apply -f agent.yaml` creates the agent of that name or updates it to the file; an update that changes nothing stores no version (schema `cmd/bma/schema/agent.schema.json`).
+- bma: `bma sessions chat <id>` talks to a session in the terminal: the reply streams in, tool approvals and custom tool results are answered at the prompt, Ctrl-C interrupts the turn. `bma sessions interrupt <id>` stops the current turn (safe to repeat). `bma sessions wait <id> [--state idle|running|requires_action|terminated] [--timeout]` waits for a state and prints the session. `bma sessions list --status` filters by state, including `requires_action` (idle sessions whose turn waits for the user). `bma profiles use --interactive` picks the profile and the workspace from lists.
+- bma: `bma sessions send --file` attaches files (uploaded and mounted at `/mnt/session/uploads/<name>`); `--wait` also prints the deliverables (`--json`: `session_id`, `stop_reason`, `text`, `pending`, `outputs`). A followed turn sets the exit status: 0 `end_turn`, 7 waiting for input (`requires_action`), 8 failed or the session ended; 124 when `sessions wait --timeout` passes.
+
 ## 1.21.0
 
 - Go: `(*Terminals).CloseTerminal(terminal_id, reason)` ends one terminal for the embedding executor exactly as `terminal.close` does (the same code path): the attached consumer receives a `closed` frame with `reason`, instead of the `exit` of a shell the executor killed itself. Unknown ids are ignored.

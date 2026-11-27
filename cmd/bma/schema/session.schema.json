@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/beeos-ai/bma-executor-sdk/blob/main/cmd/bma/schema/session.schema.json",
+  "title": "BMA session file (bma sessions launch -f)",
+  "description": "A session to start in one step: the agent, where it runs, what is mounted and the first message. Names are resolved to IDs from the lists; a name must match exactly one item.",
+  "type": "object",
+  "required": ["agent"],
+  "additionalProperties": false,
+  "oneOf": [
+    {"required": ["environment"], "not": {"required": ["machine_pool"]}},
+    {"required": ["machine_pool"], "not": {"required": ["environment"]}}
+  ],
+  "properties": {
+    "agent": {
+      "description": "The agent: its name or aprf_ ID (its latest version); {id or name, version} to pin a version; or an inline definition (with model, see agent.schema.json), created or updated like `bma agents apply`.",
+      "oneOf": [
+        {"type": "string", "minLength": 1},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "version": {"type": "integer", "minimum": 1}},
+          "oneOf": [{"required": ["id"]}, {"required": ["name"]}]
+        },
+        {"$ref": "agent.schema.json"}
+      ]
+    },
+    "environment": {"type": "string", "minLength": 1, "description": "An environment's name or env_ ID, or a machine's mch_ ID (a granted machine is listed as an environment)."},
+    "machine_pool": {"type": "string", "minLength": 1, "description": "A machine pool's name or ID: mpo_ (a machine of the pool is started for the session) or env_ (a cloud environment's own pool)."},
+    "title": {"type": "string"},
+    "metadata": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Stored with the session; bma adds bma_cli_launch_key."},
+    "resources": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A local file, uploaded and mounted (default mount: /mnt/session/uploads/<file_id>). Relative paths start at the session file's directory.",
+            "required": ["path"],
+            "additionalProperties": false,
+            "properties": {"path": {"type": "string"}, "mount_path": {"type": "string"}}
+          },
+          {
+            "type": "object",
+            "description": "An uploaded file.",
+            "required": ["type", "file_id"],
+            "properties": {"type": {"const": "file"}, "file_id": {"type": "string"}, "mount_path": {"type": "string"}}
+          },
+          {
+            "type": "object",
+            "description": "A memory store, by memstore_ ID or name.",
+            "required": ["type", "memory_store_id"],
+            "properties": {
+              "type": {"const": "memory_store"},
+              "memory_store_id": {"type": "string"},
+              "access": {"enum": ["read_write", "read_only"]},
+              "instructions": {"type": "string", "maxLength": 4096}
+            }
+          }
+        ]
+      }
+    },
+    "vault_ids": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"type": "string", "pattern": "^vlt_"}},
+    "message": {"type": "string", "description": "The first user message (--message replaces it)."},
+    "files": {"type": "array", "items": {"type": "string"}, "description": "Attachments of the first message: uploaded, mounted at /mnt/session/uploads/<name> and listed in the message (--file adds more)."}
+  }
+}

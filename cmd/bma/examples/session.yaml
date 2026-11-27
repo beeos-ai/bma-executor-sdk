@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=../schema/session.schema.json
+# bma sessions launch -f session.yaml --wait
+agent: release-notes-writer      # a name or an aprf_ ID; {name: ..., version: 3} pins a version
+environment: python-sandbox      # a name or an env_ / mch_ ID (or machine_pool: <name or mpo_ ID>)
+title: Release notes 1.8
+metadata:
+  release: "1.8"
+resources:
+  - path: CHANGELOG.md           # uploaded and mounted
+    mount_path: /mnt/session/uploads/CHANGELOG.md
+message: Write the release notes for 1.8 from /mnt/session/uploads/CHANGELOG.md into release-notes.md.

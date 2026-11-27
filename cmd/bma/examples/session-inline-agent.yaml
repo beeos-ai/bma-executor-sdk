@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=../schema/session.schema.json
+# bma sessions launch -f session-inline-agent.yaml --interactive
+agent:                           # an inline agent: created, or updated only when it changed
+  name: data-analyst
+  model: claude-sonnet-4-5
+  system: You analyze CSV files with Python and explain the results briefly.
+  tools:
+    - type: agent_toolset_20260401
+machine_pool: e2b-production     # the session runs on a machine of this pool
+files:
+  - sales.csv                    # attached to the first message
+message: Which region grew fastest last quarter?
