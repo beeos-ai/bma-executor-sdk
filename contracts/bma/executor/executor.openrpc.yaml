@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 2.900.0
+  version: 2.6.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -1634,15 +1634,15 @@ methods:
       - $ref: "#/components/errors/InternalError"
   - name: session_files.sync
     summary: Mirror the session's memory stores onto the machine now.
-    description: Harness to executor request (machine-scoped, contract 2.900.0, capability
+    description: Harness to executor request (machine-scoped, contract 2.6.0, capability
       session_files.memory). The executor fetches the session files manifest with download_token as
       the anchor process (GET …/processes/{download_token}/session/files) and mirrors its
       memory_stores into <root>/<agent_session_id>/memory/ exactly as before a process.start of the
       session (content from …/session/memory/{memory_store_id}/content?path=, length and sha256
       checked, files 0444, anything not in the manifest removed, a store with materialized false
       removed); uploads are not touched. The platform sends it only for a session with memory store
-      resources, before every turn.start of a brain on the machine and before the first platform tool
-      call of a turn on a hands machine, so memory is refreshed at every turn start and a changed
+      resources, before every turn.start of a brain on the machine and before every platform tool
+      call on a hands machine, so memory is refreshed at every turn start and a changed
       read-only copy is reset. Idempotent; synced is answered without a download when nothing
       changed. failed fails that turn or call (session.error memory_sync_failed).
     tags:

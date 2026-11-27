@@ -1196,7 +1196,7 @@
         "method": "session_files.sync",
         "params": {
           "agent_session_id": "sess_01JABC",
-          "download_token": "prc_3f2a9c0d1e4b5a6978c0d1e2"
+          "download_token": "prc_example"
         }
       }
     },
