@@ -126,13 +126,14 @@ type fileSession struct {
 	memoryReports []SessionMemoryReport
 	// memoryClient and memoryAnchor authorize memory writeback: the anchor of
 	// the last refresh (a process start, or session_files.sync's
-	// download_token, which outputs never use).
+	// download_token).
 	memoryClient *Client
 	memoryAnchor string
 
 	// mu serializes syncing and scanning this session.
 	mu sync.Mutex
-	// client and anchor (the session's latest process) authorize requests.
+	// client and anchor (the session's latest process or session_files.sync
+	// download_token) authorize requests.
 	// Writers hold mu and anchorMu; a mount's reads take only anchorMu.
 	client     *Client
 	anchor     string
