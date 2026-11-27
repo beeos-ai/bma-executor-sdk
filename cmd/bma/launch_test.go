@@ -322,6 +322,10 @@ func (f *fakeBMA) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		fakeError(w, 404, "not_found_error", "session")
 	case len(parts) == 3 && parts[2] == "resources" && r.Method == "POST":
+		if in["type"] != "file" {
+			fakeError(w, 400, "invalid_request_error", "resources[0].type is required.")
+			return
+		}
 		s := f.session(parts[1])
 		res, _ := s["resources"].([]any)
 		s["resources"] = append(res, map[string]any{"type": "file", "file_id": in["file_id"], "mount_path": in["mount_path"]})

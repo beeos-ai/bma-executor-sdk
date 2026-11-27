@@ -281,7 +281,7 @@ func mountAttachments(ctx context.Context, s *session, sid string, att []attachm
 		if err != nil {
 			return err
 		}
-		payload, err := json.Marshal(map[string]any{"file_id": id, "mount_path": at.mount})
+		payload, err := json.Marshal(map[string]any{"type": "file", "file_id": id, "mount_path": at.mount})
 		if err != nil {
 			return err
 		}
