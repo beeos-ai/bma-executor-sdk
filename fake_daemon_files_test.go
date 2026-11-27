@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -45,6 +46,10 @@ type fakeDaemonFiles struct {
 	// failUploads answers that many session-outputs uploads 503 (a
 	// transient failure) before storing any; -1 fails every one.
 	failUploads int
+	// ranges are the Range reads of uploads ("<resource>:<first>-<last>");
+	// renewals counts session-anchors renewals.
+	ranges   []string
+	renewals int
 }
 
 func digestOf(content []byte) string { return fmt.Sprintf("sha256:%x", sha256.Sum256(content)) }
@@ -121,12 +126,32 @@ func (f *fakeDaemonFiles) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && strings.HasPrefix(route, "session-files/") && strings.HasSuffix(route, "/content"):
 		resourceID := strings.TrimSuffix(strings.TrimPrefix(route, "session-files/"), "/content")
 		for _, m := range f.mounts[sessionID] {
-			if m.resourceID == resourceID {
-				_, _ = w.Write(m.content)
+			if m.resourceID != resourceID {
+				continue
+			}
+			if spec, ok := strings.CutPrefix(r.Header.Get("Range"), "bytes="); ok {
+				first, last, _ := strings.Cut(spec, "-")
+				from, _ := strconv.Atoi(first)
+				to := len(m.content) - 1
+				if last != "" {
+					to, _ = strconv.Atoi(last)
+				}
+				to = min(to, len(m.content)-1)
+				f.ranges = append(f.ranges, fmt.Sprintf("%s:%d-%d", resourceID, from, to))
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", from, to, len(m.content)))
+				w.WriteHeader(http.StatusPartialContent)
+				_, _ = w.Write(m.content[from : to+1])
 				return
 			}
+			_, _ = w.Write(m.content)
+			return
 		}
 		w.WriteHeader(http.StatusNotFound)
+	case r.Method == http.MethodPost && route == "session-anchors":
+		f.renewals++
+		renewed := fmt.Sprintf("prc_renewed%d", f.renewals)
+		f.processes[renewed] = sessionID
+		_ = json.NewEncoder(w).Encode(map[string]string{"process_id": renewed})
 	case r.Method == http.MethodPost && route == "session-outputs":
 		body, _ := io.ReadAll(r.Body)
 		if f.failUploads != 0 {

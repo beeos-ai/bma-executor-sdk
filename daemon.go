@@ -99,6 +99,20 @@ func (c *Client) daemonDo(ctx context.Context, method, path string, body io.Read
 }
 
 // daemonJSON GETs a daemon route and decodes at most limit bytes of JSON.
+// daemonPostJSON POSTs an empty body to path and decodes the JSON answer
+// (at most 4 KiB) into out.
+func (c *Client) daemonPostJSON(ctx context.Context, path string, out any) error {
+	response, err := c.daemonDo(ctx, http.MethodPost, path, http.NoBody, 0, http.Header{"Accept": {"application/json"}})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if err := json.NewDecoder(io.LimitReader(response.Body, 4<<10)).Decode(out); err != nil {
+		return fmt.Errorf("bmaexecutor: decode %s: %w", path, err)
+	}
+	return nil
+}
+
 func (c *Client) daemonJSON(ctx context.Context, path string, limit int64, out any) error {
 	response, err := c.daemonDo(ctx, http.MethodGet, path, nil, 0, http.Header{"Accept": {"application/json"}})
 	if err != nil {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.25.0
+
+- Go: session files can be mounted instead of copied (executor contract 2.7.0, `capabilities.session_files.mount`, BMA ADR-0111). With `SessionFilesOptions.Mounter` (`sessionmount.New` on Linux, root, `/dev/fuse`) `SessionFiles` hands each session's listing to the mounter at the copy's points: `<root>/<session>/uploads` is one read-only file system and each memory store `<root>/<session>/memory/<slug>` another, at the same paths, with the marker and `BMA_MEMORY_DIR`; outputs are still scanned. Content is read through the session's anchor, uploads lazily in 8 MiB ranges (`Range`), and cached by sha256 (`sessionmount.Options.CacheDir`, 2 GiB); a mount answers only the session's identity (`SessionFilesOptions.RunAs`, default the executor's user) and root. A failed mount fails the process start or `session_files.sync`. While a session is active (a running process, an open agent session, activity in the last 15 minutes) its anchor is renewed every 10 minutes (`POST …/session-anchors`); an idle session is unmounted. `sessionmount.Probe` checks a machine can mount, `sessionmount.DetachStale` detaches mounts a previous executor left; `SessionFilesOptions.MountUnavailable` and `SessionFiles.Stats` feed `ClientOptions.HeartbeatSessionFiles` (`executor.heartbeat` `session_files`).
+
 ## 1.24.0
 
 - Go: `CoreOptions.SessionRunAs` gives every session its own OS identity: called at the first `session.assign` (and when an on-machine brain opens a session), its `RunAs` is the session's for bash tools, processes, stdio MCP servers, file tools and the session workspace (0700); `CoreOptions.RunAs` stays the identity of what no session owns. The workspace's parent directories (`WorkRoot/<brain>`) are then the executor's, 0711, so a session can neither list nor enter another session's workspace. `CoreSession.RunAs()` returns the session's identity.

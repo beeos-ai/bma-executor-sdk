@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 2.6.0
+  version: 2.7.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -375,6 +375,12 @@ methods:
         required: false
         schema:
           $ref: schemas/common.json#/$defs/ExecutorLoad
+      - name: session_files
+        required: false
+        description: Contract 2.7.0. Cumulative session files mount counters (ADR-0111); sent by an
+          executor that mounts or tried to mount session files.
+        schema:
+          $ref: schemas/executor.json#/$defs/SessionFilesStats
     result:
       name: ExecutorHeartbeatResult
       schema:

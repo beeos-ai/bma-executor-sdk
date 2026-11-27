@@ -79,6 +79,12 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo -E env "PATH=$PATH" "$(command -v go)" test -race -count=1 -run 'RunAs|SessionFilesBelongToTheSession' .
 
+      # The session files mounts (ADR-0111) mount for real: root and /dev/fuse
+      # (the runner has both); as the runner user the same tests skip.
+      - name: Go session mounts (FUSE, as root)
+        if: runner.os == 'Linux'
+        run: sudo env "PATH=$PATH" GOMODCACHE="$(go env GOMODCACHE)" GOCACHE=/tmp/gocache-root GOFLAGS=-mod=readonly go test -race -count=1 ./sessionmount/
+
       - name: TypeScript (with Go and Python interop)
         working-directory: typescript
         run: |
