@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -18,9 +19,10 @@ import (
 // places a session's uploads and memory stores as file systems at the paths
 // the copy would use: <Root>/<session>/uploads (read-only) and one mount per
 // memory store <Root>/<session>/memory/<slug> (read-only for read_only
-// stores, and until memory write-back is part of this SDK for read_write ones
-// too). <Root>/<session>/memory is a 0555 directory with the marker and the
-// mount points. The mounts follow the manifest at the copy's points (before
+// stores; a read_write store is written through at close, ADR-0111 item 7,
+// with the outcomes queued like the copy's writeback reports).
+// <Root>/<session>/memory is a 0555 directory with the marker and the mount
+// points. The mounts follow the manifest at the copy's points (before
 // every process of the session, session_files.sync); outputs stay a scanned
 // local directory. A mount that fails fails the start or the sync: there is
 // no copy fallback. While a session is active the executor renews its anchor
@@ -69,7 +71,8 @@ type MountedFile struct {
 // MountedStore is one memory store.
 type MountedStore struct {
 	Slug, StoreID string
-	// ReadOnly: the store is read_only, or writes are not supported yet.
+	// ReadOnly: the store is read_only; otherwise writes go through
+	// SessionSource.WriteMemory and DeleteMemory.
 	ReadOnly bool
 	Files    []MountedFile
 }
@@ -82,6 +85,24 @@ type SessionSource interface {
 	// Memory reads the current content of a memory of a store and answers
 	// its digest and size (it may be newer than the listing).
 	Memory(ctx context.Context, storeID, storePath string) (body io.ReadCloser, digest string, size int64, err error)
+	// WriteMemory stores content at storePath of a read_write store against
+	// base (the digest "sha256:<hex>" the writer started from, "" for a new
+	// memory); DeleteMemory deletes it against base. A refusal by a memory
+	// rule is a *DaemonHTTPError; any other error means nothing was saved.
+	WriteMemory(ctx context.Context, storeID, storePath, base string, content []byte) (MemoryWrite, error)
+	DeleteMemory(ctx context.Context, storeID, storePath, base string) (MemoryWrite, error)
+	// Report queues a writeback outcome for the model (delivered with the
+	// next process.read or session_files.sync result).
+	Report(SessionMemoryReport)
+}
+
+// MemoryWrite is the store's answer to a write or delete: Status written,
+// unchanged or conflict; on a conflict Content is the store's version (nil
+// when the store has none) and Digest its "sha256:<hex>"; otherwise Digest is
+// what the store now holds at the path ("" after a delete).
+type MemoryWrite struct {
+	Status, Digest string
+	Content        *string
 }
 
 // anchoredSource reads through a session's latest anchor.
@@ -113,6 +134,33 @@ func (a anchoredSource) Upload(ctx context.Context, resourceID string, offset, l
 		return nil, fmt.Errorf("session file range answered %s", response.Status)
 	}
 	return response.Body, nil
+}
+
+func (a anchoredSource) WriteMemory(ctx context.Context, storeID, storePath, base string, content []byte) (MemoryWrite, error) {
+	return a.write(ctx, http.MethodPut, storeID, storePath, base, content)
+}
+
+func (a anchoredSource) DeleteMemory(ctx context.Context, storeID, storePath, base string) (MemoryWrite, error) {
+	return a.write(ctx, http.MethodDelete, storeID, storePath, base, nil)
+}
+
+func (a anchoredSource) write(ctx context.Context, method, storeID, storePath, base string, content []byte) (MemoryWrite, error) {
+	client, anchor := a.current()
+	answer, err := sendMemoryWrite(ctx, client, anchor, storeID, method, storePath, strings.TrimPrefix(base, "sha256:"), content)
+	if err != nil {
+		return MemoryWrite{}, err
+	}
+	w := MemoryWrite{Status: answer.Status, Content: answer.Content}
+	if answer.ContentSHA256 != "" {
+		w.Digest = "sha256:" + answer.ContentSHA256
+	}
+	return w, nil
+}
+
+func (a anchoredSource) Report(r SessionMemoryReport) {
+	a.s.mu.Lock()
+	defer a.s.mu.Unlock()
+	a.s.memoryReports = append(a.s.memoryReports, r)
 }
 
 func (a anchoredSource) Memory(ctx context.Context, storeID, storePath string) (io.ReadCloser, string, int64, error) {
@@ -167,7 +215,7 @@ func (s *fileSession) mountLocked(ctx context.Context, f *SessionFiles, manifest
 		if !store.Materialized {
 			continue
 		}
-		mounted := MountedStore{Slug: store.Slug, StoreID: store.MemoryStoreID, ReadOnly: true}
+		mounted := MountedStore{Slug: store.Slug, StoreID: store.MemoryStoreID, ReadOnly: store.Access != memoryAccessReadWrite}
 		for rel, file := range want[store.MemoryStoreID] {
 			mounted.Files = append(mounted.Files, MountedFile{Path: rel, Key: file.Path, Digest: file.Digest, Size: file.SizeBytes})
 		}

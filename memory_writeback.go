@@ -308,18 +308,29 @@ func (w storeWriter) refusal(p, digest string, err error) bool {
 }
 
 func (w storeWriter) send(ctx context.Context, method, p, base string, content []byte) (memoryWriteAnswer, error) {
-	route := "/processes/" + url.PathEscape(w.anchor) + "/session-memory/" + url.PathEscape(w.id) +
+	answer, err := sendMemoryWrite(ctx, w.client, w.anchor, w.id, method, p, base, content)
+	if err == nil {
+		w.session.lastActive = time.Now() // an agent still writing keeps its session on the walk
+	}
+	return answer, err
+}
+
+// sendMemoryWrite writes (PUT) or deletes (DELETE) the memory at p of a store
+// through anchor, against base (the bare sha256 the writer started from,
+// empty for a new memory). A refusal is a *DaemonHTTPError.
+func sendMemoryWrite(ctx context.Context, client *Client, anchor, storeID, method, p, base string,
+	content []byte) (memoryWriteAnswer, error) {
+	route := "/processes/" + url.PathEscape(anchor) + "/session-memory/" + url.PathEscape(storeID) +
 		"/memories?path=" + url.QueryEscape(p)
 	header := http.Header{memoryBaseHeader: {base}, "Accept": {"application/json"}}
 	var body io.Reader
 	if method == http.MethodPut {
 		body = bytes.NewReader(content)
 	}
-	response, err := w.client.daemonDo(ctx, method, route, body, int64(len(content)), header)
+	response, err := client.daemonDo(ctx, method, route, body, int64(len(content)), header)
 	if err != nil {
 		return memoryWriteAnswer{}, err
 	}
-	w.session.lastActive = time.Now() // an agent still writing keeps its session on the walk
 	defer func() { _ = response.Body.Close() }()
 	var answer memoryWriteAnswer
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxMemoryWriteAnswer))

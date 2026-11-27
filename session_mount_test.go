@@ -246,3 +246,45 @@ func TestMountOwnerIsTheSessionRunAs(t *testing.T) {
 		t.Fatalf("owner without an identity = %+v, %v", owner, err)
 	}
 }
+
+// A read_write store is mounted writable and the executor declares
+// memory_writeback with mounts too; the source writes and deletes through the
+// anchor against the base digest (the store wins a stale base), and a report
+// is delivered with the next result (ADR-0111 item 7).
+func TestSessionFilesMountWritesThroughTheAnchor(t *testing.T) {
+	daemon, mounter := mountDaemon(), &fakeMounter{}
+	daemon.memory["sesn_a"][0].access = "read_write"
+	h, files, _ := newMountHarness(t, daemon, mounter)
+	startIn(t, h, "proc_a", "sesn_a", "true")
+	m := mounter.last(t)
+	if len(m.Stores) != 1 || m.Stores[0].ReadOnly {
+		t.Fatalf("stores = %+v", m.Stores)
+	}
+	ctx := testContext(t)
+	w, err := m.Source.WriteMemory(ctx, "memstore_a", "/lang.md", digestOf([]byte("zh-CN")), []byte("en"))
+	noErr(t, err)
+	if w.Status != "written" || w.Digest != digestOf([]byte("en")) || string(daemon.memory["sesn_a"][0].files["/lang.md"]) != "en" {
+		t.Fatalf("write = %+v", w)
+	}
+	w, err = m.Source.WriteMemory(ctx, "memstore_a", "/lang.md", digestOf([]byte("zh-CN")), []byte("fr"))
+	noErr(t, err)
+	if w.Status != "conflict" || w.Content == nil || *w.Content != "en" || w.Digest != digestOf([]byte("en")) {
+		t.Fatalf("stale write = %+v", w)
+	}
+	w, err = m.Source.DeleteMemory(ctx, "memstore_a", "/lang.md", digestOf([]byte("en")))
+	noErr(t, err)
+	if _, kept := daemon.memory["sesn_a"][0].files["/lang.md"]; w.Status != "written" || kept {
+		t.Fatalf("delete = %+v", w)
+	}
+	want := []string{"PUT memstore_a/lang.md base=" + strings.TrimPrefix(digestOf([]byte("zh-CN")), "sha256:"),
+		"PUT memstore_a/lang.md base=" + strings.TrimPrefix(digestOf([]byte("zh-CN")), "sha256:"),
+		"DELETE memstore_a/lang.md base=" + strings.TrimPrefix(digestOf([]byte("en")), "sha256:")}
+	if got := daemon.writes(); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("writes = %q", got)
+	}
+	report := SessionMemoryReport{MemoryStoreID: "memstore_a", Path: "/lang.md", Outcome: "conflict", Message: "store won"}
+	m.Source.Report(report)
+	if got := files.memoryReports("sesn_a"); len(got) != 1 || got[0] != report {
+		t.Fatalf("reports = %+v", got)
+	}
+}

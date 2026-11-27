@@ -8,7 +8,6 @@ package sessionmount
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -18,8 +17,6 @@ import (
 	"sync/atomic"
 	"testing"
 )
-
-func digestOf(b []byte) string { return fmt.Sprintf("sha256:%x", sha256.Sum256(b)) }
 
 // fakeFetch serves content and records each request ("off+len", -1 whole).
 type fakeFetch struct {

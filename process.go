@@ -213,9 +213,7 @@ func NewProcessCapability(core *Core, opts ProcessOptions) Capability {
 			}
 			if opts.SessionFiles != nil {
 				capabilities.SessionFiles = &SessionFilesCapability{Root: opts.SessionFiles.Root(), Memory: true,
-					Mount: opts.SessionFiles.opts.Mounter != nil,
-					// A mounted memory is not a copy: nothing to write back from (ADR-0111).
-					MemoryWriteback: opts.SessionFiles.opts.Mounter == nil}
+					Mount: opts.SessionFiles.opts.Mounter != nil, MemoryWriteback: true}
 			}
 		},
 		SessionScoped:   true,

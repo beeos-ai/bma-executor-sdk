@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -52,13 +53,15 @@ type Options struct {
 // counters are the cumulative SessionFilesStats.
 type counters struct {
 	mounts, mountFailures, readsCached, readsFetched, fetchErrors atomic.Int64
+	commits, conflicts, commitFailures                            atomic.Int64
 	mountNanos                                                    atomic.Int64
 }
 
 func (c *counters) stats() bmaexecutor.SessionFilesStats {
 	return bmaexecutor.SessionFilesStats{Mounts: c.mounts.Load(), MountFailures: c.mountFailures.Load(),
 		MountSeconds: time.Duration(c.mountNanos.Load()).Seconds(), ReadsCached: c.readsCached.Load(),
-		ReadsFetched: c.readsFetched.Load(), FetchErrors: c.fetchErrors.Load()}
+		ReadsFetched: c.readsFetched.Load(), FetchErrors: c.fetchErrors.Load(), Commits: c.commits.Load(),
+		Conflicts: c.conflicts.Load(), CommitFailures: c.commitFailures.Load()}
 }
 
 // tree is one mount's listing: files by path relative to the mount root and
@@ -102,6 +105,77 @@ func newTree(files []bmaexecutor.MountedFile) (*tree, error) {
 	return t, nil
 }
 
+// clone copies t for a change: a snapshot taken before stays as it was.
+func (t *tree) clone() *tree {
+	c := &tree{files: make(map[string]bmaexecutor.MountedFile, len(t.files)), dirs: make(map[string][]string, len(t.dirs))}
+	for p, f := range t.files {
+		c.files[p] = f
+	}
+	for d, names := range t.dirs {
+		c.dirs[d] = append([]string(nil), names...)
+	}
+	return c
+}
+
+// parent is the directory of p ("" for the root).
+func parent(p string) string {
+	if d := path.Dir(p); d != "." {
+		return d
+	}
+	return ""
+}
+
+// link adds name p to its directory, and the directories above it to theirs.
+func (t *tree) link(p string) {
+	for p != "" {
+		dir, name := parent(p), path.Base(p)
+		names := t.dirs[dir]
+		i := sort.SearchStrings(names, name)
+		if i < len(names) && names[i] == name {
+			return
+		}
+		t.dirs[dir] = slices.Insert(names, i, name)
+		p = dir
+	}
+}
+
+// mkdir adds the empty directory p.
+func (t *tree) mkdir(p string) {
+	if _, ok := t.dirs[p]; !ok {
+		t.dirs[p] = []string{}
+	}
+	t.link(p)
+}
+
+// rmdir removes the empty directory p.
+func (t *tree) rmdir(p string) {
+	delete(t.dirs, p)
+	t.unlink(p)
+}
+
+// unlink removes name p from its directory.
+func (t *tree) unlink(p string) {
+	dir, name := parent(p), path.Base(p)
+	names := t.dirs[dir]
+	if i := sort.SearchStrings(names, name); i < len(names) && names[i] == name {
+		t.dirs[dir] = append(names[:i:i], names[i+1:]...)
+	}
+}
+
+// put adds or replaces the file f.
+func (t *tree) put(f bmaexecutor.MountedFile) {
+	t.files[f.Path] = f
+	t.link(f.Path)
+}
+
+// drop removes the file p (its directories stay).
+func (t *tree) drop(p string) {
+	if _, ok := t.files[p]; ok {
+		delete(t.files, p)
+		t.unlink(p)
+	}
+}
+
 // view is one mount: a session's uploads or one memory store.
 type view struct {
 	m        *Mounter
@@ -114,6 +188,16 @@ type view struct {
 	tree   *tree
 	owner  bmaexecutor.MountOwner
 	source bmaexecutor.SessionSource
+	// A read_write store's files not in the store (ADR-0111 item 7): scratch
+	// names, never sent, and files created and not committed yet. They are in
+	// tree with an empty Key; local holds their bytes. deletes counts the
+	// deletions since the last refresh (more than bulkDeleteLimit are refused).
+	local         map[string][]byte
+	deletes       int
+	deleteRefused bool
+
+	// writes serializes the changes of a read_write store (one commit at a time).
+	writes sync.Mutex
 }
 
 func (v *view) snapshot() (*tree, bmaexecutor.MountOwner, bmaexecutor.SessionSource) {
@@ -122,10 +206,16 @@ func (v *view) snapshot() (*tree, bmaexecutor.MountOwner, bmaexecutor.SessionSou
 	return v.tree, v.owner, v.source
 }
 
+// replace shows a refreshed listing; a read_write store keeps its local files
+// and starts counting deletions again.
 func (v *view) replace(t *tree, owner bmaexecutor.MountOwner, source bmaexecutor.SessionSource) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	for p := range v.local {
+		t.put(bmaexecutor.MountedFile{Path: p, Size: int64(len(v.local[p]))})
+	}
 	v.tree, v.owner, v.source = t, owner, source
+	v.deletes, v.deleteRefused = 0, false
 }
 
 // allowed reports whether uid may use the view: its session's user or root.
