@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.23.2
+
+- bma: `bma run` (and so `bma up`) wires the SDK `SessionFiles` like BeeWork Local: the executor declares `capabilities.session_files` (with `memory`) at `~/.bma/sessions` (below `BMA_HOME`), serves `process.*` and `session_files.sync`, mirrors the session's uploads and memory before its processes, uploads `outputs`, and the on-machine brain's file tools read and write those directories (`ACPAgentOptions.SessionFilesRoot`).
+
 ## 1.23.1
 
 - bma: the session file schema (`cmd/bma/schema/session.schema.json`) and the `sessions launch` example describe an attached file at its path in the session's uploads directory (`/mnt/session/<session_id>/uploads/<name>`); the example attaches `CHANGELOG.md` with `files:` so the message carries the path the session shows, instead of the `/mnt/session/uploads/<name>` that holds no file on the machine. The generated help of the session resource commands follows the next `contracts/bma-api` update.

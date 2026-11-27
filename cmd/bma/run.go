@@ -61,17 +61,14 @@ func cmdRun(args []string) error {
 		}
 		log.Printf("%s %s", e.Level, e.Message)
 	}
-	if err := os.MkdirAll(c.WorkRoot, 0o700); err != nil {
-		return err
-	}
-	core, err := bmaexecutor.NewCore(bmaexecutor.CoreOptions{WorkRoot: c.WorkRoot, OnLog: logf})
+	core, files, err := newCore(c, logf)
 	if err != nil {
 		return err
 	}
 	defer core.Close()
 	opts := bmaexecutor.ACPAgentOptions{
 		StateDir: filepath.Join(home(), "state", h.kind.ID), Core: core, OnLog: logf,
-		PlatformTools: c.PlatformTools,
+		PlatformTools: c.PlatformTools, SessionFilesRoot: files.Root(),
 	}
 	if len(c.AllowedRoots) > 0 {
 		opts.AllowedRoots = append([]string{c.WorkRoot}, c.AllowedRoots...)
@@ -96,6 +93,7 @@ func cmdRun(args []string) error {
 	if _, err := client.Start(ctx); err != nil {
 		return finish(err)
 	}
+	go files.Run(ctx)
 	go reportState(ctx, client)
 	select {
 	case <-ctx.Done():
@@ -104,6 +102,32 @@ func cmdRun(args []string) error {
 	case <-client.Done():
 		return finish(client.Err())
 	}
+}
+
+// sessionFilesRoot holds every session's uploads, outputs and memory mirror
+// (<root>/<session id>/...), apart from the executor's state directory.
+func sessionFilesRoot() string { return filepath.Join(home(), "sessions") }
+
+// newCore is the executor's hands plus the session files store: the process
+// capability syncs a session's uploads and memory before its processes and
+// declares capabilities.session_files; files.Run uploads the outputs.
+func newCore(c config, logf func(bmaexecutor.LogEvent)) (*bmaexecutor.Core, *bmaexecutor.SessionFiles, error) {
+	if err := os.MkdirAll(c.WorkRoot, 0o700); err != nil {
+		return nil, nil, err
+	}
+	files, err := bmaexecutor.NewSessionFiles(bmaexecutor.SessionFilesOptions{Root: sessionFilesRoot(), OnLog: logf})
+	if err != nil {
+		return nil, nil, err
+	}
+	core, err := bmaexecutor.NewCore(bmaexecutor.CoreOptions{WorkRoot: c.WorkRoot, OnLog: logf})
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := core.Register(bmaexecutor.NewProcessCapability(core, bmaexecutor.ProcessOptions{SessionFiles: files})); err != nil {
+		core.Close()
+		return nil, nil, err
+	}
+	return core, files, nil
 }
 
 // finish records how the connection ended: a rejected machine token stops
