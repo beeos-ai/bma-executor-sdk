@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 2.8.0
+  version: 2.9.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -1642,18 +1642,24 @@ methods:
       - $ref: "#/components/errors/CapabilityUnavailable"
       - $ref: "#/components/errors/InternalError"
   - name: session_files.sync
-    summary: Mirror the session's memory stores onto the machine now.
+    summary: Show the session's files (uploads and memory stores) on the machine now.
     description: Harness to executor request (machine-scoped, contract 2.6.0, capability
       session_files.memory). The executor fetches the session files manifest with download_token as
-      the anchor process (GET …/processes/{download_token}/session/files) and mirrors its
-      memory_stores into <root>/<agent_session_id>/memory/ exactly as before a process.start of the
-      session (content from …/session/memory/{memory_store_id}/content?path=, length and sha256
-      checked, files 0444, anything not in the manifest removed, a store with materialized false
-      removed); uploads are not touched. The platform sends it only for a session with memory store
-      resources, before every turn.start of a brain on the machine and before every platform tool
-      call on a hands machine, so memory is refreshed at every turn start and a changed
-      read-only copy is reset. Idempotent; synced is answered without a download when nothing
-      changed. failed fails that turn or call (session.error memory_sync_failed).
+      the anchor process (GET …/processes/{download_token}/session/files) and shows the session's
+      files exactly as before a process.start of the session (contract 2.9.0) - its files in
+      <root>/<agent_session_id>/uploads/ (content from …/session/files/{resource_id}/content) and its
+      memory_stores in <root>/<agent_session_id>/memory/ (content from
+      …/session/memory/{memory_store_id}/content?path=), length and sha256 checked, files 0444,
+      anything not in the manifest removed, a store with materialized false removed - and creates
+      <root>/<agent_session_id>/outputs/. download_token then anchors the session's output uploads
+      (…/session/outputs) until a later process or sync of the session replaces it, and its bash
+      tool commands get BMA_MEMORY_DIR as its processes do. A brain on the machine runs its tools
+      without process.start, so this sync is what shows its files and collects its outputs. The
+      platform sends it before every turn.start of a brain on the machine (every session, contract
+      2.9.0) and, for a session with memory store resources, before every platform tool call on a
+      hands machine, so the files are refreshed at every turn start and a changed read-only copy is
+      reset. Idempotent; synced is answered without a download when nothing changed. failed fails
+      that turn or call (session.error memory_sync_failed).
       With session_files.memory_writeback (contract 2.8.0) the executor first writes back the
       session's read_write stores against their base (the store wins a conflict) and answers the
       undelivered reports in session_memory; a writeback that cannot reach the platform does not make
@@ -1669,7 +1675,7 @@ methods:
     params:
       - name: agent_session_id
         required: true
-        description: The public session id; the directory <root>/<agent_session_id>/memory.
+        description: The public session id; the directory <root>/<agent_session_id>.
         schema:
           type: string
       - name: download_token
