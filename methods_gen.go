@@ -23,6 +23,7 @@ var Requests = struct {
 	SkillInstall          RequestMethod[SkillInstallParams, SkillInstallResult]
 	WorkspaceBackup       RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]
 	SessionFilesFlush     RequestMethod[SessionFilesFlushParams, SessionFilesFlushResult]
+	SessionFilesSync      RequestMethod[SessionFilesSyncParams, SessionFilesSyncResult]
 	SessionCompact        RequestMethod[SessionCompactParams, SessionCompactResult]
 	SessionCompactCancel  RequestMethod[SessionCompactCancelParams, SessionCompactCancelResult]
 	AgentCustomToolResult RequestMethod[AgentCustomToolResultParams, CustomToolResultResult]
@@ -45,6 +46,7 @@ var Requests = struct {
 	SkillInstall:          RequestMethod[SkillInstallParams, SkillInstallResult]{Method: "skill.install"},
 	WorkspaceBackup:       RequestMethod[WorkspaceBackupParams, WorkspaceBackupResult]{Method: "workspace.backup"},
 	SessionFilesFlush:     RequestMethod[SessionFilesFlushParams, SessionFilesFlushResult]{Method: "session_files.flush"},
+	SessionFilesSync:      RequestMethod[SessionFilesSyncParams, SessionFilesSyncResult]{Method: "session_files.sync"},
 	SessionCompact:        RequestMethod[SessionCompactParams, SessionCompactResult]{Method: "session.compact"},
 	SessionCompactCancel:  RequestMethod[SessionCompactCancelParams, SessionCompactCancelResult]{Method: "session.compact_cancel"},
 	AgentCustomToolResult: RequestMethod[AgentCustomToolResultParams, CustomToolResultResult]{Method: "agent.custom_tool_result"},

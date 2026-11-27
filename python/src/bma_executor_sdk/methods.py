@@ -47,6 +47,8 @@ from .generated import (
     SessionEventResult,
     SessionFilesFlushParams,
     SessionFilesFlushResult,
+    SessionFilesSyncParams,
+    SessionFilesSyncResult,
     SessionHistoryParams,
     SessionHistoryResult,
     SessionReadyParams,
@@ -90,6 +92,7 @@ __all__ = [
     "SKILL_INSTALL",
     "WORKSPACE_BACKUP",
     "SESSION_FILES_FLUSH",
+    "SESSION_FILES_SYNC",
     "SESSION_COMPACT",
     "SESSION_COMPACT_CANCEL",
     "AGENT_CUSTOM_TOOL_RESULT",
@@ -130,6 +133,7 @@ DESKTOP_WALLPAPER: Request[DesktopWallpaperParams, DesktopWallpaperResult] = Req
 SKILL_INSTALL: Request[SkillInstallParams, SkillInstallResult] = Request("skill.install")
 WORKSPACE_BACKUP: Request[WorkspaceBackupParams, WorkspaceBackupResult] = Request("workspace.backup")
 SESSION_FILES_FLUSH: Request[SessionFilesFlushParams, SessionFilesFlushResult] = Request("session_files.flush")
+SESSION_FILES_SYNC: Request[SessionFilesSyncParams, SessionFilesSyncResult] = Request("session_files.sync")
 SESSION_COMPACT: Request[SessionCompactParams, SessionCompactResult] = Request("session.compact")
 SESSION_COMPACT_CANCEL: Request[SessionCompactCancelParams, SessionCompactCancelResult] = Request("session.compact_cancel")
 AGENT_CUSTOM_TOOL_RESULT: Request[AgentCustomToolResultParams, CustomToolResultResult] = Request("agent.custom_tool_result")

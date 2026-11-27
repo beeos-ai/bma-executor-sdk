@@ -196,23 +196,25 @@ type ACPAgentOptions struct {
 	ToolPolicy map[string]string
 	// SessionFilesRoot is the executor's capabilities.session_files.root: the
 	// directory below which the platform mounts each session's files as
-	// <root>/<session id>/{uploads,skills,outputs} (ADR-0021). When set, the
+	// <root>/<session id>/{uploads,skills,outputs,memory}. When set, the
 	// file tools of a turn whose tools run on this machine reach, besides the
-	// workspace, exactly these three directories of that session: read,
-	// glob and grep in uploads and skills (read-only) and in outputs, and
-	// write and edit in outputs (deliverables the platform collects). Another
-	// session's directories, a path below the root that is none of the three,
-	// a "..", and a symbolic link that leaves a directory stay refused;
-	// write and edit anywhere else stay confined to the workspace. The session
-	// id must be a single safe directory name. Absolute, or empty for
-	// the workspace only.
+	// workspace, exactly these directories of that session: read, glob and
+	// grep in uploads, skills and memory (read-only; memory is the mirror of
+	// the session's memory stores, which the platform describes in the system
+	// prompt) and in outputs, and write and edit in outputs (deliverables the
+	// platform collects). Another session's directories, a path below the
+	// root that is none of them, a "..", and a symbolic link that leaves a
+	// directory stay refused; write and edit anywhere else stay confined to
+	// the workspace. The session id must be a single safe directory name.
+	// Absolute, or empty for the workspace only.
 	SessionFilesRoot string
 	// SessionMounts limits the session's directories below SessionFilesRoot
 	// that the file tools reach and the model is told about to these of
-	// "uploads", "skills" and "outputs"; nil means all three. A host whose
-	// local turns get only the skills view and do not sync
-	// uploads or outputs sets []string{"skills"}, so the model is not told to
-	// write deliverables nobody collects.
+	// "uploads", "skills", "outputs" and "memory"; nil means all four (the
+	// note names uploads, skills and outputs; memory is named by the
+	// platform). A host whose local turns get only the skills view and do not
+	// sync uploads or outputs sets []string{"skills"}, so the model is not
+	// told to write deliverables nobody collects.
 	SessionMounts []string
 	// InputFiles fetches the bytes of an image the user attached (a file
 	// block of turn.start / turn.input; see agent_acp_images.go) when the
@@ -457,8 +459,8 @@ func NewBrainHost(ctx context.Context, adapter BrainAdapter, opts ACPAgentOption
 	}
 	if opts.SessionMounts != nil {
 		for _, name := range opts.SessionMounts {
-			if name != SessionMountUploads && name != SessionMountSkills && name != SessionMountOutputs {
-				return nil, fmt.Errorf("bmaexecutor: ACPAgentOptions.SessionMounts: %q is not uploads, skills or outputs", name)
+			if name != SessionMountUploads && name != SessionMountSkills && name != SessionMountOutputs && name != SessionMountMemory {
+				return nil, fmt.Errorf("bmaexecutor: ACPAgentOptions.SessionMounts: %q is not uploads, skills, outputs or memory", name)
 			}
 		}
 		opts.SessionMounts = slices.Clone(opts.SessionMounts)

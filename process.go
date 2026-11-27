@@ -207,10 +207,11 @@ func NewProcessCapability(core *Core, opts ProcessOptions) Capability {
 				PackageInstall: opts.PackageInstaller != nil,
 			}
 			if opts.SessionFiles != nil {
-				capabilities.SessionFiles = &SessionFilesCapability{Root: opts.SessionFiles.Root()}
+				capabilities.SessionFiles = &SessionFilesCapability{Root: opts.SessionFiles.Root(), Memory: true}
 			}
 		},
-		SessionScoped: true,
+		SessionScoped:   true,
+		UnscopedMethods: p.unscopedMethods(),
 		Methods: map[string]Handler{
 			MethodProcessStart:     p.start,
 			MethodProcessRead:      p.read,
@@ -221,6 +222,28 @@ func NewProcessCapability(core *Core, opts ProcessOptions) Capability {
 		},
 		OnSessionEnd: func(session *CoreSession) { p.table(session).terminateAll(2 * time.Second) },
 	}
+}
+
+// unscopedMethods are session_files.sync with SessionFiles.
+func (p *processes) unscopedMethods() map[string]Handler {
+	if p.opts.SessionFiles == nil {
+		return nil
+	}
+	return map[string]Handler{MethodSessionFilesSync: p.syncSessionFiles}
+}
+
+// syncSessionFiles serves session_files.sync: the session's memory mirror is
+// refreshed (and a bash change to it undone) before a turn.
+func (p *processes) syncSessionFiles(ctx context.Context, req Request) (any, error) {
+	var params SessionFilesSyncParams
+	if err := decode(req.Params, &params); err != nil {
+		return nil, err
+	}
+	if err := p.opts.SessionFiles.syncMemory(ctx, req.Client, params.AgentSessionID, params.DownloadToken); err != nil {
+		p.core.log(LogWarn, "session memory not synced: "+params.AgentSessionID, err)
+		return SessionFilesSyncResult{State: "failed", Error: err.Error()}, nil
+	}
+	return SessionFilesSyncResult{State: "synced"}, nil
 }
 
 type processes struct {
@@ -601,6 +624,9 @@ func (p *processes) prepare(ctx context.Context, req Request, params ProcessStar
 			p.core.log(LogWarn, "session files not shown before a download", err)
 		}
 		plan.filesSession = plan.process.AgentSessionID
+		if command && files.mirrorsMemory(plan.filesSession) {
+			plan.env = withEnv(plan.env, map[string]string{EnvMemoryDir: files.MemoryDir(plan.filesSession)})
+		}
 	}
 	if params.PackageInstall != nil {
 		return p.prepareInstall(ctx, session, plan, params)

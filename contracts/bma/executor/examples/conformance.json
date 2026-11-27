@@ -154,7 +154,8 @@
               "file_transfer": true
             },
             "session_files": {
-              "root": "/Users/alice/Library/Application Support/Agent/sessions"
+              "root": "/Users/alice/Library/Application Support/Agent/sessions",
+              "memory": true
             }
           }
         }
@@ -1183,6 +1184,28 @@
       "result": {
         "state": "flushed",
         "uploaded": 2
+      }
+    },
+    {
+      "name": "session_files.sync request",
+      "method": "session_files.sync",
+      "kind": "request",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "req_session_files_sync",
+        "method": "session_files.sync",
+        "params": {
+          "agent_session_id": "sess_01JABC",
+          "download_token": "prc_3f2a9c0d1e4b5a6978c0d1e2"
+        }
+      }
+    },
+    {
+      "name": "session_files.sync result",
+      "method": "session_files.sync",
+      "kind": "result",
+      "result": {
+        "state": "synced"
       }
     },
     {

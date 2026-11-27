@@ -1,19 +1,19 @@
 {
   "source_repository": "beeos-ai/beeos-managed-agents",
-  "source_commit": "9704705b6acf8d8de094a4702f9a3e6924b80a3d",
+  "source_commit": "2210874b9be83006bc924a3f386a797fb6f5720f",
   "protocols": [
     "bma.executor.v1",
     "bma.executor.v1.1"
   ],
-  "contract_version": "2.5.0",
+  "contract_version": "2.900.0",
   "contract": {
-    "contracts/bma/executor/examples/conformance.json": "1a76d14e62edfff7e66358eaa88c25795ff08c76b4ae1e1bb3114381e9f04df6",
-    "contracts/bma/executor/executor.asyncapi.yaml": "e80fbe6132d0bc83be8c391057370e98ac984679b526360d881d1f51f3c7d150",
-    "contracts/bma/executor/executor.openrpc.yaml": "0792fd98ae14fd10c671a8600b5270389ff5a81dd4970ea92320d0c1cd010783",
+    "contracts/bma/executor/examples/conformance.json": "e4686faca5b81170d75104b54affe0d869b6578a5821ce764915064f5332e2fc",
+    "contracts/bma/executor/executor.asyncapi.yaml": "596e86e80495eaf52749445a64dfc945ace65fbc1e8ca4c9baab5c251e5da2bf",
+    "contracts/bma/executor/executor.openrpc.yaml": "42e2912210de6f8012a7ccff331e5a2a8f3c5a7bd4d97da3b4f014870f20e114",
     "contracts/bma/executor/schemas/agent.json": "67629a9547cb9e1ce0fb51b89c4b011f28c8718d945eadfe9d4ddf338924d649",
     "contracts/bma/executor/schemas/common.json": "7b46ba4f86e9d62fa29094fbfcf71f2b030a2f0189266324292ef9b41828e983",
     "contracts/bma/executor/schemas/desktop.json": "82d62739b07c6a42df779a90d3f17c97a464bc57f3b9428a98498a2b6cf2cb03",
-    "contracts/bma/executor/schemas/executor.json": "dc3bd96e0f6a3d6edc45a8eba8f2a9ed849ceb92e4093ad4a01288fa8df60d0c",
+    "contracts/bma/executor/schemas/executor.json": "554d44c15cfb7f8ba8ce35521a186370c65304f5bd203e4c5b13e95efb19461c",
     "contracts/bma/executor/schemas/mcp.json": "e4e574914d89acc1eb9e4ed113ccca9a078e60eca89f366d20e5055f92629f5a",
     "contracts/bma/executor/schemas/process.json": "1cccd17ca034a0600e2dd9444d37e0536a12a0f4bc3e3a82dd27791c1780b3a6",
     "contracts/bma/executor/schemas/session.json": "cd1e035fe7990cd9e0a3e2ac7c7ef3089e80dc9da6418877821b2419dff223d9",
@@ -23,8 +23,8 @@
     "contracts/bma/executor/schemas/workspace.json": "2cfdaf9e0aaed2289b48edc18cef3aab2269db98ad2cc361251ddac9c7422a35"
   },
   "generated": {
-    "generated.go": "57be4444965dcb71814156552311f0ca7c58497581a3b71452e4949b007576cc",
-    "python/src/bma_executor_sdk/generated.py": "453325125cf57fc0f24b66f5c833ebea6105e47ca70ab2cd4557787c97b276ef",
-    "typescript/src/generated/executor.ts": "aca05f4ac9da8d8fd9f1474e24e0851c9950916015413d77b4571a28e64986ff"
+    "generated.go": "c991124340d90be415bc1bd2ad37764cce3ca6f76819359436fc2d1d0244e56e",
+    "python/src/bma_executor_sdk/generated.py": "cb85c7a4f5b0ae1efd59080ce685caba93c9a32aea407b1c36dd3c783da23bbe",
+    "typescript/src/generated/executor.ts": "2a0c851442a782c769ecbb2156d8219def3e6e8bd847a8b0f837cb4b3c1c3525"
   }
 }

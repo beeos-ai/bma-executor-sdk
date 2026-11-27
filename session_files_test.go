@@ -11,7 +11,9 @@ import (
 	"testing"
 )
 
-func newSessionFilesHarness(t *testing.T, daemon *fakeDaemonFiles) (processHarness, *SessionFiles, string) {
+// newSessionFilesHarness runs a process capability with session files below
+// a temporary root; launch, if given, builds its Launch hook.
+func newSessionFilesHarness(t *testing.T, daemon *fakeDaemonFiles, launch ...func(*SessionFiles) LaunchFunc) (processHarness, *SessionFiles, string) {
 	t.Helper()
 	server := httptest.NewServer(daemon)
 	t.Cleanup(server.Close)
@@ -24,10 +26,14 @@ func newSessionFilesHarness(t *testing.T, daemon *fakeDaemonFiles) (processHarne
 		t.Fatal(err)
 	}
 	core := newTestCore(t, CoreOptions{})
-	if err := core.Register(NewProcessCapability(core, ProcessOptions{SessionFiles: files})); err != nil {
+	options := ProcessOptions{SessionFiles: files}
+	for _, build := range launch {
+		options.Launch = build(files)
+	}
+	if err := core.Register(NewProcessCapability(core, options)); err != nil {
 		t.Fatal(err)
 	}
-	if capabilities := core.Capabilities(); capabilities.SessionFiles == nil || capabilities.SessionFiles.Root != root {
+	if capabilities := core.Capabilities(); capabilities.SessionFiles == nil || capabilities.SessionFiles.Root != root || !capabilities.SessionFiles.Memory {
 		t.Fatalf("session_files capability = %+v", capabilities.SessionFiles)
 	}
 	b, _ := attachInProcess(t, core, "cloud", func(o *Options) {

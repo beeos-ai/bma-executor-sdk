@@ -2,7 +2,7 @@ asyncapi: 3.0.0
 id: https://contracts.beeos.ai/executor.asyncapi
 info:
   title: BMA Executor Protocol channels
-  version: 2.5.0
+  version: 2.900.0
   description: "WebSocket channels for bma.executor.v1 and bma.executor.v1.1. The control channel carries JSON-RPC 2.0 requests, notifications, and responses. The mcp channel carries raw MCP JSON-RPC with no BMA wrapper. PTY bytes travel on per-attach outbound host sockets (subprotocol bma.terminal.v1), not on these channels. Contract 1.4.0 adds the platform tools endpoint (x-bma-platform-tools): the HTTP MCP endpoint a brain on one machine calls to run its tools on the session's hands machine."
   license:
     name: Apache-2.0
@@ -143,6 +143,8 @@ channels:
         $ref: "#/components/messages/workspaceBackup"
       sessionFilesFlush:
         $ref: "#/components/messages/sessionFilesFlush"
+      sessionFilesSync:
+        $ref: "#/components/messages/sessionFilesSync"
       turnStart:
         $ref: "#/components/messages/turnStart"
       turnInput:
@@ -416,6 +418,12 @@ operations:
       $ref: "#/channels/control"
     messages:
       - $ref: "#/components/messages/sessionFilesFlush"
+  sessionFilesSyncReceive:
+    action: receive
+    channel:
+      $ref: "#/channels/control"
+    messages:
+      - $ref: "#/components/messages/sessionFilesSync"
   turnStartReceive:
     action: receive
     channel:
@@ -580,6 +588,10 @@ components:
             properties:
               session_id:
                 type: string
+              retain_projection:
+                type: boolean
+              force_projection_stop:
+                type: boolean
             required:
               - session_id
         required:
@@ -2190,6 +2202,45 @@ components:
       x-bma-direction: harness-to-executor
       x-bma-kind: request
       x-bma-channel: control
+    sessionFilesSync:
+      name: session_files.sync
+      title: session_files.sync
+      summary: Mirror the session's memory stores onto the machine now.
+      description: Harness to executor request (machine-scoped, contract 2.900.0, capability session_files.memory). The executor fetches the session files manifest with download_token as the anchor process (GET …/processes/{download_token}/session/files) and mirrors its memory_stores into <root>/<agent_session_id>/memory/ exactly as before a process.start of the session (content from …/session/memory/{memory_store_id}/content?path=, length and sha256 checked, files 0444, anything not in the manifest removed, a store with materialized false removed); uploads are not touched. The platform sends it only for a session with memory store resources, before every turn.start of a brain on the machine and before the first platform tool call of a turn on a hands machine, so memory is refreshed at every turn start and a changed read-only copy is reset. Idempotent; synced is answered without a download when nothing changed. failed fails that turn or call (session.error memory_sync_failed).
+      contentType: application/json
+      payload:
+        type: object
+        additionalProperties: false
+        properties:
+          jsonrpc:
+            type: string
+            const: "2.0"
+          id:
+            $ref: schemas/common.json#/$defs/JsonRpcId
+          method:
+            type: string
+            const: session_files.sync
+          params:
+            type: object
+            additionalProperties: false
+            properties:
+              agent_session_id:
+                type: string
+              download_token:
+                type: string
+            required:
+              - agent_session_id
+              - download_token
+        required:
+          - jsonrpc
+          - id
+          - method
+          - params
+      x-bma-jsonrpc-method: session_files.sync
+      x-bma-direction: harness-to-executor
+      x-bma-kind: request
+      x-bma-channel: control
+      x-bma-idempotent-by: agent_session_id
     turnStart:
       name: turn.start
       title: turn.start

@@ -333,14 +333,36 @@ func TestACPAgentSessionFilesRoot(t *testing.T) {
 	f.start(t, ctx, rigSession, "turn_1", "hello")
 	assertIdle(t, f.platform.waitIdle(t, "turn_1"), TurnOutcomeCompleted)
 	mounts := f.agent.opts.Core.session(coreKey{acpBrain, rigSession}).sessionMounts()
-	if len(mounts) != 3 {
+	if len(mounts) != 4 || mounts[3].name != SessionMountMemory || mounts[3].writable {
 		t.Fatalf("mounts = %v", mounts)
 	}
 	note := f.agent.sessionFilesNote(rigSession, false)
+	// The platform names memory in the system prompt; the note stays as it was.
+	if strings.Contains(note, "memory") {
+		t.Fatalf("note names memory: %q", note)
+	}
 	for _, want := range []string{filepath.Join(root, rigSession, "uploads"), filepath.Join(root, rigSession, "skills"), filepath.Join(root, rigSession, "outputs"), "read-only"} {
 		if !strings.Contains(note, want) {
 			t.Fatalf("note %q lacks %q", note, want)
 		}
+	}
+	// The memory mirror is readable by the file tools, not writable, and
+	// another session's mirror is out of reach.
+	memoryFile := filepath.Join(root, rigSession, "memory", "prefs", "lang.md")
+	otherFile := filepath.Join(root, "sesn_other", "memory", "prefs", "lang.md")
+	for _, file := range []string{memoryFile, otherFile} {
+		noErr(t, os.MkdirAll(filepath.Dir(file), 0o755))
+		noErr(t, os.WriteFile(file, []byte("zh-CN\n"), 0o444))
+	}
+	session := f.agent.opts.Core.session(coreKey{acpBrain, rigSession})
+	if read, err := f.agent.opts.Core.fileTool(session, ToolNameRead, ToolInput{Path: memoryFile}, nil); err != nil || !strings.Contains(textOf(read), "zh-CN") {
+		t.Fatalf("read memory = %+v %v", read, err)
+	}
+	if _, err := f.agent.opts.Core.fileTool(session, ToolNameWrite, ToolInput{Path: memoryFile, Content: "x"}, func(commit func() error) error { return commit() }); err == nil {
+		t.Fatal("memory is writable through the file tools")
+	}
+	if read, err := f.agent.opts.Core.fileTool(session, ToolNameRead, ToolInput{Path: otherFile}, nil); err == nil && strings.Contains(textOf(read), "zh-CN") {
+		t.Fatal("another session's memory is readable through the file tools")
 	}
 	// Hands on another machine, an unsafe id and no root: no note, no mounts.
 	if got := f.agent.sessionFilesNote(rigSession, true); got != "" {
@@ -367,7 +389,7 @@ func TestACPAgentSessionMountsSkillsOnly(t *testing.T) {
 	noErr(t, err)
 	t.Cleanup(core.Close)
 	if _, err = NewACPAgent(context.Background(), ACPAgentOptions{Command: []string{self}, Core: core, StateDir: t.TempDir(),
-		Upstream: ACPModelUpstream{BaseURL: "http://127.0.0.1:1/v1"}, SessionFilesRoot: t.TempDir(), SessionMounts: []string{"skills", "memory"}}); err == nil {
+		Upstream: ACPModelUpstream{BaseURL: "http://127.0.0.1:1/v1"}, SessionFilesRoot: t.TempDir(), SessionMounts: []string{"skills", "scratch"}}); err == nil {
 		t.Fatal("an unknown mount was accepted")
 	}
 

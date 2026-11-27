@@ -211,7 +211,10 @@ type Capability struct {
 	Advertise     func(*Capabilities)
 	Methods       map[string]Handler
 	SessionScoped bool
-	OnSessionEnd  func(*CoreSession)
+	// UnscopedMethods are methods of the capability that name no executor
+	// session (Request.Session nil), whatever SessionScoped says.
+	UnscopedMethods map[string]Handler
+	OnSessionEnd    func(*CoreSession)
 }
 
 // Core is the executor's execution core ("hands"): bash with process-group
@@ -381,7 +384,17 @@ func (c *Core) Register(capability Capability) error {
 	if len(c.brains) > 0 {
 		return errors.New("bmaexecutor: register capabilities before Attach")
 	}
-	for method := range capability.Methods {
+	methods := map[string]registeredMethod{}
+	for method, handler := range capability.Methods {
+		methods[method] = registeredMethod{handler: handler, sessionScoped: capability.SessionScoped}
+	}
+	for method, handler := range capability.UnscopedMethods {
+		if _, both := methods[method]; both {
+			return fmt.Errorf("bmaexecutor: method %s is registered twice", method)
+		}
+		methods[method] = registeredMethod{handler: handler}
+	}
+	for method := range methods {
 		if _, exists := c.methods[method]; exists {
 			return fmt.Errorf("bmaexecutor: method %s is already registered", method)
 		}
@@ -390,8 +403,8 @@ func (c *Core) Register(capability Capability) error {
 			return fmt.Errorf("bmaexecutor: method %s is served by the core", method)
 		}
 	}
-	for method, handler := range capability.Methods {
-		c.methods[method] = registeredMethod{handler: handler, sessionScoped: capability.SessionScoped}
+	for method, registered := range methods {
+		c.methods[method] = registered
 	}
 	c.capabilities = append(c.capabilities, capability)
 	return nil
