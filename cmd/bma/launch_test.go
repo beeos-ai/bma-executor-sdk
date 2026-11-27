@@ -710,3 +710,19 @@ func TestProfilesUseInteractivePicksTheWorkspace(t *testing.T) {
 		t.Fatalf("config %+v (%v)", c, err)
 	}
 }
+
+// /exit at an approval prompt ends the chat; it is not a deny reason.
+func TestChatExitAtAnApprovalPromptAnswersNothing(t *testing.T) {
+	f, url := newFakeBMA(t)
+	f.sessions = []map[string]any{{"id": "ses_1", "status": "idle"}}
+	stdin = bufio.NewReader(strings.NewReader("needs approval\n/exit\n"))
+	defer func() { stdin = bufio.NewReader(os.Stdin) }()
+	if _, code := runCLI(t, apiEnv(url), "sessions", "chat", "ses_1"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	for _, ev := range f.events["ses_1"] {
+		if ev["type"] == "user.tool_confirmation" {
+			t.Fatalf("answered %v", ev)
+		}
+	}
+}

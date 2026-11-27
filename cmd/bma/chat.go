@@ -65,11 +65,13 @@ func chat(ctx context.Context, s *session, sid string, first func() error) error
 		}
 		close(lines)
 	}()
+	// ask reads one answer; false: the chat ends (EOF, Ctrl-C, /exit, /quit).
 	ask := func(prompt string) (string, bool) {
 		fmt.Fprint(os.Stderr, prompt)
 		select {
 		case l, ok := <-lines:
-			return strings.TrimSpace(l), ok
+			l = strings.TrimSpace(l)
+			return l, ok && l != "/exit" && l != "/quit"
 		case <-sig:
 			fmt.Fprintln(os.Stderr)
 			return "", false
@@ -137,9 +139,6 @@ func chat(ctx context.Context, s *session, sid string, first func() error) error
 			if text, ok = ask("› "); !ok {
 				return nil
 			}
-		}
-		if text == "/exit" || text == "/quit" {
-			return nil
 		}
 		msg := userMessage(text)
 		res, err = turn(func() error { return sendEvents(ctx, s, sid, "", msg) })
