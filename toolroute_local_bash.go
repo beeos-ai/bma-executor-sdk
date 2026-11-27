@@ -136,7 +136,8 @@ func (r *LocalToolRoute) prepareBash(ctx context.Context, callID string, in map[
 		return bashPlan{failure: "session_not_active: the session is not open"}, nil
 	}
 	process := ProcessContext{SessionID: r.sessionID, AgentSessionID: r.sessionID}
-	launch, err := r.core.launchTool(ctx, session, process, callID, command, "", nil)
+	writePath, _ := in["write_path"].(string)
+	launch, err := r.core.launchTool(ctx, session, process, callID, command, "", writePath, nil)
 	if err != nil {
 		if code, detail, ok := launchRefusal(err); ok {
 			return bashPlan{}, refused(code, detail)

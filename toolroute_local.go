@@ -413,6 +413,7 @@ func (r *LocalToolRoute) runOnce(ctx context.Context, c RouteCall) *RouteResult 
 	}
 	// A file tool passes CoreOptions.FileAccess before it is marked started;
 	// a refusal is recorded and replayed like the launch hook's.
+	ctx = withWriteApproval(ctx, c.Name)
 	if refusal := r.checkFileAccess(ctx, c); refusal != nil {
 		r.logf(LogWarn, fmt.Sprintf("tool call %s (%s) of session %s refused by the file access hook: %s", c.ID, c.Name, r.sessionID, refusal.Text))
 		if err := ledger.update(c.ID, func(s *acpCallState) {
