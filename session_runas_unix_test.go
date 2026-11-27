@@ -186,3 +186,46 @@ func bashOut(t *testing.T, s *Session, command string) string {
 	out, _, _ := strings.Cut(textOf(res), "exit_code:")
 	return strings.TrimSpace(out)
 }
+
+// TestRunAsOwnsReadWriteMemory: with SessionFilesOptions.RunAs the
+// session's identity can change, create and nest files in a read_write store
+// (the store directory and its files are the session's), the changes are
+// written back, and it cannot write a read_only store. Needs root.
+func TestRunAsOwnsReadWriteMemory(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("chown needs root")
+	}
+	rw := rwStore("memstore_a", "prefs", map[string]string{"/a/b.md": "b"})
+	ro := &fakeMemoryStore{id: "memstore_r", slug: "ref", files: map[string][]byte{"/r.md": []byte("r")}}
+	daemon := &fakeDaemonFiles{processes: map[string]string{"p0": "sess_a", "p1": "sess_a"},
+		memory: map[string][]*fakeMemoryStore{"sess_a": {rw, ro}}}
+	h, files, _ := newSessionFilesHarness(t, daemon)
+	files.runAs = sessionUser
+	for _, dir := range []string{files.Root(), filepath.Dir(files.Root())} { // the test's temporary directories
+		if err := os.Chmod(dir, 0o711); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run(t, h, "p0", "sess_a", "true")
+	mem := files.MemoryDir("sess_a")
+	runAs, _ := sessionUser("sess_a")
+	for _, c := range []string{
+		"printf changed > " + filepath.Join(mem, "prefs", "a", "b.md"),
+		"mkdir -p " + filepath.Join(mem, "prefs", "a", "c") + " && printf new > " + filepath.Join(mem, "prefs", "a", "c", "d.md"),
+	} {
+		cmd := exec.Command("/bin/sh", "-c", c)
+		setCredential(cmd, runAs)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s as the session: %v %s", c, err, out)
+		}
+	}
+	cmd := exec.Command("/bin/sh", "-c", "printf x > "+filepath.Join(mem, "ref", "r.md"))
+	setCredential(cmd, runAs)
+	if err := cmd.Run(); err == nil {
+		t.Fatal("the session wrote a read_only store")
+	}
+	run(t, h, "p1", "sess_a", "true")
+	if daemonFile(daemon, rw, "/a/b.md") != "changed" || daemonFile(daemon, rw, "/a/c/d.md") != "new" {
+		t.Fatalf("store = %q, writes %v", rw.files, daemon.writes())
+	}
+}

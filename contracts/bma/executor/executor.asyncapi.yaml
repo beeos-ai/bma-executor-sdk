@@ -2,7 +2,7 @@ asyncapi: 3.0.0
 id: https://contracts.beeos.ai/executor.asyncapi
 info:
   title: BMA Executor Protocol channels
-  version: 2.7.0
+  version: 2.8.0
   description: "WebSocket channels for bma.executor.v1 and bma.executor.v1.1. The control channel carries JSON-RPC 2.0 requests, notifications, and responses. The mcp channel carries raw MCP JSON-RPC with no BMA wrapper. PTY bytes travel on per-attach outbound host sockets (subprotocol bma.terminal.v1), not on these channels. Contract 1.4.0 adds the platform tools endpoint (x-bma-platform-tools): the HTTP MCP endpoint a brain on one machine calls to run its tools on the session's hands machine."
   license:
     name: Apache-2.0
@@ -1555,7 +1555,7 @@ components:
       name: process.read
       title: process.read
       summary: Read process output from a cursor.
-      description: Harness to executor request (v1.1 §3.4). Long-polls up to wait_ms for new bytes. gap=true when bytes before earliest_cursor were dropped from the ring buffer. A read that reports an ended process of an agent session uploads that session's changed outputs before it answers, retrying transient upload failures for at most 10 s, and lists them in session_outputs (contract 2.5.0) with whether each upload went through; reading the ended process again retries what is still pending.
+      description: Harness to executor request (v1.1 §3.4). Long-polls up to wait_ms for new bytes. gap=true when bytes before earliest_cursor were dropped from the ring buffer. A read that reports an ended process of an agent session uploads that session's changed outputs before it answers, retrying transient upload failures for at most 10 s, and lists them in session_outputs (contract 2.5.0) with whether each upload went through; reading the ended process again retries what is still pending. On an executor with session_files.memory_writeback (contract 2.8.0) it also writes back the session's read_write memory stores and lists, once, every path whose change did not land in session_memory (ADR-0110).
       contentType: application/json
       payload:
         type: object
@@ -2208,7 +2208,7 @@ components:
       name: session_files.sync
       title: session_files.sync
       summary: Mirror the session's memory stores onto the machine now.
-      description: Harness to executor request (machine-scoped, contract 2.6.0, capability session_files.memory). The executor fetches the session files manifest with download_token as the anchor process (GET …/processes/{download_token}/session/files) and mirrors its memory_stores into <root>/<agent_session_id>/memory/ exactly as before a process.start of the session (content from …/session/memory/{memory_store_id}/content?path=, length and sha256 checked, files 0444, anything not in the manifest removed, a store with materialized false removed); uploads are not touched. The platform sends it only for a session with memory store resources, before every turn.start of a brain on the machine and before every platform tool call on a hands machine, so memory is refreshed at every turn start and a changed read-only copy is reset. Idempotent; synced is answered without a download when nothing changed. failed fails that turn or call (session.error memory_sync_failed).
+      description: Harness to executor request (machine-scoped, contract 2.6.0, capability session_files.memory). The executor fetches the session files manifest with download_token as the anchor process (GET …/processes/{download_token}/session/files) and mirrors its memory_stores into <root>/<agent_session_id>/memory/ exactly as before a process.start of the session (content from …/session/memory/{memory_store_id}/content?path=, length and sha256 checked, files 0444, anything not in the manifest removed, a store with materialized false removed); uploads are not touched. The platform sends it only for a session with memory store resources, before every turn.start of a brain on the machine and before every platform tool call on a hands machine, so memory is refreshed at every turn start and a changed read-only copy is reset. Idempotent; synced is answered without a download when nothing changed. failed fails that turn or call (session.error memory_sync_failed). With session_files.memory_writeback (contract 2.8.0) the executor first writes back the session's read_write stores against their base (the store wins a conflict) and answers the undelivered reports in session_memory; a writeback that cannot reach the platform does not make the sync failed.
       contentType: application/json
       payload:
         type: object

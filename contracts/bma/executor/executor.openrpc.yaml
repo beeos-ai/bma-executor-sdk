@@ -1,7 +1,7 @@
 openrpc: 1.2.6
 info:
   title: BMA Executor Protocol
-  version: 2.7.0
+  version: 2.8.0
   description: >-
     Machine-readable method catalog for bma.executor.v1 and bma.executor.v1.1, the outbound
     WebSocket + JSON-RPC 2.0 contract between a BMA harness and an executor. The prose lives in
@@ -1034,6 +1034,9 @@ methods:
       answers, retrying transient upload failures for at most 10 s, and lists them in
       session_outputs (contract 2.5.0) with whether each upload went through; reading the ended
       process again retries what is still pending.
+      On an executor with session_files.memory_writeback (contract 2.8.0) it also writes back the
+      session's read_write memory stores and lists, once, every path whose change did not land in
+      session_memory (ADR-0110).
     tags:
       - name: process
     x-bma-direction: harness-to-executor
@@ -1651,6 +1654,10 @@ methods:
       call on a hands machine, so memory is refreshed at every turn start and a changed
       read-only copy is reset. Idempotent; synced is answered without a download when nothing
       changed. failed fails that turn or call (session.error memory_sync_failed).
+      With session_files.memory_writeback (contract 2.8.0) the executor first writes back the
+      session's read_write stores against their base (the store wins a conflict) and answers the
+      undelivered reports in session_memory; a writeback that cannot reach the platform does not make
+      the sync failed.
     tags:
       - name: file
     x-bma-direction: harness-to-executor

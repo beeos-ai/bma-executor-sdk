@@ -330,6 +330,13 @@
           "items": {
             "$ref": "process.json#/$defs/SessionOutputReport"
           }
+        },
+        "session_memory": {
+          "type": "array",
+          "description": "Only on a read that reports an ended process of an agent session on an executor with session_files.memory_writeback. Contract 2.8.0. Memory writeback reports (ADR-0110) the executor has not delivered yet for this session, each delivered once: every path of a read_write memory store whose change did not land as the agent left it. Absent or empty: nothing to report.",
+          "items": {
+            "$ref": "process.json#/$defs/SessionMemoryReport"
+          }
         }
       },
       "required": [
@@ -374,6 +381,39 @@
       },
       "required": [
         "processes"
+      ],
+      "additionalProperties": true
+    },
+    "SessionMemoryReport": {
+      "type": "object",
+      "description": "Contract 2.8.0. One memory path whose writeback did not land as the agent left it (ADR-0110). outcome conflict: the store changed since the session last saw it, the store's content replaced the session's copy; rejected: a memory rule refused it (message says which and what to do), the file stays and is sent again when it changes; delete_refused: more than 50 deletions of the store in one sync, none was sent and the files were restored; reset: the store's directory or its marker could not be trusted, the directory was restored from the store and nothing was written back.",
+      "properties": {
+        "memory_store_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string",
+          "description": "The memory path (leading /); empty for delete_refused and reset, which concern the whole store."
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "conflict",
+            "rejected",
+            "delete_refused",
+            "reset"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "What happened, written for the model."
+        }
+      },
+      "required": [
+        "memory_store_id",
+        "path",
+        "outcome",
+        "message"
       ],
       "additionalProperties": true
     }

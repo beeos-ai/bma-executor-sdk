@@ -210,7 +210,9 @@ func NewProcessCapability(core *Core, opts ProcessOptions) Capability {
 			}
 			if opts.SessionFiles != nil {
 				capabilities.SessionFiles = &SessionFilesCapability{Root: opts.SessionFiles.Root(), Memory: true,
-					Mount: opts.SessionFiles.opts.Mounter != nil}
+					Mount: opts.SessionFiles.opts.Mounter != nil,
+					// A mounted memory is not a copy: nothing to write back from (ADR-0111).
+					MemoryWriteback: opts.SessionFiles.opts.Mounter == nil}
 			}
 		},
 		SessionScoped:   true,
@@ -244,9 +246,10 @@ func (p *processes) syncSessionFiles(ctx context.Context, req Request) (any, err
 	}
 	if err := p.opts.SessionFiles.syncMemory(ctx, req.Client, params.AgentSessionID, params.DownloadToken); err != nil {
 		p.core.log(LogWarn, "session memory not synced: "+params.AgentSessionID, err)
-		return SessionFilesSyncResult{State: "failed", Error: err.Error()}, nil
+		return SessionFilesSyncResult{State: "failed", Error: err.Error(),
+			SessionMemory: p.opts.SessionFiles.memoryReports(params.AgentSessionID)}, nil
 	}
-	return SessionFilesSyncResult{State: "synced"}, nil
+	return SessionFilesSyncResult{State: "synced", SessionMemory: p.opts.SessionFiles.memoryReports(params.AgentSessionID)}, nil
 }
 
 type processes struct {
@@ -1115,6 +1118,7 @@ func (p *processes) read(ctx context.Context, req Request) (any, error) {
 		// whether each upload went through: a failed upload is never a
 		// silent success (the platform reads again while one is pending).
 		result.SessionOutputs = p.opts.SessionFiles.flush(ctx, proc.filesSession)
+		result.SessionMemory = p.opts.SessionFiles.flushMemory(ctx, proc.filesSession)
 	}
 	return result, err
 }

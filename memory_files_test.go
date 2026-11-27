@@ -51,7 +51,7 @@ func TestSessionMemoryMirroredPerSessionBeforeProcessStart(t *testing.T) {
 	assertMode(t, filepath.Join(memA, "prefs", "lang.md"), 0o444)
 	assertMode(t, filepath.Join(memA, sessionMemoryMarker), 0o444)
 	raw, err := os.ReadFile(filepath.Join(memA, sessionMemoryMarker))
-	if err != nil || string(raw) != `{"stores":[{"slug":"prefs","memory_store_id":"memstore_a"}]}` {
+	if err != nil || string(raw) != `{"stores":[{"slug":"prefs","memory_store_id":"memstore_a","access":"read_only"}]}` {
 		t.Fatalf("marker = %s (%v)", raw, err)
 	}
 	if _, err := os.Stat(filepath.Join(memA, "team-notes")); !os.IsNotExist(err) {

@@ -109,7 +109,7 @@ func (s *CoreSession) target(p string, write bool) (fileTarget, error) {
 		rel, ok := m.rel(p)
 		switch {
 		case !ok:
-		case write && !m.writable:
+		case write && !m.writable && !m.writableAt(rel):
 			return fileTarget{}, fmt.Errorf("path %q is read-only (the session's %s)", p, m.name)
 		default:
 			return fileTarget{mount: m, rel: rel}, nil

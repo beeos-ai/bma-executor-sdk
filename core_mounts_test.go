@@ -420,3 +420,30 @@ func TestACPAgentSessionMountsSkillsOnly(t *testing.T) {
 		t.Fatal("outputs is writable without the outputs mount")
 	}
 }
+
+// A local brain's file tools write a read_write memory store's directory (the
+// writeback sends it to the store) and nothing else of the memory mount: not
+// a read_only store, not the marker, not a new top-level entry.
+func TestSessionMemoryMountWritableOnlyInReadWriteStores(t *testing.T) {
+	r := newMountRig(t, CoreOptions{})
+	mem := r.path("memory")
+	noErr(t, os.MkdirAll(filepath.Join(mem, "notes"), 0o755))
+	noErr(t, os.MkdirAll(filepath.Join(mem, "ref"), 0o755))
+	noErr(t, os.WriteFile(filepath.Join(mem, "ref", "r.md"), []byte("ref\n"), 0o444))
+	noErr(t, os.WriteFile(filepath.Join(mem, sessionMemoryMarker), []byte(`{"stores":[`+
+		`{"slug":"notes","memory_store_id":"memstore_n","access":"read_write"},`+
+		`{"slug":"ref","memory_store_id":"memstore_r","access":"read_only"}]}`), 0o444))
+	note := filepath.Join(mem, "notes", "deep", "today.md")
+	wantText(t, r.call("write", map[string]any{"file_path": note, "content": "one\n"}), "write rw store", "wrote")
+	wantText(t, r.call("edit", map[string]any{"file_path": note, "old_string": "one", "new_string": "two"}), "edit rw store", "edited")
+	if raw, _ := os.ReadFile(note); string(raw) != "two\n" {
+		t.Fatalf("note = %q", raw)
+	}
+	for _, p := range []string{filepath.Join(mem, "ref", "r.md"), filepath.Join(mem, "ref", "new.md"),
+		filepath.Join(mem, sessionMemoryMarker), filepath.Join(mem, "top.md"), filepath.Join(mem, "unlisted", "x.md")} {
+		wantToolError(t, r.call("write", map[string]any{"file_path": p, "content": "pwned"}), "write "+p)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(mem, "ref", "r.md")); string(raw) != "ref\n" {
+		t.Fatalf("read_only store changed: %q", raw)
+	}
+}

@@ -78,6 +78,8 @@ type sessionMemoryFile struct {
 type memoryMirror struct {
 	slug, access string
 	files        map[string]mountedFile
+	write        *memoryWriteState // read_write only (memory_writeback.go)
+	owner        *RunAs            // whom a read_write store's files belong to (nil: the executor)
 }
 
 type memoryMarker struct {
@@ -87,6 +89,8 @@ type memoryMarker struct {
 type memoryMarkerStore struct {
 	Slug          string `json:"slug"`
 	MemoryStoreID string `json:"memory_store_id"`
+	// Access lets a local brain's file tools write a read_write store.
+	Access string `json:"access"`
 }
 
 // MemoryDir is <Root>/<sessionID>/memory, where the session's memory stores
@@ -108,6 +112,16 @@ func (f *SessionFiles) syncMemory(ctx context.Context, client *Client, sessionID
 	}
 	ctx, cancel := context.WithTimeout(ctx, sessionFilesPrepareTimeout)
 	defer cancel()
+	session := f.session(sessionID)
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	session.lastActive = time.Now()
+	if err := session.unparkMemoryLocked(); err != nil {
+		f.log(LogWarn, "parked memory bases of "+sessionID+" not read", err)
+	}
+	// What the agent changed goes to the store before the manifest the
+	// refresh mirrors is listed, so the refresh never drops an unsent change.
+	session.writeBackMemoryLocked(ctx, client, token, true, f.log)
 	var manifest sessionFilesManifest
 	if err := client.daemonJSON(ctx, "/processes/"+url.PathEscape(token)+"/session-files", maxSessionManifestBytes, &manifest); err != nil {
 		return fmt.Errorf("load session files: %w", err)
@@ -115,10 +129,6 @@ func (f *SessionFiles) syncMemory(ctx context.Context, client *Client, sessionID
 	if manifest.SessionID != sessionID {
 		return fmt.Errorf("session files belong to %q, not %q", manifest.SessionID, sessionID)
 	}
-	session := f.session(sessionID)
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	session.lastActive = time.Now()
 	if f.opts.Mounter != nil {
 		session.setAnchor(client, token)
 		if session.mountedAt.IsZero() {
@@ -140,7 +150,20 @@ func (f *SessionFiles) syncMemory(ctx context.Context, client *Client, sessionID
 			return err
 		}
 	}
-	return session.syncMemoryLocked(ctx, client, token, manifest.MemoryStores, f.log)
+	owner, err := f.memoryOwner(session.id)
+	if err != nil {
+		return err
+	}
+	return session.syncMemoryLocked(ctx, client, token, manifest.MemoryStores, owner, f.log)
+}
+
+// memoryOwner is the identity read_write memory stores belong to on the
+// machine (SessionFilesOptions.RunAs; nil: the executor's).
+func (f *SessionFiles) memoryOwner(sessionID string) (*RunAs, error) {
+	if f.runAs == nil {
+		return nil, nil
+	}
+	return f.runAs(sessionID)
 }
 
 // mirrorsMemory reports whether sessionID mirrors at least one store.
@@ -157,10 +180,13 @@ func (f *SessionFiles) mirrorsMemory(sessionID string) bool {
 }
 
 // syncMemoryLocked makes <session>/memory hold exactly stores, downloading
-// through the anchor. Without stores and without a directory nothing is
-// touched, so a session without memory sees no change.
+// through the anchor; the directories and files of read_write stores belong
+// to owner (nil: the executor) so the session's identity can write them.
+// Without stores and without a directory nothing is touched, so a session
+// without memory sees no change.
 func (s *fileSession) syncMemoryLocked(ctx context.Context, client *Client, anchor string, stores []sessionMemoryStore,
-	log func(LogLevel, string, error)) error {
+	owner *RunAs, log func(LogLevel, string, error)) error {
+	s.memoryClient, s.memoryAnchor = client, anchor // the walk's writeback authorizes with it
 	sessionDir := filepath.Dir(s.uploads)
 	if len(stores) == 0 && len(s.memory) == 0 {
 		if _, err := os.Lstat(filepath.Join(sessionDir, sessionMemoryDir)); errors.Is(err, fs.ErrNotExist) {
@@ -228,7 +254,13 @@ func (s *fileSession) syncMemoryLocked(ctx context.Context, client *Client, anch
 		if mirror == nil || trusted[store.Slug] != store.MemoryStoreID {
 			mirror = &memoryMirror{files: map[string]mountedFile{}}
 		}
-		mirror.slug, mirror.access = store.Slug, store.Access
+		mirror.slug, mirror.access, mirror.owner = store.Slug, store.Access, nil
+		if store.Access == memoryAccessReadWrite {
+			mirror.owner = owner
+		}
+		if mirror.write != nil { // the refresh restores what was refused or distrusted
+			mirror.write.refused, mirror.write.reset, mirror.write.absent = false, false, map[string]bool{}
+		}
 		if err := mirrorStore(ctx, client, anchor, root, store, want[store.MemoryStoreID], mirror); err != nil {
 			return fmt.Errorf("memory store %s: %w", store.Slug, err)
 		}
@@ -308,6 +340,9 @@ func mirrorStore(ctx context.Context, client *Client, anchor string, root *os.Ro
 	if err := root.MkdirAll(store.Slug, 0o755); err != nil {
 		return err
 	}
+	if err := ownInRoot(root, store.Slug, mirror.owner); err != nil {
+		return err
+	}
 	dir, err := openChildRoot(root, store.Slug)
 	if err != nil {
 		return err
@@ -325,6 +360,9 @@ func mirrorStore(ctx context.Context, client *Client, anchor string, root *os.Ro
 	for rel, file := range files {
 		if currentIn(dir, rel, file.SizeBytes, file.Digest, known) {
 			mirror.files[file.Path] = known[rel]
+			if err := ownInRoot(dir, rel, mirror.owner); err != nil {
+				return err
+			}
 			continue
 		}
 		route := "/processes/" + url.PathEscape(anchor) + "/session-memory/" + url.PathEscape(store.MemoryStoreID) +
@@ -347,6 +385,17 @@ func mirrorStore(ctx context.Context, client *Client, anchor string, root *os.Ro
 		if err != nil {
 			return err
 		}
+		if store.Access == memoryAccessReadWrite {
+			if err := dir.Chmod(rel, 0o644); err != nil {
+				return err
+			}
+			if err := ownInRoot(dir, rel, mirror.owner); err != nil {
+				return err
+			}
+			if info, err = dir.Lstat(rel); err != nil {
+				return err
+			}
+		}
 		mirror.files[file.Path] = mountedFile{digest: digest, observed: observe(info)}
 	}
 	return nil
@@ -366,29 +415,52 @@ func memoryContentExpect(response *http.Response) (int64, string, error) {
 // empty when the marker is missing or damaged (every store distrusted).
 func readMemoryMarker(root *os.Root) map[string]string {
 	trusted := map[string]string{}
-	info, err := root.Lstat(sessionMemoryMarker)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxSessionUploadResponse*16 {
-		return trusted
-	}
-	raw, err := root.ReadFile(sessionMemoryMarker)
-	if err != nil {
-		return trusted
-	}
-	var marker memoryMarker
-	if json.Unmarshal(raw, &marker) != nil {
-		return trusted
-	}
-	for _, store := range marker.Stores {
+	for _, store := range readMemoryMarkerStores(root) {
 		trusted[store.Slug] = store.MemoryStoreID
 	}
 	return trusted
+}
+
+// readMemoryMarkerStores returns the marker's stores; none when the marker is
+// missing or damaged.
+func readMemoryMarkerStores(root *os.Root) []memoryMarkerStore {
+	info, err := root.Lstat(sessionMemoryMarker)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxSessionUploadResponse*16 {
+		return nil
+	}
+	raw, err := root.ReadFile(sessionMemoryMarker)
+	if err != nil {
+		return nil
+	}
+	var marker memoryMarker
+	if json.Unmarshal(raw, &marker) != nil {
+		return nil
+	}
+	return marker.Stores
+}
+
+// memoryWritable reports whether rel (relative to the session's memory
+// directory) is a file in a read_write store the marker lists: where a local
+// brain's file tools may write (memory_writeback.go writes it back).
+func memoryWritable(root *os.Root, rel string) bool {
+	slug, rest, ok := strings.Cut(filepath.ToSlash(rel), "/")
+	if !ok || rest == "" {
+		return false
+	}
+	for _, store := range readMemoryMarkerStores(root) {
+		if store.Slug == slug {
+			return store.Access == memoryAccessReadWrite
+		}
+	}
+	return false
 }
 
 func writeMemoryMarker(root *os.Root, stores []sessionMemoryStore) error {
 	marker := memoryMarker{Stores: []memoryMarkerStore{}}
 	for _, store := range stores {
 		if store.Materialized {
-			marker.Stores = append(marker.Stores, memoryMarkerStore{Slug: store.Slug, MemoryStoreID: store.MemoryStoreID})
+			marker.Stores = append(marker.Stores, memoryMarkerStore{Slug: store.Slug, MemoryStoreID: store.MemoryStoreID,
+				Access: store.Access})
 		}
 	}
 	raw, err := json.Marshal(marker)
@@ -434,4 +506,18 @@ func removeTreeInRoot(root *os.Root, name string) error {
 		return err
 	}
 	return root.Remove(name)
+}
+
+// ownInRoot gives rel and every directory leading to it below root to owner
+// (nothing without one), without following links.
+func ownInRoot(root *os.Root, rel string, owner *RunAs) error {
+	if owner == nil {
+		return nil
+	}
+	for p := rel; p != "." && p != "/" && p != ""; p = path.Dir(p) {
+		if err := root.Lchown(p, int(owner.UID), int(owner.GID)); err != nil {
+			return fmt.Errorf("memory: hand %s to the session's user: %w", p, err)
+		}
+	}
+	return nil
 }
