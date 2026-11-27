@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -21,6 +22,10 @@ import (
 
 	bmaexecutor "github.com/beeos-ai/bma-executor-sdk"
 )
+
+// ErrUnsupported: session files are mounted on Linux only; elsewhere New
+// and Probe answer it and the executor copies.
+var ErrUnsupported = errors.New("sessionmount: mounting session files needs Linux")
 
 // FSName is the file system type of the mounts ("fuse." + FSName in
 // /proc/mounts).

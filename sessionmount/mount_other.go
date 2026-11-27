@@ -2,12 +2,6 @@
 
 package sessionmount
 
-import "errors"
-
-// ErrUnsupported: session files are mounted on Linux only; elsewhere they
-// are copied.
-var ErrUnsupported = errors.New("sessionmount: mounting session files needs Linux")
-
 // New fails: see ErrUnsupported.
 func New(Options) (*Mounter, error) { return nil, ErrUnsupported }
 
