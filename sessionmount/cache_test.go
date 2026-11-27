@@ -1,3 +1,8 @@
+//go:build linux
+
+// The cache backs the Linux mounts only: it renames the checked file while
+// it is open, which Windows refuses.
+
 package sessionmount
 
 import (
