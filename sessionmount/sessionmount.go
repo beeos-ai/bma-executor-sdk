@@ -196,6 +196,10 @@ type view struct {
 	deletes       int
 	deleteRefused bool
 
+	// writers are the files open for writing by path: a truncate without a
+	// handle (open with O_TRUNC sends one) applies to the latest.
+	writers map[string][]any
+
 	// writes serializes the changes of a read_write store (one commit at a time).
 	writes sync.Mutex
 }

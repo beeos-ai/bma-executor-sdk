@@ -261,11 +261,54 @@ type writeHandle struct {
 }
 
 var (
-	_ fs.FileReader  = (*writeHandle)(nil)
-	_ fs.FileWriter  = (*writeHandle)(nil)
-	_ fs.FileFlusher = (*writeHandle)(nil)
-	_ fs.FileFsyncer = (*writeHandle)(nil)
+	_ fs.FileReader   = (*writeHandle)(nil)
+	_ fs.FileWriter   = (*writeHandle)(nil)
+	_ fs.FileFlusher  = (*writeHandle)(nil)
+	_ fs.FileFsyncer  = (*writeHandle)(nil)
+	_ fs.FileReleaser = (*writeHandle)(nil)
 )
+
+// opened registers h as open for writing.
+func (h *writeHandle) opened() *writeHandle {
+	v := h.n.v
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.writers == nil {
+		v.writers = map[string][]any{}
+	}
+	v.writers[h.p] = append(v.writers[h.p], h)
+	return h
+}
+
+// Release forgets h.
+func (h *writeHandle) Release(context.Context) syscall.Errno {
+	v := h.n.v
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	list := v.writers[h.p]
+	for i, other := range list {
+		if other == h {
+			list = append(list[:i:i], list[i+1:]...)
+			break
+		}
+	}
+	if len(list) == 0 {
+		delete(v.writers, h.p)
+	} else {
+		v.writers[h.p] = list
+	}
+	return 0
+}
+
+// writer is the latest file open for writing at p, or nil.
+func (v *view) writer(p string) *writeHandle {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	if list := v.writers[p]; len(list) > 0 {
+		return list[len(list)-1].(*writeHandle)
+	}
+	return nil
+}
 
 func (h *writeHandle) Read(_ context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	h.mu.Lock()
@@ -344,14 +387,14 @@ func (n *node) openWrite(ctx context.Context, p string, flags uint32) (*writeHan
 	h := &writeHandle{n: n, p: p, base: n.v.base(p)}
 	if flags&syscall.O_TRUNC != 0 {
 		h.dirty = true
-		return h, 0
+		return h.opened(), 0
 	}
 	b, _, errno := n.v.content(ctx, p)
 	if errno != 0 {
 		return nil, errno
 	}
 	h.b = b
-	return h, 0
+	return h.opened(), 0
 }
 
 var (
@@ -387,7 +430,7 @@ func (n *node) Create(ctx context.Context, name string, _, _ uint32, out *fuse.E
 	defer n.v.writes.Unlock()
 	// The kernel creates only a name it did not find: a new file, committed
 	// at close.
-	h := &writeHandle{n: n, p: p, dirty: true}
+	h := (&writeHandle{n: n, p: p, dirty: true}).opened()
 	n.v.setLocal(p, nil)
 	child := &node{v: n.v, path: p}
 	inode := n.NewInode(ctx, child, fs.StableAttr{Mode: syscall.S_IFREG, Ino: inode("f", p, "")})
@@ -491,6 +534,11 @@ func (n *node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn,
 		return syscall.EPERM
 	}
 	if size, ok := in.GetSize(); ok {
+		if _, isWrite := f.(*writeHandle); !isWrite {
+			if h := n.v.writer(n.rel()); h != nil {
+				f = h // open(O_TRUNC) truncates without its handle
+			}
+		}
 		if h, isWrite := f.(*writeHandle); isWrite {
 			if errno := h.truncate(size); errno != 0 {
 				return errno
@@ -504,6 +552,9 @@ func (n *node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn,
 			}
 			if errno == 0 {
 				errno = n.v.commit(ctx, p, h.base, h.b)
+			}
+			if h != nil {
+				_ = h.Release(ctx)
 			}
 			n.v.writes.Unlock()
 			if errno != 0 {
