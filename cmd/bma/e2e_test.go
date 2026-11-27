@@ -249,6 +249,7 @@ func TestE2E(t *testing.T) {
 	t.Run("files", e.testFiles)
 	t.Run("skills", e.testSkills)
 	t.Run("turns", e.testTurns)
+	t.Run("launch", e.testLaunch)
 	t.Run("memory-stores", e.testMemoryStores)
 	t.Run("vaults", e.testVaults)
 	t.Run("user-profiles", e.testUserProfiles)
@@ -641,6 +642,55 @@ func (e *e2e) testTurns(t *testing.T) {
 	}
 	e.must(t, "sessions.delete", "sessions", "delete", sid)
 	e.must(t, "agents.archive", "agents", "archive", aid)
+}
+
+// testLaunch: agents apply, sessions launch from a file (and its rerun),
+// sessions wait, interrupt and list --status.
+func (e *e2e) testLaunch(t *testing.T) {
+	env := e.environment(t, "")
+	model := firstNonEmpty(os.Getenv("BMA_E2E_MODEL"), "deepseek-flash")
+	agentFile := filepath.Join(e.dir, "agent.yaml")
+	_ = os.WriteFile(agentFile, []byte(fmt.Sprintf("name: %s\nmodel: %s\nsystem: You answer in as few words as possible.\n",
+		e.name("launch-agent"), model)), 0o644)
+	v1, errOut, code := e.exec(e.env, nil, "agents", "apply", "-f", agentFile, "--query", ".version")
+	v2, _, code2 := e.exec(e.env, nil, "agents", "apply", "-f", agentFile, "--query", ".version")
+	e.feature(t, "agents apply -f (create, then no-op)", code == 0 && code2 == 0 && strings.TrimSpace(v1) == "1" &&
+		strings.TrimSpace(v2) == "1", short(v1+v2+errOut))
+	aid := e.must(t, "", "agents", "list", "--all", "--query", fmt.Sprintf(`.[] | select(.name == "%s") | .id`, e.name("launch-agent")))
+	e.cleanup(t, "agents", "archive", aid)
+
+	attach := filepath.Join(e.dir, "word.txt")
+	_ = os.WriteFile(attach, []byte("delta"), 0o644)
+	sessFile := filepath.Join(e.dir, "session.yaml")
+	_ = os.WriteFile(sessFile, []byte(fmt.Sprintf("agent: %s\nenvironment: %s\ntitle: %s\nfiles: [word.txt]\n"+
+		"message: Reply with exactly the word in the attached file.\n", e.name("launch-agent"), env, e.name("launch"))), 0o644)
+	out, errOut, code := e.exec(e.env, nil, "sessions", "launch", "-f", sessFile, "--wait", "--json")
+	first := map[string]any{}
+	_ = json.Unmarshal([]byte(out), &first)
+	sid, _ := first["session_id"].(string)
+	e.feature(t, "sessions launch -f --wait --json", code == 0 && sid != "" && first["stop_reason"] == "end_turn" &&
+		strings.Contains(strings.ToLower(fmt.Sprint(first["text"])), "delta"), short(out+errOut))
+	if sid == "" {
+		return
+	}
+	e.cleanup(t, "sessions", "delete", sid)
+	out, errOut, code = e.exec(e.env, nil, "sessions", "launch", "-f", sessFile, "--wait", "--json")
+	again := map[string]any{}
+	_ = json.Unmarshal([]byte(out), &again)
+	n := e.must(t, "", "sessions", "list", "--limit", "100", "--query", fmt.Sprintf(`[.data[] | select(.title == "%s")] | length`, e.name("launch")))
+	e.feature(t, "sessions launch rerun → same session, no second one", code == 0 && again["session_id"] == sid && n == "1",
+		short(out+errOut+" sessions "+n))
+
+	out, _, code = e.exec(e.env, nil, "sessions", "wait", sid, "--timeout", "2m", "--query", ".status")
+	e.feature(t, "sessions wait", code == 0 && strings.TrimSpace(out) == "idle", out)
+	out, _, code = e.exec(e.env, nil, "sessions", "list", "--status", "idle", "--limit", "100", "--format", "json", "--query",
+		fmt.Sprintf(`[.data[] | select(.id == "%s")] | length`, sid))
+	e.feature(t, "sessions list --status idle", code == 0 && strings.TrimSpace(out) == "1", out)
+	_, _, code = e.exec(e.env, nil, "sessions", "interrupt", sid)
+	_, _, code2 = e.exec(e.env, nil, "sessions", "interrupt", sid)
+	e.feature(t, "sessions interrupt (twice, no open turn)", code == 0 && code2 == 0, fmt.Sprint(code, code2))
+	e.must(t, "", "sessions", "delete", sid)
+	e.must(t, "", "agents", "archive", aid)
 }
 
 // waitIdle follows the stream until the session is idle.

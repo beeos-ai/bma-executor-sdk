@@ -254,6 +254,8 @@ func TestSendWaitPrintsTheAgentTextOfTheTurn(t *testing.T) {
 				}
 			}
 			_, _ = io.WriteString(w, "id: 1\ndata: {\"type\":\"session.status_running\"}\n\nid: 2\ndata: {\"type\":\"agent.message\",\"content\":[{\"type\":\"text\",\"text\":\"hi there\"}]}\n\nid: 3\ndata: {\"type\":\"session.status_idle\"}\n\n")
+		case r.URL.Path == "/v1/files" && r.URL.Query().Get("scope_id") == "s1":
+			_, _ = io.WriteString(w, `{"data":[]}`)
 		default:
 			http.NotFound(w, r)
 		}

@@ -52,7 +52,15 @@ func joinOperations(ids ...string) string {
 
 func addHandWritten(root *cobra.Command) {
 	sessions := group(root, []string{"sessions"})
-	sessions.AddCommand(sendCmd())
+	sessions.AddCommand(sendCmd(), launchCmd(), chatCmd(), interruptCmd(), waitCmd())
+	if id := operationOf("GET", "/v1/sessions"); id != "" {
+		for _, c := range sessions.Commands() {
+			if c.Annotations["operation"] == id {
+				addStatusFilter(c)
+			}
+		}
+	}
+	group(root, []string{"agents"}).AddCommand(applyCmd())
 	group(root, []string{"sessions", "events"}).AddCommand(streamCmd())
 	files := group(root, []string{"files"})
 	files.AddCommand(uploadCmd())

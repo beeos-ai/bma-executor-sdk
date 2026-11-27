@@ -83,6 +83,8 @@ type eventStream struct {
 	session string
 	lastID  string
 	opened  func() error
+	// deltas asks for agent.message previews (event_start, event_delta).
+	deltas bool
 }
 
 func (e *eventStream) connect(ctx context.Context) (*http.Response, error) {
@@ -91,7 +93,11 @@ func (e *eventStream) connect(ctx context.Context) (*http.Response, error) {
 	if e.lastID != "" {
 		o = append(o, option.WithHeader("Last-Event-ID", e.lastID))
 	}
-	return e.s.do(ctx, "GET", path, nil, nil, o...)
+	var q url.Values
+	if e.deltas {
+		q = url.Values{"event_deltas": {"agent.message"}}
+	}
+	return e.s.do(ctx, "GET", path, q, nil, o...)
 }
 
 // permanent: an API refusal other than rate limiting or a server error.
@@ -196,12 +202,16 @@ func streamCmd() *cobra.Command {
 
 func sendCmd() *cobra.Command {
 	var stream, wait bool
+	var files []string
+	var key string
 	cmd := &cobra.Command{
 		Use:   "send <session_id> <text|->",
-		Short: "Send a user message to the session; --stream or --wait follow it until the session is idle",
-		Long: "Send a user message (\"-\" reads it from stdin). Without --stream or --wait, print the " +
-			"answer of the send. --stream prints every event until the session is idle; --wait prints only " +
-			"the agent's text when the session is idle.\n\nPOST " + eventsPath,
+		Short: "Send a user message (with --file attachments) to the session; --stream or --wait follow its turn",
+		Long: "Send a user message (\"-\" reads it from stdin). Each --file is uploaded and mounted in the session " +
+			"at " + uploadsDir + "<name>, and the message lists those paths. Without --stream or --wait, print the " +
+			"answer of the send. --wait prints the agent's reply and the deliverables (the outputs the reply names) " +
+			"when the turn ends; --stream prints every event of the turn as JSON lines. With either, the exit status " +
+			"is the turn's: 0 end_turn, 7 waiting for input (requires_action), 8 failed.\n\nPOST " + eventsPath,
 		Args: args(2),
 		RunE: func(cmd *cobra.Command, a []string) error {
 			if stream && wait {
@@ -215,60 +225,71 @@ func sendCmd() *cobra.Command {
 				}
 				text = string(b)
 			}
+			att, err := attachments(files)
+			if err != nil {
+				return err
+			}
 			s, err := apiSession()
 			if err != nil {
 				return err
 			}
-			payload, err := json.Marshal(map[string]any{"events": []any{map[string]any{
-				"type": "user.message", "content": []any{map[string]any{"type": "text", "text": text}}}}})
-			if err != nil {
+			ctx, sid := cmd.Context(), a[0]
+			if err := mountAttachments(ctx, s, sid, att); err != nil {
 				return err
 			}
-			path := strings.TrimPrefix(strings.Replace(eventsPath, "{session_id}", url.PathEscape(a[0]), 1), "/")
-			ctx := cmd.Context()
+			msg := userMessage(withAttachments(text, att))
 			if !stream && !wait {
-				v, err := s.json(ctx, "POST", path, nil, payload)
+				payload, err := json.Marshal(map[string]any{"events": []any{msg}})
+				if err != nil {
+					return err
+				}
+				var o []option.RequestOption
+				if key != "" {
+					o = append(o, option.WithHeader("Idempotency-Key", key))
+				}
+				v, err := s.json(ctx, "POST", eventsPathOf(sid), nil, payload, o...)
 				if err != nil || v == nil {
 					return err
 				}
 				return printValue(v, false)
 			}
-			var texts []string
-			var perr error
-			e := &eventStream{s: s, session: a[0], opened: func() error {
-				_, err := s.json(ctx, "POST", path, nil, payload)
+			var onEvent func(map[string]any) error
+			if stream {
+				onEvent = func(v map[string]any) error { return printEvent(v) }
+			}
+			res, err := followTurn(ctx, s, sid, func() error { return sendEvents(ctx, s, sid, key, msg) }, onEvent, false)
+			if err != nil {
 				return err
-			}}
-			sent := false
-			err = e.run(ctx, func(v map[string]any) bool {
-				if !turnOver(v) {
-					sent = true // the turn of our message has started
-				}
-				if stream {
-					if perr = printEvent(v); perr != nil {
-						return false
-					}
-				} else if t, _ := v["type"].(string); t == "agent.message" {
-					texts = append(texts, messageText(v))
-				}
-				// An idle before any other event is the end of an earlier turn.
-				return !(sent && turnOver(v) || v["type"] == eventTerminated)
-			})
-			if err != nil || perr != nil {
-				return errors.Join(err, perr)
 			}
-			if wait {
-				if opts.Format != "" || opts.Query != "" {
-					return printValue(map[string]any{"text": strings.Join(texts, "\n")}, false)
-				}
-				_, err = fmt.Fprintln(stdout, strings.Join(texts, "\n"))
+			if stream {
+				return turnStatus(res)
 			}
-			return err
+			return printTurn(res)
 		},
 	}
-	cmd.Flags().BoolVar(&stream, "stream", false, "print every event until the session is idle")
-	cmd.Flags().BoolVar(&wait, "wait", false, "print the agent's text when the session is idle")
+	cmd.Flags().BoolVar(&stream, "stream", false, "print every event until the turn ends")
+	cmd.Flags().BoolVar(&wait, "wait", false, "print the agent's reply and the deliverables when the turn ends")
+	cmd.Flags().StringArrayVar(&files, "file", nil, "attach a local file (repeatable): uploaded and mounted at "+uploadsDir+"<name>")
+	cmd.Flags().StringVar(&key, "idempotency-key", "", "Idempotency-Key of the send; repeating it within 24 hours does not send the message twice")
 	return cmd
+}
+
+// mountAttachments uploads the files and mounts them in the session.
+func mountAttachments(ctx context.Context, s *session, sid string, att []attachment) error {
+	for _, at := range att {
+		id, err := upload(ctx, s, at.path, "")
+		if err != nil {
+			return err
+		}
+		payload, err := json.Marshal(map[string]any{"file_id": id, "mount_path": at.mount})
+		if err != nil {
+			return err
+		}
+		if _, err := s.json(ctx, "POST", sessionPath(sid)+"/resources", nil, payload); err != nil {
+			return fmt.Errorf("mounting %s: %w", at.path, err)
+		}
+	}
+	return nil
 }
 
 // messageText joins the text blocks of a message event.

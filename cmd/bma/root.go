@@ -56,7 +56,9 @@ to --output.
 Exit codes: 0 success; 1 other failure; 2 usage error; 3 not signed in, or
 the API answered 401 or 403; 4 not found (404); 5 conflict or failed
 precondition (409, 412); 6 rate limited (429), server error (5xx) or network
-failure after the retries; 130 interrupted. An error is written to stderr:
+failure after the retries; 7 the turn waits for input (requires_action) and
+8 the turn failed or the session ended (commands that follow a turn:
+--wait, --stream, chat, wait); 124 a --timeout passed; 130 interrupted. An error is written to stderr:
 one line, or with --json the API's error envelope as it answered.`,
 		Version:       version,
 		SilenceErrors: true,
@@ -112,10 +114,11 @@ bma login --no-browser
 printf '%s' "$BMA_API_KEY" | bma login --with-token`,
 	"bma logout": `bma logout
 bma logout --profile work`,
-	"bma auth status":     "bma auth status",
-	"bma auth token":      `curl -sS "$BMA_BASE_URL/v1/agents" -H "x-api-key: $(bma auth token)"`,
-	"bma profiles list":   "bma profiles list",
-	"bma profiles use":    "bma profiles use work",
+	"bma auth status":   "bma auth status",
+	"bma auth token":    `curl -sS "$BMA_BASE_URL/v1/agents" -H "x-api-key: $(bma auth token)"`,
+	"bma profiles list": "bma profiles list",
+	"bma profiles use": `bma profiles use work
+bma profiles use --interactive`,
 	"bma profiles set":    "bma profiles set work --api https://api.beeos.ai --workspace-id <workspace_id>",
 	"bma profiles delete": "bma profiles delete work",
 	"bma up": `bma up
@@ -133,8 +136,18 @@ bma upgrade`,
 	"bma version": `bma version
 bma version --json`,
 	"bma sessions send": `bma sessions send <session_id> "Summarize the open issues" --wait
+bma sessions send <session_id> "Review this" --file ./draft.md --wait
 echo "Next step" | bma sessions send <session_id> - --stream`,
 	"bma sessions events stream": "bma sessions events stream <session_id> --until-idle",
+	"bma sessions launch": `bma sessions launch -f session.yaml --wait
+bma sessions launch -f session.yaml --message "Summarize data.csv" --file ./data.csv --json --wait
+bma sessions launch -f session.yaml --interactive`,
+	"bma sessions chat":      "bma sessions chat <session_id>",
+	"bma sessions interrupt": "bma sessions interrupt <session_id>",
+	"bma sessions wait": `bma sessions wait <session_id>
+bma sessions wait <session_id> --state requires_action --timeout 10m`,
+	"bma agents apply": `bma agents apply -f agent.yaml
+bma agents apply -f agent.yaml --query .version`,
 	"bma files upload": `bma files upload ./report.pdf
 bma files upload ./report.pdf --expires-in-seconds 86400`,
 	"bma skills push": `bma skills push ./my-skill
@@ -162,6 +175,13 @@ func (e usageErr) Error() string { return e.msg }
 
 func usageError(msg string) error { return usageErr{msg} }
 
+// notFoundErr is a name that names nothing (exit 4, like a 404).
+type notFoundErr struct{ msg string }
+
+func (e notFoundErr) Error() string { return e.msg }
+
+func notFoundError(msg string) error { return notFoundErr{msg} }
+
 // args checks the number of positional arguments as a usage error.
 func args(n int) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, a []string) error {
@@ -185,6 +205,10 @@ func exitCodeOf(err error) int {
 	}
 	if errors.Is(err, context.Canceled) {
 		return 130
+	}
+	var nf notFoundErr
+	if errors.As(err, &nf) {
+		return 4
 	}
 	if errors.Is(err, errNotSignedIn) {
 		return 3

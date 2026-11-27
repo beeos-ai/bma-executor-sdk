@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/beeos-ai/bma-executor-sdk/blob/main/cmd/bma/schema/agent.schema.json",
+  "title": "BMA agent file (bma agents apply -f)",
+  "description": "The body of an agent create (POST /v1/agents). `bma agents apply` creates the agent of this name, or updates it to a new version only when the definition changed. Members it omits are cleared on update (description, system, tools, mcp_servers, skills); metadata keys it does not list are deleted.",
+  "type": "object",
+  "required": ["name", "model"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {"type": "string", "minLength": 1, "maxLength": 64, "description": "Name of the agent; `bma agents apply` and `bma sessions launch` find the agent by it."},
+    "model": {
+      "description": "A model ID, or {id, effort}.",
+      "oneOf": [
+        {"type": "string", "minLength": 1},
+        {
+          "type": "object",
+          "required": ["id"],
+          "properties": {
+            "id": {"type": "string", "minLength": 1},
+            "effort": {"enum": ["low", "medium", "high", "xhigh", "max"]},
+            "speed": {"enum": ["standard", null]}
+          }
+        }
+      ]
+    },
+    "description": {"type": ["string", "null"]},
+    "system": {"type": ["string", "null"], "description": "System prompt."},
+    "tools": {"type": "array", "items": {"type": "object", "required": ["type"]}, "description": "agent_toolset_20260401, mcp_toolset and custom tools, as in the API."},
+    "mcp_servers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "name", "url"],
+        "properties": {"type": {"const": "url"}, "name": {"type": "string"}, "url": {"type": "string", "pattern": "^https://"}}
+      }
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "skill_id"],
+        "properties": {"type": {"const": "custom"}, "skill_id": {"type": "string"}, "version": {"type": "string"}}
+      }
+    },
+    "metadata": {"type": "object", "maxProperties": 16, "additionalProperties": {"type": "string", "maxLength": 512}},
+    "execution_identity": {"type": ["object", "null"]},
+    "multiagent": {"type": "null"},
+    "bma_harness": {"type": "object", "description": "BMA extension: the harness that runs the agent on an executor."},
+    "bma_requirements": {"type": "object", "description": "BMA extension: what a machine must offer to run the agent."}
+  }
+}
