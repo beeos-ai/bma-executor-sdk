@@ -420,6 +420,30 @@ type FileAccessRequest struct {
 // FileAccessFunc is CoreOptions.FileAccess.
 type FileAccessFunc func(ctx context.Context, req FileAccessRequest) error
 
+type writeApprovalKey struct{}
+type writeCommitKey struct{}
+
+func withWriteApproval(ctx context.Context, tool string) context.Context {
+	if tool != ToolNameWrite && tool != ToolNameEdit || ctx.Value(writeApprovalKey{}) != nil {
+		return ctx
+	}
+	return context.WithValue(ctx, writeApprovalKey{}, new(string))
+}
+
+// FileWriteApproval returns the path approved for this tool call at commit.
+// At preflight it returns a callback that can record the authorized absolute
+// path after asking the user. The host must check it against the final target.
+func FileWriteApproval(ctx context.Context) (path string, approve func(string)) {
+	approval, _ := ctx.Value(writeApprovalKey{}).(*string)
+	if approval == nil {
+		return "", nil
+	}
+	if ctx.Value(writeCommitKey{}) != nil {
+		return *approval, nil
+	}
+	return "", func(path string) { *approval = path }
+}
+
 type fileAccessCheckedKey struct{}
 
 // fileAccessChecked marks a ctx whose call already passed FileAccess (the
@@ -534,6 +558,7 @@ func (c *Core) checkWriteCommit(ctx context.Context, session *CoreSession, agent
 	if t.outside != "" {
 		req.Path, req.Outside = t.show(t.rel), true
 	}
+	ctx = context.WithValue(ctx, writeCommitKey{}, true)
 	if err := c.opts.FileAccess(ctx, req); err != nil {
 		return refusalError(&fileAccessError{err})
 	}

@@ -856,6 +856,7 @@ func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams
 	case ToolNameBash:
 		result = c.bash(ctx, session, params, input)
 	case ToolNameRead, ToolNameWrite, ToolNameEdit, ToolNameGlob, ToolNameGrep:
+		ctx = withWriteApproval(ctx, params.Tool)
 		if err = c.checkFileAccess(ctx, session, sessionProcessContext(session).AgentSessionID, params.ToolCallID, params.Tool, input); err != nil {
 			err = refusalError(err)
 			break
@@ -1077,7 +1078,7 @@ func (c *Core) bash(ctx context.Context, session *CoreSession, params ToolCallPa
 		ctx, cancel = context.WithTimeout(ctx, c.opts.BashTimeout)
 		defer cancel()
 	}
-	launch, err := c.launchTool(ctx, session, sessionProcessContext(session), params.ToolCallID, input.Command, input.Cwd, input.Env)
+	launch, err := c.launchTool(ctx, session, sessionProcessContext(session), params.ToolCallID, input.Command, input.Cwd, "", input.Env)
 	if err != nil {
 		if code, detail, refused := launchRefusal(err); refused {
 			return failedToolResult(params, code+": "+detail)
@@ -1138,7 +1139,7 @@ func sessionProcessContext(session *CoreSession) ProcessContext {
 // session workspace, then CoreOptions.Launch (when set) as process.start runs
 // ProcessOptions.Launch: it may change dir, argv and env, or refuse (a
 // *launchError). A bad cwd or env is a plain error.
-func (c *Core) launchTool(ctx context.Context, session *CoreSession, process ProcessContext, callID, command, cwd string,
+func (c *Core) launchTool(ctx context.Context, session *CoreSession, process ProcessContext, callID, command, cwd, writePath string,
 	explicit map[string]string) (toolLaunch, error) {
 	launch := toolLaunch{argv: shellArgv(command)}
 	var err error
@@ -1158,7 +1159,7 @@ func (c *Core) launchTool(ctx context.Context, session *CoreSession, process Pro
 		return toolLaunch{}, err
 	}
 	spec, err := runLaunch(ctx, c.opts.Launch, LaunchRequest{
-		ProcessContext: process, Tool: ToolNameBash, ToolCallID: callID,
+		ProcessContext: process, Tool: ToolNameBash, ToolCallID: callID, WritePath: writePath,
 		Argv: slices.Clone(launch.argv), Cwd: cwd, DefaultCwd: defaultCwd, Env: slices.Clone(env),
 	})
 	if err != nil {

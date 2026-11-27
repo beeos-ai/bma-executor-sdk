@@ -93,6 +93,8 @@ type LaunchRequest struct {
 	// call's id.
 	Tool       string
 	ToolCallID string
+	// WritePath is the additional file a local bash call asks to write.
+	WritePath string
 	// PackageInstall is set for a process.start package_install and nil for
 	// a command. Argv, Cwd and Env are then the installer's fixed command
 	// (PackageInstallCommand): the hook may wrap it, change its environment
