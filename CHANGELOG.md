@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.22.2
+
+- bma: in `bma sessions chat`, `/exit` or `/quit` at a tool approval or custom tool prompt ends the chat and answers nothing (1.22.1 sent it as the reason of a deny).
+
 ## 1.22.1
 
 - bma: `bma sessions send --file` mounts the uploaded file with `type: file` (1.22.0 left it out and the API refused the resource with 400 `invalid_field`).
