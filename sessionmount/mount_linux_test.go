@@ -32,13 +32,69 @@ func needFUSE(t *testing.T) {
 	}
 }
 
-// fakeSource serves uploads by resource id and memories by store path.
+// fakeSource serves uploads by resource id and memories by store path, and
+// takes memory writes as BMA does (the store wins a stale base).
 type fakeSource struct {
 	mu       sync.Mutex
 	uploads  map[string][]byte
 	memories map[string][]byte
 	calls    []string
+	writes   []string // "PUT|DELETE <path> base=<digest>"
+	reports  []bmaexecutor.SessionMemoryReport
 	down     bool
+	full     bool // refuse writes as a full store
+}
+
+func (s *fakeSource) WriteMemory(_ context.Context, _, p, base string, b []byte) (bmaexecutor.MemoryWrite, error) {
+	return s.write("PUT", p, base, b)
+}
+
+func (s *fakeSource) DeleteMemory(_ context.Context, _, p, base string) (bmaexecutor.MemoryWrite, error) {
+	return s.write("DELETE", p, base, nil)
+}
+
+func (s *fakeSource) write(method, p, base string, b []byte) (bmaexecutor.MemoryWrite, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writes = append(s.writes, method+" "+p+" base="+base)
+	switch {
+	case s.down:
+		return bmaexecutor.MemoryWrite{}, errors.New("network down")
+	case s.full && method == "PUT":
+		return bmaexecutor.MemoryWrite{}, &bmaexecutor.DaemonHTTPError{StatusCode: 409, Code: "memory_store_full",
+			Message: "the memory store is full"}
+	}
+	current, found := s.memories[p]
+	if found != (base != "") || found && digestOf(current) != base {
+		w := bmaexecutor.MemoryWrite{Status: "conflict"}
+		if found {
+			c := string(current)
+			w.Content, w.Digest = &c, digestOf(current)
+		}
+		return w, nil
+	}
+	if method == "DELETE" {
+		delete(s.memories, p)
+		return bmaexecutor.MemoryWrite{Status: "written"}, nil
+	}
+	s.memories[p] = append([]byte(nil), b...)
+	return bmaexecutor.MemoryWrite{Status: "written", Digest: digestOf(b)}, nil
+}
+
+func (s *fakeSource) Report(r bmaexecutor.SessionMemoryReport) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reports = append(s.reports, r)
+}
+
+func (s *fakeSource) state() (map[string]string, []string, []bmaexecutor.SessionMemoryReport) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	memories := map[string]string{}
+	for p, b := range s.memories {
+		memories[p] = string(b)
+	}
+	return memories, append([]string(nil), s.writes...), append([]bmaexecutor.SessionMemoryReport(nil), s.reports...)
 }
 
 func (s *fakeSource) Upload(_ context.Context, id string, offset, length int64) (io.ReadCloser, error) {
@@ -295,5 +351,181 @@ func TestMountUnmountDetachStaleAndProbe(t *testing.T) {
 	}
 	if err := Probe(t.TempDir()); err != nil {
 		t.Fatalf("probe: %v", err)
+	}
+}
+
+// mountStore mounts one read_write store of session sesn_w owned by uid 1001
+// with files, and answers its directory.
+func mountStore(t *testing.T, files map[string]string) (string, *fakeSource) {
+	t.Helper()
+	m, root := newTestMounter(t)
+	src := &fakeSource{uploads: map[string][]byte{}, memories: map[string][]byte{}}
+	var listed []bmaexecutor.MountedFile
+	for p, c := range files {
+		src.memories["/"+p] = []byte(c)
+		listed = append(listed, file(p, "/"+p, []byte(c)))
+	}
+	if err := os.MkdirAll(filepath.Join(root, "sesn_w", "memory"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Mount(t.Context(), sessionMount(root, "sesn_w", 1001, nil,
+		[]bmaexecutor.MountedStore{{Slug: "notes", StoreID: "memstore_w", Files: listed}}, src)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Unmount("sesn_w") })
+	return filepath.Join(root, "sesn_w", "memory", "notes"), src
+}
+
+func digestText(c string) string { return digestOf([]byte(c)) }
+
+// A read_write store is written through at close: a change against the
+// digest it was opened with, a new file against none, an unlink as a delete;
+// write-temporary-then-rename saves one version and the scratch name is never
+// sent; the session's user may write, another may not; commits are fast.
+func TestMountReadWriteStoreCommitsAtClose(t *testing.T) {
+	dir, src := mountStore(t, map[string]string{"todo.md": "v1", "old.md": "bye"})
+	todo := filepath.Join(dir, "todo.md")
+	began := time.Now()
+	if err := os.WriteFile(todo, []byte("v2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(began); took > 400*time.Millisecond {
+		t.Fatalf("commit took %v", took)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "new.md"), []byte("x"), 0o644); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a file in a missing directory: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "new.md"), []byte("fresh"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".todo.md.swp"), []byte("v3"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(dir, ".todo.md.swp"), todo); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "old.md")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := runAs(1001, "sh", "-c", "printf mine > "+filepath.Join(dir, "own.md")+" && cat "+todo); err != nil || got != "v3" {
+		t.Fatalf("the session's user: %q %v", got, err)
+	}
+	if got, err := runAs(1002, "sh", "-c", "printf x > "+filepath.Join(dir, "other.md")); err == nil {
+		t.Fatalf("another user wrote: %q", got)
+	}
+	memories, writes, reports := src.state()
+	want := map[string]string{"/todo.md": "v3", "/sub/new.md": "fresh", "/own.md": "mine"}
+	if fmt.Sprint(memories) != fmt.Sprint(want) {
+		t.Fatalf("store = %v", memories)
+	}
+	wantWrites := []string{"PUT /todo.md base=" + digestText("v1"), "PUT /sub/new.md base=",
+		"PUT /todo.md base=" + digestText("v2"), "DELETE /old.md base=" + digestText("bye"), "PUT /own.md base="}
+	if strings.Join(writes, "\n") != strings.Join(wantWrites, "\n") {
+		t.Fatalf("writes:\n%s", strings.Join(writes, "\n"))
+	}
+	if len(reports) != 0 {
+		t.Fatalf("reports %+v", reports)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if strings.Join(names, ",") != "own.md,sub,todo.md" {
+		t.Fatalf("listing %v", names)
+	}
+	info, err := os.Stat(todo)
+	if err != nil || info.Mode().Perm() != 0o644 || info.Sys().(*syscall.Stat_t).Uid != 1001 || info.Size() != 2 {
+		t.Fatalf("todo.md %v %v", info, err)
+	}
+}
+
+// The store wins a conflict (EIO, the store's version shown, reported); a
+// rule's refusal is its errno; without the platform the close is EIO and the
+// store's content stays; links, modes and moves to other mounts are refused.
+func TestMountReadWriteStoreFailures(t *testing.T) {
+	dir, src := mountStore(t, map[string]string{"a.md": "base"})
+	a := filepath.Join(dir, "a.md")
+	if b, err := os.ReadFile(a); err != nil || string(b) != "base" {
+		t.Fatalf("read %q %v", b, err)
+	}
+	src.mu.Lock()
+	src.memories["/a.md"] = []byte("theirs")
+	src.mu.Unlock()
+	if err := os.WriteFile(a, []byte("mine"), 0o644); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("stale write: %v, want EIO", err)
+	}
+	if b, err := os.ReadFile(a); err != nil || string(b) != "theirs" {
+		t.Fatalf("after the conflict %q %v", b, err)
+	}
+	if err := os.WriteFile(a, bytes.Repeat([]byte("x"), maxMemoryBytes+1), 0o644); !errors.Is(err, syscall.EFBIG) {
+		t.Fatalf("oversized: %v, want EFBIG", err)
+	}
+	src.mu.Lock()
+	src.full = true
+	src.mu.Unlock()
+	if err := os.WriteFile(filepath.Join(dir, "b.md"), []byte("b"), 0o644); !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("store full: %v, want ENOSPC", err)
+	}
+	src.mu.Lock()
+	src.full, src.down = false, true
+	src.mu.Unlock()
+	began := time.Now()
+	if err := os.WriteFile(a, []byte("offline"), 0o644); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("offline: %v, want EIO", err)
+	}
+	if time.Since(began) > 5*time.Second {
+		t.Fatalf("not_saved took %v", time.Since(began))
+	}
+	if b, err := os.ReadFile(a); err != nil || string(b) != "theirs" {
+		t.Fatalf("after not_saved %q %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "b.md")); !os.IsNotExist(err) {
+		t.Fatalf("a refused new file stays: %v", err)
+	}
+	for name, err := range map[string]error{
+		"symlink": os.Symlink("a.md", filepath.Join(dir, "l.md")),
+		"link":    os.Link(a, filepath.Join(dir, "h.md")),
+		"chmod":   os.Chmod(a, 0o600),
+	} {
+		if !errors.Is(err, syscall.EPERM) {
+			t.Fatalf("%s: %v, want EPERM", name, err)
+		}
+	}
+	_, _, reports := src.state()
+	var outcomes []string
+	for _, r := range reports {
+		outcomes = append(outcomes, r.Outcome+" "+r.Path)
+	}
+	if strings.Join(outcomes, ",") != "conflict /a.md,rejected /b.md" {
+		t.Fatalf("reports %v", outcomes)
+	}
+}
+
+// More than bulkDeleteLimit deletions between two refreshes are refused
+// (EPERM, reported once).
+func TestMountReadWriteStoreRefusesBulkDelete(t *testing.T) {
+	files := map[string]string{}
+	for i := range bulkDeleteLimit + 2 {
+		files[fmt.Sprintf("m%02d.md", i)] = fmt.Sprint(i)
+	}
+	dir, src := mountStore(t, files)
+	var refused int
+	for i := range bulkDeleteLimit + 2 {
+		if err := os.Remove(filepath.Join(dir, fmt.Sprintf("m%02d.md", i))); errors.Is(err, syscall.EPERM) {
+			refused++
+		} else if err != nil {
+			t.Fatal(err)
+		}
+	}
+	memories, _, reports := src.state()
+	if refused != 2 || len(memories) != 2 || len(reports) != 1 || reports[0].Outcome != "delete_refused" {
+		t.Fatalf("refused %d, left %d, reports %+v", refused, len(memories), reports)
 	}
 }

@@ -113,6 +113,9 @@ func mount(v *view) (*mounted, error) {
 		options = append(options, "ro")
 	}
 	t := kernelTimeout
+	if !v.readOnly {
+		t = 0 // a read_write store's entries change with every commit and conflict
+	}
 	server, err := fs.Mount(v.dir, &node{v: v}, &fs.Options{
 		EntryTimeout: &t, AttrTimeout: &t, NegativeTimeout: &t,
 		MountOptions: fuse.MountOptions{
@@ -139,13 +142,23 @@ func (mt *mounted) unmount() error {
 	return nil
 }
 
-// node is one directory or file of a view. A file node is immutable: a
-// lookup that finds other content makes a new node.
+// node is one directory or file of a view. A file node of a read-only view
+// is immutable: a lookup that finds other content makes a new node. A node
+// of a read_write store is its path (where the kernel has it now, after
+// renames) and answers from the view's current listing.
 type node struct {
 	fs.Inode
 	v    *view
 	path string // "" is the root
 	file *bmaexecutor.MountedFile
+}
+
+// rel is the node's path relative to the mount root.
+func (n *node) rel() string {
+	if n.v.readOnly {
+		return n.path
+	}
+	return n.Path(nil)
 }
 
 var (
@@ -162,16 +175,34 @@ func (n *node) denied(ctx context.Context) bool {
 }
 
 func (n *node) fill(a *fuse.Attr) {
-	_, owner, _ := n.v.snapshot()
+	t, owner, _ := n.v.snapshot()
 	mtime := n.v.mounted
+	file, p := n.file, n.rel()
+	isFile := file != nil
+	if !n.v.readOnly {
+		isFile = n.StableAttr().Mode&syscall.S_IFMT == syscall.S_IFREG
+		if f, ok := t.files[p]; ok {
+			file = &f
+		}
+	}
 	switch {
-	case n.file != nil:
+	case isFile:
 		a.Mode = syscall.S_IFREG | 0o444
 		a.Nlink = 1
-		a.Size = uint64(n.file.Size) //nolint:gosec // sizes are not negative
+		if file != nil {
+			a.Size = uint64(file.Size) //nolint:gosec // sizes are not negative
+		}
 		a.Blocks = (a.Size + 511) / 512
-	case n.path == "":
+		if !n.v.readOnly {
+			a.Mode = syscall.S_IFREG | 0o644
+			a.Uid, a.Gid = owner.UID, owner.GID
+		}
+	case p == "":
 		a.Mode = syscall.S_IFDIR | 0o700
+		a.Nlink = 2
+		a.Uid, a.Gid = owner.UID, owner.GID
+	case !n.v.readOnly:
+		a.Mode = syscall.S_IFDIR | 0o755
 		a.Nlink = 2
 		a.Uid, a.Gid = owner.UID, owner.GID
 	default:
@@ -195,13 +226,16 @@ func (n *node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs
 		return nil, syscall.EACCES
 	}
 	t, _, _ := n.v.snapshot()
-	p := path.Join(n.path, name)
+	p := path.Join(n.rel(), name)
 	child := &node{v: n.v, path: p}
 	var ino uint64
 	mode := uint32(syscall.S_IFDIR)
 	if f, ok := t.files[p]; ok {
 		child.file = &f
 		ino, mode = inode("f", p, f.Digest), syscall.S_IFREG
+		if !n.v.readOnly { // one inode per path: an edit keeps it
+			child.file, ino = nil, inode("f", p, "")
+		}
 	} else if _, ok := t.dirs[p]; ok {
 		ino = inode("d", p, "")
 	} else {
@@ -216,12 +250,17 @@ func (n *node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		return nil, syscall.EACCES
 	}
 	t, _, _ := n.v.snapshot()
-	names := t.dirs[n.path]
+	dir := n.rel()
+	names := t.dirs[dir]
 	entries := make([]fuse.DirEntry, 0, len(names))
 	for _, name := range names {
-		p := path.Join(n.path, name)
+		p := path.Join(dir, name)
 		if f, ok := t.files[p]; ok {
-			entries = append(entries, fuse.DirEntry{Name: name, Mode: syscall.S_IFREG, Ino: inode("f", p, f.Digest)})
+			digest := f.Digest
+			if !n.v.readOnly {
+				digest = ""
+			}
+			entries = append(entries, fuse.DirEntry{Name: name, Mode: syscall.S_IFREG, Ino: inode("f", p, digest)})
 		} else {
 			entries = append(entries, fuse.DirEntry{Name: name, Mode: syscall.S_IFDIR, Ino: inode("d", p, "")})
 		}
@@ -229,16 +268,29 @@ func (n *node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	return fs.NewListDirStream(entries), 0
 }
 
-// Open refuses writes (the views are read-only) and opens the content: an
-// upload through the disk cache, a memory from this process or the store.
+// Open opens the content: an upload through the disk cache, a memory from
+// this process or the store; a file of a read_write store as it is now, for
+// writing staged and committed at close. Writes elsewhere are EROFS.
 func (n *node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	if n.denied(ctx) {
 		return nil, 0, syscall.EACCES
 	}
+	writing := flags&(syscall.O_WRONLY|syscall.O_RDWR|syscall.O_TRUNC|syscall.O_APPEND) != 0
+	if !n.v.readOnly && n.v.store != "" {
+		if n.StableAttr().Mode&syscall.S_IFMT != syscall.S_IFREG {
+			return nil, 0, syscall.EISDIR
+		}
+		if writing {
+			h, errno := n.openWrite(ctx, n.rel(), flags)
+			return h, 0, errno
+		}
+		b, _, errno := n.v.content(ctx, n.rel())
+		return &memoryHandle{b: b}, 0, errno
+	}
 	if n.file == nil {
 		return nil, 0, syscall.EISDIR
 	}
-	if flags&(syscall.O_WRONLY|syscall.O_RDWR|syscall.O_TRUNC|syscall.O_APPEND) != 0 {
+	if writing {
 		return nil, 0, syscall.EROFS
 	}
 	if n.v.store != "" {
