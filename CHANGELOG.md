@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.22.3
+
+- bma: `bma sessions send --file` and `bma sessions launch` name each attached file in the message at the `mount_path` the session shows for it (its path in the session's uploads directory, `/mnt/session/<session_id>/uploads/<name>`), not at `/mnt/session/uploads/<name>`, where the machine has no file.
+
 ## 1.22.2
 
 - bma: in `bma sessions chat`, `/exit` or `/quit` at a tool approval or custom tool prompt ends the chat and answers nothing (1.22.1 sent it as the reason of a deny).

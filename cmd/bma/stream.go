@@ -208,7 +208,7 @@ func sendCmd() *cobra.Command {
 		Use:   "send <session_id> <text|->",
 		Short: "Send a user message (with --file attachments) to the session; --stream or --wait follow its turn",
 		Long: "Send a user message (\"-\" reads it from stdin). Each --file is uploaded and mounted in the session " +
-			"at " + uploadsDir + "<name>, and the message lists those paths. Without --stream or --wait, print the " +
+			"as <name> in its uploads directory, and the message lists the mount paths the session shows. Without --stream or --wait, print the " +
 			"answer of the send. --wait prints the agent's reply and the deliverables (the outputs the reply names) " +
 			"when the turn ends; --stream prints every event of the turn as JSON lines. With either, the exit status " +
 			"is the turn's: 0 end_turn, 7 waiting for input (requires_action), 8 failed.\n\nPOST " + eventsPath,
@@ -234,7 +234,7 @@ func sendCmd() *cobra.Command {
 				return err
 			}
 			ctx, sid := cmd.Context(), a[0]
-			if err := mountAttachments(ctx, s, sid, att); err != nil {
+			if att, err = mountAttachments(ctx, s, sid, att); err != nil {
 				return err
 			}
 			msg := userMessage(withAttachments(text, att))
@@ -269,27 +269,36 @@ func sendCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&stream, "stream", false, "print every event until the turn ends")
 	cmd.Flags().BoolVar(&wait, "wait", false, "print the agent's reply and the deliverables when the turn ends")
-	cmd.Flags().StringArrayVar(&files, "file", nil, "attach a local file (repeatable): uploaded and mounted at "+uploadsDir+"<name>")
+	cmd.Flags().StringArrayVar(&files, "file", nil, "attach a local file (repeatable): uploaded and mounted as <name> in the session's uploads directory")
 	cmd.Flags().StringVar(&key, "idempotency-key", "", "Idempotency-Key of the send; repeating it within 24 hours does not send the message twice")
 	return cmd
 }
 
-// mountAttachments uploads the files and mounts them in the session.
-func mountAttachments(ctx context.Context, s *session, sid string, att []attachment) error {
-	for _, at := range att {
+// mountAttachments uploads the files, mounts them in the session and answers
+// them with the mount_path the session shows for each.
+func mountAttachments(ctx context.Context, s *session, sid string, att []attachment) ([]attachment, error) {
+	out := make([]attachment, len(att))
+	for i, at := range att {
 		id, err := upload(ctx, s, at.path, "")
 		if err != nil {
-			return err
+			return nil, err
 		}
 		payload, err := json.Marshal(map[string]any{"type": "file", "file_id": id, "mount_path": at.mount})
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if _, err := s.json(ctx, "POST", sessionPath(sid)+"/resources", nil, payload); err != nil {
-			return fmt.Errorf("mounting %s: %w", at.path, err)
+		v, err := s.json(ctx, "POST", sessionPath(sid)+"/resources", nil, payload)
+		if err != nil {
+			return nil, fmt.Errorf("mounting %s: %w", at.path, err)
 		}
+		res, _ := v.(map[string]any)
+		shown, _ := res["mount_path"].(string)
+		if shown == "" {
+			return nil, fmt.Errorf("mounting %s: the answer has no mount_path", at.path)
+		}
+		out[i] = attachment{path: at.path, mount: shown}
 	}
-	return nil
+	return out, nil
 }
 
 // messageText joins the text blocks of a message event.

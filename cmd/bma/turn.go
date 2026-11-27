@@ -343,8 +343,28 @@ func sendEvents(ctx context.Context, s *session, sid, key string, events ...any)
 }
 
 // attachment is a local file a message brings: uploaded, then mounted in
-// the session at /mnt/session/uploads/<name>.
+// the session as <name> in its uploads directory. mount is the requested
+// mount_path until the session shows where the file is.
 type attachment struct{ path, mount string }
+
+// shownMounts answers the attachments with the mount_path session shows for
+// each: the file resource at the same path relative to the uploads directory.
+func shownMounts(session map[string]any, att []attachment) []attachment {
+	resources, _ := session["resources"].([]any)
+	out := make([]attachment, len(att))
+	for i, a := range att {
+		out[i] = a
+		_, want, _ := strings.Cut(a.mount, "/uploads/")
+		for _, r := range resources {
+			m, _ := r.(map[string]any)
+			shown, _ := m["mount_path"].(string)
+			if _, rel, ok := strings.Cut(shown, "/uploads/"); ok && m["type"] == "file" && rel == want {
+				out[i].mount = shown
+			}
+		}
+	}
+	return out
+}
 
 func attachments(paths []string) ([]attachment, error) {
 	seen := map[string]string{}
@@ -352,7 +372,7 @@ func attachments(paths []string) ([]attachment, error) {
 	for _, p := range paths {
 		name := filepath.Base(p)
 		if prev, dup := seen[name]; dup {
-			return nil, usageError(fmt.Sprintf("%s and %s would both mount at %s%s", prev, p, uploadsDir, name))
+			return nil, usageError(fmt.Sprintf("%s and %s would both mount as %s", prev, p, name))
 		}
 		seen[name] = p
 		out = append(out, attachment{path: p, mount: uploadsDir + name})
