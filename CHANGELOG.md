@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.24.0
+
+- Go: `CoreOptions.SessionRunAs` gives every session its own OS identity: called at the first `session.assign` (and when an on-machine brain opens a session), its `RunAs` is the session's for bash tools, processes, stdio MCP servers, file tools and the session workspace (0700); `CoreOptions.RunAs` stays the identity of what no session owns. The workspace's parent directories (`WorkRoot/<brain>`) are then the executor's, 0711, so a session can neither list nor enter another session's workspace. `CoreSession.RunAs()` returns the session's identity.
+- Go: `SessionFilesOptions.RunAs` gives each agent session's files to its identity: `<root>/<session id>` is the executor's with the session's group (0750) and `outputs` the session's (0700), re-applied before every process and memory sync; a link in place of either is refused.
+- Go: a package install that is not `Privileged` runs with HOME and USER of the session's identity.
+- Go: `CoreOptions.WorkRootAliases`: directories that, as a session's cwd, mean the session's workspace like `WorkRoot` does (for example the workload user's home when the work root is elsewhere).
+
 ## 1.23.2
 
 - bma: `bma run` (and so `bma up`) wires the SDK `SessionFiles` like BeeWork Local: the executor declares `capabilities.session_files` (with `memory`) at `~/.bma/sessions` (below `BMA_HOME`), serves `process.*` and `session_files.sync`, mirrors the session's uploads and memory before its processes, uploads `outputs`, and the on-machine brain's file tools read and write those directories (`ACPAgentOptions.SessionFilesRoot`).

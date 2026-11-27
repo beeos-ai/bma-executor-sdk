@@ -164,7 +164,7 @@ func (s *CoreSession) withRoot(p string, write bool, fn func(root *os.Root, rel 
 
 func (c *Core) read(session *CoreSession, input ToolInput) (ToolResultParams, error) {
 	var result ToolResultParams
-	err := c.withFileIdentity(func() error {
+	err := c.withFileIdentity(session.runAs, func() error {
 		return session.withRoot(input.Path, false, func(root *os.Root, rel string) error {
 			file, err := root.Open(rel)
 			if err != nil {
@@ -180,9 +180,9 @@ func (c *Core) read(session *CoreSession, input ToolInput) (ToolResultParams, er
 
 // readPath reads a file outside the workspace by its path (a session's own
 // output file, see LocalToolRoute) with the read tool's offset and limit.
-func (c *Core) readPath(p string, input ToolInput) (ToolResultParams, error) {
+func (c *Core) readPath(runAs *RunAs, p string, input ToolInput) (ToolResultParams, error) {
 	var result ToolResultParams
-	err := c.withFileIdentity(func() error {
+	err := c.withFileIdentity(runAs, func() error {
 		file, err := os.Open(p)
 		if err != nil {
 			return err
@@ -222,15 +222,17 @@ func (c *Core) readFrom(file io.Reader, input ToolInput) (ToolResultParams, erro
 	return textResult(false, out.String()), nil
 }
 
-func (c *Core) withFileIdentity(fn func() error) error {
-	if c.opts.RunAs == nil {
+// withFileIdentity runs fn with the file identity runAs (a session's), or
+// as the executor when nil.
+func (c *Core) withFileIdentity(runAs *RunAs, fn func() error) error {
+	if runAs == nil {
 		return fn()
 	}
-	return withFileIdentity(c.opts.RunAs, fn)
+	return withFileIdentity(runAs, fn)
 }
 
 func (c *Core) write(session *CoreSession, input ToolInput, commit fileCommit) (ToolResultParams, error) {
-	err := c.withFileIdentity(func() error {
+	err := c.withFileIdentity(session.runAs, func() error {
 		return session.withRoot(input.Path, true, func(root *os.Root, rel string) error {
 			return commit(func() error {
 				if dir := filepath.Dir(rel); dir != "." {
@@ -255,7 +257,7 @@ func (c *Core) editFile(session *CoreSession, input ToolInput, all bool, commit 
 	if input.OldString == "" {
 		return 0, errors.New("edit requires old_string and new_string")
 	}
-	err = c.withFileIdentity(func() error {
+	err = c.withFileIdentity(session.runAs, func() error {
 		return session.withRoot(input.Path, true, func(root *os.Root, rel string) error {
 			raw, err := root.ReadFile(rel)
 			if err != nil {
@@ -285,7 +287,7 @@ func (c *Core) edit(session *CoreSession, input ToolInput, commit fileCommit) (T
 }
 
 func (c *Core) glob(session *CoreSession, input ToolInput) (result ToolResultParams, err error) {
-	err = c.withFileIdentity(func() (err error) {
+	err = c.withFileIdentity(session.runAs, func() (err error) {
 		result, err = c.globFiles(session, input)
 		return err
 	})
@@ -321,7 +323,7 @@ func (c *Core) globFiles(session *CoreSession, input ToolInput) (ToolResultParam
 }
 
 func (c *Core) grep(session *CoreSession, input ToolInput) (result ToolResultParams, err error) {
-	err = c.withFileIdentity(func() (err error) {
+	err = c.withFileIdentity(session.runAs, func() (err error) {
 		result, err = c.grepFiles(session, input)
 		return err
 	})

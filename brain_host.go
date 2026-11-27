@@ -1169,7 +1169,11 @@ func acpAgentModels(models []AgentModel, efforts []string) []AgentModel {
 func (a *BrainHost) turnCwd(sessionID, requested string) (string, error) {
 	if requested == "" {
 		dir := a.opts.Core.workspace(acpBrain, sessionID)
-		if err := a.opts.Core.createWorkspace(dir); err != nil {
+		runAs, err := a.opts.Core.sessionRunAs(coreKey{acpBrain, sessionID}, acpBrain, SessionAssignParams{SessionID: sessionID})
+		if err != nil {
+			return "", err
+		}
+		if err := a.opts.Core.createWorkspace(dir, runAs); err != nil {
 			return "", err
 		}
 		return filepath.EvalSymlinks(dir)

@@ -119,6 +119,11 @@ func (f *SessionFiles) syncMemory(ctx context.Context, client *Client, sessionID
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	session.lastActive = time.Now()
+	if len(manifest.MemoryStores) > 0 || len(session.memory) > 0 {
+		if err := f.sessionDirs(session); err != nil {
+			return err
+		}
+	}
 	return session.syncMemoryLocked(ctx, client, token, manifest.MemoryStores, f.log)
 }
 

@@ -74,6 +74,11 @@ jobs:
           go vet -tags e2e ./cmd/bma  # the staging e2e (cli-e2e.yaml) compiles on every PR
           go test -race ./...
 
+      # The identity tests switch uids and chown, so they skip as the runner user; run them as root, as executors run.
+      - name: Go identity tests as root
+        if: runner.os == 'Linux'
+        run: sudo -E env "PATH=$PATH" "$(command -v go)" test -race -count=1 -run 'RunAs|SessionFilesBelongToTheSession' .
+
       - name: TypeScript (with Go and Python interop)
         working-directory: typescript
         run: |
