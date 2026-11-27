@@ -158,7 +158,7 @@ func (v *view) commit(ctx context.Context, p, base string, b []byte) syscall.Err
 			"if it is still needed.")
 	}
 	v.m.stats.commits.Add(1)
-	v.stored(p, digestOf(b), b)
+	v.stored(p, digestOf(b), append([]byte{}, b...)) // never nil: an empty memory is not a deletion
 	return 0
 }
 
@@ -210,7 +210,7 @@ func (v *view) storeWins(p string, w bmaexecutor.MemoryWrite, message string) sy
 		message = "/" + p + " was deleted from the store since this session read it, so your change was not kept. " +
 			"Write it again if it is still needed."
 	} else {
-		b := []byte(*w.Content)
+		b := append([]byte{}, *w.Content...)
 		v.stored(p, digestOf(b), b)
 	}
 	_, _, source := v.snapshot()
