@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.22.1
+
+- bma: `bma sessions send --file` mounts the uploaded file with `type: file` (1.22.0 left it out and the API refused the resource with 400 `invalid_field`).
+
 ## 1.22.0
 
 - bma: `bma sessions launch -f session.yaml` starts a session from a file in one step: the agent (a name or ID, a pinned version, or an inline definition applied like `bma agents apply`), the environment or machine pool (by name or ID; a name must match exactly one item, an ambiguous name exits 2 and an unknown one 4, each listing the candidates), title, metadata, resources (local files are uploaded and mounted), vault IDs and the first message with its attachments (`--message`, `--file`). The launch is idempotent: its key (a digest of the file and of every file it uploads, or `--idempotency-key`) is the Idempotency-Key of every create and is stored in the session's metadata as `bma_cli_launch_key`, so a rerun finds that session instead of creating another and does not send the message twice. `--wait` prints the agent's reply and the deliverables, `--stream` the turn's events, `--interactive` continues as `bma sessions chat`. Schema: `cmd/bma/schema/session.schema.json`; examples in `cmd/bma/examples/`.
