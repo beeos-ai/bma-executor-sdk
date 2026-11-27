@@ -22,6 +22,7 @@ type fakeMount struct {
 // paths are listed but answer 404 (deleted in between).
 type fakeMemoryStore struct {
 	id, slug       string
+	access         string // "" = read_only
 	unmaterialized bool
 	files          map[string][]byte
 	head           map[string][]byte
@@ -43,6 +44,10 @@ type fakeDaemonFiles struct {
 	// memoryReads counts memory content downloads by store slug + path.
 	memoryReads map[string]int
 	outputs     []fakeOutput
+	// memoryWrites records the memory writebacks: "PUT|DELETE <store><path> base=<sha>".
+	memoryWrites []string
+	// failMemoryWrites answers that many memory writebacks 503.
+	failMemoryWrites int
 	// failUploads answers that many session-outputs uploads 503 (a
 	// transient failure) before storing any; -1 fails every one.
 	failUploads int
@@ -82,7 +87,11 @@ func (f *fakeDaemonFiles) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		for _, store := range f.memory[sessionID] {
-			item := sessionMemoryStore{MemoryStoreID: store.id, Slug: store.slug, Access: "read_write",
+			access := store.access
+			if access == "" {
+				access = "read_only"
+			}
+			item := sessionMemoryStore{MemoryStoreID: store.id, Slug: store.slug, Access: access,
 				MountPath: "/mnt/session/" + sessionID + "/memory/" + store.slug, Materialized: !store.unmaterialized,
 				Files: []sessionMemoryFile{}}
 			if !store.unmaterialized {
@@ -123,6 +132,9 @@ func (f *fakeDaemonFiles) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
+	case (r.Method == http.MethodPut || r.Method == http.MethodDelete) && strings.HasPrefix(route, "session-memory/") &&
+		strings.HasSuffix(route, "/memories"):
+		f.memoryWrite(w, r, sessionID, strings.TrimSuffix(strings.TrimPrefix(route, "session-memory/"), "/memories"))
 	case r.Method == http.MethodGet && strings.HasPrefix(route, "session-files/") && strings.HasSuffix(route, "/content"):
 		resourceID := strings.TrimSuffix(strings.TrimPrefix(route, "session-files/"), "/content")
 		for _, m := range f.mounts[sessionID] {
@@ -172,6 +184,77 @@ func (f *fakeDaemonFiles) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+// memoryWrite answers a writeback as BMA does (ADR-0110): the store wins a
+// stale base, a retry is unchanged, a rule refuses an oversized memory.
+func (f *fakeDaemonFiles) memoryWrite(w http.ResponseWriter, r *http.Request, sessionID, storeID string) {
+	p, base := r.URL.Query().Get("path"), r.Header.Get("X-BMA-Memory-Base-SHA256")
+	body, _ := io.ReadAll(r.Body)
+	f.memoryWrites = append(f.memoryWrites, r.Method+" "+storeID+p+" base="+base)
+	if f.failMemoryWrites > 0 {
+		f.failMemoryWrites--
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	var store *fakeMemoryStore
+	for _, s := range f.memory[sessionID] {
+		if s.id == storeID {
+			store = s
+		}
+	}
+	if store == nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if store.access != "read_write" {
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"code": "memory_read_only", "message": "read-only"})
+		return
+	}
+	bare := func(c []byte) string { return strings.TrimPrefix(digestOf(c), "sha256:") }
+	current, found := store.files[p]
+	answer := func(status string, withContent bool) {
+		out := map[string]any{"status": status, "content_sha256": "", "content": nil}
+		if c, ok := store.files[p]; ok {
+			out["content_sha256"] = bare(c)
+			if withContent {
+				out["content"] = string(c)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	}
+	if r.Method == http.MethodDelete {
+		switch {
+		case !found:
+			answer("unchanged", false)
+		case bare(current) != base:
+			answer("conflict", true)
+		default:
+			delete(store.files, p)
+			answer("written", false)
+		}
+		return
+	}
+	switch {
+	case len(body) > 102400:
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"code": "invalid_field",
+			"message": "content must be at most 102400 bytes (100 kB): split it into smaller memories."})
+	case found && bare(current) == bare(body):
+		answer("unchanged", false)
+	case found != (base != "") || found && bare(current) != base:
+		answer("conflict", true)
+	default:
+		store.files[p] = body
+		answer("written", false)
+	}
+}
+
+func (f *fakeDaemonFiles) writes() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.memoryWrites...)
 }
 
 func (f *fakeDaemonFiles) uploaded() []fakeOutput {

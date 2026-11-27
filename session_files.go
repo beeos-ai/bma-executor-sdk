@@ -122,6 +122,13 @@ type SessionFiles struct {
 type fileSession struct {
 	id               string
 	uploads, outputs string
+	// memoryReports are memory writeback reports not delivered yet.
+	memoryReports []SessionMemoryReport
+	// memoryClient and memoryAnchor authorize memory writeback: the anchor of
+	// the last refresh (a process start, or session_files.sync's
+	// download_token, which outputs never use).
+	memoryClient *Client
+	memoryAnchor string
 
 	// mu serializes syncing and scanning this session.
 	mu sync.Mutex
@@ -215,6 +222,7 @@ func (f *SessionFiles) Run(ctx context.Context) {
 			flush, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			for _, session := range f.active(time.Time{}) {
 				session.scan(flush, f, true)
+				session.writeBackMemory(flush, true, f.log)
 				f.unmount(session)
 			}
 			cancel()
@@ -223,6 +231,7 @@ func (f *SessionFiles) Run(ctx context.Context) {
 			sessions := f.active(time.Now().Add(-sessionFilesIdle))
 			for _, session := range sessions {
 				session.scan(ctx, f, false)
+				session.writeBackMemory(ctx, false, f.log)
 			}
 			if f.opts.Mounter != nil {
 				f.renewAnchors(ctx, sessions)
@@ -256,8 +265,14 @@ func (f *SessionFiles) active(cutoff time.Time) []*fileSession {
 	for _, session := range idle {
 		flush, cancel := context.WithTimeout(context.Background(), sessionFilesFlushTimeout)
 		session.scan(flush, f, true)
+		session.writeBackMemory(flush, true, f.log)
 		cancel()
 		f.unmount(session)
+		session.mu.Lock()
+		if err := session.parkMemoryLocked(); err != nil {
+			f.log(LogWarn, "memory bases of "+session.id+" not parked", err)
+		}
+		session.mu.Unlock()
 	}
 	return sessions
 }
@@ -324,6 +339,10 @@ func (f *SessionFiles) prepare(ctx context.Context, client *Client, sessionID, p
 	defer session.mu.Unlock()
 	session.setAnchor(client, processID)
 	session.lastActive = time.Now()
+	if err := session.unparkMemoryLocked(); err != nil {
+		f.log(LogWarn, "parked memory bases of "+sessionID+" not read", err)
+	}
+	session.writeBackMemoryLocked(ctx, client, processID, true, f.log) // before the refresh lists the manifest
 	var manifest sessionFilesManifest
 	if err := client.daemonJSON(ctx, "/processes/"+url.PathEscape(processID)+"/session-files", maxSessionManifestBytes, &manifest); err != nil {
 		return fmt.Errorf("load session files: %w", err)
@@ -347,7 +366,11 @@ func (f *SessionFiles) prepare(ctx context.Context, client *Client, sessionID, p
 	if err := session.syncLocked(ctx, manifest.Files); err != nil {
 		return err
 	}
-	if err := session.syncMemoryLocked(ctx, client, processID, manifest.MemoryStores, f.log); err != nil {
+	owner, err := f.memoryOwner(sessionID)
+	if err != nil {
+		return err
+	}
+	if err := session.syncMemoryLocked(ctx, client, processID, manifest.MemoryStores, owner, f.log); err != nil {
 		return fmt.Errorf("memory: %w", err)
 	}
 	f.started.Store(processID, struct{}{})
@@ -391,6 +414,30 @@ func (f *SessionFiles) sessionDirs(s *fileSession) error {
 		return fmt.Errorf("session files: hand outputs to the session's user: %w", err)
 	}
 	return os.Chmod(s.outputs, 0o700)
+}
+
+// flushMemory writes back sessionID's memory now (a process of it ended) and
+// returns the reports not delivered yet.
+func (f *SessionFiles) flushMemory(ctx context.Context, sessionID string) []SessionMemoryReport {
+	f.mu.Lock()
+	session := f.sessions[sessionID]
+	f.mu.Unlock()
+	if session == nil {
+		return nil
+	}
+	session.writeBackMemory(ctx, true, f.log)
+	return session.takeMemoryReports()
+}
+
+// memoryReports returns sessionID's undelivered memory writeback reports.
+func (f *SessionFiles) memoryReports(sessionID string) []SessionMemoryReport {
+	f.mu.Lock()
+	session := f.sessions[sessionID]
+	f.mu.Unlock()
+	if session == nil {
+		return nil
+	}
+	return session.takeMemoryReports()
 }
 
 // flush uploads the outputs of sessionID now (a process of it ended) and

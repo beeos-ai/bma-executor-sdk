@@ -246,6 +246,10 @@
         "mount": {
           "type": "boolean",
           "description": "Contract 2.7.0 (ADR-0111). The executor mounts the session's uploads and memory stores instead of copying them: at the points it would copy (before every process.start of an agent session, on session_files.sync) it serves <root>/<agent_session_id>/uploads as one read-only file system and each memory store <root>/<agent_session_id>/memory/<slug> as its own (read-only for access read_only), with the same paths, manifest, content routes and marker as the copy. Content is read lazily (Range on the session files content route) and cached by sha256; each mount root belongs to the OS user that session's processes run as (0700) and answers only that user. A declaring executor fails a process start or a sync whose mount fails; it never copies instead. Declared only after the executor's mount probe succeeded; outputs stay a scanned local directory. Absent or false: the copy protocol."
+        },
+        "memory_writeback": {
+          "type": "boolean",
+          "description": "Contract 2.901.0 (requires memory). The executor writes back the session's read_write memory stores (ADR-0110): a file created, changed or deleted under <root>/<agent_session_id>/memory/<slug>/ is sent to the platform against the content_sha256 it materialized (PUT/DELETE …/session/memory/{memory_store_id}/memories?path=) on the 2 s walk (after two equal observations), when a process of the session ends, on session_files.sync, when the session goes idle and at executor shutdown, before the mirror refreshes the directory, each bounded; a session idle for 15 min keeps its bases on the machine, so a change made after (an on-machine brain's own tools in a long turn) is written back at its next refresh; the store wins a conflict; more than 50 deletions of one store in one sync are refused; a missing marker or unknown base resets the store's directory; reports are delivered in session_memory. read_only stores and read_write stores are both mirrored; only read_write files are written 0644. A writeback failure never fails a process, sync or turn. Absent or false: memory is read-only on this executor and the platform refuses file-tool writes into it."
         }
       },
       "required": [
@@ -680,6 +684,13 @@
         },
         "error": {
           "type": "string"
+        },
+        "session_memory": {
+          "type": "array",
+          "description": "On an executor with session_files.memory_writeback. Contract 2.901.0. Memory writeback reports (ADR-0110) the executor has not delivered yet for this session, each delivered once: every path of a read_write memory store whose change did not land as the agent left it. Absent or empty: nothing to report. A writeback that could not reach the platform does not make the result failed: it is retried by the next walk.",
+          "items": {
+            "$ref": "process.json#/$defs/SessionMemoryReport"
+          }
         }
       },
       "required": [

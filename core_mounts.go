@@ -86,6 +86,19 @@ func (s *CoreSession) sessionMounts() []*sessionMount {
 	return s.mounts
 }
 
+// writableAt reports a path of the memory mount in a read_write store.
+func (m *sessionMount) writableAt(rel string) bool {
+	if m.name != SessionMountMemory {
+		return false
+	}
+	root, err := m.open()
+	if err != nil {
+		return false
+	}
+	defer func() { _ = root.Close() }()
+	return memoryWritable(root, rel)
+}
+
 // rel is the absolute path p as a path below the mount's directory.
 func (m *sessionMount) rel(p string) (string, bool) {
 	return relUnder(p, dirAndReal(m.dir)...)
