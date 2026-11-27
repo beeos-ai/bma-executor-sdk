@@ -201,6 +201,9 @@ type ProcessOptions struct {
 // session's processes are terminated when it stops.
 func NewProcessCapability(core *Core, opts ProcessOptions) Capability {
 	p := &processes{core: core, opts: opts}
+	if opts.SessionFiles != nil {
+		core.files.Store(opts.SessionFiles)
+	}
 	return Capability{
 		Advertise: func(capabilities *Capabilities) {
 			capabilities.Process = &ProcessCapability{
@@ -237,14 +240,14 @@ func (p *processes) unscopedMethods() map[string]Handler {
 	return map[string]Handler{MethodSessionFilesSync: p.syncSessionFiles}
 }
 
-// syncSessionFiles serves session_files.sync: the session's memory mirror is
-// refreshed (and a bash change to it undone) before a turn.
+// syncSessionFiles serves session_files.sync: the session's files are shown
+// as before a process (a bash change to them undone) before a turn.
 func (p *processes) syncSessionFiles(ctx context.Context, req Request) (any, error) {
 	var params SessionFilesSyncParams
 	if err := decode(req.Params, &params); err != nil {
 		return nil, err
 	}
-	if err := p.opts.SessionFiles.syncMemory(ctx, req.Client, params.AgentSessionID, params.DownloadToken); err != nil {
+	if err := p.opts.SessionFiles.syncSession(ctx, req.Client, params.AgentSessionID, params.DownloadToken); err != nil {
 		p.core.log(LogWarn, "session memory not synced: "+params.AgentSessionID, err)
 		return SessionFilesSyncResult{State: "failed", Error: err.Error(),
 			SessionMemory: p.opts.SessionFiles.memoryReports(params.AgentSessionID)}, nil

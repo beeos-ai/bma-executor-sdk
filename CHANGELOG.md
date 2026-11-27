@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.27.0
+
+- Go: `session_files.sync` shows the session's files as a `process.start` does (executor contract 2.9.0): besides the memory stores it syncs the manifest's uploads into `<root>/<session id>/uploads` (copy mode; a mounting executor already mounted them), creates `outputs`, and its `download_token` becomes the session's anchor, so the outputs walk uploads what the session writes. A brain on the machine (an ACP brain whose tools the `LocalToolRoute` runs) starts no process, so this sync before each of its turns is what shows it its uploads and collects its outputs.
+- Go: a bash tool command of an agent session (the `LocalToolRoute`'s and `tool.call` bash) gets `BMA_MEMORY_DIR` when the session mirrors memory stores, as its processes do (the Core takes the session files of `NewProcessCapability`).
+
 ## 1.26.0
 
 - Go: `SessionFiles` writes back the session's `read_write` memory stores (executor contract 2.8.0, `capabilities.session_files.memory_writeback`, BMA ADR-0110). A file the agent creates, changes or deletes below `<root>/<session id>/memory/<slug>/` is sent to the store against the digest the mirror wrote (`PUT`/`DELETE …/session-memory/{memory_store_id}/memories?path=`, `X-BMA-Memory-Base-SHA256`) on the 2 s walk once it settled, when a process of the session ends, and before every mirror refresh (process start, `session_files.sync`), so a refresh never drops an unsent change. The store wins a conflict (its version replaces the file); a memory rule's refusal leaves the file and is not retried until it changes; more than 50 deletions of a store in one pass are refused; a store directory without its marker entry is not written back from. Every outcome that did not land is reported once in `ProcessReadResult.session_memory` or `SessionFilesSyncResult.session_memory`. Writeback never fails a process, sync or turn; what cannot reach the platform is retried by the next walk. Files of `read_write` stores are `0644`; `read_only` stores are unchanged.

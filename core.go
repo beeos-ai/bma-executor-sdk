@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -260,6 +261,10 @@ type Core struct {
 	local localState
 	// frames are the sessions' last computer use observations (computer_use.go).
 	frames computerFrames
+	// files are the session files of the process capability
+	// (ProcessOptions.SessionFiles), so a bash tool command of an agent
+	// session gets BMA_MEMORY_DIR as its processes do.
+	files atomic.Pointer[SessionFiles]
 }
 
 type registeredMethod struct {
@@ -1219,23 +1224,24 @@ func sessionProcessContext(session *CoreSession) ProcessContext {
 }
 
 // launchTool prepares the command of a bash tool call: the shell argv of
-// command, the environment (Env over explicit) and cwd resolved in the
-// session workspace, then CoreOptions.Launch (when set) as process.start runs
-// ProcessOptions.Launch: it may change dir, argv and env, or refuse (a
-// *launchError). A bad cwd or env is a plain error.
+// command, the environment (Env over explicit, and BMA_MEMORY_DIR when the
+// agent session mirrors memory stores, as for its processes) and cwd resolved
+// in the session workspace, then CoreOptions.Launch (when set) as
+// process.start runs ProcessOptions.Launch: it may change dir, argv and env,
+// or refuse (a *launchError). A bad cwd or env is a plain error.
 func (c *Core) launchTool(ctx context.Context, session *CoreSession, process ProcessContext, callID, command, cwd, writePath string,
 	explicit map[string]string) (toolLaunch, error) {
 	launch := toolLaunch{argv: shellArgv(command), runAs: session.runAs}
 	var err error
-	if c.opts.Launch == nil {
-		if launch.dir, err = session.ResolveCwd(cwd); err != nil {
-			return toolLaunch{}, err
-		}
-		launch.env, err = c.env(explicit, session.runAs)
-		return launch, err
-	}
 	if launch.env, err = c.env(explicit, session.runAs); err != nil {
 		return toolLaunch{}, err
+	}
+	if files := c.files.Load(); files != nil && process.AgentSessionID != "" && files.mirrorsMemory(process.AgentSessionID) {
+		launch.env = withEnv(launch.env, map[string]string{EnvMemoryDir: files.MemoryDir(process.AgentSessionID)})
+	}
+	if c.opts.Launch == nil {
+		launch.dir, err = session.ResolveCwd(cwd)
+		return launch, err
 	}
 	env := launch.env
 	defaultCwd, err := session.ResolveCwd("")

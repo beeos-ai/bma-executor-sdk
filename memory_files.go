@@ -100,10 +100,13 @@ func (f *SessionFiles) MemoryDir(sessionID string) string {
 	return filepath.Join(f.root, sessionID, sessionMemoryDir)
 }
 
-// syncMemory refreshes the memory mirror of sessionID with the manifest
-// anchored on token (a process anchor of that session), for
-// session_files.sync.
-func (f *SessionFiles) syncMemory(ctx context.Context, client *Client, sessionID, token string) error {
+// syncSession shows sessionID's files as before a process of it, with the
+// manifest anchored on token (a process anchor of that session), for
+// session_files.sync: its uploads and memory stores, and token anchors its
+// output uploads. A brain on the machine runs its tools without a process, so
+// this sync before each of its turns is what shows them its files and
+// collects their outputs.
+func (f *SessionFiles) syncSession(ctx context.Context, client *Client, sessionID, token string) error {
 	if !sessionIDPattern.MatchString(sessionID) {
 		return fmt.Errorf("agent session id %q is not a safe directory name", sessionID)
 	}
@@ -129,8 +132,8 @@ func (f *SessionFiles) syncMemory(ctx context.Context, client *Client, sessionID
 	if manifest.SessionID != sessionID {
 		return fmt.Errorf("session files belong to %q, not %q", manifest.SessionID, sessionID)
 	}
+	session.setAnchor(client, token)
 	if f.opts.Mounter != nil {
-		session.setAnchor(client, token)
 		if session.mountedAt.IsZero() {
 			// Not mounted yet (no process of the session ran here): the
 			// uploads are mounted too, from this manifest.
@@ -145,10 +148,11 @@ func (f *SessionFiles) syncMemory(ctx context.Context, client *Client, sessionID
 		}
 		return session.mountLocked(ctx, f, manifest, true)
 	}
-	if len(manifest.MemoryStores) > 0 || len(session.memory) > 0 {
-		if err := f.sessionDirs(session); err != nil {
-			return err
-		}
+	if err := f.sessionDirs(session); err != nil {
+		return err
+	}
+	if err := session.syncLocked(ctx, manifest.Files); err != nil {
+		return err
 	}
 	owner, err := f.memoryOwner(session.id)
 	if err != nil {
