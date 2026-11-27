@@ -158,9 +158,11 @@ type PackageInstaller interface {
 }
 
 // PackageInstallCommand is the fixed command one package install runs. Env
-// is its complete environment. Privileged runs it with the executor's own
-// identity instead of CoreOptions.RunAs: system package managers need root,
-// user-level ones must not get it.
+// is its complete environment, except that a command that is not Privileged
+// gets HOME and USER of the session's identity (CoreOptions.SessionRunAs or
+// RunAs) when it has one, so a user-level install lands in that identity's
+// home. Privileged runs it with the executor's own identity instead: system
+// package managers need root, user-level ones must not get it.
 type PackageInstallCommand struct {
 	Argv       []string
 	Dir        string
@@ -587,6 +589,7 @@ type launchPlan struct {
 	cwd          string
 	argv, env    []string
 	filesSession string
+	runAs        *RunAs // the session's identity
 	// install is the installer's command of a package install, with the
 	// Launch hook's changes applied.
 	install *PackageInstallCommand
@@ -599,10 +602,10 @@ func (p *processes) prepare(ctx context.Context, req Request, params ProcessStar
 	plan := launchPlan{process: ProcessContext{
 		SessionID: session.ID(), ProcessID: params.ProcessID,
 		AgentSessionID: params.Metadata[MetadataAgentSessionID], Metadata: params.Metadata, Client: req.Client,
-	}}
+	}, runAs: session.runAs}
 	command := params.FileTransfer == nil && params.PackageInstall == nil
 	if command {
-		env, err := p.core.Env(params.Env)
+		env, err := p.core.env(params.Env, session.runAs)
 		if err != nil {
 			return launchPlan{}, invalidParams("%v", err)
 		}
@@ -732,7 +735,7 @@ func (p *processes) create(plan launchPlan, params ProcessStartParams) (*process
 		return p.startTransfer(plan.process, params), nil
 	}
 	if params.PackageInstall != nil {
-		return p.startPackageInstall(params, *plan.install)
+		return p.startPackageInstall(params, *plan.install, plan.runAs)
 	}
 	env := plan.env
 	var release func()
@@ -744,7 +747,7 @@ func (p *processes) create(plan launchPlan, params ProcessStartParams) (*process
 	}
 	spawnParams := params
 	spawnParams.Argv = plan.argv
-	proc, err := spawn(spawnParams, plan.cwd, env, p.core.opts.RunAs)
+	proc, err := spawn(spawnParams, plan.cwd, env, plan.runAs)
 	if err != nil {
 		if release != nil {
 			release()
@@ -757,14 +760,23 @@ func (p *processes) create(plan launchPlan, params ProcessStartParams) (*process
 
 // startPackageInstall runs the installer's fixed command with stdin closed;
 // only a privileged command keeps the executor's identity.
-func (p *processes) startPackageInstall(params ProcessStartParams, command PackageInstallCommand) (*process, error) {
-	runAs := p.core.opts.RunAs
-	if command.Privileged {
+func (p *processes) startPackageInstall(params ProcessStartParams, command PackageInstallCommand, runAs *RunAs) (*process, error) {
+	env := command.Env
+	switch {
+	case command.Privileged:
 		runAs = nil
+	case runAs != nil:
+		identity := map[string]string{}
+		for name, value := range map[string]string{"HOME": runAs.Home, "USER": runAs.User} {
+			if value != "" {
+				identity[name] = value
+			}
+		}
+		env = withEnv(env, identity)
 	}
 	spawnParams := params
 	spawnParams.Argv, spawnParams.Stdin, spawnParams.PackageInstall = command.Argv, StdinClosed, nil
-	proc, err := spawn(spawnParams, command.Dir, command.Env, runAs)
+	proc, err := spawn(spawnParams, command.Dir, env, runAs)
 	if err != nil {
 		return nil, spawnFailed(err)
 	}

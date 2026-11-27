@@ -219,6 +219,10 @@ func (r *LocalToolRoute) Call(ctx context.Context, c RouteCall) *RouteResult {
 // no harness client (no session.ready, no artifact upload).
 func (c *Core) openLocal(brain, sessionID, workspace string) error {
 	key := coreKey{brain, sessionID}
+	runAs, err := c.sessionRunAs(key, brain, SessionAssignParams{SessionID: sessionID})
+	if err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -234,7 +238,8 @@ func (c *Core) openLocal(brain, sessionID, workspace string) error {
 		return busy("executor is at its session capacity")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	c.sessions[key] = &CoreSession{key: key, workspace: workspace, ctx: ctx, cancel: cancel, values: map[any]any{}, outside: c.opts.OutsideFiles}
+	c.sessions[key] = &CoreSession{key: key, workspace: workspace, ctx: ctx, cancel: cancel, values: map[any]any{},
+		outside: c.opts.OutsideFiles, runAs: runAs}
 	return nil
 }
 

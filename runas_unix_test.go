@@ -121,7 +121,7 @@ func TestCoreRunAsOwnsTheBrainDirectoryOfADefaultWorkspace(t *testing.T) {
 		t.Fatalf("bash in the default workspace = %q err %v", textOf(bash), err)
 	}
 	acp := core.workspace(acpBrain, "sess_acp")
-	if err := core.createWorkspace(acp); err != nil {
+	if err := core.createWorkspace(acp, &runAs); err != nil {
 		t.Fatal(err)
 	}
 	for _, dir := range []string{filepath.Join(root, "local"), filepath.Join(root, "local", "sess_ws"),

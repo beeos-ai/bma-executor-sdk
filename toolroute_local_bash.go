@@ -163,7 +163,7 @@ func (r *LocalToolRoute) runBash(ctx context.Context, callID string, in map[stri
 		timeout = min(time.Duration(ms)*time.Millisecond, acpBashMaxTimeout)
 	}
 	onTimeoutKill := in["on_timeout"] == "kill"
-	output, err := r.bashOutputFile(plan.workspace, callID)
+	output, err := r.bashOutputFile(plan.workspace, callID, plan.launch.runAs)
 	if err != nil {
 		return "spawn bash: " + err.Error(), true, nil
 	}
@@ -171,7 +171,7 @@ func (r *LocalToolRoute) runBash(ctx context.Context, callID string, in map[stri
 	if err != nil {
 		return "spawn bash: " + err.Error(), true, nil
 	}
-	if runAs := r.core.opts.RunAs; runAs != nil {
+	if runAs := plan.launch.runAs; runAs != nil {
 		if err := os.Chown(output, int(runAs.UID), int(runAs.GID)); err != nil {
 			_ = out.Close()
 			return "spawn bash: " + err.Error(), true, nil
@@ -179,7 +179,7 @@ func (r *LocalToolRoute) runBash(ctx context.Context, callID string, in map[stri
 	}
 	// The command is not tied to the call's ctx: it may outlive the call.
 	cmd := toolCommand(context.Background(), plan.launch.argv)
-	setCredential(cmd, r.core.opts.RunAs)
+	setCredential(cmd, plan.launch.runAs)
 	// The command writes to a pipe, never to the output file: a sandbox that
 	// denies the file's path breaks programs that check their stdout (on
 	// macOS raw cat and dd fail with "stdout: Operation not permitted").
@@ -272,7 +272,7 @@ func (c *Core) bashOutputDir(sessionID string) string {
 
 // bashOutputFile is the file a command's output goes to: in the session's
 // directory under CoreOptions.ToolOutputDir, else in the working directory.
-func (r *LocalToolRoute) bashOutputFile(cwd, callID string) (string, error) {
+func (r *LocalToolRoute) bashOutputFile(cwd, callID string, runAs *RunAs) (string, error) {
 	dir := r.core.bashOutputDir(r.sessionID)
 	if dir == "" {
 		dir = filepath.Join(cwd, acpBashOutputDir)
@@ -280,7 +280,7 @@ func (r *LocalToolRoute) bashOutputFile(cwd, callID string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	if runAs := r.core.opts.RunAs; runAs != nil {
+	if runAs != nil {
 		if err := os.Chown(dir, int(runAs.UID), int(runAs.GID)); err != nil {
 			return "", err
 		}
@@ -310,7 +310,11 @@ func (r *LocalToolRoute) readOutputFile(path string, input ToolInput) (string, b
 	} else if !info.Mode().IsRegular() {
 		return fmt.Sprintf("%s is not a regular file", path), true
 	}
-	result, err := r.core.readPath(path, input)
+	session := r.core.session(coreKey{acpBrain, r.sessionID})
+	if session == nil {
+		return "session_not_active: the session is not open", true
+	}
+	result, err := r.core.readPath(session.runAs, path, input)
 	if err != nil {
 		return err.Error(), true
 	}

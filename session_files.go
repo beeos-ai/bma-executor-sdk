@@ -80,7 +80,12 @@ type SessionFilesOptions struct {
 	// MaxOutputBytes is the largest output uploaded (default and maximum
 	// 1 GiB); larger files are skipped and logged.
 	MaxOutputBytes int64
-	OnLog          func(LogEvent)
+	// RunAs, when set, is the OS identity of an agent session's processes
+	// (the one CoreOptions.SessionRunAs gives the session): <Root>/<session>
+	// is then the executor's, group RunAs.GID, 0750, so only that identity
+	// reaches the session's files, and outputs is RunAs's, 0700. Unix only.
+	RunAs func(sessionID string) (*RunAs, error)
+	OnLog func(LogEvent)
 }
 
 // SessionFiles syncs the session files of an executor that declares
@@ -91,6 +96,7 @@ type SessionFilesOptions struct {
 type SessionFiles struct {
 	root           string
 	maxOutputBytes int64
+	runAs          func(sessionID string) (*RunAs, error)
 	onLog          func(LogEvent)
 
 	mu       sync.Mutex
@@ -164,7 +170,8 @@ func NewSessionFiles(opts SessionFilesOptions) (*SessionFiles, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("bmaexecutor: create session files root: %w", err)
 	}
-	return &SessionFiles{root: root, maxOutputBytes: opts.MaxOutputBytes, onLog: opts.OnLog, sessions: map[string]*fileSession{}}, nil
+	return &SessionFiles{root: root, maxOutputBytes: opts.MaxOutputBytes, runAs: opts.RunAs, onLog: opts.OnLog,
+		sessions: map[string]*fileSession{}}, nil
 }
 
 // Root is the advertised capabilities.session_files.root.
@@ -266,10 +273,8 @@ func (f *SessionFiles) prepare(ctx context.Context, client *Client, sessionID, p
 	if manifest.SessionID != sessionID {
 		return fmt.Errorf("session files belong to %q, not %q", manifest.SessionID, sessionID)
 	}
-	for _, dir := range []string{session.uploads, session.outputs} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
+	if err := f.sessionDirs(session); err != nil {
+		return err
 	}
 	if err := session.syncLocked(ctx, manifest.Files); err != nil {
 		return err
@@ -279,6 +284,45 @@ func (f *SessionFiles) prepare(ctx context.Context, client *Client, sessionID, p
 	}
 	f.started.Store(processID, struct{}{})
 	return nil
+}
+
+// sessionDirs creates the session's directory with its uploads and outputs
+// and, with SessionFilesOptions.RunAs, gives them to the session's identity
+// (again on every call, so a changed mode or owner does not last): the
+// session directory stays the executor's (it writes into it, so a link put in
+// its place must not be followed) with the session's group, 0750; outputs is
+// the session's, 0700. Links in place of either are refused.
+func (f *SessionFiles) sessionDirs(s *fileSession) error {
+	for _, dir := range []string{s.uploads, s.outputs} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	if f.runAs == nil {
+		return nil
+	}
+	runAs, err := f.runAs(s.id)
+	if err != nil || runAs == nil {
+		return err
+	}
+	sessionDir := filepath.Dir(s.uploads)
+	for _, dir := range []string{sessionDir, s.outputs} {
+		if info, err := os.Lstat(dir); err != nil {
+			return err
+		} else if !info.IsDir() {
+			return fmt.Errorf("session files: %s is not a directory", filepath.Base(dir))
+		}
+	}
+	if err := os.Lchown(sessionDir, os.Geteuid(), int(runAs.GID)); err != nil {
+		return fmt.Errorf("session files: hand the session directory to the session's group: %w", err)
+	}
+	if err := os.Chmod(sessionDir, 0o750); err != nil {
+		return err
+	}
+	if err := os.Lchown(s.outputs, int(runAs.UID), int(runAs.GID)); err != nil {
+		return fmt.Errorf("session files: hand outputs to the session's user: %w", err)
+	}
+	return os.Chmod(s.outputs, 0o700)
 }
 
 // flush uploads the outputs of sessionID now (a process of it ended) and

@@ -116,6 +116,15 @@ type CoreOptions struct {
 	// the file tools (read, write, edit, glob, grep) use the workload's file
 	// identity. Unix only.
 	RunAs *RunAs
+	// SessionRunAs, when set, gives each session its own OS identity: it
+	// runs at the first session.assign of a session (before OnAssign and the
+	// workspace; two concurrent first assigns may both call it, so it must
+	// return the same identity for the same session), and the identity it
+	// returns is the session's RunAs for everything RunAs covers (bash
+	// tools, processes, stdio MCP servers, file tools, the workspace's
+	// owner). RunAs stays the identity of what no session owns. An error
+	// refuses the assign. Unix only.
+	SessionRunAs func(brain string, params SessionAssignParams) (*RunAs, error)
 	// Launch runs before each bash tool command starts (tool.call and
 	// LocalToolRoute, so also ACPAgent's own tools), with the semantics of
 	// ProcessOptions.Launch: it may change the directory, argv and
@@ -262,10 +271,13 @@ type CoreSession struct {
 	// workRoot is CoreOptions.WorkRoot: a cwd equal to it means "the
 	// session's workspace" (see ResolveCwd).
 	workRoot string
-	client   *Client
-	params   SessionAssignParams
-	ctx      context.Context
-	cancel   context.CancelFunc
+	// runAs is the session's OS identity (CoreOptions.SessionRunAs, else
+	// RunAs); nil runs as the executor.
+	runAs  *RunAs
+	client *Client
+	params SessionAssignParams
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	mu      sync.Mutex
 	stopped bool
@@ -283,6 +295,10 @@ func (s *CoreSession) ID() string        { return s.key.session }
 func (s *CoreSession) Brain() string     { return s.key.brain }
 func (s *CoreSession) Workspace() string { return s.workspace }
 func (s *CoreSession) Client() *Client   { return s.client }
+
+// RunAs is the OS identity the session's commands and file tools use
+// (CoreOptions.SessionRunAs, else RunAs); nil is the executor's own.
+func (s *CoreSession) RunAs() *RunAs { return s.runAs }
 
 // Context is canceled when the session stops.
 func (s *CoreSession) Context() context.Context { return s.ctx }
@@ -362,7 +378,7 @@ func NewCore(opts CoreOptions) (*Core, error) {
 	if opts.DenyEnv == nil {
 		opts.DenyEnv = func(string) bool { return false }
 	}
-	if opts.RunAs != nil && runtime.GOOS == "windows" {
+	if (opts.RunAs != nil || opts.SessionRunAs != nil) && runtime.GOOS == "windows" {
 		return nil, errors.New("bmaexecutor: CoreOptions.RunAs is not supported on windows")
 	}
 	for key := range opts.Env {
@@ -588,6 +604,10 @@ func (c *Core) assign(brain string, client *Client, params SessionAssignParams) 
 		}
 	}
 	key := coreKey{brain, params.SessionID}
+	runAs, err := c.sessionRunAs(key, brain, params)
+	if err != nil {
+		return SessionAssignResult{}, err
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -623,7 +643,7 @@ func (c *Core) assign(brain string, client *Client, params SessionAssignParams) 
 	ctx, cancel := context.WithCancel(context.Background())
 	session := &CoreSession{
 		key: key, workspace: c.workspace(brain, params.SessionID), workRoot: c.opts.WorkRoot, client: client, params: params,
-		ctx: ctx, cancel: cancel, values: map[any]any{}, outside: c.opts.OutsideFiles,
+		ctx: ctx, cancel: cancel, values: map[any]any{}, outside: c.opts.OutsideFiles, runAs: runAs,
 	}
 	c.sessions[key] = session
 	c.mu.Unlock()
@@ -632,12 +652,32 @@ func (c *Core) assign(brain string, client *Client, params SessionAssignParams) 
 		c.stop(key)
 		return SessionAssignResult{}, err
 	}
-	if err := c.createWorkspace(session.workspace); err != nil {
+	if err := c.createWorkspace(session.workspace, session.runAs); err != nil {
 		c.stop(key)
 		return SessionAssignResult{}, fmt.Errorf("create workspace: %w", err)
 	}
 	go c.prepare(client, session, params)
 	return SessionAssignResult{Accepted: true, SessionID: params.SessionID}, nil
+}
+
+// sessionRunAs is the identity of the session key:
+// CoreOptions.SessionRunAs (outside the core's lock: it may create an OS
+// account), else RunAs. A session the core holds keeps its identity.
+func (c *Core) sessionRunAs(key coreKey, brain string, params SessionAssignParams) (*RunAs, error) {
+	c.mu.Lock()
+	existing := c.sessions[key]
+	c.mu.Unlock()
+	switch {
+	case existing != nil:
+		return existing.runAs, nil
+	case c.opts.SessionRunAs == nil:
+		return c.opts.RunAs, nil
+	}
+	runAs, err := c.opts.SessionRunAs(brain, params)
+	if err != nil {
+		return nil, fmt.Errorf("session identity: %w", err)
+	}
+	return runAs, nil
 }
 
 // onAssign runs CoreOptions.OnAssign; its error is the assign's invalid params.
@@ -651,16 +691,18 @@ func (c *Core) onAssign(session *CoreSession, params SessionAssignParams) error 
 	return nil
 }
 
-// createWorkspace creates a missing session workspace, owned by the RunAs
-// identity when set. An existing directory is left as it is.
-func (c *Core) createWorkspace(dir string) error {
+// createWorkspace creates a missing session workspace, owned by the
+// session's identity runAs when set. An existing directory is left as it is.
+func (c *Core) createWorkspace(dir string, runAs *RunAs) error {
 	if _, err := os.Stat(dir); err == nil {
 		return nil
 	}
-	// Every directory created here is the RunAs identity's, the missing
-	// parents too (WorkRoot/<brain> below a session workspace): a parent the
-	// executor created for itself would keep the workload user out of the
-	// workspace, and every process of the session would fail to chdir.
+	// The workspace is the session identity's. Its missing parents
+	// (WorkRoot/<brain>) are too with one RunAs for every session: a parent
+	// the executor created for itself would keep the workload user out of the
+	// workspace, and every process of the session would fail to chdir. With
+	// SessionRunAs they hold many sessions' workspaces, so they are the
+	// executor's, 0711: every session passes through, none lists or adds.
 	var missing []string
 	for d := dir; ; d = filepath.Dir(d) {
 		if _, err := os.Lstat(d); err == nil {
@@ -674,11 +716,22 @@ func (c *Core) createWorkspace(dir string) error {
 		}
 	}
 	for _, d := range slices.Backward(missing) {
-		if err := os.Mkdir(d, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		shared := d != dir && c.opts.SessionRunAs != nil
+		mode := os.FileMode(0o700)
+		if shared {
+			mode = 0o711
+		}
+		if err := os.Mkdir(d, mode); err != nil && !errors.Is(err, fs.ErrExist) {
 			return err
 		}
-		if c.opts.RunAs != nil {
-			if err := os.Lchown(d, int(c.opts.RunAs.UID), int(c.opts.RunAs.GID)); err != nil {
+		if shared {
+			if err := os.Chmod(d, mode); err != nil { // the umask may have dropped bits
+				return err
+			}
+			continue
+		}
+		if runAs != nil {
+			if err := os.Lchown(d, int(runAs.UID), int(runAs.GID)); err != nil {
 				return err
 			}
 		}
@@ -994,8 +1047,13 @@ func (s *CoreSession) isWorkRoot(path string) bool {
 
 // Env builds a bash or process environment: baseEnv from the executor, the
 // request env (bounded, loader and DenyEnv variables rejected), then
-// CoreOptions.Env.
+// CoreOptions.Env, with HOME and USER of RunAs.
 func (c *Core) Env(explicit map[string]string) ([]string, error) {
+	return c.env(explicit, c.opts.RunAs)
+}
+
+// env is Env for the identity runAs (a session's).
+func (c *Core) env(explicit map[string]string, runAs *RunAs) ([]string, error) {
 	if len(explicit) > maxEnvEntries {
 		return nil, fmt.Errorf("env exceeds %d entries", maxEnvEntries)
 	}
@@ -1022,7 +1080,7 @@ func (c *Core) Env(explicit map[string]string) ([]string, error) {
 	for key, value := range c.opts.Env {
 		setEnvValue(values, key, value, envCaseInsensitive)
 	}
-	if runAs := c.opts.RunAs; runAs != nil {
+	if runAs != nil {
 		setOrDrop(values, "HOME", runAs.Home)
 		setOrDrop(values, "USER", runAs.User)
 	}
@@ -1116,6 +1174,7 @@ func (c *Core) bash(ctx context.Context, session *CoreSession, params ToolCallPa
 type toolLaunch struct {
 	dir       string
 	argv, env []string
+	runAs     *RunAs // the session's identity
 }
 
 // launchError is a Launch hook's refusal of a bash tool command (an
@@ -1154,16 +1213,16 @@ func sessionProcessContext(session *CoreSession) ProcessContext {
 // *launchError). A bad cwd or env is a plain error.
 func (c *Core) launchTool(ctx context.Context, session *CoreSession, process ProcessContext, callID, command, cwd, writePath string,
 	explicit map[string]string) (toolLaunch, error) {
-	launch := toolLaunch{argv: shellArgv(command)}
+	launch := toolLaunch{argv: shellArgv(command), runAs: session.runAs}
 	var err error
 	if c.opts.Launch == nil {
 		if launch.dir, err = session.ResolveCwd(cwd); err != nil {
 			return toolLaunch{}, err
 		}
-		launch.env, err = c.Env(explicit)
+		launch.env, err = c.env(explicit, session.runAs)
 		return launch, err
 	}
-	if launch.env, err = c.Env(explicit); err != nil {
+	if launch.env, err = c.env(explicit, session.runAs); err != nil {
 		return toolLaunch{}, err
 	}
 	env := launch.env
@@ -1197,7 +1256,7 @@ func (c *Core) launchTool(ctx context.Context, session *CoreSession, process Pro
 
 func (c *Core) runShell(ctx context.Context, launch toolLaunch) (shellExecution, error) {
 	cmd := toolCommand(ctx, launch.argv)
-	setCredential(cmd, c.opts.RunAs)
+	setCredential(cmd, launch.runAs)
 	cmd.Dir = launch.dir
 	cmd.Env = launch.env
 	stdout := &cappedBuffer{limit: c.opts.MaxOutputBytes}
@@ -1398,7 +1457,7 @@ func (c *Core) runMCPOnce(client *Client, session *CoreSession, server MCPServer
 	}
 	// Under RunAs the server's identity variables are the workload's, not
 	// the executor's (HOME stays uninherited, as without RunAs).
-	if runAs := c.opts.RunAs; runAs != nil {
+	if runAs := session.runAs; runAs != nil {
 		setOrDrop(values, "USER", runAs.User)
 		setOrDrop(values, "LOGNAME", runAs.User)
 	}
@@ -1436,7 +1495,7 @@ func (c *Core) runMCPOnce(client *Client, session *CoreSession, server MCPServer
 	defer cancel()
 	cmd := exec.CommandContext(ctx, command, transport.Args...)
 	setProcessGroup(cmd)
-	setCredential(cmd, c.opts.RunAs)
+	setCredential(cmd, session.runAs)
 	cmd.Dir = dir
 	cmd.Env = make([]string, 0, len(values))
 	for name, value := range values {
