@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.29.1
+
+- Go: a write to a mounted read_write memory store that did not reach the platform (network loss, 404, 429, 5xx) is queued as a `SessionMemoryReport` (`rejected`, "was not saved") besides failing the close with `EIO`, so the model learns of it from `process.read` / `session_files.sync` even when a shell redirection ignores the `close` error and exits 0.
+
 ## 1.29.0
 
 - Go: only a session with work in flight holds one of the Core's slots (`CoreOptions.MaxSessions`, `MaxSessionsPerBrain`), as the executor contract says of idle sessions. When a new session (a `session.assign`, or a local brain's session) needs a slot, the Core releases its least recently used idle session a harness assigned: no tool call or request in flight, no running process, no MCP server of its own. It is stopped like `session.stop` but without `session.ended`; its workspace stays, and the harness's next `session.assign` of it (sent before the session's tool calls) opens it again. `session.assign` answers `executor_busy` (-32009) only when every session that counts is busy; before, the 17th open session of a machine was refused although 16 sat idle. `Capability.Busy` lets a capability keep a session's slot (the process capability does while a process runs).
