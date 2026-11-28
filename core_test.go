@@ -266,7 +266,27 @@ func TestCoreMultiBrainIsolationAndCapacity(t *testing.T) {
 		t.Fatalf("cross-brain call = %+v", textOf(cross))
 	}
 
-	// Per-brain capacity, then total capacity: both executor_busy.
+	// Sessions with a tool call in flight fill per-brain capacity, then
+	// total capacity: both executor_busy.
+	hold := func(b string, session *Session) (release func()) {
+		t.Helper()
+		started := filepath.Join(core.workspace(b, session.ID()), "started")
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = session.CallTool(ctx, ToolCallParams{ToolCallID: "call_hold", Tool: ToolNameBash,
+				Input: NewToolInput(ToolInput{Command: "touch started; sleep 30"})})
+		}()
+		waitFor(t, func() bool { _, err := os.Stat(started); return err == nil })
+		return func() {
+			if _, err := session.CancelTool(ctx, "call_hold", "done"); err != nil {
+				t.Fatal(err)
+			}
+			<-done
+		}
+	}
+	releaseCloud := hold("cloud", cloudSession)
+	releaseLocal := hold("local", localSession)
 	var rpcErr *RPCError
 	if _, err := cloud.executor.AssignSession(ctx, SessionAssignParams{SessionID: "sess_second"}); !errors.As(err, &rpcErr) || rpcErr.Code != CodeExecutorBusy {
 		t.Fatalf("per-brain capacity err = %v", err)
@@ -274,13 +294,17 @@ func TestCoreMultiBrainIsolationAndCapacity(t *testing.T) {
 	if _, err := third.executor.AssignSession(ctx, SessionAssignParams{SessionID: "sess_third"}); !errors.As(err, &rpcErr) || rpcErr.Code != CodeExecutorBusy {
 		t.Fatalf("total capacity err = %v", err)
 	}
-	// Stopping one brain's session frees capacity for another brain only.
-	if err := cloudSession.Stop(ctx, "done"); err != nil {
-		t.Fatal(err)
-	}
+	// An idle session holds no slot: once cloud's call ended, another
+	// brain's new session takes the slot of cloud's idle one, and the busy
+	// local session keeps its own.
+	releaseCloud()
 	readySession(t, third, SessionAssignParams{SessionID: "sess_third"})
+	releaseLocal()
 	if raw, _ := os.ReadFile(filepath.Join(core.workspace("local", "sess_same"), "owner")); string(raw) != "local" {
 		t.Fatalf("local workspace = %q", raw)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(core.workspace("cloud", "sess_same"), "owner")); string(raw) != "cloud" {
+		t.Fatalf("released cloud workspace = %q", raw)
 	}
 }
 

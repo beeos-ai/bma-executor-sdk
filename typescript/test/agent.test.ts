@@ -209,6 +209,32 @@ describe('agent capability', () => {
     }
   })
 
+  test('max_sessions bounds running turns; a session whose turn ended holds no slot', async () => {
+    const platform = new MemoryPlatform()
+    const harness = new Harness({ agent: platform })
+    const client = new ExecutorClient({ environmentId: 'env_test', executor: executorInfo, dialer: harness.inProcessDialer(), reconnectBaseDelayMs: 10 })
+    client.serveAgent(echoAgent([]), { models: [{ id: 'echo-1' }], interaction_kinds: ['permission'], max_sessions: 1 })
+    await client.start()
+    try {
+      const executor = await harness.waitExecutor()
+      const busy = (error: unknown) => error instanceof RpcError && error.code === JsonRpcErrorCode.ExecutorBusy
+      await executor.startTurn(turnStart('as_s1', 't_s1', 'fail'))
+      await waitFor(() => platform.types('as_s1').includes('session.status_idle'))
+      // The idle session holds no slot: another session's turn starts.
+      await executor.startTurn(turnStart('as_s2', 't_s2', 'block'))
+      await waitFor(() => platform.types('as_s2').includes('session.status_running'))
+      // While that turn runs, a turn of a new or an idle session is executor_busy.
+      await assert.rejects(executor.startTurn(turnStart('as_s3', 't_s3', 'block')), busy)
+      await assert.rejects(executor.startTurn(turnStart('as_s1', 't_s1b', 'block')), busy)
+      assert.deepEqual(await executor.cancelTurn({ session_id: 'as_s2', turn_id: 't_s2' }), { canceled: true })
+      await waitFor(() => platform.types('as_s2').includes('session.status_idle'))
+      await executor.startTurn(turnStart('as_s3', 't_s3', 'fail'))
+      await waitFor(() => platform.types('as_s3').includes('session.status_idle'))
+    } finally {
+      client.stop()
+    }
+  })
+
   test('events are resent after a retryable failure and a dropped connection, without gaps or duplicates', async () => {
     const platform = new MemoryPlatform()
     platform.failNext = 2
