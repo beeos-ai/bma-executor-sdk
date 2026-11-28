@@ -30,7 +30,9 @@ import (
 // content. Scratch names (hidden, "~", ".tmp" and the other outputs scratch
 // forms) stay in this process and are never sent, so writing a temporary
 // file and renaming it onto a memory saves one version. Every outcome but
-// "written" is also a SessionMemoryReport for the model.
+// "written" is also a SessionMemoryReport for the model, including a write
+// that was not saved (the close fails with EIO, which a shell redirection
+// does not report).
 const (
 	// maxMemoryBytes is the memory content rule (100 kB): a longer write
 	// fails with EFBIG at once.
@@ -230,6 +232,13 @@ func (v *view) failed(p string, err error) syscall.Errno {
 	var refusal *bmaexecutor.DaemonHTTPError
 	if !errors.As(err, &refusal) || refusal.StatusCode >= 500 || refusal.StatusCode == http.StatusNotFound ||
 		refusal.StatusCode == http.StatusTooManyRequests {
+		// The close failed with EIO, which a shell redirection (printf > f)
+		// does not turn into a failing command, so the model is told here.
+		_, _, source := v.snapshot()
+		source.Report(bmaexecutor.SessionMemoryReport{MemoryStoreID: v.store, Path: "/" + p, Outcome: "rejected",
+			Message: "/" + p + " was not saved: the memory store could not be reached (" + err.Error() + "), so the " +
+				"store still has its previous content even if the shell command that wrote it reported success. " +
+				"Write it again when the connection is back, and read it to check."})
 		return syscall.EIO
 	}
 	_, _, source := v.snapshot()

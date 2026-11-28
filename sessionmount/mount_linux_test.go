@@ -503,7 +503,7 @@ func TestMountReadWriteStoreFailures(t *testing.T) {
 	for _, r := range reports {
 		outcomes = append(outcomes, r.Outcome+" "+r.Path)
 	}
-	if strings.Join(outcomes, ",") != "conflict /a.md,rejected /b.md" {
+	if strings.Join(outcomes, ",") != "conflict /a.md,rejected /b.md,rejected /a.md" {
 		t.Fatalf("reports %v", outcomes)
 	}
 }
