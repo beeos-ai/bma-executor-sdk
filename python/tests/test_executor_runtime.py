@@ -311,13 +311,16 @@ def turn_start(session_id: str, turn_id: str, text: str) -> dict[str, Any]:
 
 
 @contextlib.asynccontextmanager
-async def agent_pair(transport: str = "inprocess") -> AsyncIterator[tuple[bx.Harness, bx.Executor, bx.ExecutorClient, RecordingPlatform, ScriptedAgent]]:
+async def agent_pair(transport: str = "inprocess", max_sessions: int = 0) -> AsyncIterator[tuple[bx.Harness, bx.Executor, bx.ExecutorClient, RecordingPlatform, ScriptedAgent]]:
     platform = RecordingPlatform()
     harness = bx.Harness(agent=platform, request_timeout=2.0)
     agent = ScriptedAgent()
     async with listen(harness, transport) as (url, dialer):
         client = make_client(url, dialer)
-        client.serve_agent(agent, {"models": [{"id": "local-model", "thinking_levels": ["low", "medium", "high"]}], "permission_modes": ["default"], "interaction_kinds": ["permission", "question"]})  # type: ignore[arg-type,typeddict-item]
+        capability: dict[str, Any] = {"models": [{"id": "local-model", "thinking_levels": ["low", "medium", "high"]}], "permission_modes": ["default"], "interaction_kinds": ["permission", "question"]}
+        if max_sessions:
+            capability["max_sessions"] = max_sessions
+        client.serve_agent(agent, capability)  # type: ignore[arg-type]
         await client.start()
         executor = await harness.wait_executor()
         try:
@@ -377,6 +380,25 @@ async def test_agent_turn_lifecycle(transport: str) -> None:
         closed = await executor.close_agent_session({"session_id": "ses_a", "reason": "archived"})  # type: ignore[typeddict-item]
         assert closed["closed"] is True and agent.closed == ["ses_a"]
         assert (await executor.close_agent_session({"session_id": "ses_a"}))["closed"] is False  # type: ignore[typeddict-item]
+
+
+async def test_max_sessions_bounds_running_turns_not_idle_sessions() -> None:
+    # One slot per running turn (contract agent.max_sessions): a session whose
+    # turn ended holds none, so a new session's turn starts; while a turn
+    # runs, another session's turn is executor_busy.
+    async with agent_pair(max_sessions=1) as (harness, executor, client, platform, agent):
+        await executor.start_turn(turn_start("ses_1", "turn_1", "hello"))  # type: ignore[arg-type]
+        await platform.wait_for(lambda: idle_of(platform, "turn_1"))
+        await executor.start_turn(turn_start("ses_2", "turn_2", "hold on"))  # type: ignore[arg-type]
+        await asyncio.wait_for(agent.holding.wait(), 2)
+        for session in ("ses_3", "ses_1"):
+            with pytest.raises(bx.RPCError) as busy:
+                await executor.start_turn(turn_start(session, "turn_x_" + session, "hello"))  # type: ignore[arg-type]
+            assert busy.value.code == JsonRpcErrorCode.ExecutorBusy
+        assert (await executor.cancel_turn({"session_id": "ses_2", "turn_id": "turn_2"}))["canceled"] is True  # type: ignore[typeddict-item]
+        await platform.wait_for(lambda: idle_of(platform, "turn_2"))
+        await executor.start_turn(turn_start("ses_3", "turn_3", "hello"))  # type: ignore[arg-type]
+        await platform.wait_for(lambda: idle_of(platform, "turn_3"))
 
 
 async def test_agent_custom_tool_result() -> None:

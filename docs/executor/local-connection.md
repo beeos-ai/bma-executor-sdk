@@ -75,7 +75,7 @@ The runnable version is [`examples/local-brain`](../../examples/local-brain/main
 | Calls | `tool.call` reaches only sessions its own harness assigned; otherwise a failed result `session_not_active` |
 | Workspaces | per session `WorkRoot/<brain>/<session>` (override with `CoreOptions.Workspace`); file tools confined to it |
 | MCP | channels and stdio servers per (brain, session, server_key) |
-| Capacity | `MaxSessions` (default 16) shared; `MaxSessionsPerBrain` (default `MaxSessions`) so the cloud cannot starve the local brain; full → `session.assign` `-32009` (`retryable:true`) |
+| Capacity | `MaxSessions` (default 16) shared; `MaxSessionsPerBrain` (default `MaxSessions`) so the cloud cannot starve the local brain; only sessions with work in flight hold a slot (the least recently used idle one is released and reopened by its next `session.assign`); all busy → `session.assign` `-32009` (`retryable:true`) |
 | Cancel/cleanup | `tool.cancel`, deadlines, `timeout_ms`, `session.stop` kill only that session's process groups; a harness disconnect affects only its sessions |
 | Trust | bash is not a sandbox: every harness runs as the executor's OS user; attach only brains you trust with this machine |
 

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // LocalToolRoute runs a brain's tool calls on this machine, in a Core: the
@@ -223,23 +224,33 @@ func (c *Core) openLocal(brain, sessionID, workspace string) error {
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
+	for {
+		c.mu.Lock()
+		if c.closed {
+			c.mu.Unlock()
+			return &RPCError{Code: CodeResourceUnavailable, Message: "executor is shutting down"}
+		}
+		if s, ok := c.sessions[key]; ok {
+			s.mu.Lock()
+			s.workspace = workspace
+			s.lastUsed = time.Now()
+			s.mu.Unlock()
+			c.mu.Unlock()
+			return nil
+		}
+		if c.fullLocked(brain, false) == nil {
+			break // c.mu stays locked
+		}
+		c.mu.Unlock()
+		// An idle session a harness assigned holds no slot.
+		if err := c.makeRoom(brain, false); err != nil {
+			return err
+		}
+	}
 	defer c.mu.Unlock()
-	if c.closed {
-		return &RPCError{Code: CodeResourceUnavailable, Message: "executor is shutting down"}
-	}
-	if s, ok := c.sessions[key]; ok {
-		s.mu.Lock()
-		s.workspace = workspace
-		s.mu.Unlock()
-		return nil
-	}
-	if len(c.sessions) >= c.opts.MaxSessions {
-		return busy("executor is at its session capacity")
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c.sessions[key] = &CoreSession{key: key, workspace: workspace, ctx: ctx, cancel: cancel, values: map[any]any{},
-		outside: c.opts.OutsideFiles, runAs: runAs}
+		outside: c.opts.OutsideFiles, runAs: runAs, lastUsed: time.Now()}
 	return nil
 }
 
