@@ -227,6 +227,7 @@ func NewProcessCapability(core *Core, opts ProcessOptions) Capability {
 			MethodProcessList:      p.list,
 		},
 		OnSessionEnd: func(session *CoreSession) { p.table(session).terminateAll(2 * time.Second) },
+		Busy:         func(session *CoreSession) bool { return p.table(session).running() > 0 },
 	}
 }
 
@@ -949,6 +950,13 @@ func (p *process) pump(r io.ReadCloser, pick func(*process) *stream) {
 			return
 		}
 	}
+}
+
+// running counts processes that have not ended.
+func (t *processTable) running() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.runningLocked()
 }
 
 // runningLocked counts processes that have not ended. Callers hold t.mu.

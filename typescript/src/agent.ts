@@ -557,8 +557,6 @@ export class AgentRuntime {
   private session(id: string, create: boolean): AgentSession | undefined {
     const existing = this.sessions.get(id)
     if (existing || !create) return existing
-    const max = this.capability.max_sessions ?? 0
-    if (max > 0 && this.sessions.size >= max) throw new RpcError(JsonRpcErrorCode.ExecutorBusy, 'executor_busy')
     const session = new AgentSession(this.host, id)
     this.sessions.set(id, session)
     this.host.addSession(id)
@@ -572,6 +570,15 @@ export class AgentRuntime {
     }
     if (!params?.session_id || !params.turn_id || !params.input?.length) {
       throw new RpcError(JsonRpcErrorCode.InvalidParams, 'session_id, turn_id and input are required')
+    }
+    // One slot per running turn (max_sessions); an idle session holds none.
+    // A repeated turn.start and one of a session with a running turn get
+    // their recorded result and conflict.
+    const known = this.sessions.get(params.session_id)
+    const max = this.capability.max_sessions ?? 0
+    if (max > 0 && !known?.turn && !known?.results.has(params.turn_id) &&
+      [...this.sessions.values()].filter((other) => other.turn).length >= max) {
+      throw new RpcError(JsonRpcErrorCode.ExecutorBusy, 'executor_busy')
     }
     const session = this.session(params.session_id, true)!
     const recorded = session.results.get(params.turn_id)

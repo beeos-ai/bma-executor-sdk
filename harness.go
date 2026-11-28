@@ -339,7 +339,7 @@ func (e *Executor) AssignSession(ctx context.Context, params SessionAssignParams
 	}
 	e.mu.Unlock()
 	session := &Session{
-		executor: e, id: params.SessionID, workID: params.WorkID, leaseToken: params.Lease.Token,
+		executor: e, id: params.SessionID, workID: params.WorkID, leaseToken: params.Lease.Token, assign: params,
 		ready: make(chan struct{}), done: make(chan struct{}),
 		calls: map[string]*toolCall{}, mcp: map[string]*HarnessMCPChannel{}, mcpChanged: make(chan struct{}),
 	}
@@ -438,6 +438,9 @@ type Session struct {
 	id         string
 	workID     string
 	leaseToken string
+	// assign is the session.assign sent again when the executor released
+	// the session while it was idle (CallTool).
+	assign SessionAssignParams
 
 	readyOnce sync.Once
 	ready     chan struct{}
@@ -507,6 +510,15 @@ func (s *Session) CallTool(ctx context.Context, params ToolCallParams) (ToolResu
 	if !exists {
 		var ack Ack
 		err := s.executor.call(ctx, MethodToolCall, params, &ack)
+		if rpc := (*RPCError)(nil); errors.As(err, &rpc) && rpc.Code == CodeSessionNotActive {
+			// An executor keeps only sessions with work in flight and may
+			// have released this one while it was idle: assign it again (the
+			// harness assigns a session before its tool calls) and send the
+			// call once more. Refused before its ack, the call did not run.
+			if err = s.reassign(ctx); err == nil {
+				err = s.executor.call(ctx, MethodToolCall, params, &ack)
+			}
+		}
 		if err == nil && !ack.Accepted {
 			err = errors.New("bmaexecutor: executor did not accept tool.call")
 		}
@@ -526,6 +538,16 @@ func (s *Session) CallTool(ctx context.Context, params ToolCallParams) (ToolResu
 	case <-ctx.Done():
 		return ToolResultParams{}, ctx.Err()
 	}
+}
+
+// reassign sends the session's session.assign again.
+func (s *Session) reassign(ctx context.Context) error {
+	var result SessionAssignResult
+	err := s.executor.call(ctx, MethodSessionAssign, s.assign, &result)
+	if err == nil && !result.Accepted {
+		err = ErrAssignRejected
+	}
+	return err
 }
 
 // CancelTool sends tool.cancel. The waiting CallTool still receives the

@@ -81,9 +81,16 @@ type CoreOptions struct {
 	// executor whose sessions all share one directory, or a desktop app
 	// mapping a brain to a project folder). Tools are confined to it.
 	Workspace func(brain, sessionID string) string
-	// MaxSessions bounds active sessions across all attached brains;
-	// MaxSessionsPerBrain bounds one brain (defaults to MaxSessions). A full
-	// core answers session.assign with executor_busy (-32009, retryable).
+	// MaxSessions bounds the sessions the core holds across all attached
+	// brains; MaxSessionsPerBrain bounds one brain (defaults to
+	// MaxSessions). Only a session with work in flight keeps its slot: when
+	// a new session needs one, the core releases its least recently used
+	// idle session a harness assigned (no tool call or request in flight, no
+	// running process, no MCP server of its own) without session.ended. Its
+	// workspace stays, and the harness's next session.assign of it (sent
+	// before the session's tool calls) opens it again. A core whose sessions
+	// are all busy answers session.assign with executor_busy (-32009,
+	// retryable).
 	MaxSessions         int
 	MaxSessionsPerBrain int
 	// MaxMCPServersPerSession bounds session.assign.mcp_servers (default 4).
@@ -230,6 +237,10 @@ type Capability struct {
 	// session (Request.Session nil), whatever SessionScoped says.
 	UnscopedMethods map[string]Handler
 	OnSessionEnd    func(*CoreSession)
+	// Busy reports whether the session holds work of this capability that
+	// releasing it would end (for example a running process): a busy
+	// session keeps its slot (CoreOptions.MaxSessions). Nil is never busy.
+	Busy func(*CoreSession) bool
 }
 
 // Core is the executor's execution core ("hands"): bash with process-group
@@ -292,7 +303,12 @@ type CoreSession struct {
 	mu      sync.Mutex
 	stopped bool
 	wg      sync.WaitGroup
-	values  map[any]any
+	// active counts the work entered (enter); lastUsed is when work last
+	// started or ended, or the session was assigned: the core releases the
+	// least recently used idle session.
+	active   int
+	lastUsed time.Time
+	values   map[any]any
 	// mounts are the session's mounted file directories the file tools may
 	// reach besides the workspace (core_mounts.go); empty for most sessions.
 	mounts []*sessionMount
@@ -335,7 +351,9 @@ func (s *CoreSession) Value(key any, create func() any) any {
 	return value
 }
 
-// enter registers work that stop must wait for; false once stopping.
+// enter registers work that stop must wait for (a tool call, a request, an
+// MCP server's supervisor) until leave; false once stopping. A session with
+// work entered is busy: the core does not release it.
 func (s *CoreSession) enter() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -343,7 +361,25 @@ func (s *CoreSession) enter() bool {
 		return false
 	}
 	s.wg.Add(1)
+	s.active++
+	s.lastUsed = time.Now()
 	return true
+}
+
+// leave ends work registered by enter.
+func (s *CoreSession) leave() {
+	s.mu.Lock()
+	s.active--
+	s.lastUsed = time.Now()
+	s.mu.Unlock()
+	s.wg.Done()
+}
+
+// touch makes the session the most recently used.
+func (s *CoreSession) touch() {
+	s.mu.Lock()
+	s.lastUsed = time.Now()
+	s.mu.Unlock()
 }
 
 // NewCore validates options and creates WorkRoot.
@@ -560,7 +596,7 @@ func (c *Core) serve(ctx context.Context, brain string, client *Client, method s
 		if session == nil || !session.enter() {
 			return nil, &RPCError{Code: CodeSessionNotActive, Message: "session is not active"}
 		}
-		defer session.wg.Done()
+		defer session.leave()
 		request.Session = session
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithCancel(ctx)
@@ -595,6 +631,102 @@ func busy(message string) error {
 	return &RPCError{Code: CodeExecutorBusy, Message: message, Data: &JSONRPCErrorData{Retryable: true}}
 }
 
+// fullLocked is the executor_busy error a new session of brain meets
+// (MaxSessions, and MaxSessionsPerBrain when perBrain), nil when the core
+// has room. Callers hold c.mu.
+func (c *Core) fullLocked(brain string, perBrain bool) error {
+	if len(c.sessions) >= c.opts.MaxSessions {
+		return busy("executor is at its session capacity")
+	}
+	if !perBrain {
+		return nil
+	}
+	n := 0
+	for key := range c.sessions {
+		if key.brain == brain {
+			n++
+		}
+	}
+	if n >= c.opts.MaxSessionsPerBrain {
+		return busy("this harness is at its session capacity on the executor")
+	}
+	return nil
+}
+
+// makeRoom releases least recently used idle sessions until a new session
+// of brain fits (fullLocked), so that only sessions with work in flight hold
+// a slot. When every session that counts against the limit is busy it
+// returns that limit's executor_busy error.
+func (c *Core) makeRoom(brain string, perBrain bool) error {
+	for {
+		c.mu.Lock()
+		full := c.fullLocked(brain, perBrain)
+		if full == nil {
+			c.mu.Unlock()
+			return nil
+		}
+		// Any brain's session counts against the total, only brain's own
+		// against its per-brain limit.
+		total := len(c.sessions) >= c.opts.MaxSessions
+		type candidate struct {
+			session  *CoreSession
+			lastUsed time.Time
+		}
+		var candidates []candidate
+		for key, session := range c.sessions {
+			if total || key.brain == brain {
+				session.mu.Lock()
+				candidates = append(candidates, candidate{session, session.lastUsed})
+				session.mu.Unlock()
+			}
+		}
+		capabilities := slices.Clone(c.capabilities)
+		c.mu.Unlock()
+		sort.Slice(candidates, func(i, j int) bool { return candidates[i].lastUsed.Before(candidates[j].lastUsed) })
+		released := false
+		for _, candidate := range candidates {
+			if released = c.release(candidate.session, capabilities); released {
+				break
+			}
+		}
+		if !released {
+			return full
+		}
+	}
+}
+
+// release ends an idle session a harness assigned as session.stop does, but
+// without session.ended: for the harness the session goes on, and its next
+// session.assign opens it again on the same workspace. It reports false and
+// keeps the session when that is not idle: a local brain's (its agent
+// suspends those), one with work entered (a tool call, a request, an MCP
+// server), or one a capability reports busy (a running process).
+func (c *Core) release(session *CoreSession, capabilities []Capability) bool {
+	if session.client == nil {
+		return false
+	}
+	for _, capability := range capabilities {
+		if capability.Busy != nil && capability.Busy(session) {
+			return false
+		}
+	}
+	c.mu.Lock()
+	session.mu.Lock()
+	idle := c.sessions[session.key] == session && !session.stopped && session.active == 0
+	if idle {
+		delete(c.sessions, session.key)
+		session.stopped = true
+	}
+	session.mu.Unlock()
+	c.mu.Unlock()
+	if !idle {
+		return false
+	}
+	c.teardown(session, capabilities)
+	c.log(LogInfo, "session "+session.key.session+" released: idle while the executor was full; its next session.assign opens it again", nil)
+	return true
+}
+
 func (c *Core) workspace(brain, sessionID string) string {
 	if c.opts.Workspace != nil {
 		return c.opts.Workspace(brain, sessionID)
@@ -623,42 +755,38 @@ func (c *Core) assign(brain string, client *Client, params SessionAssignParams) 
 	if err != nil {
 		return SessionAssignResult{}, err
 	}
-	c.mu.Lock()
-	if c.closed {
+	for {
+		c.mu.Lock()
+		if c.closed {
+			c.mu.Unlock()
+			return SessionAssignResult{Accepted: false, SessionID: params.SessionID}, nil
+		}
+		if existing, exists := c.sessions[key]; exists {
+			// A replayed assign (for example after reconnect) is idempotent; its
+			// metadata replaces the session's, as the newest assign's.
+			c.mu.Unlock()
+			if err := c.onAssign(existing, params); err != nil {
+				return SessionAssignResult{}, err
+			}
+			existing.mu.Lock()
+			existing.params.Metadata = maps.Clone(params.Metadata)
+			existing.lastUsed = time.Now()
+			existing.mu.Unlock()
+			return SessionAssignResult{Accepted: true, SessionID: params.SessionID}, nil
+		}
+		if c.fullLocked(brain, true) == nil {
+			break // c.mu stays locked
+		}
 		c.mu.Unlock()
-		return SessionAssignResult{Accepted: false, SessionID: params.SessionID}, nil
-	}
-	if existing, exists := c.sessions[key]; exists {
-		// A replayed assign (for example after reconnect) is idempotent; its
-		// metadata replaces the session's, as the newest assign's.
-		c.mu.Unlock()
-		if err := c.onAssign(existing, params); err != nil {
+		if err := c.makeRoom(brain, true); err != nil {
 			return SessionAssignResult{}, err
 		}
-		existing.mu.Lock()
-		existing.params.Metadata = maps.Clone(params.Metadata)
-		existing.mu.Unlock()
-		return SessionAssignResult{Accepted: true, SessionID: params.SessionID}, nil
-	}
-	perBrain := 0
-	for existing := range c.sessions {
-		if existing.brain == brain {
-			perBrain++
-		}
-	}
-	switch {
-	case len(c.sessions) >= c.opts.MaxSessions:
-		c.mu.Unlock()
-		return SessionAssignResult{}, busy("executor is at its session capacity")
-	case perBrain >= c.opts.MaxSessionsPerBrain:
-		c.mu.Unlock()
-		return SessionAssignResult{}, busy("this harness is at its session capacity on the executor")
 	}
 	// Sessions outlive one connection: their context is not the request's.
 	ctx, cancel := context.WithCancel(context.Background())
 	session := &CoreSession{
 		key: key, workspace: c.workspace(brain, params.SessionID), workRoots: append([]string{c.opts.WorkRoot}, c.opts.WorkRootAliases...), client: client, params: params,
-		ctx: ctx, cancel: cancel, values: map[any]any{}, outside: c.opts.OutsideFiles, runAs: runAs,
+		ctx: ctx, cancel: cancel, values: map[any]any{}, outside: c.opts.OutsideFiles, runAs: runAs, lastUsed: time.Now(),
 	}
 	c.sessions[key] = session
 	c.mu.Unlock()
@@ -810,7 +938,7 @@ func (c *Core) prepare(client *Client, session *CoreSession, params SessionAssig
 		}
 		first.Add(1)
 		go func() {
-			defer session.wg.Done()
+			defer session.leave()
 			c.superviseMCP(client, session, server, first.Done)
 		}()
 	}
@@ -859,10 +987,17 @@ func (c *Core) stop(key coreKey) bool {
 	if session == nil {
 		return false
 	}
-	c.frames.forget(key)
 	session.mu.Lock()
 	session.stopped = true
 	session.mu.Unlock()
+	c.teardown(session, capabilities)
+	return true
+}
+
+// teardown ends a stopped session removed from the core: cancels it, runs
+// every capability's OnSessionEnd and waits for its work to leave.
+func (c *Core) teardown(session *CoreSession, capabilities []Capability) {
+	c.frames.forget(session.key)
 	session.cancel()
 	for _, capability := range capabilities {
 		if capability.OnSessionEnd != nil {
@@ -870,7 +1005,6 @@ func (c *Core) stop(key coreKey) bool {
 		}
 	}
 	session.wg.Wait()
-	return true
 }
 
 func (c *Core) session(key coreKey) *CoreSession {
@@ -894,9 +1028,11 @@ var coreTools = map[string]bool{
 // acceptToolCall rejects a tool.call before it is acknowledged: an unknown
 // session is session_not_active and an unsupported tool capability_unavailable.
 func (c *Core) acceptToolCall(brain string, params ToolCallParams) error {
-	if c.session(coreKey{brain, params.SessionID}) == nil {
+	session := c.session(coreKey{brain, params.SessionID})
+	if session == nil {
 		return &RPCError{Code: CodeSessionNotActive, Message: "session is not active"}
 	}
+	session.touch() // the most recently used, so not the next one released
 	if !coreTools[params.Tool] && !c.hasComputerTool(params.Tool) {
 		return &RPCError{Code: CodeCapabilityUnavailable, Message: "capability_unavailable",
 			Data: &JSONRPCErrorData{Capability: "tool:" + params.Tool}}
@@ -917,7 +1053,7 @@ func (c *Core) toolCall(ctx context.Context, brain string, params ToolCallParams
 	if !session.enter() {
 		return failedToolResult(params, "session_not_active: the session is stopping")
 	}
-	defer session.wg.Done()
+	defer session.leave()
 	// session.stop cancels the tool as well as tool.cancel and the deadline.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

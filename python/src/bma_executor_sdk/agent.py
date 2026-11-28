@@ -244,9 +244,6 @@ class _AgentRuntime:
         session = self.sessions.get(session_id)
         if session is not None or not create:
             return session
-        limit = self.capability.get("max_sessions") or 0
-        if limit > 0 and len(self.sessions) >= limit:
-            raise RPCError(JsonRpcErrorCode.ExecutorBusy, "executor_busy")
         session = _AgentSession(self, session_id)
         self.sessions[session_id] = session
         self.client._sessions.add(session_id)  # noqa: SLF001
@@ -259,6 +256,17 @@ class _AgentRuntime:
             raise RPCError(JsonRpcErrorCode.CapabilityUnavailable, "input_skills is not supported")
         if not params.get("session_id") or not params.get("turn_id") or not params.get("input"):
             raise RPCError(JsonRpcErrorCode.InvalidParams, "session_id, turn_id and input are required")
+        # One slot per running turn (max_sessions); an idle session holds none.
+        # A repeated turn.start and one of a session with a running turn get
+        # their recorded result and conflict.
+        known = self.sessions.get(params["session_id"])
+        limit = self.capability.get("max_sessions") or 0
+        if (
+            limit > 0
+            and (known is None or (known.turn is None and params["turn_id"] not in known.results))
+            and sum(1 for other in self.sessions.values() if other.turn is not None) >= limit
+        ):
+            raise RPCError(JsonRpcErrorCode.ExecutorBusy, "executor_busy")
         s = self.session(params["session_id"], True)
         assert s is not None
         if params["turn_id"] in s.results:
